@@ -11,6 +11,22 @@ const { parseHunks } = require('../lib/hunks.cjs');
 const { readReviewOutput, REPAIRED } = require('../lib/review-output.cjs');
 const { applySuppression } = require('./suppress.cjs');
 
+const SUCCESS = 'success';
+
+/*
+ * A run that ended in error publishes no text of its own, whatever it happened to be saying.
+ *
+ * The reviewer that a gateway 429 cut short at its twelfth step had written "Now let me read the
+ * surrounding code", and the unparseable-output fallback posted that sentence on the pull request as
+ * though somebody had reviewed it. Which is the rule `executionLog` already keeps for a run a signal
+ * ended - a fragment reads as a short review - held one step later, where the reason the run ended is
+ * known. The run report beside this names the failure and carries the cost; this says which pull
+ * request went unreviewed, and nothing a model wrote.
+ */
+const ended = (conclusion) => String(conclusion ?? SUCCESS).trim() !== SUCCESS;
+
+const FAILED_NOTICE = '_The review run ended before it produced findings, so this pull request was not reviewed._';
+
 const MARKER = '<!-- kreview-finding -->';
 // kreview/fetch-prior.cjs and eval/parse.mjs both match this exact string, so it lives in one
 // place here and is scrubbed out of anything the model wrote.
@@ -159,7 +175,18 @@ function renderSummary(summary, folded) {
  * It is a parameter here rather than a skipped step in the action, because skipping the step loses
  * `findings_total`, `inline`, `folded` and `suppressed` - the columns a comparison is actually for.
  */
-module.exports = async ({ github, core, owner, repo, prNumber, commitId, runResult, suppression, publish = true }) => {
+module.exports = async ({
+  github,
+  core,
+  owner,
+  repo,
+  prNumber,
+  commitId,
+  runResult,
+  suppression,
+  publish = true,
+  conclusion = SUCCESS,
+}) => {
   const { review: parsed, reason: parseReason } = readReviewOutput(runResult);
 
   if (!parsed) {
@@ -174,7 +201,7 @@ module.exports = async ({ github, core, owner, repo, prNumber, commitId, runResu
         owner,
         repo,
         issue_number: prNumber,
-        body: fromModel(runResult).trim() || '_The reviewer produced no output._',
+        body: ended(conclusion) ? FAILED_NOTICE : fromModel(runResult).trim() || '_The reviewer produced no output._',
       });
     }
     return {

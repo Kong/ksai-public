@@ -99,6 +99,21 @@ function agentsUnder(root) {
   return agents;
 }
 
+/**
+ * missing answers a line about something absent, as a warning only where it was meant to be there.
+ *
+ * The channel and the agent mandates belong to a flow the reviewer and the implement action drive.
+ * A caller naming its own tool list is `claude-run`, which registers no channel and points at no
+ * plugin root by design, so warning it about both published two annotations per run that named
+ * nothing to fix - one of them telling a `fixer` about "the audit this review must run". A warning
+ * that fires where nothing is wrong is read as noise everywhere else too, which costs the one that
+ * is real.
+ *
+ * @param {string} said
+ * @returns {string}
+ */
+const missing = (said) => (stated ? said : `::warning::${said}`);
+
 const agents = agentsUnder(pluginRoot);
 const channel = String(process.env.KSAI_CHANNEL_NONCE ?? '').trim() === '' ? '' : CHANNEL_PLUGIN;
 const config = runtimeConfig({ channel, agents, skills, permission, baseUrl, auth, attribution });
@@ -113,13 +128,15 @@ console.log(
 console.log(
   channel
     ? 'the run channel is registered, so this run can be told something and asked to stop'
-    : '::warning::this run drew no channel token, so nothing can be delivered to it and a stop cannot be honoured',
+    : missing('this run drew no channel token, so nothing can be delivered to it and a stop cannot be honoured'),
 );
-console.log(config.plugin ? `the renewing auth plugin is ${config.plugin[0]}` : '::warning::no auth plugin, so this review lasts one token');
+console.log(config.plugin ? `the renewing auth plugin is ${config.plugin[0]}` : '::warning::no auth plugin, so this run lasts one token');
 console.log(
   Object.keys(agents).length
     ? `delegating to ${counted(Object.keys(agents).length, 'subagent')}: ${Object.entries(agents)
         .map(([name, one]) => `${name}=${/** @type {{model?: string}} */ (one).model ?? 'arm'}`)
         .join(', ')}`
-    : '::warning::no kreview agent mandates, so the audit this review must run has nowhere to go',
+    : pluginRoot
+      ? '::warning::no kreview agent mandates, so the audit a review must run has nowhere to go'
+      : 'no plugin root, so this run delegates to no subagent',
 );

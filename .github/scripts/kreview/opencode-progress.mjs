@@ -1,68 +1,11 @@
-import { createHash } from 'node:crypto';
 import { appendFileSync, readFileSync, statSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 import { TRIPPED, breaker, plain, rendered, summary, timeline } from '../ksai/progress.mjs';
 import { main as stagesMain } from '../ksai/stages.mjs';
-import { parsed } from '../lib/opencode.mjs';
+import { CLAUDE_NAME, detailed, parsed } from '../lib/opencode.mjs';
 
-const CLAUDE_NAME = Object.assign(Object.create(null), {
-  bash: 'Bash',
-  read: 'Read',
-  write: 'Write',
-  edit: 'Edit',
-  patch: 'Edit',
-  glob: 'Glob',
-  grep: 'Grep',
-  list: 'Glob',
-  task: 'Task',
-  skill: 'Skill',
-  webfetch: 'WebFetch',
-  websearch: 'WebSearch',
-});
-
-const INPUT_KEY = Object.assign(Object.create(null), {
-  Read: [['filePath', 'file_path']],
-  Write: [['filePath', 'file_path']],
-  Edit: [['filePath', 'file_path']],
-  Glob: [
-    ['pattern', 'pattern'],
-    ['path', 'pattern'],
-  ],
-  Grep: [['pattern', 'pattern']],
-  Task: [['description', 'description']],
-  Skill: [['name', 'skill']],
-  WebFetch: [['url', 'url']],
-  WebSearch: [['query', 'query']],
-  Bash: [['description', 'description']],
-});
-
-/**
- * detailed answers the input the shared timeline reads a detail out of.
- *
- * `Bash` carries its `description` and never its `command`, which is the rule
- * `docs/decisions/run-visibility.md` states for the Claude engine and which holds here for the same
- * reason: the command is the string most likely to carry a value that should not be repeated. Where
- * opencode's caller wrote no description the row is the tool name and its elapsed time, which is
- * less than the Claude engine shows and more than nothing.
- *
- * The command is replaced by a digest of itself rather than dropped, because the breaker fingerprints
- * this same input to find a repeat. Dropping it left every `bash` call fingerprinting as `{}`, so nine
- * different commands read as nine identical ones and the repeat breaker killed a healthy run at its
- * twenty-second step. The digest distinguishes them and no renderer reads the key, so the command text
- * still reaches nothing that prints.
- */
-export function detailed(name, input) {
-  const out = { ...input };
-  for (const [from, to] of INPUT_KEY[name] ?? []) {
-    if (typeof input?.[from] === 'string' && out[to] === undefined) out[to] = input[from];
-  }
-  if (typeof out.command === 'string') {
-    out.command_digest = createHash('sha256').update(out.command).digest('hex').slice(0, 16);
-  }
-  delete out.command;
-  return out;
-}
+export { detailed };
 
 /**
  * transcript answers opencode's event stream in the shape `ksai/progress.mjs` already reads, so the

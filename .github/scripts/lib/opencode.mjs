@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -337,20 +338,110 @@ export function parsed(text) {
   return out;
 }
 
+export const CLAUDE_NAME = Object.assign(Object.create(null), {
+  bash: 'Bash',
+  read: 'Read',
+  write: 'Write',
+  edit: 'Edit',
+  patch: 'Edit',
+  glob: 'Glob',
+  grep: 'Grep',
+  list: 'Glob',
+  task: 'Task',
+  skill: 'Skill',
+  webfetch: 'WebFetch',
+  websearch: 'WebSearch',
+});
+
+const INPUT_KEY = Object.assign(Object.create(null), {
+  Read: [['filePath', 'file_path']],
+  Write: [['filePath', 'file_path']],
+  Edit: [['filePath', 'file_path']],
+  Glob: [
+    ['pattern', 'pattern'],
+    ['path', 'pattern'],
+  ],
+  Grep: [['pattern', 'pattern']],
+  Task: [['description', 'description']],
+  Skill: [['name', 'skill']],
+  WebFetch: [['url', 'url']],
+  WebSearch: [['query', 'query']],
+  Bash: [['description', 'description']],
+});
+
 /**
- * answer answers the review opencode wrote, or null when the stream carried no text at all.
+ * detailed answers the input the shared timeline reads a detail out of.
+ *
+ * `Bash` carries its `description` and never its `command`, which is the rule
+ * `docs/decisions/run-visibility.md` states for the Claude engine and which holds here for the same
+ * reason: the command is the string most likely to carry a value that should not be repeated. Where
+ * opencode's caller wrote no description the row is the tool name and its elapsed time, which is
+ * less than the Claude engine shows and more than nothing.
+ *
+ * The command is replaced by a digest of itself rather than dropped, because the breaker fingerprints
+ * this same input to find a repeat. Dropping it left every `bash` call fingerprinting as `{}`, so nine
+ * different commands read as nine identical ones and the repeat breaker killed a healthy run at its
+ * twenty-second step. The digest distinguishes them and no renderer reads the key, so the command text
+ * still reaches nothing that prints.
+ */
+export function detailed(name, input) {
+  const out = { ...input };
+  for (const [from, to] of INPUT_KEY[name] ?? []) {
+    if (typeof input?.[from] === 'string' && out[to] === undefined) out[to] = input[from];
+  }
+  if (typeof out.command === 'string') {
+    out.command_digest = createHash('sha256').update(out.command).digest('hex').slice(0, 16);
+  }
+  delete out.command;
+  return out;
+}
+
+/**
+ * answer answers what opencode wrote at the end of the run, or null when the stream carried no text
+ * at all.
  *
  * A part is kept by id and the last state of it wins, because opencode may update a part while the
  * model writes it. Joining every event instead concatenates each snapshot of one part, which reads
  * as a review that repeats itself.
+ *
+ * **One step's text is the answer, never the whole run's.** The Claude engine's `result` is the
+ * model's last message, and this stream carries a text part for every turn that said anything, so
+ * joining all of them published a forty-five step fix's running commentary ahead of the summary it
+ * was asked for - glued together without a space where two turns met. A caller whose prompt says the
+ * final message is posted verbatim got the monologue instead. So the parts are grouped at
+ * `step_start` and the last group holding text wins: the last group holding text rather than the
+ * last step, because a run whose final step called a tool and said nothing would otherwise answer
+ * with the empty string and lose a summary that was written.
  */
 export function answer(events) {
-  const parts = new Map();
+  const said = spoken(events);
+  return said.length ? said.at(-1) : null;
+}
+
+/**
+ * everything answers every turn that spoke, joined, which is what `answer` used to return.
+ *
+ * It exists for one reader: the review flow's structured output is a contract, and a reviewer that
+ * wrote its findings and then said one more thing would have that contract land in a turn `answer`
+ * no longer returns. Publishing the trailing sentence as the review is the failure this whole change
+ * is about, so the caller that knows a review is expected checks both and takes the one carrying it.
+ */
+export function everything(events) {
+  const said = spoken(events);
+  return said.length ? said.join('\n') : null;
+}
+
+function spoken(events) {
+  const groups = [new Map()];
   for (const [index, one] of events.entries()) {
+    if (one?.type === 'step_start') {
+      groups.push(new Map());
+      continue;
+    }
     if (one?.type !== 'text' || typeof one?.part?.text !== 'string') continue;
-    parts.set(one.part.id ?? `#${index}`, one.part.text);
+    groups.at(-1).set(one.part.id ?? `#${index}`, one.part.text);
   }
-  return parts.size ? [...parts.values()].join('') : null;
+  return groups.filter((one) => one.size).map((one) => [...one.values()].join(''));
 }
 
 /** spending answers what each step of the run reported, dropping a step that reported neither figure. */
@@ -380,6 +471,18 @@ const REFUSED = /prevents you from using this specific tool call/i;
  *
  * It was a hardcoded empty list, so every opencode run reported no denials whatever it had been
  * refused - a constant sitting in a column that reads as a measurement.
+ *
+ * **A count answers how often and never what**, which is the complaint `run-visibility.md` opens on:
+ * a kong-mesh run finished with sixteen denials that "were not diagnosable", and a fixer run this
+ * engine drove finished with fourteen `bash` entries that named nothing but `bash`. An operator
+ * reading them cannot tell a profile scoped too tightly from a model that kept asking for what it
+ * was told not to do. So each entry carries the same detail the timeline is allowed to print,
+ * through the same `detailed` - the description and never the command, so what is recorded here is
+ * bounded by the rule that already decided what a row may show.
+ *
+ * The digest that rule keeps for the repeat breaker is dropped here: `deniedCall` takes the first
+ * string it finds as the head the run report prints, so a refused call carrying no description would
+ * put sixteen hex characters in a column that answers what was asked.
  */
 export function denials(events) {
   const out = [];
@@ -388,10 +491,43 @@ export function denials(events) {
     const state = one.part?.state ?? {};
     if (state.status !== 'error') continue;
     if (!REFUSED.test(String(state.output ?? state.error ?? ''))) continue;
-    out.push({ tool_name: String(one.part?.tool ?? 'unknown') });
+    const tool = String(one.part?.tool ?? 'unknown');
+    const input = state.input && typeof state.input === 'object' ? state.input : {};
+    const { command_digest: _digest, ...detail } = detailed(CLAUDE_NAME[tool] ?? tool, input);
+    out.push({ tool_name: tool, tool_input: detail });
   }
   return out;
 }
+
+/**
+ * endedOn answers the failure the stream itself reports, as one line, or null where it reports none.
+ *
+ * opencode writes its terminal failure as an `error` event and exits 1 without printing it, so the
+ * job log said `opencode exit=1` and nothing else. A review that died on a gateway 429 - the token
+ * window spent, `isRetryable: true`, nothing retrying - was diagnosable only by downloading the raw
+ * stream artifact and reading its last line. One line in the log is what that investigation was
+ * worth.
+ *
+ * The status code is carried because it is what separates the answers: a 429 is a budget, a 401 is
+ * the token, a 500 is theirs. Everything here is bounded and flattened - the message is a provider's
+ * text, so it is one line of at most `MAX_FAILURE_CHARS` and nothing that could open a row of its own.
+ */
+export function endedOn(events) {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const one = events[index];
+    if (one?.type !== 'error') continue;
+    const error = one.error ?? {};
+    const said = String(error.data?.message ?? error.message ?? '').replace(/\s+/g, ' ').trim();
+    const status = Number(error.data?.statusCode);
+    const named = String(error.name ?? '').replace(/\s+/g, ' ').trim() || 'error';
+    const detail = said ? `${named}: ${said}` : named;
+    const shown = Number.isFinite(status) ? `${detail} (${status})` : detail;
+    return shown.slice(0, MAX_FAILURE_CHARS);
+  }
+  return null;
+}
+
+const MAX_FAILURE_CHARS = 300;
 
 function elapsed(events) {
   const stamps = events.map((one) => Number(one?.timestamp)).filter((one) => Number.isFinite(one));
@@ -428,10 +564,10 @@ function truncated(exitCode) {
  * one reader whichever engine produced the review. A run a signal ended reports what it spent and
  * no review at all, so the salvage notice speaks instead of the publisher.
  */
-export function executionLog({ events, exitCode, secrets = [] }) {
+export function executionLog({ events, exitCode, secrets = [], said }) {
   const steps = spending(events);
   const { usage, cost } = totals(steps);
-  const text = answer(events);
+  const text = said === undefined ? answer(events) : said;
   const code = Number(exitCode);
   const failed = code !== 0;
   return resultRecord({
