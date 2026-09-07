@@ -1,0 +1,521 @@
+name: KSAI gate
+description: >-
+  Resolves who asked and what they asked for, before any flow job starts. It refuses a call naming no
+  federation, authorizes the requester against the source repository's CODEOWNERS, routes the comment to
+  a flow, and where the comment names no command runs a cheap classifier to read it. Every flow job in the
+  caller reads its answer, so nothing that spends or writes starts on a comment this action did not place.
+
+  It also publishes the one notice a refused request gets. A flow job gated on `authorized` is skipped
+  rather than run, and a skipped job says nothing the requester can see.
+
+inputs:
+  ksai_ref:
+    description: >-
+      ref of the ksai source repository this action reads its scripts and the CODEOWNERS check from. Defaults to the ref the
+      caller pinned this action at, so the two halves cannot land on different commits.
+    required: false
+    default: ""
+  kong_org_github_token:
+    description: read token for the ksai source repository, used for this action's own checkout
+    required: true
+  authorization_github_token:
+    description: >-
+      read-only token for the CODEOWNERS check and the routing. Needs source-repo contents:read, org
+      Members:read for `@org/team` CODEOWNERS entries, and pull-requests:read. An empty value is read as
+      a mint the App could not make, which is what a repository the App is not installed on looks like,
+      and is answered with a notice saying so rather than with an unauthenticated CODEOWNERS read.
+    required: true
+  post_github_token:
+    description: >-
+      token the refusal notice is published with, which needs issues:write and nothing else - a pull
+      request's conversation is an issue thread. It is the caller's own workflow token rather than an App
+      token: this job runs before anybody is authorized, so no App write credential may be minted in it.
+    required: true
+  federation_rule_id:
+    description: team federation rule id (fdrl_...)
+    required: true
+  organization_id:
+    description: Anthropic organization UUID
+    required: true
+  service_account_id:
+    description: team service account id (svac_...)
+    required: true
+  workspace_id:
+    description: team workspace id (wrkspc_...)
+    required: true
+  anthropic_base_url:
+    description: >-
+      origin the classifier is called on, with no version segment. Kong's own callers default to Kong AI
+      Gateway, where KSAI spend is attributed; the published mirror carries no default, so a caller there sets
+      its own origin. Empty is refused rather than falling back to api.anthropic.com.
+    required: false
+    default: ""
+  anthropic_auth:
+    description: "`federation` or `oidc-bearer`"
+    required: false
+    default: oidc-bearer
+  trigger_phrase:
+    description: phrase a comment carries to reach this flow
+    required: true
+  bot_login:
+    description: login this flow publishes under, which decides whether a pull request is one of its own
+    required: true
+  team:
+    description: team the run is attributed to in the gateway's cost headers
+    required: false
+    default: ""
+  actor:
+    description: login authorized for a dispatched review; empty for every comment
+    required: false
+    default: ""
+  pr_number:
+    description: pull request number for a dispatch whose event carries none
+    required: false
+    default: ""
+  requester:
+    description: >-
+      the login this run is authorized as, and the one the notice stands down for where it is a `[bot]`.
+      A bot never owns a path in CODEOWNERS, so refusing one publishes a refusal addressed to nobody - a
+      recovery dispatch carrying no actor arrives exactly that way. Empty reaches the CODEOWNERS check as
+      an empty username, which refuses loudly rather than quietly.
+    required: true
+  sidebar_withdrawal:
+    description: >-
+      true when `clear-review-request` will answer this run instead. A review request GitHub made in the
+      reviewer sidebar is declined there, in the same step that withdraws it, and two publishers would
+      answer one act twice - but that job is off by default, and standing down for a publisher nobody
+      turned on is the silence this notice exists to end.
+    required: false
+    default: "false"
+  continuation:
+    description: >-
+      true when this dispatch carries work that runs whatever the gate answers. The implement flow
+      resumes an already authorized request that way, so a refusal here would say nothing ran while
+      that run is working.
+    required: false
+    default: "false"
+  disabled_commands:
+    description: commands this repository turns off
+    required: false
+    default: ""
+  write_access_commands:
+    description: >-
+      commands write access on the repository is enough to run, rather than owning a path in CODEOWNERS.
+      Empty (the default) holds every command to ownership, which is what every installation did before
+      this existed. `.ksai/ksai.json` may take names out of this list and may never add one.
+    required: false
+    default: ""
+  allowed_commands:
+    description: replaced by disabled_commands, and still read so a value left behind stops the run
+    required: false
+    default: ""
+  classifier_model:
+    description: arm the comment classifier runs on
+    required: false
+    default: ""
+  bare_comments:
+    description: whether a comment naming no phrase on this flow's own pull request steers the run
+    required: false
+    default: auto
+  otel_endpoint:
+    description: OTLP endpoint the classifier reports to
+    required: false
+    default: ""
+  datadog_key:
+    description: Datadog API key, which turns the classifier's telemetry on when it is set
+    required: false
+    default: ""
+
+outputs:
+  authorized:
+    description: >-
+      whether the requester clears the bar the asked command holds here - CODEOWNERS ownership with write
+      access, or plain write access for a command named in `write_access_commands`. Empty where no
+      CODEOWNERS answer was read at all, which is neither a yes nor a no.
+    value: ${{ steps.bar.outputs.authorized }}
+  bar:
+    description: which bar the asked command held, `codeowners` or `write`
+    value: ${{ steps.bar.outputs.bar }}
+  codeowner:
+    description: >-
+      whether the requester owns a path in this repository's CODEOWNERS and holds write access, which is
+      the bar every command holds until one is named in `write_access_commands`
+    value: ${{ steps.authz.outputs.authorized }}
+  write_access:
+    description: >-
+      whether the requester holds write access, where a command open to write access made that worth
+      asking. Empty where it was not asked or could not be told.
+    value: ${{ steps.authz.outputs.write_access }}
+  write_access_commands:
+    description: the commands write access is enough for here, once `.ksai/ksai.json` has narrowed the list
+    value: ${{ steps.trigger.outputs.write_access_commands }}
+  owners:
+    description: >-
+      'absent' where this repository has no CODEOWNERS file at all, so a reader can say the repository has
+      no owners rather than that the requester is not one. Empty everywhere else.
+    value: ${{ steps.authz.outputs.owners }}
+  review:
+    description: whether this comment starts a review
+    value: ${{ steps.verdict.outputs.review || steps.trigger.outputs.review }}
+  implement:
+    description: whether this comment reaches the implement flow
+    value: ${{ steps.verdict.outputs.implement || steps.trigger.outputs.implement }}
+  test:
+    description: whether this comment starts an adversarial test run
+    value: ${{ steps.verdict.outputs.test || steps.trigger.outputs.test }}
+  help:
+    description: whether this comment asks for the command catalogue
+    value: ${{ steps.trigger.outputs.help }}
+  requested:
+    description: whether anything was asked of this flow at all
+    value: ${{ steps.trigger.outputs.requested }}
+  thread_root_id:
+    description: id of the review thread the comment was left in, empty elsewhere
+    value: ${{ steps.trigger.outputs.thread_root_id }}
+  verdict:
+    description: what the classifier read the comment as, empty where none ran
+    value: ${{ steps.verdict.outputs.verdict }}
+  classifier_model:
+    description: arm the classifier ran on
+    value: ${{ steps.trigger.outputs.classify_model }}
+  classifier_cost:
+    description: what the classifier cost
+    value: ${{ steps.verdict.outputs.cost }}
+  classifier_input_tokens:
+    description: input tokens the classifier read
+    value: ${{ steps.verdict.outputs.input_tokens }}
+  classifier_output_tokens:
+    description: output tokens the classifier wrote
+    value: ${{ steps.verdict.outputs.output_tokens }}
+  classifier_turns:
+    description: turns the classifier took
+    value: ${{ steps.verdict.outputs.turns }}
+  classifier_duration:
+    description: how long the classifier ran for
+    value: ${{ steps.verdict.outputs.duration }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve the ref this gate reads
+      id: gate_ref
+      shell: bash
+      env:
+        KSAI_REF: ${{ inputs.ksai_ref }}
+        ACTION_REF: ${{ github.action_ref }}
+      run: |
+        set -euo pipefail
+        echo "ref=${KSAI_REF:-$ACTION_REF}" >> "$GITHUB_OUTPUT"
+
+    - name: Check out trusted ksai code for the gate
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        token: ${{ inputs.kong_org_github_token }}
+        path: _ksai
+        repository: Kong/ksai-public
+        ref: ${{ steps.gate_ref.outputs.ref }}
+        sparse-checkout: |
+          .github/actions/codeowners-authz
+          .github/scripts
+        persist-credentials: false
+
+    - name: Authorize commenter against CODEOWNERS
+      id: authz
+      if: ${{ inputs.authorization_github_token != '' }}
+      uses: ./_ksai/.github/actions/codeowners-authz
+      with:
+        github-token: ${{ inputs.authorization_github_token }}
+        username: ${{ inputs.requester }}
+        write_access: ${{ inputs.write_access_commands != '' }}
+
+    - name: Work out which flow this comment invokes
+      id: trigger
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        TRIGGER: ${{ inputs.trigger_phrase }}
+        DISABLED_COMMANDS: ${{ inputs.disabled_commands }}
+        WRITE_ACCESS_COMMANDS: ${{ inputs.write_access_commands }}
+        CODEOWNER: ${{ steps.authz.outputs.authorized }}
+        WRITE_ACCESS: ${{ steps.authz.outputs.write_access }}
+        OWNERS: ${{ steps.authz.outputs.owners }}
+        LEGACY_ALLOWED_COMMANDS: ${{ inputs.allowed_commands }}
+        CLASSIFIER_MODEL: ${{ inputs.classifier_model }}
+        BARE_COMMENTS: >-
+          ${{ (steps.authz.outputs.authorized == 'true' || steps.authz.outputs.write_access == 'true') &&
+          inputs.bare_comments || 'off' }}
+        BOT_LOGIN: ${{ inputs.bot_login }}
+        PROMPT_FILE: ${{ runner.temp }}/ksai-classify-prompt.txt
+        SCRIPTS: ${{ github.workspace }}/_ksai/.github/scripts
+      with:
+        github-token: ${{ inputs.authorization_github_token }}
+        retries: 3
+        script: |
+          const { route } = require(`${process.env.SCRIPTS}/ksai/route.cjs`);
+          await route({ github, core, context, env: process.env });
+
+    - name: Say the App is not installed on this repository
+      id: not-installed
+      continue-on-error: true
+      if: >-
+        ${{ inputs.authorization_github_token == '' && steps.trigger.outputs.requested == 'true' &&
+        inputs.continuation != 'true' && !endsWith(inputs.requester, '[bot]') }}
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        ISSUE_NUMBER: ${{ inputs.pr_number || github.event.issue.number || github.event.pull_request.number }}
+        REPO: ${{ github.repository }}
+        TRIGGER: ${{ inputs.trigger_phrase }}
+        SCRIPTS: ${{ github.workspace }}/_ksai/.github/scripts
+      with:
+        github-token: ${{ inputs.post_github_token }}
+        retries: 3
+        script: |
+          const { renderNotInstalled } = require(`${process.env.SCRIPTS}/lib/select-arm.cjs`);
+          const issue_number = Number(process.env.ISSUE_NUMBER);
+          if (!Number.isInteger(issue_number) || issue_number <= 0) {
+            core.warning(`no issue or pull request number to say it on, got: ${process.env.ISSUE_NUMBER}`);
+            return;
+          }
+          await github.rest.issues.createComment({
+            ...context.repo,
+            issue_number,
+            body: renderNotInstalled({ repo: process.env.REPO, triggerPhrase: process.env.TRIGGER }),
+          });
+
+    - name: Stop when this repository has no App token
+      if: ${{ inputs.authorization_github_token == '' }}
+      shell: bash
+      env:
+        REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+        echo "::error::no App token was minted for ${REPO}, so nothing this flow does can run; check that the KSAI App is installed on this repository, which is what a mint fails on when the workflow itself is correct"
+        exit 1
+
+    - name: Compute gate cost-attribution headers
+      id: gate_headers
+      if: ${{ steps.trigger.outputs.classify == 'true' }}
+      env:
+        REPO: ${{ github.repository }}
+        TEAM: ${{ inputs.team }}
+        FEDERATION_RULE: ${{ inputs.federation_rule_id }}
+        SERVICE_ACCOUNT: ${{ inputs.service_account_id }}
+        RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        ACTOR: ${{ inputs.actor || github.actor }}
+        MODEL: ${{ steps.trigger.outputs.classify_model }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        {
+          echo "value<<KSAI_HEADERS_EOF"
+          printf 'X-Caller-Name: KSAI\n'
+          printf 'X-Initiated-By: KSAI\n'
+          printf 'X-Ksai-Repo: %s\n' "${REPO}"
+          printf 'X-Ksai-Team: %s\n' "${TEAM}"
+          printf 'X-Ksai-Federation-Rule: %s\n' "${FEDERATION_RULE}"
+          printf 'X-Ksai-Service-Account: %s\n' "${SERVICE_ACCOUNT}"
+          printf 'X-Ksai-Workflow: ksai-gate\n'
+          printf 'X-Ksai-Run-Id: %s\n' "${RUN_ID}"
+          printf 'X-Ksai-Actor: %s\n' "${ACTOR}"
+          printf 'X-Ksai-Action: ksai:classify\n'
+          printf 'X-Ksai-Model: %s\n' "${MODEL}"
+          printf 'X-Ksai-Effort: low\n'
+          echo "KSAI_HEADERS_EOF"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Classify the comment
+      id: classify_run
+      if: ${{ steps.trigger.outputs.classify == 'true' }}
+      continue-on-error: true
+      shell: bash
+      env:
+        MODEL: ${{ steps.trigger.outputs.classify_model }}
+        EFFORT: low
+        PROMPT_FILE: ${{ steps.trigger.outputs.classify_file }}
+        EXECUTION_FILE: ${{ runner.temp }}/ksai-gate-classify-execution.json
+        ATTRIBUTION_HEADERS: ${{ steps.gate_headers.outputs.value }}
+        ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
+        ANTHROPIC_AUTH: ${{ inputs.anthropic_auth }}
+        ANTHROPIC_FEDERATION_RULE_ID: ${{ inputs.federation_rule_id }}
+        ANTHROPIC_ORGANIZATION_ID: ${{ inputs.organization_id }}
+        ANTHROPIC_SERVICE_ACCOUNT_ID: ${{ inputs.service_account_id }}
+        ANTHROPIC_WORKSPACE_ID: ${{ inputs.workspace_id }}
+        OTEL_EXPORTER_OTLP_ENDPOINT: ${{ inputs.otel_endpoint }}
+        OTEL_EXPORTER_OTLP_HEADERS: ${{ inputs.datadog_key != '' && format('dd-api-key={0}', inputs.datadog_key) || '' }}
+        OTEL_RESOURCE_ATTRIBUTES: >-
+          team=${{ inputs.team }},repo=${{ github.repository }},workflow=ksai-gate
+        SCRIPTS: ${{ github.workspace }}/_ksai/.github/scripts
+      run: |
+        set -euo pipefail
+        echo "execution_file=${EXECUTION_FILE}" >> "$GITHUB_OUTPUT"
+        node "${SCRIPTS}/ksai/ask-once.mjs"
+
+    - name: Read the verdict and settle the routing
+      id: verdict
+      if: >-
+        ${{ always() && steps.trigger.outputs.classify == 'true' }}
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        EXECUTION_FILE: ${{ steps.classify_run.outputs.execution_file }}
+        CLASSIFY_MODEL: ${{ steps.trigger.outputs.classify_model }}
+        DISABLED_COMMANDS: ${{ inputs.disabled_commands }}
+        ON_ISSUE: ${{ github.event_name == 'issue_comment' && !github.event.issue.pull_request }}
+        ON_OWN_PULL: ${{ steps.trigger.outputs.own_pull }}
+        THREAD_ROOT_ID: ${{ steps.trigger.outputs.thread_root_id }}
+        REVIEW: ${{ steps.trigger.outputs.review }}
+        IMPLEMENT: ${{ steps.trigger.outputs.implement }}
+        TEST: ${{ steps.trigger.outputs.test }}
+        SCRIPTS: ${{ github.workspace }}/_ksai/.github/scripts
+      with:
+        script: |
+          const { settle } = require(`${process.env.SCRIPTS}/ksai/route.cjs`);
+          settle({ core, env: process.env });
+
+    - name: Apply the bar the asked command holds
+      id: bar
+      if: ${{ always() && steps.trigger.outcome != '' }}
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        CODEOWNER: ${{ steps.authz.outputs.authorized }}
+        WRITE_ACCESS: ${{ steps.authz.outputs.write_access }}
+        WRITE_ACCESS_COMMANDS: ${{ steps.trigger.outputs.write_access_commands }}
+        COMMAND: ${{ steps.trigger.outputs.command }}
+        VERDICT: ${{ steps.verdict.outputs.verdict }}
+        SCRIPTS: ${{ github.workspace }}/_ksai/.github/scripts
+      with:
+        script: |
+          const { settleAuthorization } = require(`${process.env.SCRIPTS}/ksai/route.cjs`);
+          settleAuthorization({ core, env: process.env });
+
+    - name: Render the refusal
+      id: render-refusal
+      continue-on-error: true
+      if: >-
+        ${{ steps.bar.outputs.authorized != 'true' && steps.trigger.outputs.requested == 'true' &&
+        steps.trigger.outputs.help != 'true' && inputs.sidebar_withdrawal != 'true' &&
+        inputs.continuation != 'true' && !endsWith(inputs.requester, '[bot]') }}
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        ISSUE_NUMBER: ${{ inputs.pr_number || github.event.issue.number || github.event.pull_request.number }}
+        ON_ISSUE: ${{ github.event_name == 'issue_comment' && !github.event.issue.pull_request }}
+        REPO: ${{ github.repository }}
+        COMMAND: ${{ steps.bar.outputs.command }}
+        BAR: ${{ steps.bar.outputs.bar }}
+        UNDECIDED: ${{ steps.bar.outputs.undecided }}
+        WRITE_ACCESS: ${{ steps.authz.outputs.write_access }}
+        WRITE_ACCESS_COMMANDS: ${{ steps.trigger.outputs.write_access_commands }}
+        FLOW: ${{ steps.trigger.outputs.review == 'true' && 'review' || 'implement' }}
+        RUN_ID: ${{ github.run_id }}
+        TRIGGER: ${{ inputs.trigger_phrase }}
+        OWNERS: ${{ steps.authz.outputs.owners }}
+        SCRIPTS: ${{ github.workspace }}/_ksai/.github/scripts
+      with:
+        script: |
+          const {
+            renderUnauthorized,
+            renderNoOwners,
+            CODEOWNERS_BAR,
+            parseDisabledCommands,
+          } = require(`${process.env.SCRIPTS}/lib/select-arm.cjs`);
+          const { marked } = require(`${process.env.SCRIPTS}/ksai/marker.cjs`);
+          const issue_number = Number(process.env.ISSUE_NUMBER);
+          if (!Number.isInteger(issue_number) || issue_number <= 0) {
+            core.setFailed(`the refusal resolved no issue or pull request number, got: ${process.env.ISSUE_NUMBER}`);
+            return;
+          }
+          const bar = process.env.BAR || CODEOWNERS_BAR;
+          const said = {
+            repo: process.env.REPO,
+            triggerPhrase: process.env.TRIGGER,
+            command: process.env.COMMAND,
+            bar,
+            undecided: process.env.UNDECIDED === 'true',
+            write: process.env.WRITE_ACCESS,
+            writeAccessCommands: parseDisabledCommands(process.env.WRITE_ACCESS_COMMANDS),
+          };
+          const render =
+            process.env.OWNERS === 'absent' && bar === CODEOWNERS_BAR ? renderNoOwners : renderUnauthorized;
+          const onIssue = process.env.ON_ISSUE === 'true';
+          core.setOutput('issue_number', String(issue_number));
+          core.setOutput('body', marked(
+            render(said),
+            {
+              kind: 'notice',
+              flow: process.env.FLOW,
+              command: process.env.COMMAND,
+              triggerPhrase: process.env.TRIGGER,
+              issue: onIssue ? issue_number : null,
+              pr: onIssue ? null : issue_number,
+              run: Number(process.env.RUN_ID),
+            },
+          ));
+
+    - name: Say why nothing ran
+      continue-on-error: true
+      if: ${{ steps.render-refusal.outcome == 'success' }}
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        ISSUE_NUMBER: ${{ steps.render-refusal.outputs.issue_number }}
+        BODY: ${{ steps.render-refusal.outputs.body }}
+      with:
+        github-token: ${{ inputs.post_github_token }}
+        retries: 3
+        script: |
+          await github.rest.issues.createComment({
+            ...context.repo,
+            issue_number: Number(process.env.ISSUE_NUMBER),
+            body: process.env.BODY,
+          });
+
+    - name: Stop when the write bar could not be read
+      if: ${{ steps.bar.outputs.undecided == 'true' }}
+      shell: bash
+      env:
+        REFUSAL: ${{ steps.bar.outputs.unreadable_write }}
+      run: |
+        set -euo pipefail
+        echo "::error::${REFUSAL}"
+        exit 1
+
+    - name: Ask whether this repository reaches its team's federation
+      id: federation
+      continue-on-error: true
+      if: >-
+        ${{ steps.bar.outputs.authorized == 'true' && steps.trigger.outputs.requested == 'true' &&
+        steps.trigger.outputs.help != 'true' && steps.trigger.outputs.classify != 'true' &&
+        inputs.continuation != 'true' }}
+      shell: bash
+      working-directory: ${{ runner.temp }}
+      env:
+        ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
+        ANTHROPIC_AUTH: ${{ inputs.anthropic_auth }}
+        ANTHROPIC_FEDERATION_RULE_ID: ${{ inputs.federation_rule_id }}
+        ANTHROPIC_ORGANIZATION_ID: ${{ inputs.organization_id }}
+        ANTHROPIC_SERVICE_ACCOUNT_ID: ${{ inputs.service_account_id }}
+        ANTHROPIC_WORKSPACE_ID: ${{ inputs.workspace_id }}
+        SCRIPTS: ${{ github.workspace }}/_ksai/.github/scripts
+      run: timeout 30 node "${SCRIPTS}/ksai/federation-preflight.mjs"
+
+    - name: Say this repository is not in its team's federation
+      continue-on-error: true
+      if: ${{ steps.federation.outputs.refused == 'true' }}
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        ISSUE_NUMBER: ${{ inputs.pr_number || github.event.issue.number || github.event.pull_request.number }}
+        REPO: ${{ github.repository }}
+        TRIGGER: ${{ inputs.trigger_phrase }}
+        SCRIPTS: ${{ github.workspace }}/_ksai/.github/scripts
+      with:
+        github-token: ${{ inputs.post_github_token }}
+        retries: 3
+        script: |
+          const { renderNoFederation } = require(`${process.env.SCRIPTS}/lib/select-arm.cjs`);
+          const issue_number = Number(process.env.ISSUE_NUMBER);
+          if (!Number.isInteger(issue_number) || issue_number <= 0) {
+            core.warning(`no issue or pull request number to say it on, got: ${process.env.ISSUE_NUMBER}`);
+            return;
+          }
+          await github.rest.issues.createComment({
+            ...context.repo,
+            issue_number,
+            body: renderNoFederation({ repo: process.env.REPO, triggerPhrase: process.env.TRIGGER }),
+          });

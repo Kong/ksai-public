@@ -1,0 +1,171 @@
+name: Clear review request
+description: >-
+  Withdraw the stand-in team's review request once the reviewer has answered, and say why when it
+  refused. The reviewer that answers is the app, not the team that was asked, so a request left
+  pending reads as a review that never happened. An action rather than copied steps because what it
+  encodes is GitHub API behaviour rather than workflow shape, and each step below says which fact it
+  is holding.
+
+inputs:
+  pr_number:
+    description: "PR number whose request is being withdrawn"
+    required: true
+  team_slug:
+    description: >-
+      slug of the team standing in for the app in the reviewer sidebar - the lower-case hyphenated
+      name from the team URL, not a display name. Must be a team in this repository's own org, since
+      GitHub will not let a review request name a team from another one, and must be the same slug
+      the assign workflow matches on: aiming the withdrawal at a team nobody requested passes the
+      check below and leaves the real request pending.
+
+      Required, and deliberately without a default. An input set to the empty string overrides a
+      default rather than falling back to it, so a caller passing an unset variable would send an
+      empty slug and a default here would look like a safety net while catching nothing. The caller
+      picks the fallback, and the step below refuses an empty value outright.
+    required: true
+  client-id:
+    description: "client id of the GitHub App to mint the withdrawal token from (not sensitive)"
+    required: true
+  private-key:
+    description: "private key of that same App"
+    required: true
+  refused-actor:
+    description: >-
+      login to name in a refusal comment before withdrawing. Empty (the default) withdraws in
+      silence, which is right only when a review actually happened. Set it when CODEOWNERS turned
+      the requester down: the sidebar otherwise keeps promising a review, the Actions run is green,
+      and nothing anywhere tells the person who asked that they were declined.
+    required: false
+    default: ""
+  refused-command-off:
+    description: >-
+      set to `true` to withdraw because this repository has the review command turned off in
+      `disabled_commands`, rather than because CODEOWNERS declined the requester. The two need
+      separate wordings: naming CODEOWNERS for a configuration choice sends a requester who did
+      nothing wrong to argue with the owners file. Withdrawing in silence is not an option either -
+      the sidebar entry disappears and nothing says why.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    # GITHUB_TOKEN cannot withdraw a team, only a person. It is scoped to one repository and cannot
+    # resolve an org team, so the endpoint drops the `team_reviewers` it cannot see, answers 200 with
+    # the team still attached, and the job goes green over a sidebar that still says ksai is
+    # reviewing. Verified against a live request.
+    #
+    # Minted against this repo's own org, because that is where the team being withdrawn lives - not
+    # necessarily Kong, which is where the reviewer plugin is read from.
+    - name: Mint org-read token
+      id: token
+      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+      with:
+        owner: ${{ github.repository_owner }}
+        repositories: ${{ github.event.repository.name }}
+        client-id: ${{ inputs.client-id }}
+        private-key: ${{ inputs.private-key }}
+        # Members:read to resolve the team, pull-requests:write to withdraw it. Nothing else: the app
+        # holds write scopes for other flows and this needs none of them.
+        permission-members: read
+        permission-pull-requests: write
+
+    # `reviewers` is required on this endpoint even when only a team is being withdrawn: omitting it
+    # fails with 422 `"reviewers" wasn't supplied`, verified against a live request. The empty array
+    # withdraws no people, which is the intent.
+    #
+    # The answer is read rather than discarded, because this endpoint reports success for a team it
+    # silently ignored - which is how the token bug above stays green. A withdrawal that did not
+    # withdraw fails the job instead, unless GitHub itself is refusing it: a request CODEOWNERS made
+    # cannot be removed while the base branch requires code owner review, and that is a repository's
+    # configuration rather than a fault in this flow.
+    #
+    # `// []` because a jq error inside the assignment ends the step under `errexit` before the
+    # `::error::` below can say anything, turning a withdrawal that worked into an opaque red job.
+    #
+    # The match ignores case because GitHub answers with the canonical slug, which is lower-case
+    # however team_slug is spelled. A mis-cased value would otherwise miss its own team in the answer
+    # and pass - the silent green this step exists to prevent, rebuilt inside the check.
+    - name: Withdraw the team's request
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+        REPO: ${{ github.repository }}
+        OWNER: ${{ github.repository_owner }}
+        PR: ${{ inputs.pr_number }}
+        TEAM: ${{ inputs.team_slug }}
+      run: |
+        if [ -z "${TEAM}" ]; then
+          echo "::error::team_slug is empty, so there is no request to withdraw and no way to check"
+          exit 1
+        fi
+        remaining=$(gh api --method DELETE "repos/${REPO}/pulls/${PR}/requested_reviewers" \
+          -f "reviewers[]" \
+          -f "team_reviewers[]=${TEAM}" \
+          --jq '(.requested_teams // [])[].slug')
+        if ! printf '%s\n' "${remaining}" | grep -qxiF "${TEAM}"; then
+          exit 0
+        fi
+        if ! gh api "orgs/${OWNER}/teams/${TEAM}" --jq '.slug' >/dev/null; then
+          echo "::error::${TEAM} is still a requested reviewer on #${PR} after the withdrawal, and this token cannot resolve the team - the endpoint drops a team_reviewers it cannot see and answers 200 anyway"
+          exit 1
+        fi
+        if ! base=$(gh api "repos/${REPO}/pulls/${PR}" --jq '.base.ref'); then
+          echo "::error::${TEAM} is still a requested reviewer on #${PR} after the withdrawal, and #${PR} could not be read to find the branch whose rules decide whether that is allowed"
+          exit 1
+        fi
+        if ! pinned=$(gh api "repos/${REPO}/rules/branches/${base//\//%2F}" \
+          --jq 'any(.[]; .type == "pull_request" and .parameters.require_code_owner_review == true)'); then
+          echo "::error::${TEAM} is still a requested reviewer on #${PR} after the withdrawal, and the branch rules for ${base} could not be read to say whether GitHub is pinning it"
+          exit 1
+        fi
+        if [ "${pinned}" = "true" ]; then
+          echo "::notice::${TEAM} stays a requested reviewer on #${PR}. ${base} requires code owner review, and GitHub refuses to withdraw a request CODEOWNERS made while that rule stands - which is what this looks like. The review itself was posted"
+          exit 0
+        fi
+        echo "::error::${TEAM} is still a requested reviewer on #${PR} after the withdrawal"
+        exit 1
+
+    # After the withdrawal, not before. A composite action has no continue-on-error, so a failed step
+    # abandons the ones after it: commenting first meant a locked conversation, a secondary rate limit
+    # or a transient 5xx could skip the withdrawal entirely. Between the two, the withdrawal is the
+    # half whose absence is silent - a missing comment still shows up as a red job.
+    #
+    # It rides the app token the mint above already carries, so a caller needs no pull-requests:write
+    # of its own and the refusal arrives from the same identity the review would have.
+    #
+    # The login is checked against the charset GitHub issues before it goes inside a code span. On a
+    # hand dispatch `actor` is a free-form string that CODEOWNERS quietly answers `false` for, so a
+    # backtick in it would close the span and let whoever dispatched compose markdown the app then
+    # posts under its own name. An unusable value still gets a refusal, just without the name in it.
+    # The configuration wording, which is a different refusal from the one below: nobody was declined and
+    # nothing failed - this repository turned the command off, so no run was ever going to answer.
+    - name: Say the review command is turned off here
+      if: ${{ inputs.refused-command-off == 'true' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+        REPO: ${{ github.repository }}
+        PR: ${{ inputs.pr_number }}
+      run: |
+        gh pr comment "${PR}" --repo "${REPO}" --body \
+          "ksai withdrew this review request: the \`review\` command is turned off in this repository's workflow, so no run would have answered it. A code owner turns commands off with \`disabled_commands\`."
+
+    - name: Say why the review was refused
+      if: ${{ inputs.refused-actor != '' && inputs.refused-command-off != 'true' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+        REPO: ${{ github.repository }}
+        PR: ${{ inputs.pr_number }}
+        ACTOR: ${{ inputs.refused-actor }}
+      run: |
+        # Matched in the shell rather than through grep: grep anchors per line, so a value carrying a
+        # newline passes on the strength of one good line and takes the rest of itself along.
+        if [[ "${ACTOR}" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}$ ]]; then
+          who="\`${ACTOR}\`"
+        else
+          who="the account that asked"
+        fi
+        gh pr comment "${PR}" --repo "${REPO}" --body \
+          "ksai declined this review request: ${who} is not a code owner of this repository, so a code owner has to ask for it"

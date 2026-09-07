@@ -1,0 +1,97 @@
+name: KSAI Jira report
+description: >-
+  Tells a Jira ticket what one `/ksai implement` run did, and optionally moves its status. Called once per
+  event by `.github/actions/ksai`, which is the only caller: six reporting steps there differ in the event
+  they name and in nothing else, so the shape they share lives here rather than six times over.
+
+  Writing back to Jira fails open, which is the opposite bias to reading a ticket and must not be unified
+  with it. This runs after the push and after the pull request exists, so an outage, a missing permission or
+  an expired credential is a warning on a green run - a red run is the thing somebody re-triggers, and there
+  is nothing left to re-try. Every sentence it publishes is a literal keyed by event; the only model-written
+  value is a reason, and that goes through `escapeWiki`.
+
+  It holds an Atlassian credential and no GitHub token, which is why it is a step of its own rather than part
+  of the gate beside it.
+
+inputs:
+  event:
+    description: >-
+      which sentence to publish: `planned`, `waiting`, `paused`, `released`, `stepped`, `ready`,
+      `blocked` or `stopped`. Keyed into a null-prototype table, so a value naming none of them
+      publishes nothing.
+    required: true
+  pr_url:
+    description: "the pull request the sentence links to, re-checked against a URL shape before it is published"
+    required: false
+    default: ""
+  reason:
+    description: "a model-written or step-written reason, escaped and capped before it reaches the ticket"
+    required: false
+    default: ""
+  reason_file:
+    description: "a file to read the reason from instead, for the steps that write one rather than output it"
+    required: false
+    default: ""
+  actor:
+    description: >-
+      the display name of the Jira account that released the plan, for the three events that report work a
+      release let happen. Read in the calling action's own Jira-credentialed step, escaped and capped here
+      like every other value from outside this repository.
+    required: false
+    default: ""
+  transition:
+    description: >-
+      a Jira transition to apply after the comment lands, matched against the transitions the ticket itself
+      offers and skipped with a warning when it offers none by that name. Empty leaves the status alone.
+    required: false
+    default: ""
+  plan_key:
+    description: "the ticket key the planning run resolved, empty on every later run"
+    required: false
+    default: ""
+  step_key:
+    description: "the ticket key read back out of the pull request body, which outranks `plan_key`"
+    required: false
+    default: ""
+  jira_cloud_id:
+    description: "Atlassian cloud id of the site to write to"
+    required: false
+    default: ""
+  jira_projects:
+    description: "the project keys this repository may write to, re-resolved here rather than trusted from the step that read the ticket"
+    required: false
+    default: ""
+  jira_client_id:
+    description: "client id of the Atlassian service account's OAuth 2.0 credential"
+    required: false
+    default: ""
+  jira_client_secret:
+    description: "client secret of that credential"
+    required: false
+    default: ""
+  scripts_dir:
+    description: "the trusted copy of `.github/scripts` staged outside the workspace by the calling action"
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Report to the Jira ticket
+      shell: bash
+      env:
+        EVENT: ${{ inputs.event }}
+        PR_URL: ${{ inputs.pr_url }}
+        REASON: ${{ inputs.reason }}
+        REASON_FILE: ${{ inputs.reason_file }}
+        ACTOR: ${{ inputs.actor }}
+        JIRA_TRANSITION: ${{ inputs.transition }}
+        PLAN_KEY: ${{ inputs.plan_key }}
+        STEP_KEY: ${{ inputs.step_key }}
+        JIRA_CLOUD_ID: ${{ inputs.jira_cloud_id }}
+        JIRA_PROJECTS: ${{ inputs.jira_projects }}
+        JIRA_CLIENT_ID: ${{ inputs.jira_client_id }}
+        JIRA_CLIENT_SECRET: ${{ inputs.jira_client_secret }}
+        SCRIPTS: ${{ inputs.scripts_dir }}
+      run: |
+        set -euo pipefail
+        node "${SCRIPTS}/ksai/jira-report.mjs"

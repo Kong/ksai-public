@@ -1,0 +1,91 @@
+{
+  "defaultAlias": "flagship",
+  "allowedAliases": [
+    "fast",
+    "balanced",
+    "flagship"
+  ],
+  "tierOrder": [
+    "fast",
+    "balanced",
+    "flagship"
+  ],
+  "aliases": {
+    "fast": "zai-org/GLM-5.3-Flash",
+    "balanced": "zai-org/GLM-5.3-Flash",
+    "flagship": "zai-org/GLM-5.3-Flash"
+  },
+  "vendorAliases": {
+    "opus": "claude-opus-5",
+    "sonnet": "claude-sonnet-5",
+    "haiku": "claude-haiku-4-5"
+  },
+  "vendorTiers": {
+    "opus": "flagship",
+    "sonnet": "balanced",
+    "haiku": "fast"
+  },
+  "knownModels": [
+    "claude-opus-5",
+    "claude-sonnet-5",
+    "claude-haiku-4-5",
+    "zai-org/GLM-5.3-Flash",
+    "zai-org/GLM-5.3",
+    "deepseek-ai/DeepSeek-V4-Flash-0731",
+    "moonshotai/Kimi-K3"
+  ],
+  "allowedModels": [
+    "zai-org/GLM-5.3-Flash",
+    "claude-opus-5",
+    "claude-sonnet-5",
+    "claude-haiku-4-5"
+  ],
+  "claudeModels": [
+    "claude-opus-5",
+    "claude-sonnet-5",
+    "claude-haiku-4-5"
+  ],
+  "context": {
+    "claude-opus-5": "1M",
+    "claude-sonnet-5": "1M",
+    "claude-haiku-4-5": "200K",
+    "zai-org/GLM-5.3-Flash": "1M",
+    "zai-org/GLM-5.3": "1M",
+    "deepseek-ai/DeepSeek-V4-Flash-0731": "1M",
+    "moonshotai/Kimi-K3": "1M"
+  },
+  "rates": {
+    "claude-opus-5": {
+      "input": 5,
+      "output": 25
+    },
+    "claude-sonnet-5": {
+      "input": 2,
+      "output": 10
+    },
+    "claude-haiku-4-5": {
+      "input": 1,
+      "output": 5
+    },
+    "zai-org/GLM-5.3-Flash": {
+      "input": 0.15,
+      "output": 0.5,
+      "cacheRead": 0.03
+    },
+    "zai-org/GLM-5.3": {
+      "input": 1.4,
+      "output": 4.4,
+      "cacheRead": 0.14
+    },
+    "deepseek-ai/DeepSeek-V4-Flash-0731": {
+      "input": 0.13,
+      "output": 0.26,
+      "cacheRead": 0.028
+    },
+    "moonshotai/Kimi-K3": {
+      "input": 3,
+      "output": 15,
+      "cacheRead": 0.3
+    }
+  }
+}

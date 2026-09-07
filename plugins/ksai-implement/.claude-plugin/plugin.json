@@ -1,0 +1,8 @@
+{
+  "name": "ksai-implement",
+  "description": "CI-only skills used by the KSAI GitHub workflow to plan, build, test, and fix repository changes",
+  "version": "0.15.1",
+  "author": {
+    "name": "Kong"
+  }
+}

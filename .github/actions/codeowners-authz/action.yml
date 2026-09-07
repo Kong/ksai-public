@@ -1,0 +1,72 @@
+name: CODEOWNERS Authorization
+description: >
+  Authorizes a GitHub username against the repository's CODEOWNERS: an individual
+  @user entry on any rule, or active membership in an @org/team entry on any rule
+  where that team itself holds write on the repo (needs org Members:read). In either
+  case the login must also hold write access. Used to gate comment-triggered
+  workflows (e.g. /ksai) before any expensive or concurrency-grouped work runs.
+
+inputs:
+  github-token:
+    description: "token to read CODEOWNERS (contents:read), confirm the login's repo permission (metadata:read) and, for @org/team entries, check org team membership (org Members:read)"
+    required: true
+  username:
+    description: "GitHub login to authorize"
+    required: true
+  write_access:
+    description: >-
+      'true' to also answer whether the login holds write access, which is the bar a repository may open
+      a command to instead of CODEOWNERS ownership. Off by default, so a caller that opens no command to
+      write access spends no extra request and inherits no failure mode it did not have.
+    required: false
+    default: "false"
+
+outputs:
+  authorized:
+    description: "'true' if username holds write access on the repo AND is either named on a CODEOWNERS rule directly or an active member of an @org/team named on a rule that itself holds write on the repo, else 'false'"
+    value: ${{ steps.check.outputs.authorized }}
+  owners:
+    description: >-
+      'absent' when the repository has no CODEOWNERS file at any of the three paths GitHub reads, so it
+      has no code owners and the denial is about the repository rather than about the login. Empty
+      everywhere else, including a file that exists and names nobody.
+    value: ${{ steps.check.outputs.owners }}
+  write_access:
+    description: >-
+      'true' or 'false' where `write_access` asked for it and GitHub answered, and empty where it was not
+      asked or could not be told. Empty is not a denial: a caller holding a command whose bar is write
+      access has to be loud about it rather than read it as no.
+    value: ${{ steps.check.outputs.write_access }}
+
+runs:
+  using: composite
+  steps:
+    - id: check
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        AUTHZ_USERNAME: ${{ inputs.username }}
+        AUTHZ_WRITE_ACCESS: ${{ inputs.write_access }}
+        # The logic ships beside this action.yml, so every caller's sparse-checkout of
+        # `.github/actions/codeowners-authz` already includes it - no consumer workflow change.
+        # It lives in a module rather than inline here so the API glue is unit-testable too.
+        AUTHZ_ACTION_PATH: ${{ github.action_path }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        retries: 3
+        script: |
+          const authorize = require(`${process.env.AUTHZ_ACTION_PATH}/authorize.cjs`);
+          const cache = Object.create(null);
+          const asked = {
+            github,
+            core,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            username: process.env.AUTHZ_USERNAME,
+            cache,
+          };
+          const authorized = await authorize(asked);
+          core.setOutput('authorized', authorized ? 'true' : 'false');
+          core.setOutput(
+            'write_access',
+            process.env.AUTHZ_WRITE_ACCESS === 'true' ? await authorize.writeAccess(asked) : '',
+          );

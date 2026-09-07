@@ -1,0 +1,39 @@
+name: KSAI independent approval
+
+on:
+  workflow_call:
+    inputs:
+      runs_on:
+        description: >-
+          one runner label, or several as a JSON array. `workflow_call` inputs are only ever
+          boolean, number or string, so a pool needing more than one label is written
+          '["self-hosted", "linux"]' and read back with fromJSON.
+        required: false
+        type: string
+        default: ubuntu-latest
+
+permissions: {}
+
+jobs:
+  update:
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ${{ startsWith(inputs.runs_on, '[') && fromJSON(inputs.runs_on) || inputs.runs_on }}
+    timeout-minutes: 5
+    concurrency:
+      group: independent-approval-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      pull-requests: write
+      statuses: write
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      - name: Hold the pull request for an independent approval
+        uses: Kong/ksai-public/.github/actions/require-independent-approval@v3.40.4
+        with:
+          github-token: ${{ github.token }}
+          pr-number: ${{ github.event.pull_request.number }}
+          head-sha: ${{ github.event.pull_request.head.sha }}

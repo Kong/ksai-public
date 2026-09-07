@@ -1,0 +1,44 @@
+name: Require Independent Approval
+description: >
+  Holds a pull request until the approvals its base branch requires come from
+  somebody who did not contribute to it. A contributor is the pull request's
+  author, any commit author on it, or any login named by a `Co-authored-by:`
+  trailer. GitHub only refuses an approval from the pull request's author, so a
+  branch a bot opened on a person's behalf can be approved by that same person.
+  Reports a commit status to make required, and dismisses a contributor's own
+  approval so GitHub recounts without it.
+
+inputs:
+  github-token:
+    description: "token to read the pull request, its commits, its reviews and the base branch rules (contents:read, metadata:read), write the commit status (statuses:write) and dismiss a contributor's approval (pull-requests:write)"
+    required: true
+  pr-number:
+    description: "pull request to hold"
+    required: true
+  head-sha:
+    description: "head commit of that pull request, from the event payload, so a failure can be reported on it even when the pull request itself cannot be read"
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        INDEPENDENT_ACTION_PATH: ${{ github.action_path }}
+        INDEPENDENT_PR: ${{ inputs.pr-number }}
+        INDEPENDENT_HEAD_SHA: ${{ inputs.head-sha }}
+        INDEPENDENT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        retries: 3
+        script: |
+          const { run } = require(`${process.env.INDEPENDENT_ACTION_PATH}/independent.cjs`);
+          await run({
+            github,
+            core,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            prNumber: Number(process.env.INDEPENDENT_PR),
+            headSha: process.env.INDEPENDENT_HEAD_SHA,
+            targetUrl: process.env.INDEPENDENT_RUN_URL,
+          });

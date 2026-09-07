@@ -1,0 +1,117 @@
+{
+  "_comment": "Policy tables for triage/policy.cjs beside this file. Edit this file to change what a review costs; the engine holds the logic that applies these and is not configurable from here. JSON because the reviewer action installs no dependencies, so the runtime has JSON.parse and no YAML parser. Every rule carries a `why` that is rendered into the run report, so a pull request shows the reason it got the arm it got. Patterns are JavaScript regular expressions against the repo-relative path, `flags` accepts only `i`, and a malformed rule is dropped rather than guessed at.",
+
+  "bands": [
+    {
+      "tier": "balanced",
+      "maxLines": 1500,
+      "maxFiles": 60,
+      "why": "a diff of this size reads fine on the balanced tier"
+    }
+  ],
+
+  "_bands_note": "First band whose bounds both hold wins; a diff matching none keeps the repo's configured model. Both bounds are checked because they fail in different directions: a wide mechanical sweep across many files reads badly on a cheap arm, and a dense change concentrated in few files reads worse. The bounds were 600 lines and 30 files while they were a guess, and they are now measured against the eval corpus. Above 600 lines opus returned 0.54 critical-or-high findings per run against sonnet's 1.00, and what the extra spend bought was low-severity volume - 2.07 low findings per run against 1.16 - in the severity band with the lowest engagement and the most thumbs-down. Engagement with what each arm found is level, at 77% for opus and 79% for sonnet. The sonnet arm in that range is 19 runs against opus's 91, which is why the bound moves to 1500 rather than further. `maxFiles` excluded five runs in that range that the line bound did not, so 60 keeps the second bound honest without letting it decide anything. There is deliberately no haiku band - what is measured about haiku is its cost, not what it finds, and the one arm this reviewer was seen to fail on returned a status line and reported success. Add one only after measuring parse_ok and findings-per-run against sonnet.",
+
+  "riskFloorTier": "flagship",
+
+  "risk": [
+    { "match": "^\\.github/(workflows|actions)/", "why": "a workflow change runs with the repo's credentials" },
+    { "match": "(^|/)dockerfile(\\.|$)", "flags": "i", "why": "an image change ships to every environment" },
+    { "match": "(^|/)docker-compose[^/]*\\.ya?ml$", "flags": "i", "why": "an image change ships to every environment" },
+    { "match": "\\.tf(vars)?$", "why": "infrastructure changes are hard to reverse" },
+    { "match": "\\.sql$", "why": "a data change is hard to reverse" },
+    { "match": "(^|/)migrations?/", "why": "a data change is hard to reverse" },
+    { "match": "(^|/)(auth|authn|authz|crypto|security|secrets?|tokens?|passwords?|sessions?|permissions?)(/|[._-]|$)", "flags": "i", "why": "a change on an auth path decides who gets in" },
+    { "match": "(^|/)codeowners$", "flags": "i", "why": "CODEOWNERS decides who may spend the team's budget" }
+  ],
+
+  "_risk_note": "A matched rule raises the floor to its `floor`, or to riskFloorTier when it names none. The floor is the top tier, so a match means the diff keeps whatever arm the caller configured. That is how this table says no downgrade rather than how it says escalate: the selector's clamp only ever moves down, so a proposal of `opus` moves a repo configured for opus nowhere and moves a repo configured for sonnet nowhere either. The floor was `sonnet` until it was measured, which made the whole table inert - the one band names `sonnet` too, so `tierFor` never raised anything, and a four-line workflow change was downgraded exactly like an ordinary diff while the run report printed the risk reason beside it. 52 reviews in the eval corpus carry `risk: true` and a sonnet proposal for that reason. The point is that a one-line change here is a small diff with a large blast radius, which the size bands would otherwise send to the cheapest arm on the line count alone, so a rule that does not deserve to hold the configured arm does not belong in this table.",
+
+  "apiSurface": [
+    { "match": "\\.proto$", "why": "a wire contract other repositories build against" },
+    { "match": "(^|/)(openapi|swagger)[^/]*\\.(ya?ml|json)$", "flags": "i", "why": "a published API description" },
+    { "match": "\\.d\\.ts$", "why": "a published type surface" },
+    { "match": "(^|/)(api|apis)/", "flags": "i", "why": "a directory other repositories call into" },
+    { "match": "(^|/)(controllers?|routes?|handlers?|endpoints?)/", "flags": "i", "why": "a request entry point" },
+    { "match": "(^|/)graphql/", "flags": "i", "why": "a published schema" },
+    { "match": "\\.graphql$", "why": "a published schema" }
+  ],
+
+  "_apiSurface_note": "Recorded and acted on by nothing. It measures how often a diff changes a surface other repositories call, which is the base rate any cross-repo-index rollout needs. A wiring test asserts no step's condition reads it.",
+
+  "skillsByExtension": [
+    { "ext": ".go", "skill": "go-code-review" },
+    { "ext": ".vue", "skill": "vue-code-review" },
+    { "ext": ".ts", "skill": "typescript-code-review" },
+    { "ext": ".tsx", "skill": "typescript-code-review" },
+    { "ext": ".mts", "skill": "typescript-code-review" },
+    { "ext": ".cts", "skill": "typescript-code-review" },
+    { "ext": ".js", "skill": "typescript-code-review" },
+    { "ext": ".jsx", "skill": "typescript-code-review" },
+    { "ext": ".mjs", "skill": "typescript-code-review" },
+    { "ext": ".cjs", "skill": "typescript-code-review" }
+  ],
+
+  "skillsByPath": [
+    {
+      "match": "\\.(controller|module|service|resolver|guard|interceptor|pipe|filter|middleware|decorator)\\.ts$",
+      "skill": "nestjs-code-review",
+      "why": "NestJS names files by role, and the manifest that would prove it is not in the diff"
+    },
+    {
+      "match": "(^|/)(composables|stores)/.*\\.(ts|js|mjs)$",
+      "flags": "i",
+      "skill": "vue-code-review",
+      "why": "Nuxt auto-imports composables/ by convention and Pinia stores conventionally live in stores/ - the skill's own description already claims Vue/Nuxt .ts/.js/.mjs files that the .vue-only extension rule cannot reach"
+    }
+  ],
+
+  "_skills_note": "Path rules are checked before extension rules, so a NestJS file, or a Vue/Nuxt composable or store, is not claimed by the plain TypeScript rules beneath them. They match the full path, not only the basename, which is what lets a rule key on a directory. The TypeScript and JavaScript extensions were uncovered until the gap was measured: across 420 real pull requests in seven wired repositories, 62% of reviewable lines matched no rule at all, and .ts, .mjs and .cjs were the three largest uncovered code extensions, behind only the .json and .yaml data files that no reviewer skill claims. Those files were always reviewed - by default-code-review, which carries no language catalog - so this routes them to one rather than reviewing anything that was skipped. A file no rule claims counts as uncovered, and the engine brings in default-code-review when enough of the diff is uncovered. A skill named here must exist under plugins/kreview/skills/, which a wiring test enforces.",
+
+  "skipAuthors": [
+    { "login": "renovate[bot]" },
+    { "login": "kong-renovate-app[bot]" },
+    { "login": "dependabot[bot]" },
+    { "login": "dependabot-preview[bot]" },
+    { "login": "github-actions[bot]" },
+    { "login": "pre-commit-ci[bot]" },
+    { "login": "kong-volcano-app[bot]" },
+    { "login": "kong-konnect-automation-app[bot]" },
+    { "login": "kong-mesh[bot]" }
+  ],
+
+  "_skipAuthors_note": "A pull request opened by one of these is skipped whatever it changed, checked before the file list is even read. Logins are compared case-insensitively, since GitHub treats them that way. This is the one skip rule that does not look at the diff, and it earns its place where reviews are requested automatically: with the consumer template's automatic request branch kept, every opened pull request gets a review, so a bot's pull requests are reviewed on repeat until something stops them. The skip is bounded by who wrote the commits rather than by who opened the pull request: a person pushing onto a Renovate branch was getting their own code refused a review they had asked for, so a head carrying one commit this list does not name is reviewed. List an account here only when its own pull requests are never worth a model's time. Adding a human login would silence that person's pull requests with no way for them to tell why beyond the notice. The list held the two public bots and matched most of nothing: over the last 50 pull requests of 120 wired repositories, kong-renovate-app[bot] opened 329, kong-volcano-app[bot] 71, kong-konnect-automation-app[bot] 56 and kong-mesh[bot] 55, none of them listed, against 526 for renovate[bot] and 153 for dependabot[bot] which were. Two automation accounts are deliberately still absent: kong-ksai[bot] opens the pull requests this flow writes itself, and aikido-autofix[bot] changes code to close a vulnerability. Both are worth a model's time.",
+
+  "skipAuthorReason": "every commit on this pull request was written by an automation account",
+
+  "nonReviewable": {
+    "extensions": [
+      ".png", ".jpg", ".jpeg", ".gif", ".ico", ".webp", ".bmp",
+      ".pdf", ".mp4", ".mov", ".webm",
+      ".woff", ".woff2", ".ttf", ".eot", ".otf"
+    ],
+    "basenames": [
+      "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "npm-shrinkwrap.json",
+      "go.sum", "cargo.lock", "gemfile.lock", "poetry.lock", "composer.lock",
+      "pipfile.lock", "flake.lock"
+    ]
+  },
+
+  "_nonReviewable_note": "A diff made entirely of these is skipped and no review runs, which in practice means a pin-only dependency bump. Keep it tight: a wrong entry buys a review that never happened and nobody noticed. Documentation is deliberately absent - markdown is behaviour in an agent repository, where AGENTS.md becomes repo_conventions and a SKILL.md is a spawn protocol, and prose is worth reviewing everywhere else, so no extension carrying words is skippable. .svg is absent because an SVG carries script and foreignObject and is served as active content, so it is not an inert image. Anything arguable stays out - a .gitignore hides files from a reviewer and a CODEOWNERS line decides who may spend the budget, so neither is 'just config'.",
+
+  "skipReason": "every changed file is an asset or a generated dependency lockfile",
+
+  "dependencyManifests": [
+    { "manifest": "package.json", "lockfiles": ["package-lock.json", "yarn.lock", "pnpm-lock.yaml", "npm-shrinkwrap.json"] },
+    { "manifest": "go.mod", "lockfiles": ["go.sum"] },
+    { "manifest": "cargo.toml", "lockfiles": ["cargo.lock"] },
+    { "manifest": "gemfile", "lockfiles": ["gemfile.lock"] },
+    { "manifest": "pipfile", "lockfiles": ["pipfile.lock"] },
+    { "manifest": "composer.json", "lockfiles": ["composer.lock"] },
+    { "manifest": "pyproject.toml", "lockfiles": ["poetry.lock"] }
+  ],
+
+  "_dependencyManifests_note": "The manifest half of a resolved dependency update, each paired with the lockfiles its own package manager writes. A diff is skipped when every reviewable file is a listed manifest, every manifest in it has one of its own lockfiles in the diff beside it, and no risk rule matched. The pairing is per ecosystem rather than diff-wide, and that is the whole rule: counting lockfiles across the diff let a hand-edited package.json ride into a skip on a go.sum that a real Go bump had changed, which is a crafted bypass of the fleet's only automated review pass. It is not per directory, because npm workspaces keep one package-lock.json at the root while every packages/*/package.json changes beneath it, and pairing by directory would refuse the monorepos this rule exists for. The lockfile is the load-bearing condition rather than decoration: a package manager rewrites it when the resolved dependency set moves and leaves it alone when only a script, an engines field or an export map changes, so a manifest edit arriving without its own lockfile is a behaviour change wearing a dependency file's name and stays reviewable. Every lockfile named here must also be in the nonReviewable basenames above, which a rules test asserts - one that is not would count as a reviewable file and cancel the skip it was meant to license. requirements.txt is deliberately absent: it has no lockfile of its own, so it could never satisfy the pairing, and listing a manifest that can never be skipped reads as though it could. What this still cannot separate is a pull request that bumps a dependency and edits a script in the same package.json, or one that hand-edits one workspace manifest while bumping another - the file list is all this policy reads.",
+
+  "manifestSkipReason": "the only reviewable change is a dependency manifest beside its lockfile"
+}
