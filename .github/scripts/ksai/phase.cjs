@@ -5,7 +5,7 @@ const { readCount } = require('./continue.cjs');
 
 const { pagedProbe } = require('./pages.cjs');
 const { scrub, hasPlanRegion, heldBy, planFileIn } = require('./plan.cjs');
-const { surfaceOf, asAlert, JIRA_KEY_SHAPE } = require('../lib/select-arm.cjs');
+const { surfaceOf, asAlert, commandEnabled, ownerOf, JIRA_KEY_SHAPE } = require('../lib/select-arm.cjs');
 
 const MAX_PAGES = 10;
 const PER_PAGE = 100;
@@ -250,14 +250,19 @@ const PHASE_NOTICE = Object.freeze(
   }),
 );
 
-function renderPhaseNotice(phase, { pending = null, triggerPhrase = null } = {}) {
+const DO_INSTEAD =
+  '. If the work you want was never raised in a thread - a red check, a conflict, a missing test - ask for ' +
+  '`do` and say what to do';
+
+function renderPhaseNotice(phase, { pending = null, triggerPhrase = null, disabledCommands = null } = {}) {
   const key = String(phase ?? '')
     .trim()
     .toLowerCase();
   const body = PHASE_NOTICE[key];
   if (!body) return '';
   if (key !== 'ambiguous' && String(pending ?? '') !== '0') return '';
-  return asAlert('WARNING', scrub(body, { triggerPhrase }));
+  const offered = key === 'fix' && commandEnabled('do', { flow: ownerOf('do'), disabledCommands }) ? DO_INSTEAD : '';
+  return asAlert('WARNING', scrub(`${body}${offered}`, { triggerPhrase }));
 }
 
 function renderClosed(command, { state = null, triggerPhrase = null } = {}) {
@@ -481,11 +486,10 @@ async function resolvePhase({
     });
   }
 
-  return {
-    error:
-      `the \`${wanted}\` command belongs to the \`${family}\` phase family, and nothing in this action resolves ` +
+  return refuse(
+    `the \`${wanted}\` command belongs to the \`${family}\` phase family, and nothing in this action resolves ` +
       'that family yet, so there is nothing to work on',
-  };
+  );
 }
 
 module.exports = {

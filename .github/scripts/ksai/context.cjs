@@ -2,6 +2,19 @@
 
 const { readCount, MAX_ATTEMPTS } = require('./continue.cjs');
 const { JIRA_KEY_SHAPE, anyCommandOpen } = require('../lib/select-arm.cjs');
+const { editState, UNEDITED } = require('./approval.cjs');
+
+const editRefusal = (comment, where) => {
+  const state = editState(comment);
+  if (state === UNEDITED) return null;
+  return {
+    error:
+      `the ${where} this run answers ${state === 'edited' ? 'has been edited since it was posted' : 'carries no edit state to read'}, ` +
+      'so nothing ran. GitHub keeps the original author on an edited comment while the words become somebody ' +
+      "else's, and authorization here reads that author - so a command is only ever taken from a comment nobody " +
+      'has touched. Post a new comment asking for it',
+  };
+};
 
 const NUMBER_SHAPE = /^[1-9][0-9]{0,9}$/;
 
@@ -121,6 +134,8 @@ function resolveContext({ eventName = null, payload = null, inputs = null } = {}
     if (issueNumber === null) {
       return { error: `the comment event carried no issue number (got \`${String(issue?.number ?? '')}\`)` };
     }
+    const refused = editRefusal(comment, 'comment');
+    if (refused) return refused;
     return {
       issueNumber,
       jiraKey: null,
@@ -129,6 +144,7 @@ function resolveContext({ eventName = null, payload = null, inputs = null } = {}
       commenter: commenterOf(comment),
       commentId: readNumber(comment?.id),
       commentBody: String(comment?.body ?? ''),
+      commentEdited: editState(comment),
       threadRootId: null,
       attempt: 0,
       stall: 0,
@@ -181,6 +197,8 @@ function resolveContext({ eventName = null, payload = null, inputs = null } = {}
           `an \`id\` of its own (got \`${String(comment?.in_reply_to_id ?? '')}\` and \`${String(comment?.id ?? '')}\`)`,
       };
     }
+    const refused = editRefusal(comment, 'review comment');
+    if (refused) return refused;
     return {
       issueNumber,
       jiraKey: null,
@@ -189,6 +207,7 @@ function resolveContext({ eventName = null, payload = null, inputs = null } = {}
       commenter: commenterOf(comment),
       commentId: readNumber(comment?.id),
       commentBody: String(comment?.body ?? ''),
+      commentEdited: editState(comment),
       threadRootId,
       attempt: 0,
       stall: 0,

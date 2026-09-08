@@ -14,6 +14,7 @@ const {
   surfaceOfEvent,
 } = require('../lib/select-arm.cjs');
 const { counted } = require('../lib/text.cjs');
+const { docsLink } = require('../lib/docs.cjs');
 
 const NEVER_CLASSIFIED = Object.freeze([...NEVER_INFERRED].sort());
 
@@ -27,7 +28,23 @@ const SURFACES = Object.freeze([
 
 const NUDGE_VERDICT = 'approve-nudge';
 
+const NO_VERDICT = 'none';
+
 const CLARIFY_VERDICT = 'clarify';
+
+const EXAMPLES = Object.freeze([
+  Object.freeze({ said: 'the build is red, sort it out', answer: 'do', quiet: false }),
+  Object.freeze({ said: 'triage this and fix everything that blocks it from being merged', answer: 'do', quiet: false }),
+  Object.freeze({ said: 'resolve the conflicts with the base branch', answer: 'do', quiet: false }),
+  Object.freeze({ said: 'answer the comments you left on this', answer: 'fix', quiet: false }),
+  Object.freeze({ said: 'take another look at the error handling', answer: 'review', quiet: false }),
+  Object.freeze({ said: 'rework the plan so it covers the notes left on it', answer: 'revise', quiet: false }),
+  Object.freeze({ said: 'start the environments and try to break this', answer: 'test', quiet: false }),
+  Object.freeze({ said: 'build what this issue describes', answer: 'implement', quiet: false }),
+  Object.freeze({ said: 'looks good to me, ship it', answer: NUDGE_VERDICT, quiet: false }),
+  Object.freeze({ said: 'thanks, nice one', answer: NO_VERDICT, quiet: true }),
+  Object.freeze({ said: 'cc @someone for visibility', answer: NO_VERDICT, quiet: true }),
+]);
 
 const STANDING_NONE_RULE = Object.freeze([
   '- Answer none only when nothing above is close. It is not a safe default: it leaves the request',
@@ -107,8 +124,6 @@ function answerSet(disabledCommands, surface = null) {
   return set;
 }
 
-const NO_VERDICT = 'none';
-
 const surfaceForComment = ({ onOwnPull = null, onIssue = null, threadRootId = null, onReview = null } = {}) => {
   const where = surfaceOfEvent(onIssue, threadRootId, onReview);
   return String(onOwnPull) === 'true' && where === 'pull' ? OWN_PULL_SURFACE : where;
@@ -122,6 +137,11 @@ function renderCommandClassifierPrompt({ comment = null, surface = null, disable
   const asked = String(surface ?? '');
   const notes = notesFor(asked);
   const extras = extrasFor(asked, disabledCommands);
+  const offered = answerable(disabledCommands, asked);
+  const silenceIsRight = Array.isArray(notes.noneRule);
+  const examples = EXAMPLES.filter((example) =>
+    example.quiet ? silenceIsRight : offered.includes(example.answer),
+  );
   const lines = [
     'Answer with exactly one word and nothing else. No punctuation, no explanation, no quotes.',
     '',
@@ -130,7 +150,7 @@ function renderCommandClassifierPrompt({ comment = null, surface = null, disable
     'matches what they are asking for.',
     '',
     'The commands:',
-    ...answerable(disabledCommands, asked).map((command) => {
+    ...offered.map((command) => {
       const extra = extras.find((one) => one.answer === command);
       if (extra) return `- ${command}: ${extra.doc}`;
       const where = SURFACE[command] === 'issue' ? 'on an issue' : SURFACE[command] === 'pull' ? 'on a pull request' : 'anywhere';
@@ -146,6 +166,11 @@ function renderCommandClassifierPrompt({ comment = null, surface = null, disable
     ...(notes.noneRule ?? STANDING_NONE_RULE),
     '- Informal wording still names a command. "sort the CI out", "have a go at the conflicts" and "this needs a',
     '  regression case adding" are all asking for work, not for nothing.',
+    '- The words somebody writes are not the name of the command they want. A comment can say "fix" and want a',
+    '  different one, so match on the result it asks for rather than on a word it shares with a name above.',
+    ...(examples.length
+      ? ['', 'Comments and the word each one takes:', ...examples.map(({ said, answer }) => `- "${said}": ${answer}`)]
+      : []),
     '',
     'COMMENT-BEGIN',
     text,
@@ -154,6 +179,17 @@ function renderCommandClassifierPrompt({ comment = null, surface = null, disable
     'One word:',
   ];
   return lines.join('\n');
+}
+
+const CLASSIFIER_SOURCE = 'classifier';
+
+function renderClassifierFooter(source, { triggerPhrase = null } = {}) {
+  if (String(source ?? '').trim() !== CLASSIFIER_SOURCE) return '';
+  const link = docsLink('the command reference', '/reference/#commands', { scrubbed: true });
+  const said =
+    'Your comment named no command, so the one that ran was read from your words. If that read them wrong, ' +
+    `write the command yourself${link ? ` - ${link} lists every one` : ''}`;
+  return `---\n\n*${scrubTrigger(said, triggerPhrase)}*`;
 }
 
 function renderClarification({ triggerPhrase = null, disabledCommands = null } = {}) {
@@ -308,10 +344,13 @@ module.exports = {
   NUDGE_VERDICT,
   CLARIFY_VERDICT,
   OWN_PULL_SURFACE,
+  CLASSIFIER_SOURCE,
+  EXAMPLES,
   answerable,
   finalResult,
   renderCommandClassifierPrompt,
   renderClarification,
+  renderClassifierFooter,
   verdictOf,
   actOnVerdict,
   renderClassifierSpend,

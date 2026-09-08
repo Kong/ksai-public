@@ -18,6 +18,7 @@ const { KINDS, KIND_TABLE, payloadFor, marked } = require('./marker.cjs');
 const { decideFinish } = require('./phase.cjs');
 const { checkStep, creditOf, oneLine, parseBody, scrub } = require('./plan.cjs');
 const { asAlert } = require('../lib/select-arm.cjs');
+const { renderClassifierFooter } = require('./classify.cjs');
 
 function decideFinished(env) {
   const out = decideFinish({
@@ -172,7 +173,11 @@ async function publishNotice({ github, owner, repo, env }) {
     ? asAlert('WARNING', scrub(`Nothing ran: ${String(env[said.body])}`, { triggerPhrase: env.TRIGGER }))
     : String(env[said.body]);
   const named = said.kind ? String(env[said.kind] ?? '').trim() : '';
-  const body = marked(text, payloadFor(env, { kind: KINDS.includes(named) ? named : 'notice' }));
+  const footer = renderClassifierFooter(env.ROUTE_SOURCE, { triggerPhrase: env.TRIGGER });
+  const body = marked(
+    footer ? `${text}\n\n${footer}` : text,
+    payloadFor(env, { kind: KINDS.includes(named) ? named : 'notice' }),
+  );
   await github.rest.issues.createComment({ owner, repo, issue_number: target, body });
   outputs.posted = 'true';
   return { outputs, notices: [`published the notice for a run that stopped before the model, on #${target}`] };
@@ -189,7 +194,11 @@ async function publishTesterNotice({ github, owner, repo, env }) {
   }
 
   const named = String(env.NOTICE_KIND ?? '').trim();
-  const body = marked(notice, payloadFor(env, { kind: KINDS.includes(named) ? named : 'notice', pr: env.THREAD_NUM }));
+  const footer = renderClassifierFooter(env.ROUTE_SOURCE, { triggerPhrase: env.TRIGGER });
+  const body = marked(
+    footer ? `${notice}\n\n${footer}` : notice,
+    payloadFor(env, { kind: KINDS.includes(named) ? named : 'notice', pr: env.THREAD_NUM }),
+  );
   try {
     await github.rest.issues.createComment({ owner, repo, issue_number: target, body });
   } catch (error) {

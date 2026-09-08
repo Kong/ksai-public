@@ -1426,6 +1426,7 @@ runs:
         NOTICE_KIND: ${{ steps.select_test.outputs.notice_kind }}
         COMMAND: test
         TRIGGER: ${{ inputs.trigger_phrase }}
+        ROUTE_SOURCE: ${{ steps.select_test.outputs.route_source }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:
         github-token: ${{ inputs.source_org_github_token }}
@@ -1972,6 +1973,7 @@ runs:
         REPOSITORY: ${{ github.repository }}
         COMMAND: ${{ steps.select.outputs.command }}
         TRIGGER: ${{ inputs.trigger_phrase }}
+        DISABLED_COMMANDS: ${{ inputs.disabled_commands }}
         BOT_LOGIN: ${{ inputs.bot_login }}
         GUIDANCE: ${{ steps.select.outputs.guidance_html }}
         THREADS_FILE: ${{ runner.temp }}/ksai-threads.json
@@ -2102,6 +2104,7 @@ runs:
         DISABLED_COMMANDS: ${{ inputs.disabled_commands }}
         BOT_LOGIN: ${{ inputs.bot_login }}
         COMMENT_ID: ${{ steps.context.outputs.comment_id }}
+        COMMENT_EDITED: ${{ steps.context.outputs.comment_edited }}
         THREAD_ROOT_ID: ${{ steps.context.outputs.thread_root_id }}
         DISPATCHED: ${{ steps.context.outputs.dispatched }}
         REVIEW_ID: ${{ steps.context.outputs.review_id }}
@@ -2628,6 +2631,7 @@ runs:
         TRIGGER: ${{ inputs.trigger_phrase }}
         PLAN_NOTICE: ${{ steps.read_plan.outputs.error_notice }}
         COMMAND: ${{ steps.select.outputs.command }}
+        ROUTE_SOURCE: ${{ steps.select.outputs.route_source }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:
         github-token: ${{ inputs.source_org_github_token }}
@@ -5842,6 +5846,7 @@ runs:
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         RUN_ID: ${{ github.run_id }}
         COMMAND: ${{ steps.select_arm.outputs.command }}
+        ROUTE_SOURCE: ${{ steps.select_arm.outputs.route_source }}
         REPORT_PUBLISHED: ${{ steps.comment_report.outputs.published }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:

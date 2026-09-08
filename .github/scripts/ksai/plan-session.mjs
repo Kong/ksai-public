@@ -25,11 +25,7 @@ const OPENCODE_FILE = 'opencode-session.json';
 
 const opencodeAt = (dir) => join(dir, OPENCODE_FILE);
 
-/**
- * saveOpencode carries the planning session by exporting it, which is the only handle this engine
- * offers: its sessions live in a store rather than in a transcript file a path can name.
- */
-export function newestSession(env, run) {
+function newestSession(env, run) {
   const listed = run('opencode', ['session', 'list', '--format', 'json', '-n', '1'], { encoding: 'utf8', env });
   try {
     const [newest] = JSON.parse(String(listed.stdout ?? '[]'));
@@ -40,6 +36,10 @@ export function newestSession(env, run) {
   }
 }
 
+/**
+ * saveOpencode carries the planning session by exporting it, which is the only handle this engine
+ * offers: its sessions live in a store rather than in a transcript file a path can name.
+ */
 export function saveOpencode(env = process.env, run = spawnSync) {
   const outputs = { file: '', saved: 'false' };
   const dir = String(env.STAGING_DIR ?? '').trim();

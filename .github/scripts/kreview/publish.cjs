@@ -3,6 +3,7 @@ const { updateOrCreate } = require('../lib/comment.cjs');
 const { BLANK_CELL, historyLines, ksaiHeading, reportTable, runHeading, spendSaid } = require('../lib/run-progress.cjs');
 const { runStateMarker } = require('../lib/run-record.cjs');
 const { MODEL_TIERS, armLabel } = require('../lib/select-arm.cjs');
+const { renderClassifierFooter } = require('../ksai/classify.cjs');
 const { href: markerHref } = require('../ksai/marker.cjs');
 const { scrub } = require('../ksai/plan.cjs');
 const { watchdogDetail } = require('../lib/watchdog.cjs');
@@ -528,11 +529,13 @@ async function publishReviewNotice({ github, owner, repo, env }) {
     return { notices: [`the run report carried the \`${kind}\` notice, so nothing was published beside it`] };
   }
 
+  const said = scrub(renderReviewNotice(kind, env), { triggerPhrase: env.TRIGGER });
+  const footer = renderClassifierFooter(env.ROUTE_SOURCE, { triggerPhrase: env.TRIGGER });
   await github.rest.issues.createComment({
     owner,
     repo,
     issue_number: Number(env.PR_NUMBER),
-    body: scrub(renderReviewNotice(kind, env), { triggerPhrase: env.TRIGGER }),
+    body: footer ? `${said}\n\n${footer}` : said,
   });
   return { notices: [`published the \`${kind}\` notice`] };
 }

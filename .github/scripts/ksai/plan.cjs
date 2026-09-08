@@ -29,7 +29,7 @@ const PLAN_DIR_SHAPE = new RegExp(`^(?:${PATH_SEGMENT}\\/){0,7}${PATH_SEGMENT}$`
 
 const DEFAULT_PLAN_DIR = 'docs/plans';
 
-const PHASE_HEADING = /^ {0,3}##[ \t]+Phase[ \t]+([1-9][0-9]{0,2})[ \t]*(?:[-:][ \t]*(.*))?$/;
+const PHASE_HEADING = /^ {0,3}##[ \t]+Phase[ \t]+([1-9][0-9]{0,2})[ \t]*(?:[-:][ \t]*?(.*?))?(?:[ \t]+#+)?[ \t]*$/;
 
 const PHASE_ATTEMPT = /^ {0,3}#{1,6}[ \t]+Phase[ \t]*[0-9]/i;
 
@@ -37,7 +37,7 @@ const PHASE_SETEXT = /^ {0,3}Phase[ \t]*[0-9]/i;
 
 const HTML_BLOCK_AT = /^<(?:\/?[a-zA-Z][a-zA-Z0-9-]*(?:[ \t/>]|$)|\?|!(?:[a-zA-Z]|\[CDATA\[))/;
 
-const STEPS_HEADING = /^ {0,3}###[ \t]+Steps[ \t]*$/;
+const STEPS_HEADING = /^ {0,3}###[ \t]+Steps(?:[ \t]+#+)?[ \t]*$/;
 
 const DOC_BULLET = /^[-*+][ \t]+(.*?)[ \t]*$/;
 
@@ -410,7 +410,7 @@ function motivationOf(body) {
   return said.join('\n').trim();
 }
 
-const MAX_DOC_LINES = 5000;
+const { MAX_PLAN_LINES: MAX_DOC_LINES } = require('../lib/plan-given.cjs');
 
 function planDirOf(dir) {
   const asked = String(dir ?? '').trim().replace(/^\/+|\/+$/g, '');
@@ -485,13 +485,15 @@ function outsideComments(line, open) {
   let inside = open;
   let said = '';
   let tag = false;
+  let ended = false;
   let at = 0;
   while (at < text.length) {
     if (inside) {
       const closed = text.indexOf('-->', at);
-      if (closed === -1) return { said, open: true, tag };
+      if (closed === -1) return { said, open: true, tag, reopened: ended };
       at = closed + 3;
       inside = false;
+      ended = true;
       continue;
     }
     if (text[at] === '\\') {
@@ -517,7 +519,7 @@ function outsideComments(line, open) {
     said += text[at];
     at += 1;
   }
-  return { said, open: inside, tag };
+  return { said, open: inside, tag, reopened: false };
 }
 
 function parsePlanDocument(text) {
@@ -535,6 +537,7 @@ function parsePlanDocument(text) {
   let fenced = '';
   let fencedAt = 0;
   let commented = false;
+  let escaped = false;
   let last = '';
   let said = '';
   let saidAt = 0;
@@ -548,31 +551,26 @@ function parsePlanDocument(text) {
     saidAt = 0;
     let hidden = false;
     let tagged = false;
+    const fence = DOC_FENCE.exec(line);
     if (fenced === '') {
       const seen = outsideComments(line, commented);
-      commented = seen.open;
-      tagged = seen.tag;
-      if (seen.said.trim() === '') continue;
-      hidden = seen.said !== line;
-    }
-    const fence = DOC_FENCE.exec(line);
-    if (fence && (fenced !== '' || opensFence(fence))) {
-      if (fenced === '') {
-        fenced = fence[1];
-        fencedAt = i + 1;
-      } else if (fence[1].startsWith(fenced) && String(fence[2] ?? '').trim() === '') {
-        fenced = '';
+      if (!(!commented && fence !== null && opensFence(fence))) {
+        const wasCommented = commented;
+        if (wasCommented && seen.open === false && escaped) {
+          return {
+            error:
+              `line ${i + 1} of the plan document closes an HTML comment that was opened on a line which had ` +
+              'already closed one. CommonMark ends the raw block at that first `-->`, so this line is escaped ' +
+              'paragraph text rather than a terminator: the reader is shown nothing from there to the end of the ' +
+              'document while this reads everything below as visible. Put each comment on a line of its own',
+          };
+        }
+        escaped = seen.open ? seen.reopened === true || (wasCommented && escaped) : false;
+        commented = seen.open;
+        tagged = seen.tag;
+        if (seen.said.trim() === '') continue;
+        hidden = seen.said !== line;
       }
-      continue;
-    }
-    if (fenced !== '') continue;
-    if (region === 'steps' && DOC_QUOTE.test(line)) {
-      return {
-        error:
-          `line ${i + 1} of the plan document quotes a line inside a step list. A bullet inside a ` +
-          'blockquote renders as a step and is read here as none, so it would be approved and never ' +
-          'carried out - write it as a step, or move the quotation out of `### Steps`',
-      };
     }
     if (tagged) {
       return {
@@ -592,6 +590,24 @@ function parsePlanDocument(text) {
           'the checkpoint that would have held them. Put the comment on a line of its own, or write it as a ' +
           'fenced code block. A document already published this way is edited by asking for a rework, which ' +
           'offers the new one - editing it in place moves its blob and the approval names the blob it read',
+      };
+    }
+    if (fence && (fenced !== '' || opensFence(fence))) {
+      if (fenced === '') {
+        fenced = fence[1];
+        fencedAt = i + 1;
+      } else if (fence[1].startsWith(fenced) && String(fence[2] ?? '').trim() === '') {
+        fenced = '';
+      }
+      continue;
+    }
+    if (fenced !== '') continue;
+    if (region === 'steps' && DOC_QUOTE.test(line)) {
+      return {
+        error:
+          `line ${i + 1} of the plan document quotes a line inside a step list. A bullet inside a ` +
+          'blockquote renders as a step and is read here as none, so it would be approved and never ' +
+          'carried out - write it as a step, or move the quotation out of `### Steps`',
       };
     }
     const underlines = was === 'prose' && SETEXT_UNDERLINE.test(line);

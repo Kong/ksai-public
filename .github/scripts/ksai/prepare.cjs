@@ -213,7 +213,7 @@ async function selectImplementArm({ github, core, owner, repo, env }) {
     guidance_html: '',
     jira_key: '',
     plan_mode: '',
-    route_source: '',
+    route_source: out.routeSource ?? '',
     route_surface: '',
     receipt: '',
     write_access_commands: '',
@@ -286,7 +286,6 @@ async function selectImplementArm({ github, core, owner, repo, env }) {
       guidance_html: out.guidanceHtml,
       plan_given: out.planGiven === true ? 'true' : 'false',
       jira_key: out.jiraKey ?? '',
-      route_source: out.routeSource,
       route_surface: out.routeSurface,
       receipt: out.receipt,
     });
@@ -364,7 +363,7 @@ async function selectTesterArm({ github, core, owner, repo, env }) {
     mine: out.mine ? 'true' : 'false',
     notice,
     notice_kind: out.help ? 'guide' : '',
-    route_source: '',
+    route_source: out.routeSource ?? '',
     route_surface: '',
     receipt: '',
   };
@@ -403,7 +402,6 @@ async function selectTesterArm({ github, core, owner, repo, env }) {
       command: out.command,
       model: out.model,
       effort: out.effort,
-      route_source: out.routeSource,
       route_surface: out.routeSurface,
       receipt: out.receipt,
     });
@@ -462,6 +460,7 @@ async function resolveRunContext({ github, context, env }) {
     commenter: out.commenter ?? '',
     comment_id: out.commentId == null ? '' : String(out.commentId),
     comment_body: out.commentBody,
+    comment_edited: out.commentEdited ?? '',
     thread_root_id: out.threadRootId == null ? '' : String(out.threadRootId),
     attempt: String(out.attempt),
     stall: String(out.stall),
@@ -525,6 +524,7 @@ async function resolveCheckpoint({ github, owner, repo, env }) {
     writeAccessCommands: env.WRITE_ACCESS_COMMANDS,
     disabledCommands: env.DISABLED_COMMANDS,
     jiraToken: env.JIRA_TOKEN,
+    commentEdited: env.COMMENT_EDITED,
   };
   const seen = needsReleaseRead(asked)
     ? await alreadyReleased({
@@ -636,7 +636,11 @@ async function decidePhase({ github, core, owner, repo, env }) {
     plan_file: out.planFile,
     held: out.held,
     conflicting: out.conflicting,
-    notice: renderPhaseNotice(out.phase, { pending: out.pending, triggerPhrase: env.TRIGGER }),
+    notice: renderPhaseNotice(out.phase, {
+      pending: out.pending,
+      triggerPhrase: env.TRIGGER,
+      disabledCommands: env.DISABLED_COMMANDS,
+    }),
   });
   return { notices: [], outputs };
 }

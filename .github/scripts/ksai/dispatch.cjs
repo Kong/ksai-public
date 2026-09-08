@@ -20,8 +20,16 @@ const {
 } = require('../lib/select-arm.cjs');
 const { receiptOf, sourceOf } = require('../lib/request-intent.cjs');
 const loadConfig = require('./config.cjs');
-const { verdictOf, answerable, surfaceForComment, CLARIFY_VERDICT, NO_VERDICT, NUDGE_VERDICT, OWN_PULL_SURFACE } =
-  require('./classify.cjs');
+const {
+  verdictOf,
+  answerable,
+  surfaceForComment,
+  CLARIFY_VERDICT,
+  CLASSIFIER_SOURCE,
+  NO_VERDICT,
+  NUDGE_VERDICT,
+  OWN_PULL_SURFACE,
+} = require('./classify.cjs');
 const {
   parseBody,
   firstUnchecked,
@@ -183,32 +191,33 @@ async function resolveRequest({
       ? CLARIFY_VERDICT
       : classifiedCommandOf(classifiedCommand, arm?.disabledCommands, classifierSurface);
   if (verdict === CLARIFY_VERDICT) return { mine: false, clarify: true };
-  if (verdict === NUDGE_VERDICT) return { mine: false, nudge: true };
+  if (verdict === NUDGE_VERDICT) return { mine: false, nudge: true, routeSource: CLASSIFIER_SOURCE };
   const classified = verdict !== '' && commandFitsSurface(verdict, { onIssue, threadRootId }) ? verdict : '';
   const command = classified || result.command;
   const named = result.commandNamed || classified !== '';
+  const routeSource = sourceOf({ classified: classified !== '', named: result.commandNamed });
 
-  if (command === HELP_COMMAND) return { mine: false, help: true };
+  if (command === HELP_COMMAND) return { mine: false, help: true, routeSource };
 
   if (ownerOf(command) === null) {
-    if (deliveredCommand(command)) return { mine: false, delivered: command };
-    return { mine: false, unimplemented: command, classified: classified !== '' };
+    if (deliveredCommand(command)) return { mine: false, delivered: command, routeSource };
+    return { mine: false, unimplemented: command, classified: classified !== '', routeSource };
   }
 
   if (!named && !commandFitsSurface(command, { onIssue, threadRootId, onReview })) {
-    return { mine: false, unnamed: true };
+    return { mine: false, unnamed: true, routeSource };
   }
 
   if (!commandEnabled(command, { flow: ownerOf(command), disabledCommands: arm?.disabledCommands })) {
-    return { mine: false, disabled: command };
+    return { mine: false, disabled: command, routeSource };
   }
 
   if (!named && !ownsCommand(own, command)) {
-    return { mine: false, foreign: command };
+    return { mine: false, foreign: command, routeSource };
   }
 
   if (!commandFitsSurface(command, { onIssue, threadRootId, onReview })) {
-    return { mine: false, wrongSurface: { command, wants: surfaceOf(command) } };
+    return { mine: false, wrongSurface: { command, wants: surfaceOf(command) }, routeSource };
   }
 
   if (ownsCommand(own, command)) {
@@ -217,9 +226,10 @@ async function resolveRequest({
       return {
         mine: false,
         unauthorized: { command, bar: bar.bar, undecided: bar.undecided, writeAccessCommands: result.writeAccess },
+        routeSource,
       };
     }
-    const source = sourceOf({ classified: classified !== '', named: result.commandNamed });
+    const source = routeSource;
     return {
       mine: true,
       command,
@@ -238,7 +248,7 @@ async function resolveRequest({
       receipt: receiptOf(command, requestSurface, source),
     };
   }
-  return { mine: false, foreign: command };
+  return { mine: false, foreign: command, routeSource };
 }
 
 async function nextStep({ github = null, owner = null, repo = null, prNumber = null, botLogin = null } = {}) {

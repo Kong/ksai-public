@@ -104,8 +104,8 @@ function lastRework(comments, { botLogin = null } = {}) {
   if (known === '') return null;
   let newest = null;
   for (const comment of comments ?? []) {
-    if (!ownUnedited(comment, known)) continue;
-    if (markerOf(comment.body)?.kind !== 'revise-answered') continue;
+    if (ownState(comment, known) === FOREIGN) continue;
+    if (markerOf(comment?.body)?.kind !== 'revise-answered') continue;
     const at = Date.parse(String(comment.created_at ?? ''));
     if (!Number.isFinite(at)) continue;
     if (newest === null || at > newest) newest = at;
@@ -125,6 +125,7 @@ module.exports = {
   ownState,
   ownUnedited,
   vouchedOwn,
+  EDITED,
   FOREIGN,
   UNEDITED,
   UNKNOWN,

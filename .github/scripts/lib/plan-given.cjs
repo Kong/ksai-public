@@ -115,6 +115,4 @@ module.exports = {
   MAX_PLAN_LINES,
   PLAN_BEGIN,
   PLAN_END,
-  SUMMARY_MARKER,
-  TITLE_MARKER,
 };

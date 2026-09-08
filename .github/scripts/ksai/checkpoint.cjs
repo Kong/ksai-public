@@ -10,7 +10,7 @@ const {
 } = require('../lib/select-arm.cjs');
 const { LOGIN_SHAPE, markerValues, scrub, shapesIn } = require('./plan.cjs');
 const { PAGE_SIZE: RELEASE_PER_PAGE, probeComments } = require('./pages.cjs');
-const { ownState, FOREIGN, UNEDITED } = require('./approval.cjs');
+const { ownState, EDITED, FOREIGN, UNEDITED } = require('./approval.cjs');
 const { counted, plural } = require('../lib/text.cjs');
 
 const RELEASE_MARKER_PREFIX = '<!-- ksai-phase:';
@@ -144,10 +144,15 @@ function withoutRelease({
   writeAccessCommands = null,
   disabledCommands = null,
   jiraToken = null,
+  commentEdited = null,
 } = {}) {
   if (String(atCheckpoint) !== 'true') return { release: false, waiting: false, reason: 'no-checkpoint' };
   if (!commandEnabled('approve', { flow: 'implement', disabledCommands })) {
     return { release: false, waiting: true, reason: 'approve-disabled' };
+  }
+  const editedState = String(commentEdited ?? '').trim();
+  if (editedState !== '' && editedState !== UNEDITED) {
+    return { release: false, waiting: true, reason: editedState === EDITED ? 'edited-request' : 'edit-unreadable' };
   }
   if (isApprove(command)) {
     const bar = commandAuthorized('approve', {
@@ -198,6 +203,7 @@ function decideCheckpoint({
   unreadable = null,
   disabledCommands = null,
   jiraToken = null,
+  commentEdited = null,
 } = {}) {
   const settled = withoutRelease({
     atCheckpoint,
@@ -207,6 +213,7 @@ function decideCheckpoint({
     writeAccessCommands,
     disabledCommands,
     jiraToken,
+    commentEdited,
   });
   if (settled) return settled;
   if (unreadable) return { release: false, waiting: true, reason: 'unreadable' };
@@ -232,6 +239,26 @@ const WAITING = Object.freeze(
         'This phase of the plan is done and `approve` is released here by anyone with write access, which ' +
         'GitHub could not be asked about, so this released nothing rather than guessing. That is a grant to ' +
         'fix rather than a refusal of anybody: the authorization token needs metadata:read on this repository',
+    }),
+    'edited-request': Object.freeze({
+      kind: 'phase-waiting',
+      level: 'WARNING',
+      say: ({ outstanding }) =>
+        'This phase of the plan is done and the comment asking to release it has been edited since it was ' +
+        'posted, so it released nothing.' +
+        outstanding +
+        ' Anybody with write access can edit anybody else\'s comment, so a release is only ever read off one ' +
+        'nobody has touched: post a new comment asking for it',
+    }),
+    'edit-unreadable': Object.freeze({
+      kind: 'phase-waiting',
+      level: 'WARNING',
+      say: ({ outstanding }) =>
+        'This phase of the plan is done and this run could not tell whether the comment asking to release it ' +
+        'had been edited, so it released nothing rather than guessing.' +
+        outstanding +
+        ' A release is only ever read off a comment nobody has touched, and that could not be established here: ' +
+        'post a new comment asking for it',
     }),
     'approve-disabled': Object.freeze({
       kind: 'phase-waiting',
@@ -266,7 +293,9 @@ const WAITING = Object.freeze(
 );
 
 function waitingCase({ remaining = null, reason = null } = {}) {
-  if (reason === 'unreadable' || reason === 'approve-disabled' || reason === 'write-unreadable') return reason;
+  if (Object.prototype.hasOwnProperty.call(WAITING, String(reason ?? '')) && reason !== 'last' && reason !== 'more') {
+    return reason;
+  }
   return Number(remaining) === 1 ? 'last' : 'more';
 }
 
