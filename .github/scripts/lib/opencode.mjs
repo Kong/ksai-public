@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
-import { isAbsolute, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import claudeArgs from './claude-args.cjs';
-import { resultRecord } from './execution-log.mjs';
+import { resultRecord, stopReason } from './execution-log.mjs';
 import modelCatalog from './model-catalog.json' with { type: 'json' };
 import selectArm from './select-arm.cjs';
 import { originProblem } from '../kreview/federated-token.mjs';
@@ -41,6 +41,96 @@ const OPENCODE_TOOL = Object.assign(Object.create(null), {
   WebSearch: 'websearch',
 });
 
+const EXTERNAL_DIRECTORY = 'external_directory';
+
+const SANDBOX_TMPDIR = '/tmp';
+
+/**
+ * listed answers the entries of a comma- or newline-separated input, which is how a caller writes a list.
+ *
+ * @param {string | undefined} value
+ * @returns {string[]}
+ */
+export function listed(value) {
+  return String(value ?? '')
+    .split(/[,\n]/)
+    .map((one) => one.trim())
+    .filter(Boolean);
+}
+
+/**
+ * expandHome answers a path with a leading `~` or `$HOME` resolved, which a shell does and a script does not.
+ *
+ * @param {string | undefined} value
+ * @param {Record<string, string | undefined>} [env]
+ * @returns {string}
+ */
+export function expandHome(value, env = process.env) {
+  const at = String(value ?? '').trim();
+  const home = String(env.HOME ?? '').trim();
+  if (!home) return at;
+  if (at === '~' || at === '$HOME') return home;
+  for (const prefix of ['~/', '$HOME/']) {
+    if (at.startsWith(prefix)) return join(home, at.slice(prefix.length));
+  }
+  return at;
+}
+
+const within = (at, root) => at === root || at.startsWith(`${root.replace(/\/+$/, '')}/`);
+
+/**
+ * sandboxScopes answers the paths a caller named, resolved the way both the sandbox and the tool policy read them.
+ *
+ * `exists` is required rather than defaulted: a scope the runner does not hold is bound by neither
+ * side, and a default answering yes would grant what no mount backs.
+ *
+ * @param {Record<string, string | undefined>} env
+ * @param {(at: string) => boolean} exists
+ * @returns {{allow: string[], deny: string[], missing: string[]}}
+ */
+export function sandboxScopes(env, exists) {
+  const workspace = String(env.GITHUB_WORKSPACE ?? '').trim() || '/';
+  const staged = [
+    String(env.RUNNER_TEMP ?? ''),
+    String(env.OPENCODE_HOME ?? ''),
+    String(env.KSAI_TOKEN_DIR ?? ''),
+    String(env.KSAI_CHANNEL_DIR ?? ''),
+    join(workspace, '_ksai'),
+  ]
+    .map((one) => one.trim())
+    .filter(Boolean)
+    .map((one) => resolve(workspace, expandHome(one, env)));
+  /** @type {string[]} */
+  const missing = [];
+  const scoped = (value) =>
+    listed(value)
+      .map((one) => resolve(workspace, expandHome(one, env)))
+      .filter((at) => !staged.some((root) => within(root, at) || within(at, root)))
+      .filter((at) => {
+        if (exists(at)) return true;
+        missing.push(at);
+        return false;
+      });
+  return { allow: scoped(env.SANDBOX_ALLOW_WRITE), deny: scoped(env.SANDBOX_DENY_WRITE), missing };
+}
+
+/**
+ * externalDirectory answers the `external_directory` rules for the scopes a caller named.
+ *
+ * @param {string[]} [scopes]
+ * @returns {Record<string, string>}
+ */
+export function externalDirectory(scopes = []) {
+  /** @type {Record<string, string>} */
+  const rules = { '*': 'deny' };
+  for (const one of [SANDBOX_TMPDIR, ...scopes]) {
+    const at = String(one ?? '').trim().replace(/\/+$/, '');
+    if (!at) continue;
+    rules[`${at}/*`] = 'allow';
+  }
+  return rules;
+}
+
 function bashPatterns(token) {
   const inner = token.slice('Bash('.length, -1);
   if (inner === '') return ['*'];
@@ -75,7 +165,7 @@ export function mergedDenials(policy) {
     .map(([name, key]) => ({ name, key, granted: allow.tools.filter(([, one]) => one === key).map(([one]) => one) }));
 }
 
-export function opencodePermissions(policy) {
+export function opencodePermissions(policy, scopes = []) {
   const allow = classify(policy?.allowed);
   const deny = classify(policy?.disallowed);
   const dropped = new Set(mergedDenials(policy).map(({ name }) => name));
@@ -85,6 +175,7 @@ export function opencodePermissions(policy) {
     if (dropped.has(name)) continue;
     permission[key] = 'deny';
   }
+  permission[EXTERNAL_DIRECTORY] = externalDirectory(scopes);
   const bash = { '*': 'deny' };
   for (const pattern of allow.bash) bash[pattern] = 'allow';
   for (const pattern of deny.bash) {
@@ -106,9 +197,9 @@ export const RUNTIME_CONFIG = Object.freeze({
   permission: opencodePermissions(claudeArgs.TOOL_POLICY.review),
 });
 
-export function phasePermissions(phase) {
+export function phasePermissions(phase, scopes = []) {
   const policy = claudeArgs.toolPolicy(phase);
-  return policy ? opencodePermissions(policy) : null;
+  return policy ? opencodePermissions(policy, scopes) : null;
 }
 
 export function phaseDenials(phase) {
@@ -559,6 +650,7 @@ function truncated(exitCode) {
   return Number.isFinite(exitCode) && exitCode > 128;
 }
 
+
 /**
  * executionLog answers the run in the shape `runSpend` reads, so the whole publish path stays
  * one reader whichever engine produced the review. A run a signal ended reports what it spent and
@@ -579,5 +671,6 @@ export function executionLog({ events, exitCode, secrets = [], said }) {
     denials: denials(events),
     truncated: truncated(code),
     failed,
+    reason: [stopReason(code), endedOn(events)].filter(Boolean).join(' - '),
   });
 }

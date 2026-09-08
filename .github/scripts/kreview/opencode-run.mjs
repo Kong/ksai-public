@@ -9,13 +9,16 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { conclusionOf } from '../lib/execution-log.mjs';
+import { conclusionOf, exitedOn, stopReason } from '../lib/execution-log.mjs';
 import modelCatalog from '../lib/model-catalog.json' with { type: 'json' };
+import { listed, sandboxScopes } from '../lib/opencode.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
 import { bearer, heldExpiry } from '../lib/opencode-token.mjs';
+
+export { listed };
 
 const MASKED_HOMES = ['.config', '.claude'];
 
@@ -40,38 +43,19 @@ const RESOLVER = '/etc/resolv.conf';
 
 const MASKED_RUNTIME = '/run';
 
-export function listed(value) {
-  return String(value ?? '')
-    .split(/[,\n]/)
-    .map((one) => one.trim())
-    .filter(Boolean);
-}
-
-const within = (at, root) => at === root || at.startsWith(`${root.replace(/\/+$/, '')}/`);
-
 export function scopeBinds(env = process.env, exists = existsSync) {
-  const workspace = String(env.GITHUB_WORKSPACE ?? '').trim() || '/';
-  const staged = [
-    String(env.RUNNER_TEMP ?? ''),
-    String(env.OPENCODE_HOME ?? ''),
-    String(env.KSAI_TOKEN_DIR ?? ''),
-    String(env.KSAI_CHANNEL_DIR ?? ''),
-    join(workspace, '_ksai'),
-  ]
-    .map((one) => one.trim())
-    .filter(Boolean)
-    .map((one) => resolve(workspace, one));
+  const scopes = sandboxScopes(env, exists);
+  for (const at of scopes.missing) {
+    console.log(
+      `::warning::the sandbox scope ${at} is not on this runner, so nothing is bound there and no tool may reach it`,
+    );
+  }
   const args = [];
-  for (const [name, flag] of [
-    ['SANDBOX_ALLOW_WRITE', '--bind'],
-    ['SANDBOX_DENY_WRITE', '--ro-bind'],
+  for (const { flag, named } of [
+    { flag: '--bind', named: scopes.allow },
+    { flag: '--ro-bind', named: scopes.deny },
   ]) {
-    for (const one of listed(env[name])) {
-      const at = resolve(workspace, one);
-      if (!exists(at)) continue;
-      if (staged.some((root) => within(root, at) || within(at, root))) continue;
-      args.push(flag, at, at);
-    }
+    for (const at of named) args.push(flag, at, at);
   }
   return args;
 }
@@ -248,13 +232,19 @@ async function main(env = process.env) {
     });
     code = await new Promise((ended) => {
       ran.on('error', () => ended(127));
-      ran.on('close', (status, signal) => ended(status === null ? (signal ? 129 : 1) : status));
+      ran.on('close', (status, signal) => ended(exitedOn(status, signal)));
     });
   } finally {
     if (ticking) clearInterval(ticking);
     closeSync(out);
   }
+  const reason = stopReason(code);
   console.log(`opencode exit=${code}`);
+  if (code > 128) {
+    console.log(
+      `::error::${reason}; a run killed from outside is usually the runner out of memory, and nothing it wrote is a finished answer`,
+    );
+  }
 
   const reduced = spawnSync(process.execPath, [join(String(env.SCRIPTS ?? ''), 'kreview/opencode-log.mjs')], {
     env: { ...env, OPENCODE_EXIT: String(code), OPENCODE_EVENTS_FILE: events, OPENCODE_EXECUTION_FILE: execution },

@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import modelCatalog from '../lib/model-catalog.json' with { type: 'json' };
@@ -14,6 +14,7 @@ import {
   phasePermissions,
   providerBaseUrl,
   runtimeConfig,
+  sandboxScopes,
   underWorkspace,
 } from '../lib/opencode.mjs';
 
@@ -56,7 +57,8 @@ for (const { name, key, granted } of stated ? mergedDenials(policy) : phaseDenia
     `::warning::${name} is denied and ${granted.join(' and ')} granted, and opencode gates them all behind one ${key} key - so the denial is dropped and ${name} is reachable here where the Claude engine refuses it`,
   );
 }
-const permission = stated ? opencodePermissions(policy) : phasePermissions(phase);
+const scopes = sandboxScopes(process.env, existsSync).allow;
+const permission = stated ? opencodePermissions(policy, scopes) : phasePermissions(phase, scopes);
 if (!permission) {
   console.log(
     `::error::opencode_phase ${phase || '(empty)'} names no entry in the shared tool table, so this run has no tool policy - a phase resolving to a default would run a write flow read-only, or hand a reviewer the tools to change the tree it is reviewing`,
@@ -124,6 +126,11 @@ console.log(`opencode runtime config written to ${destination}`);
 console.log(`model calls go to ${baseUrl}, authenticated by ${auth}`);
 console.log(
   `this run works under the ${stated ? 'tool list its caller named' : `${phase} tool policy`}${skills.length ? `, with skills from ${skills.join(', ')}` : ' and no skills'}`,
+);
+console.log(
+  scopes.length
+    ? `paths outside the workspace this run may read and write: ${scopes.join(', ')}`
+    : 'this run reaches no path outside the workspace but its own temporary directory',
 );
 console.log(
   channel
