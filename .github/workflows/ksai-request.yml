@@ -3,6 +3,15 @@ name: KSAI review request
 on:
   workflow_call:
     inputs:
+      client_id:
+        description: >-
+          the client ID of the GitHub App this call mints its tokens with. Empty (the default) reads
+          the `KSAI_CLIENT_ID` repository variable, which is what a repository holding the shared
+          KSAI App wants. A repository with an App of its own passes its own variable here rather
+          than copying that App's client ID into a second variable under a name this workflow chose.
+        required: false
+        type: string
+        default: ""
       runs_on:
         description: >-
           one runner label, or several as a JSON array. `workflow_call` inputs are only ever
@@ -87,7 +96,7 @@ jobs:
         with:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
-          client-id: ${{ vars.KSAI_CLIENT_ID }}
+          client-id: ${{ inputs.client_id || vars.KSAI_CLIENT_ID }}
           private-key: ${{ secrets.ksai_private_key }}
           permission-members: read
           permission-pull-requests: write
@@ -159,9 +168,9 @@ jobs:
 
       - name: Withdraw the request when no review was started
         if: ${{ always() && steps.request.outcome == 'success' && steps.dispatch.outcome != 'success' }}
-        uses: Kong/ksai-public/.github/actions/clear-review-request@v3.40.6
+        uses: Kong/ksai-public/.github/actions/clear-review-request@v3.40.7
         with:
           pr_number: ${{ github.event.pull_request.number }}
           team_slug: ${{ vars.KSAI_REVIEW_TEAM || 'ksai' }}
-          client-id: ${{ vars.KSAI_CLIENT_ID }}
+          client-id: ${{ inputs.client_id || vars.KSAI_CLIENT_ID }}
           private-key: ${{ secrets.ksai_private_key }}

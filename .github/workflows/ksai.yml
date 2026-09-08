@@ -27,6 +27,15 @@ on:
         required: false
         type: string
         default: ""
+      client_id:
+        description: >-
+          the client ID of the GitHub App this call mints its tokens with. Empty (the default) reads
+          the `KSAI_CLIENT_ID` repository variable, which is what a repository holding the shared
+          KSAI App wants. A repository with an App of its own passes its own variable here rather
+          than copying that App's client ID into a second variable under a name this workflow chose.
+        required: false
+        type: string
+        default: ""
       federation_rule_id:
         description: >-
           the team's Anthropic federation identifiers, from federations/<team>.yaml in the ksai source repository.
@@ -579,6 +588,7 @@ jobs:
       actions: write
       contents: read
     with:
+      client_id: ${{ inputs.client_id }}
       runs_on: ${{ inputs.runs_on }}
       push_as_app: ${{ inputs.push_as_app }}
     secrets:
@@ -708,17 +718,6 @@ jobs:
             *) echo "::error::anthropic_auth must be one of federation, oidc-bearer, got: ${ANTHROPIC_AUTH}"; exit 1 ;;
           esac
 
-      - name: Mint ksai read token
-        id: ksai-token
-        continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          owner: Kong
-          repositories: ksai-public
-          client-id: ${{ vars.KSAI_CLIENT_ID }}
-          private-key: ${{ secrets.ksai_private_key }}
-          permission-contents: read
-
       - name: Mint this repository's read token
         id: authz-token
         continue-on-error: true
@@ -726,24 +725,24 @@ jobs:
         with:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
-          client-id: ${{ vars.KSAI_CLIENT_ID }}
+          client-id: ${{ inputs.client_id || vars.KSAI_CLIENT_ID }}
           private-key: ${{ secrets.ksai_private_key }}
           permission-contents: read
           permission-members: read
           permission-pull-requests: read
 
-      - name: Refuse a call whose credentials are not the App's
-        if: ${{ steps.ksai-token.outcome == 'failure' }}
+      - name: Refuse a call whose credentials cannot read this repository
+        if: ${{ steps.authz-token.outcome == 'failure' }}
         run: |
           set -euo pipefail
-          echo "::error::the KSAI App minted no read token for its own repository, so the credentials this workflow holds are not the KSAI App's and nothing below can be checked out; check the KSAI_CLIENT_ID variable and the ksai_private_key secret"
+          echo "::error::the App minted no read token for this repository, so nothing below can read its CODEOWNERS, its pull requests or its members; check the client_id input or the KSAI_CLIENT_ID variable, the ksai_private_key secret, and that the App is installed here"
           exit 1
 
       - name: Resolve who asked and what they asked for
         id: gate
-        uses: Kong/ksai-public/.github/actions/ksai-gate@v3.40.6
+        uses: Kong/ksai-public/.github/actions/ksai-gate@v3.40.7
         with:
-          kong_org_github_token: ${{ steps.ksai-token.outputs.token }}
+          kong_org_github_token: ${{ github.token }}
           authorization_github_token: ${{ steps.authz-token.outputs.token }}
           post_github_token: ${{ github.token }}
           federation_rule_id: ${{ inputs.federation_rule_id }}
@@ -785,16 +784,6 @@ jobs:
         with:
           egress-policy: audit
 
-      - name: Mint ksai read token
-        id: ksai-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          owner: Kong
-          repositories: ksai-public
-          client-id: ${{ vars.KSAI_CLIENT_ID }}
-          private-key: ${{ secrets.ksai_private_key }}
-          permission-contents: read
-
       - name: Mint the token this flow posts with
         id: post-token
         if: ${{ inputs.push_as_app && needs.gate.outputs.authorized == 'true' }}
@@ -803,7 +792,7 @@ jobs:
         with:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
-          client-id: ${{ vars.KSAI_CLIENT_ID }}
+          client-id: ${{ inputs.client_id || vars.KSAI_CLIENT_ID }}
           private-key: ${{ secrets.ksai_private_key }}
           permission-contents: read
           permission-issues: write
@@ -812,10 +801,10 @@ jobs:
       - name: Check out trusted ksai scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          token: ${{ steps.ksai-token.outputs.token }}
+          token: ${{ github.token }}
           path: _ksai-help
           repository: Kong/ksai-public
-          ref: v3.40.6
+          ref: v3.40.7
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -917,23 +906,13 @@ jobs:
         with:
           egress-policy: audit
 
-      - name: Mint ksai read token
-        id: ksai-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          owner: Kong
-          repositories: ksai-public
-          client-id: ${{ vars.KSAI_CLIENT_ID }}
-          private-key: ${{ secrets.ksai_private_key }}
-          permission-contents: read
-
       - name: Mint this repository's read token
         id: authz-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
-          client-id: ${{ vars.KSAI_CLIENT_ID }}
+          client-id: ${{ inputs.client_id || vars.KSAI_CLIENT_ID }}
           private-key: ${{ secrets.ksai_private_key }}
           permission-contents: read
           permission-members: read
@@ -947,13 +926,13 @@ jobs:
         with:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
-          client-id: ${{ vars.KSAI_CLIENT_ID }}
+          client-id: ${{ inputs.client_id || vars.KSAI_CLIENT_ID }}
           private-key: ${{ secrets.ksai_private_key }}
           permission-contents: read
           permission-issues: write
           permission-pull-requests: write
 
-      - uses: Kong/ksai-public/.github/actions/ksai@v3.40.6
+      - uses: Kong/ksai-public/.github/actions/ksai@v3.40.7
         with:
           flow: review
           trigger_phrase: ${{ inputs.trigger_phrase }}
@@ -965,7 +944,7 @@ jobs:
           comment_body: ${{ github.event_name == 'workflow_dispatch' && '/ksai review this pull request' || '' }}
           source_org_github_token: ${{ inputs.push_as_app && steps.post-token.outputs.token || github.token }}
           authorization_github_token: ${{ steps.authz-token.outputs.token }}
-          kong_org_github_token: ${{ steps.ksai-token.outputs.token }}
+          kong_org_github_token: ${{ github.token }}
           federation_rule_id: ${{ inputs.federation_rule_id }}
           organization_id: ${{ inputs.organization_id }}
           service_account_id: ${{ inputs.service_account_id }}
@@ -1035,23 +1014,13 @@ jobs:
         shell: bash
         run: echo "attempt=${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
 
-      - name: Mint ksai read token
-        id: ksai-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          owner: Kong
-          repositories: ksai-public
-          client-id: ${{ vars.KSAI_CLIENT_ID }}
-          private-key: ${{ secrets.ksai_private_key }}
-          permission-contents: read
-
       - name: Mint this repository's read token
         id: authz-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
-          client-id: ${{ vars.KSAI_CLIENT_ID }}
+          client-id: ${{ inputs.client_id || vars.KSAI_CLIENT_ID }}
           private-key: ${{ secrets.ksai_private_key }}
           permission-contents: read
           permission-members: read
@@ -1101,7 +1070,7 @@ jobs:
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           owner: ${{ steps.go-owners.outputs.one }}
-          client-id: ${{ vars.KSAI_CLIENT_ID }}
+          client-id: ${{ inputs.client_id || vars.KSAI_CLIENT_ID }}
           private-key: ${{ secrets.ksai_private_key }}
           permission-contents: read
 
@@ -1112,11 +1081,11 @@ jobs:
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           owner: ${{ steps.go-owners.outputs.two }}
-          client-id: ${{ vars.KSAI_CLIENT_ID }}
+          client-id: ${{ inputs.client_id || vars.KSAI_CLIENT_ID }}
           private-key: ${{ secrets.ksai_private_key }}
           permission-contents: read
 
-      - uses: Kong/ksai-public/.github/actions/ksai@v3.40.6
+      - uses: Kong/ksai-public/.github/actions/ksai@v3.40.7
         with:
           flow: test
           engine: ${{ inputs.engine }}
@@ -1129,7 +1098,7 @@ jobs:
           actor: ${{ inputs.actor }}
           source_org_github_token: ${{ github.token }}
           authorization_github_token: ${{ steps.authz-token.outputs.token }}
-          kong_org_github_token: ${{ steps.ksai-token.outputs.token }}
+          kong_org_github_token: ${{ github.token }}
           bot_login: github-actions[bot]
           federation_rule_id: ${{ inputs.federation_rule_id }}
           organization_id: ${{ inputs.organization_id }}
@@ -1175,34 +1144,24 @@ jobs:
         with:
           egress-policy: audit
 
-      - name: Mint ksai read token
-        id: ksai-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          owner: Kong
-          repositories: ksai-public
-          client-id: ${{ vars.KSAI_CLIENT_ID }}
-          private-key: ${{ secrets.ksai_private_key }}
-          permission-contents: read
-
       - name: Mint the token this flow posts with
         id: post-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
-          client-id: ${{ vars.KSAI_CLIENT_ID }}
+          client-id: ${{ inputs.client_id || vars.KSAI_CLIENT_ID }}
           private-key: ${{ secrets.ksai_private_key }}
           permission-contents: read
           permission-pull-requests: write
 
-      - uses: Kong/ksai-public/.github/actions/ksai@v3.40.6
+      - uses: Kong/ksai-public/.github/actions/ksai@v3.40.7
         with:
           flow: test-publish
           trigger_phrase: ${{ inputs.trigger_phrase }}
           issue_number: ${{ inputs.pr || github.event.issue.number || github.event.pull_request.number }}
           source_org_github_token: ${{ steps.post-token.outputs.token }}
-          kong_org_github_token: ${{ steps.ksai-token.outputs.token }}
+          kong_org_github_token: ${{ github.token }}
           bot_login: ${{ format('{0}[bot]', steps.post-token.outputs.app-slug) }}
           classifier_model_used: ${{ needs.gate.outputs.classifier_model }}
           verdict: ${{ needs.gate.outputs.verdict }}
@@ -1243,21 +1202,11 @@ jobs:
         with:
           egress-policy: audit
 
-      - name: Mint ksai read token
-        id: ksai-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          owner: Kong
-          repositories: ksai-public
-          client-id: ${{ vars.KSAI_CLIENT_ID }}
-          private-key: ${{ secrets.ksai_private_key }}
-          permission-contents: read
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          token: ${{ steps.ksai-token.outputs.token }}
+          token: ${{ github.token }}
           repository: Kong/ksai-public
-          ref: v3.40.6
+          ref: v3.40.7
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1301,14 +1250,14 @@ jobs:
         with:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
-          client-id: ${{ vars.KSAI_CLIENT_ID }}
+          client-id: ${{ inputs.client_id || vars.KSAI_CLIENT_ID }}
           private-key: ${{ secrets.ksai_private_key }}
           permission-contents: read
           permission-members: read
           permission-issues: read
           permission-pull-requests: read
 
-      - uses: Kong/ksai-public/.github/actions/ksai@v3.40.6
+      - uses: Kong/ksai-public/.github/actions/ksai@v3.40.7
         if: ${{ steps.sample.outputs.shadow == 'true' }}
         with:
           flow: review
@@ -1322,7 +1271,7 @@ jobs:
           comment_body: ${{ github.event_name == 'workflow_dispatch' && '/ksai review this pull request' || '' }}
           source_org_github_token: ${{ steps.authz-token.outputs.token }}
           authorization_github_token: ${{ steps.authz-token.outputs.token }}
-          kong_org_github_token: ${{ steps.ksai-token.outputs.token }}
+          kong_org_github_token: ${{ github.token }}
           federation_rule_id: ${{ inputs.federation_rule_id }}
           organization_id: ${{ inputs.organization_id }}
           service_account_id: ${{ inputs.service_account_id }}
@@ -1458,23 +1407,13 @@ jobs:
             exit 1
           fi
 
-      - name: Mint ksai read token
-        id: ksai-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          owner: Kong
-          repositories: ksai-public
-          client-id: ${{ vars.KSAI_CLIENT_ID }}
-          private-key: ${{ secrets.ksai_private_key }}
-          permission-contents: read
-
       - name: Mint this repository's read token
         id: authz-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
-          client-id: ${{ vars.KSAI_CLIENT_ID }}
+          client-id: ${{ inputs.client_id || vars.KSAI_CLIENT_ID }}
           private-key: ${{ secrets.ksai_private_key }}
           permission-contents: read
           permission-members: read
@@ -1488,7 +1427,7 @@ jobs:
         with:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
-          client-id: ${{ vars.KSAI_CLIENT_ID }}
+          client-id: ${{ inputs.client_id || vars.KSAI_CLIENT_ID }}
           private-key: ${{ secrets.ksai_private_key }}
           permission-contents: write
           permission-issues: write
@@ -1537,7 +1476,7 @@ jobs:
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           owner: ${{ steps.go-owners.outputs.one }}
-          client-id: ${{ vars.KSAI_CLIENT_ID }}
+          client-id: ${{ inputs.client_id || vars.KSAI_CLIENT_ID }}
           private-key: ${{ secrets.ksai_private_key }}
           permission-contents: read
 
@@ -1548,11 +1487,11 @@ jobs:
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           owner: ${{ steps.go-owners.outputs.two }}
-          client-id: ${{ vars.KSAI_CLIENT_ID }}
+          client-id: ${{ inputs.client_id || vars.KSAI_CLIENT_ID }}
           private-key: ${{ secrets.ksai_private_key }}
           permission-contents: read
 
-      - uses: Kong/ksai-public/.github/actions/ksai@v3.40.6
+      - uses: Kong/ksai-public/.github/actions/ksai@v3.40.7
         with:
           flow: implement
           engine: ${{ inputs.engine }}
@@ -1573,7 +1512,7 @@ jobs:
           source_org_github_token: ${{ inputs.push_as_app && steps.push-token.outputs.token || github.token }}
           ci_evidence_github_token: ${{ inputs.push_as_app && github.token || '' }}
           authorization_github_token: ${{ steps.authz-token.outputs.token }}
-          kong_org_github_token: ${{ steps.ksai-token.outputs.token }}
+          kong_org_github_token: ${{ github.token }}
           go_module_tokens: |
             ${{ steps.go-token-one.outputs.token != '' && format('{0}={1}', steps.go-owners.outputs.one, steps.go-token-one.outputs.token) || '' }}
             ${{ steps.go-token-two.outputs.token != '' && format('{0}={1}', steps.go-owners.outputs.two, steps.go-token-two.outputs.token) || '' }}
@@ -1649,12 +1588,12 @@ jobs:
         with:
           egress-policy: audit
 
-      - uses: Kong/ksai-public/.github/actions/clear-review-request@v3.40.6
+      - uses: Kong/ksai-public/.github/actions/clear-review-request@v3.40.7
         if: ${{ needs.gate.result == 'success' }}
         with:
           pr_number: ${{ inputs.pr || github.event.issue.number || github.event.pull_request.number }}
           team_slug: ${{ vars.KSAI_REVIEW_TEAM || 'ksai' }}
-          client-id: ${{ vars.KSAI_CLIENT_ID }}
+          client-id: ${{ inputs.client_id || vars.KSAI_CLIENT_ID }}
           private-key: ${{ secrets.ksai_private_key }}
           refused-actor: ${{ needs.gate.outputs.authorized != 'true' && inputs.actor || '' }}
           refused-command-off: ${{ github.event_name == 'workflow_dispatch' && needs.gate.outputs.authorized == 'true' && needs.gate.outputs.review != 'true' }}
@@ -1691,23 +1630,13 @@ jobs:
         with:
           egress-policy: audit
 
-      - name: Mint ksai read token
-        id: ksai-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          owner: Kong
-          repositories: ksai-public
-          client-id: ${{ vars.KSAI_CLIENT_ID }}
-          private-key: ${{ secrets.ksai_private_key }}
-          permission-contents: read
-
       - name: Check out trusted ksai code for the recovery
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          token: ${{ steps.ksai-token.outputs.token }}
+          token: ${{ github.token }}
           path: _ksai-recover
           repository: Kong/ksai-public
-          ref: v3.40.6
+          ref: v3.40.7
           sparse-checkout: |
             .github/scripts
           persist-credentials: false
