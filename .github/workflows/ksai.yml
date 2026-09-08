@@ -740,7 +740,7 @@ jobs:
 
       - name: Resolve who asked and what they asked for
         id: gate
-        uses: Kong/ksai-public/.github/actions/ksai-gate@v3.40.8
+        uses: Kong/ksai-public/.github/actions/ksai-gate@v3.40.9
         with:
           kong_org_github_token: ${{ github.token }}
           authorization_github_token: ${{ steps.authz-token.outputs.token }}
@@ -804,7 +804,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-help
           repository: Kong/ksai-public
-          ref: v3.40.8
+          ref: v3.40.9
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -932,7 +932,7 @@ jobs:
           permission-issues: write
           permission-pull-requests: write
 
-      - uses: Kong/ksai-public/.github/actions/ksai@v3.40.8
+      - uses: Kong/ksai-public/.github/actions/ksai@v3.40.9
         with:
           flow: review
           trigger_phrase: ${{ inputs.trigger_phrase }}
@@ -1085,7 +1085,7 @@ jobs:
           private-key: ${{ secrets.ksai_private_key }}
           permission-contents: read
 
-      - uses: Kong/ksai-public/.github/actions/ksai@v3.40.8
+      - uses: Kong/ksai-public/.github/actions/ksai@v3.40.9
         with:
           flow: test
           engine: ${{ inputs.engine }}
@@ -1146,6 +1146,7 @@ jobs:
 
       - name: Mint the token this flow posts with
         id: post-token
+        if: ${{ inputs.push_as_app }}
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           owner: ${{ github.repository_owner }}
@@ -1155,14 +1156,14 @@ jobs:
           permission-contents: read
           permission-pull-requests: write
 
-      - uses: Kong/ksai-public/.github/actions/ksai@v3.40.8
+      - uses: Kong/ksai-public/.github/actions/ksai@v3.40.9
         with:
           flow: test-publish
           trigger_phrase: ${{ inputs.trigger_phrase }}
           issue_number: ${{ inputs.pr || github.event.issue.number || github.event.pull_request.number }}
-          source_org_github_token: ${{ steps.post-token.outputs.token }}
+          source_org_github_token: ${{ inputs.push_as_app && steps.post-token.outputs.token || github.token }}
           kong_org_github_token: ${{ github.token }}
-          bot_login: ${{ format('{0}[bot]', steps.post-token.outputs.app-slug) }}
+          bot_login: ${{ inputs.push_as_app && format('{0}[bot]', steps.post-token.outputs.app-slug) || 'github-actions[bot]' }}
           classifier_model_used: ${{ needs.gate.outputs.classifier_model }}
           verdict: ${{ needs.gate.outputs.verdict }}
           classifier_cost: ${{ needs.gate.outputs.classifier_cost }}
@@ -1206,7 +1207,7 @@ jobs:
         with:
           token: ${{ github.token }}
           repository: Kong/ksai-public
-          ref: v3.40.8
+          ref: v3.40.9
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1257,7 +1258,7 @@ jobs:
           permission-issues: read
           permission-pull-requests: read
 
-      - uses: Kong/ksai-public/.github/actions/ksai@v3.40.8
+      - uses: Kong/ksai-public/.github/actions/ksai@v3.40.9
         if: ${{ steps.sample.outputs.shadow == 'true' }}
         with:
           flow: review
@@ -1491,7 +1492,7 @@ jobs:
           private-key: ${{ secrets.ksai_private_key }}
           permission-contents: read
 
-      - uses: Kong/ksai-public/.github/actions/ksai@v3.40.8
+      - uses: Kong/ksai-public/.github/actions/ksai@v3.40.9
         with:
           flow: implement
           engine: ${{ inputs.engine }}
@@ -1588,7 +1589,7 @@ jobs:
         with:
           egress-policy: audit
 
-      - uses: Kong/ksai-public/.github/actions/clear-review-request@v3.40.8
+      - uses: Kong/ksai-public/.github/actions/clear-review-request@v3.40.9
         if: ${{ needs.gate.result == 'success' }}
         with:
           pr_number: ${{ inputs.pr || github.event.issue.number || github.event.pull_request.number }}
@@ -1636,7 +1637,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-recover
           repository: Kong/ksai-public
-          ref: v3.40.8
+          ref: v3.40.9
           sparse-checkout: |
             .github/scripts
           persist-credentials: false
