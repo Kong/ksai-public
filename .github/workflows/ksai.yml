@@ -112,16 +112,20 @@ on:
       write_access_commands:
         description: >-
           commands anyone holding write access on the repository may run, comma- or space-separated. Every
-          other command needs the commenter to own a path in `CODEOWNERS` as well, which is what every
-          command needs while this is empty - the default, and the behaviour of every installation that
-          sets nothing. A command that writes to the repository is the one to leave out: what the stricter
-          bar protects is the team's Anthropic budget rather than the code, since anyone holding write can
-          already push. In an organization that grants write broadly, naming a command here opens that
-          budget to everyone who holds it. `.ksai/ksai.json` may take names out of this list and may never
-          add one, so widening it is a change to this file.
+          other command needs the commenter to own a path in `CODEOWNERS` as well. `all` is the default and
+          names every command a repository can open, one shipped later included: holding them to ownership
+          kept contributors working across team lines out of the review, and the fix, that they would
+          otherwise have had before asking a human for either, and anyone holding write can already push
+          whatever those commands would write. What the stricter bar protects is the team's Anthropic
+          budget rather than the code, so an organization that grants write broadly is the one to narrow
+          this - to a list of names, or to the empty value that holds every command to ownership.
+          `stop` and `pause` are refused here by name: they reach a run already going and are answered by
+          whoever wrote the comment. `.ksai/ksai.json` may take names out of this list and may never add
+          one, so widening it is a change to this file while closing one again is a change to the
+          repository's own.
         required: false
         type: string
-        default: ""
+        default: "all"
       bare_comments:
         description: >-
           `auto` reads a comment that names no command when it sits on a pull request this flow
@@ -740,7 +744,7 @@ jobs:
 
       - name: Resolve who asked and what they asked for
         id: gate
-        uses: Kong/ksai-public/.github/actions/ksai-gate@v3.40.12
+        uses: Kong/ksai-public/.github/actions/ksai-gate@v3.41.0
         with:
           kong_org_github_token: ${{ github.token }}
           authorization_github_token: ${{ steps.authz-token.outputs.token }}
@@ -804,7 +808,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-help
           repository: Kong/ksai-public
-          ref: v3.40.12
+          ref: v3.41.0
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -825,7 +829,7 @@ jobs:
           SCRIPTS: ${{ github.workspace }}/_ksai-help/.github/scripts
         with:
           script: |
-            const { renderHelp, parseDisabledCommands } = require(`${process.env.SCRIPTS}/lib/select-arm.cjs`);
+            const { renderHelp, writeAccessNames } = require(`${process.env.SCRIPTS}/lib/select-arm.cjs`);
             const issue_number = Number(process.env.ISSUE_NUMBER);
             if (!Number.isInteger(issue_number) || issue_number <= 0) {
               core.setFailed(`the help command resolved no issue or pull request number, got: ${process.env.ISSUE_NUMBER}`);
@@ -840,7 +844,7 @@ jobs:
               authorized: process.env.AUTHORIZED,
               owners: process.env.OWNERS,
               write: process.env.WRITE_ACCESS,
-              writeAccessCommands: parseDisabledCommands(process.env.WRITE_ACCESS_COMMANDS),
+              writeAccessCommands: writeAccessNames(process.env.WRITE_ACCESS_COMMANDS),
             });
             core.setOutput('issue_number', String(issue_number));
             core.setOutput('body', body);
@@ -932,7 +936,7 @@ jobs:
           permission-issues: write
           permission-pull-requests: write
 
-      - uses: Kong/ksai-public/.github/actions/ksai@v3.40.12
+      - uses: Kong/ksai-public/.github/actions/ksai@v3.41.0
         with:
           flow: review
           trigger_phrase: ${{ inputs.trigger_phrase }}
@@ -1085,7 +1089,7 @@ jobs:
           private-key: ${{ secrets.ksai_private_key }}
           permission-contents: read
 
-      - uses: Kong/ksai-public/.github/actions/ksai@v3.40.12
+      - uses: Kong/ksai-public/.github/actions/ksai@v3.41.0
         with:
           flow: test
           engine: ${{ inputs.engine }}
@@ -1156,7 +1160,7 @@ jobs:
           permission-contents: read
           permission-pull-requests: write
 
-      - uses: Kong/ksai-public/.github/actions/ksai@v3.40.12
+      - uses: Kong/ksai-public/.github/actions/ksai@v3.41.0
         with:
           flow: test-publish
           trigger_phrase: ${{ inputs.trigger_phrase }}
@@ -1207,7 +1211,7 @@ jobs:
         with:
           token: ${{ github.token }}
           repository: Kong/ksai-public
-          ref: v3.40.12
+          ref: v3.41.0
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1258,7 +1262,7 @@ jobs:
           permission-issues: read
           permission-pull-requests: read
 
-      - uses: Kong/ksai-public/.github/actions/ksai@v3.40.12
+      - uses: Kong/ksai-public/.github/actions/ksai@v3.41.0
         if: ${{ steps.sample.outputs.shadow == 'true' }}
         with:
           flow: review
@@ -1492,7 +1496,7 @@ jobs:
           private-key: ${{ secrets.ksai_private_key }}
           permission-contents: read
 
-      - uses: Kong/ksai-public/.github/actions/ksai@v3.40.12
+      - uses: Kong/ksai-public/.github/actions/ksai@v3.41.0
         with:
           flow: implement
           engine: ${{ inputs.engine }}
@@ -1589,7 +1593,7 @@ jobs:
         with:
           egress-policy: audit
 
-      - uses: Kong/ksai-public/.github/actions/clear-review-request@v3.40.12
+      - uses: Kong/ksai-public/.github/actions/clear-review-request@v3.41.0
         if: ${{ needs.gate.result == 'success' }}
         with:
           pr_number: ${{ inputs.pr || github.event.issue.number || github.event.pull_request.number }}
@@ -1637,7 +1641,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-recover
           repository: Kong/ksai-public
-          ref: v3.40.12
+          ref: v3.41.0
           sparse-checkout: |
             .github/scripts
           persist-credentials: false

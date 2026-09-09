@@ -4,7 +4,7 @@ const {
   asAlert,
   commandAuthorized,
   commandEnabled,
-  parseDisabledCommands,
+  writeAccessNames,
   releaserOf,
   JIRA_ACCOUNT_CORE,
 } = require('../lib/select-arm.cjs');
@@ -158,7 +158,7 @@ function withoutRelease({
     const bar = commandAuthorized('approve', {
       codeowner: authorized,
       write,
-      writeAccessCommands: parseDisabledCommands(writeAccessCommands),
+      writeAccessCommands: writeAccessNames(writeAccessCommands),
     });
     if (bar.undecided) return { release: false, waiting: true, reason: 'write-unreadable' };
     if (!bar.authorized) return { release: false, waiting: true, reason: 'unauthorized' };
@@ -263,8 +263,8 @@ const WAITING = Object.freeze(
     'approve-disabled': Object.freeze({
       kind: 'phase-waiting',
       level: 'WARNING',
-      say: ({ outstanding }) =>
-        'This phase of the plan is done and the next one waits for a code owner to release it, which this ' +
+      say: ({ outstanding, releaser }) =>
+        `This phase of the plan is done and the next one waits for ${releaser} to release it, which this ` +
         'repository has turned off - so no comment here can release it and nothing further will run.' +
         outstanding +
         ' That is a configuration to change rather than something to wait for: either stop turning the ' +
@@ -320,7 +320,7 @@ const releaseKind = (remaining) => (lastCheckpoint(remaining) ? 'last-phase-rele
 
 function renderReleased({ approvedBy = null, commentId = null, triggerPhrase = null, remaining = null, at = 0 } = {}) {
   const who = String(approvedBy ?? '').trim();
-  const named = LOGIN_SHAPE.test(who) ? `@${who}` : 'a code owner';
+  const named = LOGIN_SHAPE.test(who) ? `@${who}` : 'an approver';
   const lines =
     lastCheckpoint(remaining)
       ? [

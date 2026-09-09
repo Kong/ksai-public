@@ -196,7 +196,7 @@ const isTrue = (value) => value === true || String(value) === 'true';
 
 function settledPlan({ mode = '', requireApproval = '', jiraKey = '' } = {}) {
   if (isTrue(requireApproval)) {
-    return { plans: true, why: 'this repository requires a code owner to approve a plan before anything is committed' };
+    return { plans: true, why: 'this repository requires a plan to be approved before anything is committed' };
   }
   if (String(jiraKey ?? '').trim() !== '') {
     return { plans: true, why: 'work read from a ticket is always planned, because its requester is not a GitHub identity' };

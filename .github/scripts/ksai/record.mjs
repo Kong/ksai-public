@@ -139,7 +139,7 @@ function finishedMessage({ quoted, remainingAfter, stepsLeft }) {
     return `Finished "${quoted}". ${counted(remainingAfter, 'box', 'boxes')} ${plural(remainingAfter, 'remains', 'remain')}.`;
   }
   if (stepsLeft === 0) {
-    return `Finished "${quoted}", the last step in this phase. The checkpoint below is next, and a code owner releases it.`;
+    return `Finished "${quoted}", the last step in this phase. The checkpoint below is next, and an approver releases it.`;
   }
   return `Finished "${quoted}". ${counted(stepsLeft, 'step')} ${plural(stepsLeft, 'remains', 'remain')}.`;
 }

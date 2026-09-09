@@ -744,7 +744,7 @@ function renderPlanWaiting({
     '',
     `[The plan](${link}) is committed to this branch. Review it there - it is an ordinary file, so editing it edits what will run`,
     '',
-    'No step runs until a code owner approves the plan. Approving turns it into the task list that drives the work, one box per step',
+    'No step runs until an approver releases the plan. Approving turns it into the task list that drives the work, one box per step',
   ];
   const below = creditBlock({ issueNumber, requestedBy, repository, jira }, options);
   const alert = asAlert('CAUTION', scrub('Work in progress - the plan is written and nothing is implemented yet', options));

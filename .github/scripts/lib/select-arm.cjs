@@ -121,7 +121,7 @@ const COMMAND_TABLE = Object.freeze(
     approve: Object.freeze({
       owner: 'implement',
       surface: 'pull',
-      doc: 'releases a plan that is waiting for a code owner to agree to it',
+      doc: 'releases a plan that is waiting for an approver to agree to it',
       delivered: false,
       named: true,
     }),
@@ -401,10 +401,10 @@ function renderDisabled(command, { repo = null, triggerPhrase = null } = {}) {
   );
 }
 
-function hasNoOwners(repo) {
+function hasNoOwners(repo, { open = NO_WRITE_ACCESS } = {}) {
   return (
-    `${namedRepo(repo)} has no \`CODEOWNERS\` file, so it has no code owners at all and nobody can be ` +
-    'authorized'
+    `${namedRepo(repo)} has no \`CODEOWNERS\` file, so it has no code owners at all and ` +
+    (open.length === 0 ? 'nobody can be authorized' : 'nothing holding the ownership bar can be authorized')
   );
 }
 
@@ -414,35 +414,55 @@ const spelled = (commands) =>
     .join(', ')
     .replace(/, ([^,]*)$/, ' and $1');
 
+const saidOpen = (open) => {
+  const every = OPENABLE.every((command) => open.includes(command));
+  const one = every || open.length === 1;
+  return { every, said: every ? 'Every command' : spelled(open), runs: one ? 'runs' : 'run', needs: one ? 'needs' : 'need' };
+};
+
 function openToWrite(writeAccessCommands, { write = null } = {}) {
   const open = writeAccessCommands ?? NO_WRITE_ACCESS;
   if (open.length === 0) return '';
   const holds = asFact(write) === 'true' ? ', which you hold' : '';
-  return `${spelled(open)} ${open.length === 1 ? 'runs' : 'run'} here for anyone with write access${holds}`;
+  const { said, runs } = saidOpen(open);
+  return `${said} ${runs} here for anyone with write access${holds}`;
 }
 
-function notAnOwner(repo, { command = null, writeAccessCommands = null, write = null } = {}) {
+function notAnOwner(repo, { command = null, writeAccessCommands = null, write = null, asked = false } = {}) {
   const named = namedCommand(command);
   const also = named === '' ? '' : openToWrite(writeAccessCommands, { write });
+  const scope = named === '' ? (asked ? ' for a command this run could not name' : ' here') : ` for \`${named}\` here`;
   return (
     `you are not a code owner of ${namedRepo(repo)} with write access - owning any path in \`CODEOWNERS\` is ` +
-    `the bar${named === '' ? '' : ` for \`${named}\``} here, and a code owner has to ask for it` +
+    `the bar${scope}, and a code owner has to ask for it` +
     `${also ? `. ${also}` : ''}`
   );
 }
 
 function standing({ authorized = null, owners = null, repo = null, writeAccessCommands = null, write = null } = {}) {
   const open = writeAccessCommands ?? NO_WRITE_ACCESS;
-  const why = String(owners) === 'absent' ? hasNoOwners(repo) : notAnOwner(repo);
+  const { every, said, needs } = saidOpen(open);
   const bars =
     open.length === 0
       ? []
       : [
-        `${spelled(open)} ${open.length === 1 ? 'needs' : 'need'} only write access here; every other command ` +
-          'needs `CODEOWNERS` ownership.',
+        `${said} ${needs} only write access here` +
+          (every ? '.' : '; every other command needs `CODEOWNERS` ownership.'),
       ];
   if (String(authorized) !== 'false') return bars;
-  const runs = open.length > 0 && asFact(write) === 'true' ? `Only ${spelled(open)} will` : 'None of these will';
+  const holds = asFact(write);
+  if (every && holds === 'true') return bars;
+  if (every) {
+    return [
+      holds === 'false'
+        ? `None of these will run for you, because you do not have write access to ${namedRepo(repo)}.`
+        : `Whether any of these runs for you could not be told, because GitHub could not be asked whether ` +
+          `you have write access to ${namedRepo(repo)}. ${UNREADABLE_WRITE}`,
+      ...bars,
+    ];
+  }
+  const why = String(owners) === 'absent' ? hasNoOwners(repo, { open }) : notAnOwner(repo);
+  const runs = open.length > 0 && holds === 'true' ? `Only ${spelled(open)} will` : 'None of these will';
   return [`${runs} run for you, because ${why}.`, ...bars];
 }
 
@@ -467,7 +487,7 @@ function renderUnauthorized({
   const body =
     bar === WRITE_BAR
       ? noWriteAccess(repo, { command, undecided })
-      : notAnOwner(repo, { command, writeAccessCommands, write });
+      : notAnOwner(repo, { command, writeAccessCommands, write, asked: true });
   return asAlert('WARNING', scrubTrigger(`${body.charAt(0).toUpperCase()}${body.slice(1)}`, triggerPhrase));
 }
 
@@ -477,9 +497,10 @@ function prerequisite(said, label, path, triggerPhrase) {
 }
 
 function renderNoOwners({ repo = null, triggerPhrase = null, writeAccessCommands = null, write = null } = {}) {
-  const also = openToWrite(writeAccessCommands, { write });
+  const open = writeAccessCommands ?? NO_WRITE_ACCESS;
+  const also = openToWrite(open, { write });
   return prerequisite(
-    `Nothing ran, because ${hasNoOwners(repo)}. Add one to the default branch naming who owns which paths` +
+    `Nothing ran, because ${hasNoOwners(repo, { open })}. Add one to the default branch naming who owns which paths` +
       (also
         ? `. ${also}`
         : ', or name the commands write access is enough for in `write_access_commands` in the workflow file'),
@@ -574,6 +595,14 @@ const deliveredCommand = (command) => DELIVERED[String(command ?? '').toLowerCas
 
 const COMMANDS = Object.freeze(Object.keys(OWNER));
 
+const OPENABLE = Object.freeze(COMMANDS.filter((command) => !deliveredCommand(command)));
+
+const EVERY_COMMAND = 'all';
+
+const expandEveryCommand = (names) => names.flatMap((name) => (name === EVERY_COMMAND ? OPENABLE : [name]));
+
+const writeAccessNames = (input) => expandEveryCommand(parseDisabledCommands(input));
+
 function resolveCommand(token, aliases) {
   const candidate = String(token ?? '').toLowerCase();
   if (COMMANDS.includes(candidate)) return candidate;
@@ -650,28 +679,33 @@ function unknownCommandIn(named, { where = null, commandAliases = null } = {}) {
     : `${where} names \`${safeEcho(unknown)}\`, which is not a command; the commands are ${COMMANDS.join(', ')}`;
 }
 
+const carriedRefusal = (where, carried) =>
+  `${where} names \`${safeEcho(carried)}\`, which is carried into a run already going rather than starting one, ` +
+  'so it is answered by whoever wrote the comment rather than by the command; remove it, and every command left ' +
+  'in the list keeps working';
+
 function resolveWriteAccess({ input = null, fromFile = null, commandAliases = null } = {}) {
-  const named = [...new Set(parseDisabledCommands(input))];
+  const named = [...new Set(writeAccessNames(input))];
   const unknown = unknownCommandIn(named, { where: 'the `write_access_commands` input', commandAliases });
   if (unknown !== null) return { error: unknown };
   const carried = named.find((command) => deliveredCommand(command));
-  if (carried !== undefined) {
-    return {
-      error:
-        `the \`write_access_commands\` input names \`${safeEcho(carried)}\`, which is carried into a run already ` +
-        'going rather than starting one, so it is answered by whoever wrote the comment rather than by the ' +
-        'command; remove it, and every command left in the list keeps working',
-    };
-  }
+  if (carried !== undefined) return { error: carriedRefusal('the `write_access_commands` input', carried) };
   if (fromFile === null || fromFile === undefined) {
     return { commands: Object.freeze(named) };
   }
-  const held = [...new Set([...fromFile].map((command) => String(command ?? '').trim().toLowerCase()))];
+  const asked = [...new Set([...fromFile].map((command) => String(command ?? '').trim().toLowerCase()))];
+  const held = [...new Set(expandEveryCommand(asked))];
+  const heldCarried = held.find((command) => deliveredCommand(command));
+  if (heldCarried !== undefined) {
+    return { error: carriedRefusal('`write_access_commands` in `.ksai/ksai.json`', heldCarried) };
+  }
   const widened = held.find((command) => !named.includes(command));
   if (widened !== undefined) {
+    const word = !asked.includes(widened) && asked.includes(EVERY_COMMAND);
     return {
       error:
-        `\`write_access_commands\` in \`.ksai/ksai.json\` names \`${safeEcho(widened)}\`, which the workflow's own ` +
+        `\`write_access_commands\` in \`.ksai/ksai.json\` names \`${safeEcho(word ? EVERY_COMMAND : widened)}\`, ` +
+        `which ${word ? `opens \`${safeEcho(widened)}\` and ` : ''}the workflow's own ` +
         '`write_access_commands` does not; a repository may narrow that list and may never widen it',
     };
   }
@@ -685,14 +719,16 @@ const namedCommand = (command) => {
 
 const anyCommandOpen = (input) => (resolveWriteAccess({ input }).commands ?? NO_WRITE_ACCESS).length > 0;
 
-const releaserOf = (writeAccessCommands) =>
-  parseDisabledCommands(writeAccessCommands).includes('approve')
-    ? 'a code owner or anyone with write access here'
-    : 'a code owner';
-
 function commandBar(command, { writeAccessCommands = null } = {}) {
   return (writeAccessCommands ?? NO_WRITE_ACCESS).includes(namedCommand(command)) ? WRITE_BAR : CODEOWNERS_BAR;
 }
+
+const opensApprove = (writeAccessCommands) => commandBar('approve', { writeAccessCommands }) === WRITE_BAR;
+
+const releaserOf = (writeAccessCommands) =>
+  opensApprove(writeAccessNames(writeAccessCommands))
+    ? 'a code owner or anyone with write access here'
+    : 'a code owner';
 
 const asFact = (fact) => String(fact ?? '').trim();
 
@@ -706,7 +742,8 @@ function commandAuthorized(command, { codeowner = null, write = null, writeAcces
     bar,
     read: true,
     authorized: owns === 'true' || holds === 'true',
-    undecided: owns !== 'true' && holds !== 'true' && holds !== 'false',
+    undecided:
+      namedCommand(command) !== HELP_COMMAND && owns !== 'true' && holds !== 'true' && holds !== 'false',
   };
 }
 
@@ -1144,12 +1181,15 @@ module.exports = {
   resolveWriteAccess,
   anyCommandOpen,
   releaserOf,
+  opensApprove,
   unknownCommandIn,
   commandAuthorized,
   namedCommand,
   undecidedWriteAccess,
   parseDisabledCommands,
   parseAllowedCommands: parseDisabledCommands,
+  writeAccessNames,
+  EVERY_COMMAND,
   scrubTrigger,
   asAlert,
   namedRepo,
@@ -1158,6 +1198,7 @@ module.exports = {
   ALIASES,
   MODEL_TIERS,
   COMMANDS,
+  OPENABLE,
   HELP_COMMAND,
   DEFAULT_COMMAND,
   defaultCommandFor,

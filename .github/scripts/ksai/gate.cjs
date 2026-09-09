@@ -11,6 +11,7 @@ const {
   asAlert,
   commandAuthorized,
   commandEnabled,
+  opensApprove,
   releaserOf,
   undecidedWriteAccess,
   NO_WRITE_ACCESS,
@@ -95,7 +96,7 @@ async function readNativeApprovals({
 
 async function mayRelease({ github, core, owner, repo, login, authorize, writeAccess, writeAccessCommands, cache }) {
   const owns = (await authorize({ github, core, owner, repo, username: login, cache })) === true;
-  const asks = !owns && writeAccessCommands.includes('approve');
+  const asks = !owns && opensApprove(writeAccessCommands);
   const holds = asks ? await writeAccess({ github, core, owner, repo, username: login, cache }) : '';
   const bar = commandAuthorized('approve', {
     codeowner: owns ? 'true' : 'false',
@@ -130,7 +131,7 @@ async function withoutScan({
   if (typeof authorize !== 'function') {
     return { required: true, blocked: true, reason: 'no authorization function was passed to check approvers with' };
   }
-  if (writeAccessCommands.includes('approve') && typeof writeAccess !== 'function') {
+  if (opensApprove(writeAccessCommands) && typeof writeAccess !== 'function') {
     return {
       required: true,
       blocked: true,
@@ -499,7 +500,7 @@ function renderAwaiting({ reason = null, triggerPhrase = null, openThreads = nul
     return asAlert(
       'WARNING',
       scrub(
-        'A code owner has to approve a plan before any of it is written, and this repository has the ' +
+        'A plan has to be approved before any of it is written, and this repository has the ' +
           '`approve` command turned off - so no review or comment can release this one and nothing will run. A code owner ' +
           'has to take `approve` out of `disabled_commands` in the workflow file',
         { triggerPhrase },
@@ -514,7 +515,7 @@ function renderAwaiting({ reason = null, triggerPhrase = null, openThreads = nul
     );
   } else if (reason === 'reworked-since-approval') {
     lines.push(
-      'A code owner approved this plan and the plan document has been reworked since, so nothing has ' +
+      'This plan was approved and the plan document has been reworked since, so nothing has ' +
         'started. The approval released the document that was there when it was given, not this one - read ' +
         'the plan again and approve the draft pull request, or leave an explicit approval request in its ' +
         'conversation',
@@ -523,7 +524,7 @@ function renderAwaiting({ reason = null, triggerPhrase = null, openThreads = nul
     const many = Number(openThreads);
     const named = Number.isFinite(many) && many > 0 ? counted(many, 'review thread') : 'review threads';
     lines.push(
-      `A code owner approved this plan, and ${named} on the plan document ${plural(many, 'is', 'are')} waiting for an answer, so ` +
+      `This plan was approved, and ${named} on the plan document ${plural(many, 'is', 'are')} waiting for an answer, so ` +
         'nothing has started. Submit a review and the plan is reworked in answer, or resolve each thread ' +
         'yourself, and then approve the draft pull request again. To approve over the wait instead, add `--force` ' +
         'to an explicit approval request: each waiting thread gets a reply and is resolved',

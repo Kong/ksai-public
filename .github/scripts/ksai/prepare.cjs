@@ -837,23 +837,23 @@ const PLAN_REFUSAL = Object.freeze(
       'release the phase with a comment here:',
     'unreadable-releases':
       'I could not read the comments that record which phases of this plan have been released, so I stopped ' +
-      'rather than guess at a code owner review. The plan itself is fine - what needs looking at is ' +
+      'rather than guess at an approval. The plan itself is fine - what needs looking at is ' +
       '`bot_login` and whether the token may read this conversation:',
     'no-boundary-record':
       'No comment of mine records how many phase boundaries this plan was published with, so there is nothing ' +
-      'to check the task list against and I stopped rather than carry on past a code owner review that may no ' +
+      'to check the task list against and I stopped rather than carry on past an approval that may no ' +
       'longer be there. The plan reads fine, the comments read fine, and the token is not the problem: either ' +
       'this plan was published before I started recording that count, or the comment recording it has been ' +
       'deleted. Delete the whole task list to have the work planned again from scratch:',
     'edited-steps':
-      'The task titles in this list are not the ones a code owner released, so I stopped rather than build from ' +
+      'The task titles in this list are not the ones an approver released, so I stopped rather than build from ' +
       'an instruction nobody reviewed. A title is not a label for the work: it is what this flow is handed ' +
       'verbatim, so rewording an unticked row substitutes what the next run does. The boundaries are intact and ' +
       'the releases read fine - what changed is the wording of the tasks themselves. Restore what was released, ' +
       'or delete the whole task list to have the work planned again from scratch:',
     'edited-plan':
       'This plan holds a different number of phase boundaries from the one it was published with, so I stopped ' +
-      'rather than carry on past a code owner review that may no longer be there. The plan reads fine - what ' +
+      'rather than carry on past an approval that may no longer be there. The plan reads fine - what ' +
       'changed is how many boundaries it has. Restore the task list to what it was published as to carry on, or ' +
       'delete the whole task list to have the work planned again from scratch:',
   }),

@@ -101,10 +101,11 @@ inputs:
   write_access_commands:
     description: >-
       commands write access on the repository is enough to run, rather than owning a path in CODEOWNERS.
-      Empty (the default) holds every command to ownership, which is what every installation did before
-      this existed. `.ksai/ksai.json` may take names out of this list and may never add one.
+      `all` is the default and names every command a repository can open, one shipped later included;
+      `stop` and `pause` are refused here by name. `.ksai/ksai.json` may take names out of this list and
+      may never add one.
     required: false
-    default: ""
+    default: "all"
   allowed_commands:
     description: replaced by disabled_commands, and still read so a value left behind stops the run
     required: false
@@ -139,7 +140,7 @@ outputs:
   codeowner:
     description: >-
       whether the requester owns a path in this repository's CODEOWNERS and holds write access, which is
-      the bar every command holds until one is named in `write_access_commands`
+      the bar every command not named in `write_access_commands` holds
     value: ${{ steps.authz.outputs.authorized }}
   write_access:
     description: >-
@@ -414,7 +415,7 @@ runs:
             renderUnauthorized,
             renderNoOwners,
             CODEOWNERS_BAR,
-            parseDisabledCommands,
+            writeAccessNames,
           } = require(`${process.env.SCRIPTS}/lib/select-arm.cjs`);
           const { marked } = require(`${process.env.SCRIPTS}/ksai/marker.cjs`);
           const issue_number = Number(process.env.ISSUE_NUMBER);
@@ -430,7 +431,7 @@ runs:
             bar,
             undecided: process.env.UNDECIDED === 'true',
             write: process.env.WRITE_ACCESS,
-            writeAccessCommands: parseDisabledCommands(process.env.WRITE_ACCESS_COMMANDS),
+            writeAccessCommands: writeAccessNames(process.env.WRITE_ACCESS_COMMANDS),
           };
           const render =
             process.env.OWNERS === 'absent' && bar === CODEOWNERS_BAR ? renderNoOwners : renderUnauthorized;

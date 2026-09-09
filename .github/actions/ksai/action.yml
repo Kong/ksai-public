@@ -256,13 +256,14 @@ inputs:
   write_access_commands:
     description: >-
       commands anyone holding write access on the repository may run, comma- or space-separated. Every other
-      command needs the commenter to own a path in `CODEOWNERS` as well, which is what every command needs
-      while this is empty - the default, and the behaviour of every installation that sets nothing. What the
-      stricter bar protects is the team's Anthropic budget rather than the code, since anyone holding write
-      can already push, so an organization that grants write broadly opens that budget to everyone holding
-      it. `.ksai/ksai.json` may take names out of this list and may never add one.
+      command needs the commenter to own a path in `CODEOWNERS` as well. `all` is the default and names every
+      command a repository can open, one shipped later included, because anyone holding write can already
+      push whatever those commands would write. What the stricter bar protects is the team's Anthropic
+      budget rather than the code, so an organization that grants write broadly is the one to narrow this -
+      to a list of names, or to the empty value that holds every command to ownership. `stop` and `pause`
+      are refused here by name. `.ksai/ksai.json` may take names out of this list and may never add one.
     required: false
-    default: ""
+    default: "all"
   allowed_commands:
     description: >-
       replaced by `disabled_commands`, which names the commands this repository turns off rather than the ones
@@ -4375,6 +4376,7 @@ runs:
         TRIGGER_PHRASE: ${{ inputs.trigger_phrase }}
         BOT_LOGIN: ${{ inputs.bot_login }}
         OWN_PULL: ${{ steps.courier_pull.outputs.mine }}
+        WRITE_ACCESS_COMMANDS: ${{ steps.select.outputs.write_access_commands || steps.select_arm.outputs.write_access_commands }}
         STOP_MODE: ${{ steps.halt.outputs.mode }}
         STOP_GRACE_SECONDS: ${{ steps.halt.outputs.grace }}
         PID_FILE: ${{ runner.temp }}/ksai-courier.pid

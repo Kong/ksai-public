@@ -9,6 +9,7 @@ const {
   deliveredCommand,
   ownsCommand,
   parseDisabledCommands,
+  writeAccessNames,
   parseOptions,
   commandFitsSurface,
   resolveWriteAccess,
@@ -343,7 +344,7 @@ function settleAuthorization({ core, env }) {
   const answer = commandAuthorized(command, {
     codeowner: env.CODEOWNER,
     write: env.WRITE_ACCESS,
-    writeAccessCommands: parseDisabledCommands(env.WRITE_ACCESS_COMMANDS),
+    writeAccessCommands: writeAccessNames(env.WRITE_ACCESS_COMMANDS),
   });
 
   const refusal = answer.undecided ? undecidedWriteAccess(command) : '';

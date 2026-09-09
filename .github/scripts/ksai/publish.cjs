@@ -283,7 +283,7 @@ async function publishAwaiting({ github, owner, repo, env }) {
       payloadFor(env, { kind: 'plan-waiting', reason: env.REASON }),
     ),
   });
-  return { notices: [`the plan is waiting on a code owner (${env.REASON})`] };
+  return { notices: [`the plan is waiting on an approver (${env.REASON})`] };
 }
 
 async function publishRefusedRelease({ github, owner, repo, env }) {
@@ -326,7 +326,7 @@ async function publishWaiting({ github, owner, repo, env }) {
     issue_number: Number(env.PR_NUMBER),
     body: marked(waiting.body, payloadFor(env, { kind: waiting.kind, reason: env.REASON })),
   });
-  return { notices: [`the phase is waiting on a code owner (${env.REASON})`] };
+  return { notices: [`the phase is waiting on an approver (${env.REASON})`] };
 }
 
 const reporting = (kind, over = {}) => {

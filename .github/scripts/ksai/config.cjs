@@ -1,6 +1,7 @@
 
 const {
   COMMANDS,
+  EVERY_COMMAND,
   HELP_COMMAND,
   PLAN_MODES,
   deliveredCommand,
@@ -185,6 +186,14 @@ function parseConfig(text) {
       };
     }
 
+    if (name === EVERY_COMMAND) {
+      return {
+        error:
+          `alias \`${safeEcho(name)}\` in \`${CONFIG_PATH}\` is the word \`write_access_commands\` reads as every ` +
+          'command, so a list naming it would open everything rather than the command this maps to',
+      };
+    }
+
     const target = table[rawName];
     if (typeof target !== 'string') {
       return {
@@ -230,7 +239,7 @@ function parseConfig(text) {
       };
     }
     writeAccess = asked.map((entry) => entry.trim().toLowerCase());
-    const unknownName = unknownCommandIn(writeAccess, {
+    const unknownName = unknownCommandIn(writeAccess.filter((entry) => entry !== EVERY_COMMAND), {
       where: `\`write_access_commands\` in \`${CONFIG_PATH}\``,
       commandAliases: aliases,
     });

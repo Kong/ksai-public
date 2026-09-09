@@ -288,7 +288,7 @@ async function nextStep({ github = null, owner = null, repo = null, prNumber = n
     return {
       error:
         `this plan was published with ${counted(seen.shape.checkpoints, 'phase boundary row')} and the body now holds ` +
-        `${boundaries.length}. A boundary is a code owner's review, so a plan whose boundaries have changed ` +
+        `${boundaries.length}. A boundary is an approver's review, so a plan whose boundaries have changed ` +
         'is not run',
       errorKind: 'edited-plan',
     };
@@ -296,7 +296,7 @@ async function nextStep({ github = null, owner = null, repo = null, prNumber = n
   if (seen.shape.digest && seen.shape.digest !== stepDigest(body)) {
     return {
       error:
-        'the step titles in this body are not the ones a code owner released. A title is the task this flow ' +
+        'the step titles in this body are not the ones an approver released. A title is the task this flow ' +
         'carries out verbatim, so a body whose steps have been reworded since the review is not a plan this ' +
         'run will carry on with. Restore the wording that was released, or plan the work again from scratch',
       errorKind: 'edited-steps',

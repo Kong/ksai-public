@@ -19,11 +19,11 @@ const RESOLVE = `
 const ANSWER = Object.freeze(
   Object.assign(Object.create(null), {
     waiting:
-      'A code owner released this plan while this thread was still waiting for an answer, so it is closed here. ' +
+      'This plan was released while this thread was still waiting for an answer, so it is closed here. ' +
       'The release did not read it into the plan document. If the point still stands, say so and it will be ' +
       'picked up against the code.',
     answered:
-      'A code owner released this plan with this thread still open, so it is closed here. The answer above is ' +
+      'This plan was released with this thread still open, so it is closed here. The answer above is ' +
       'the one the release went ahead on, and no further pass will revisit the plan document. If the point ' +
       'still stands, say so and it will be picked up against the code.',
   }),

@@ -152,7 +152,7 @@ function openOn({ branch, repo, defaultBranch, subject, bodyFile, run, block, pu
     branch,
     prUrl,
     prNumber,
-    message: `Working on this in ${prUrl}. The plan is written to a document on that branch for a code owner to review, and every later update lands on that pull request.`,
+    message: `Working on this in ${prUrl}. The plan is written to a document on that branch for review, and every later update lands on that pull request.`,
   };
 }
 

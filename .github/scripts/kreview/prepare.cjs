@@ -98,6 +98,7 @@ async function selectReviewArm({ github, core, owner, repo, env }) {
     route_source: '',
     route_surface: '',
     receipt: '',
+    write_access_commands: '',
     prompt_content_html: '',
     prompt_content_report: '',
   };
@@ -192,6 +193,7 @@ async function selectReviewArm({ github, core, owner, repo, env }) {
     receipt: reviews ? receiptOf(wanted, routeSurface, routeSource) : '',
     prompt_content_html: helps ? '' : result.promptHtml,
     prompt_content_report: helps ? '' : result.promptReport,
+    write_access_commands: (result.writeAccess ?? []).join(' '),
   });
 
   const note =

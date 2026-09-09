@@ -30,13 +30,14 @@ const stopLatch = (signals) => {
   return { asked: () => asked, close: () => signals.off('SIGTERM', ask) };
 };
 
-export function authorizerOver({ github, owner, repo, load = loadAuthorize }) {
+export function authorizerOver({ github, owner, repo, load = loadAuthorize, writeAccessCommands = null }) {
   let authorize;
   try {
     authorize = load();
   } catch {
     return null;
   }
+  const opens = String(writeAccessCommands ?? '').trim() !== '';
   let cache = Object.create(null);
   return async (username) => {
     let stuck = false;
@@ -54,7 +55,14 @@ export function authorizerOver({ github, owner, repo, load = loadAuthorize }) {
       cache = Object.create(null);
       return null;
     }
-    return allowed === true;
+    if (allowed === true) return true;
+    if (!opens) return false;
+    if (typeof authorize.writeAccess !== 'function') return null;
+    const holds = await authorize.writeAccess({ github, core, owner, repo, username, cache });
+    if (holds === 'true') return true;
+    if (holds === 'false') return false;
+    cache = Object.create(null);
+    return null;
   };
 }
 
@@ -92,7 +100,9 @@ export async function main(
   const inbox = join(stateDir, 'inbox');
   const carrying = existsSync(inbox);
   const watching = carrying ? inbox : stateDir;
-  const authorize = carrying ? authorizerOver({ github, owner, repo: name, load }) : () => false;
+  const authorize = carrying
+    ? authorizerOver({ github, owner, repo: name, load, writeAccessCommands: env.WRITE_ACCESS_COMMANDS })
+    : () => false;
   if (!authorize) {
     say(stateDir, 'the courier could not load the authorization it carries every comment through, so it read none');
     return 0;

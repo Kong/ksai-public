@@ -144,7 +144,7 @@ export function publishPlan({
     '-m',
     `docs(plan): plan the work for ${jira?.key ? String(jira.key) : `#${String(issueNumber)}`}`,
     '-m',
-    'A code owner reviews this document and approves it before any step runs.',
+    'An approver reviews this document and releases it before any step runs.',
   ]);
   if (!committed.ok) {
     return block('The plan document could not be committed, so nothing was published.');

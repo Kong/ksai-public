@@ -1,6 +1,6 @@
 ---
 name: ksai-plan
-description: Plan a GitHub issue or a Jira ticket as a plan document a code owner reviews, holding an ordered list of independently committable steps for a CI flow that implements one step per run. Reads the ticket and the repo, sizes each step to one commit with a clear completion test, writes the document, and reports the run as a JSON manifest. Use at the start of a ksai implement run, before any code is written.
+description: Plan a GitHub issue or a Jira ticket as a plan document an approver reviews, holding an ordered list of independently committable steps for a CI flow that implements one step per run. Reads the ticket and the repo, sizes each step to one commit with a clear completion test, writes the document, and reports the run as a JSON manifest. Use at the start of a ksai implement run, before any code is written.
 argument-hint: "<issue-number-or-url-or-jira-key>"
 allowed-tools: Agent, Bash, Read, Grep, Glob, Write
 ---
@@ -31,7 +31,7 @@ A `/ksai implement` comment on an issue starts a CI flow:
 1. A trusted step opens a **draft** pull request.
 2. This skill runs once and writes the plan document.
 3. A trusted step commits that document to the branch, and the pull request waits.
-4. A code owner reads the document, asks for changes, and approves it. Only then are your steps
+4. An approver reads the document, asks for changes, and approves it. Only then are your steps
    rendered into the pull request body as a checkbox list.
 5. `ksai-step` runs once per step, each time in a **fresh workflow run with a fresh context**,
    and lands one commit.
@@ -182,7 +182,7 @@ to touch, an assumption you made - goes in `summary`, not into the title.
 
 ## Phase 6 - Write the plan document
 
-Write it with the Write tool, at the path this run names. It is what a code owner reads, comments on
+Write it with the Write tool, at the path this run names. It is what an approver reads, comments on
 and approves, and the flow parses its step lists back out - so the headings are a contract while
 everything between them is yours.
 
@@ -218,16 +218,16 @@ The reconcile command writes unconditionally. Issue #42 asks for a flag that sho
 - A step is one `-` bullet in column 0. A second line under a step is refused rather than read,
   indented or not - a sub-bullet, a wrapped line, a sentence continuing the one above - and an empty
   bullet carries no title and is refused with the plan. A numbered item, and a bullet below a `---` or
-  `***` rule inside a `### Steps` section, are refused rather than read - both render as list items a
-  code owner reads as steps, and neither is one. Close a step list with a heading, never with a rule.
-- An HTML comment beside text on any line is refused. A comment renders as nothing, so the line a code
-  owner reads is not the line this parses - and a bullet written inside a comment block is a step
+  `***` rule inside a `### Steps` section, are refused rather than read - both render as list items an
+  approver reads as steps, and neither is one. Close a step list with a heading, never with a rule.
+- An HTML comment beside text on any line is refused. A comment renders as nothing, so the line an
+  approver reads is not the line this parses - and a bullet written inside a comment block is a step
   nobody approved, while one inside a phase heading erases the phase and its checkpoint.
 - **One physical line per paragraph and per bullet, however long it runs.** Never wrap prose to a
-  column. A code owner leaves review comments on the lines of this document and a later run rewrites
+  column. An approver leaves review comments on the lines of this document and a later run rewrites
   it; hard-wrapped prose moves every line after an edit, which strands the threads left on them.
 - The steps are the titles from Phase 4, verbatim. Everything Phase 4 says about them still holds -
-  they are published into the pull request body as checklist rows once a code owner approves.
+  they are published into the pull request body as checklist rows once an approver approves.
 - Write the context you would want if you were the one implementing step 3 with none of your reasoning:
   what you read, what you decided, and what you deliberately did not do.
 
@@ -254,9 +254,9 @@ file and nothing else you said.
   a type means calling a bug fix a feature. That is not hypothetical: the first pull request this flow
   ever opened was titled `feat: One commit: arg() in panel/build-cli.mjs errors instead of d`, because
   the title was this manifest's `summary` with a hardcoded `feat:` prefix glued on and cut to fit.
-- The manifest carries no steps. They live in the document, so the plan a code owner edits is the plan
+- The manifest carries no steps. They live in the document, so the plan an approver edits is the plan
   that runs. A phase is one coherent piece of the work a human could read and judge on its own: not one
-  step, and not the whole plan. The flow stops after each phase and waits for a code owner to review the
+  step, and not the whole plan. The flow stops after each phase and waits for an approver to review the
   commits and release the next one, so ten phases is the ceiling and two to four is the usual answer.
   Small work is one phase, and a plan of two or three steps almost always is. Thirty steps across all
   phases, in a document of at most 5000 lines, are the other two ceilings, and a plan over any of them
