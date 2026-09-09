@@ -320,6 +320,8 @@ runs:
           printf 'X-Ksai-Action: ksai:classify\n'
           printf 'X-Ksai-Model: %s\n' "${MODEL}"
           printf 'X-Ksai-Effort: low\n'
+          printf 'Ai-Cost-Repository: %s\n' "${REPO}"
+          printf 'Ai-Cost-Initiated-By: KSAI\n'
           echo "KSAI_HEADERS_EOF"
         } >> "$GITHUB_OUTPUT"
 

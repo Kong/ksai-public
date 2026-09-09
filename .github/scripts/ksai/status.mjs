@@ -31,6 +31,8 @@ export const ATTRIBUTION = Object.freeze([
   { name: 'X-Ksai-Action', of: (_held = {}, _model = '') => 'ksai:status' },
   { name: 'X-Ksai-Model', of: (_held = {}, model = '') => model },
   { name: 'X-Ksai-Effort', of: (_held = {}, _model = '') => 'low' },
+  { name: 'Ai-Cost-Repository', of: (held = {}, _model = '') => held.REPOSITORY },
+  { name: 'Ai-Cost-Initiated-By', of: (_held = {}, _model = '') => 'KSAI' },
 ]);
 
 export const MODES = Object.freeze(['auto', 'off']);
