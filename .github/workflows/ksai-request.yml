@@ -168,7 +168,7 @@ jobs:
 
       - name: Withdraw the request when no review was started
         if: ${{ always() && steps.request.outcome == 'success' && steps.dispatch.outcome != 'success' }}
-        uses: Kong/ksai-public/.github/actions/clear-review-request@v3.41.0
+        uses: $/.github/actions/clear-review-request
         with:
           pr_number: ${{ github.event.pull_request.number }}
           team_slug: ${{ vars.KSAI_REVIEW_TEAM || 'ksai' }}
