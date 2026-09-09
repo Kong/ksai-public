@@ -740,7 +740,7 @@ jobs:
 
       - name: Resolve who asked and what they asked for
         id: gate
-        uses: Kong/ksai-public/.github/actions/ksai-gate@v3.40.11
+        uses: Kong/ksai-public/.github/actions/ksai-gate@v3.40.12
         with:
           kong_org_github_token: ${{ github.token }}
           authorization_github_token: ${{ steps.authz-token.outputs.token }}
@@ -804,7 +804,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-help
           repository: Kong/ksai-public
-          ref: v3.40.11
+          ref: v3.40.12
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -932,7 +932,7 @@ jobs:
           permission-issues: write
           permission-pull-requests: write
 
-      - uses: Kong/ksai-public/.github/actions/ksai@v3.40.11
+      - uses: Kong/ksai-public/.github/actions/ksai@v3.40.12
         with:
           flow: review
           trigger_phrase: ${{ inputs.trigger_phrase }}
@@ -1085,7 +1085,7 @@ jobs:
           private-key: ${{ secrets.ksai_private_key }}
           permission-contents: read
 
-      - uses: Kong/ksai-public/.github/actions/ksai@v3.40.11
+      - uses: Kong/ksai-public/.github/actions/ksai@v3.40.12
         with:
           flow: test
           engine: ${{ inputs.engine }}
@@ -1156,7 +1156,7 @@ jobs:
           permission-contents: read
           permission-pull-requests: write
 
-      - uses: Kong/ksai-public/.github/actions/ksai@v3.40.11
+      - uses: Kong/ksai-public/.github/actions/ksai@v3.40.12
         with:
           flow: test-publish
           trigger_phrase: ${{ inputs.trigger_phrase }}
@@ -1207,7 +1207,7 @@ jobs:
         with:
           token: ${{ github.token }}
           repository: Kong/ksai-public
-          ref: v3.40.11
+          ref: v3.40.12
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1258,7 +1258,7 @@ jobs:
           permission-issues: read
           permission-pull-requests: read
 
-      - uses: Kong/ksai-public/.github/actions/ksai@v3.40.11
+      - uses: Kong/ksai-public/.github/actions/ksai@v3.40.12
         if: ${{ steps.sample.outputs.shadow == 'true' }}
         with:
           flow: review
@@ -1492,7 +1492,7 @@ jobs:
           private-key: ${{ secrets.ksai_private_key }}
           permission-contents: read
 
-      - uses: Kong/ksai-public/.github/actions/ksai@v3.40.11
+      - uses: Kong/ksai-public/.github/actions/ksai@v3.40.12
         with:
           flow: implement
           engine: ${{ inputs.engine }}
@@ -1589,7 +1589,7 @@ jobs:
         with:
           egress-policy: audit
 
-      - uses: Kong/ksai-public/.github/actions/clear-review-request@v3.40.11
+      - uses: Kong/ksai-public/.github/actions/clear-review-request@v3.40.12
         if: ${{ needs.gate.result == 'success' }}
         with:
           pr_number: ${{ inputs.pr || github.event.issue.number || github.event.pull_request.number }}
@@ -1637,7 +1637,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-recover
           repository: Kong/ksai-public
-          ref: v3.40.11
+          ref: v3.40.12
           sparse-checkout: |
             .github/scripts
           persist-credentials: false
