@@ -1,6 +1,6 @@
 'use strict';
 
-const { COMMANDS } = require('./select-arm.cjs');
+const { COMMANDS, MODEL_CORE, MODEL_SHAPE } = require('./select-arm.cjs');
 const { markerJson } = require('./run-record.cjs');
 const { escapeForRegExp } = require('./text.cjs');
 
@@ -21,7 +21,7 @@ const REASON_SHAPE = /^[a-z][a-z0-9-]{0,39}$/;
 
 const UNCLASSIFIED_REASON = 'unclassified';
 const ARMS = Object.freeze(['classifier', 'triage', 'dispute', 'main', 'status']);
-const ARM_MODEL_SHAPE = /^[A-Za-z0-9._-]{0,64}$/;
+const ARM_MODEL_SHAPE = new RegExp(`^(?:${MODEL_CORE})?$`);
 const ARM_EFFORT_SHAPE = /^[a-z]{0,16}$/;
 const ROUTE_SOURCES = Object.freeze(['explicit', 'classifier', 'context', 'continuation']);
 const ROUTE_SURFACES = Object.freeze(['issue', 'pull', 'thread', 'review']);
@@ -91,7 +91,7 @@ function validAttempt(attempt) {
   if (!shaped(attempt.id, ATTEMPT_ID_SHAPE)) return false;
   if (!shaped(attempt.phase, /^[A-Za-z0-9._/-]{1,24}$/)) return false;
   if (!shaped(attempt.outcome, /^[A-Za-z0-9._/-]{1,24}$/)) return false;
-  if (!shaped(attempt.model, /^[A-Za-z0-9._-]{1,64}$/)) return false;
+  if (!shaped(attempt.model, MODEL_SHAPE)) return false;
   if (!shaped(attempt.effort, /^[a-z]{1,16}$/)) return false;
   if (!SELECTION_SOURCES.includes(attempt.model_source)) return false;
   if (!SELECTION_SOURCES.includes(attempt.effort_source)) return false;

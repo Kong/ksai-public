@@ -71,7 +71,9 @@ function canonicalOf(model, allow) {
   return CANONICAL_MODELS.get(key) ?? entry;
 }
 
-const MODEL_SHAPE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}(?:\/[A-Za-z0-9][A-Za-z0-9._-]{0,63}){0,2}$/;
+const MODEL_CORE = '[A-Za-z0-9][A-Za-z0-9._-]{0,63}(?:\\/[A-Za-z0-9][A-Za-z0-9._-]{0,63}){0,2}';
+
+const MODEL_SHAPE = new RegExp(`^${MODEL_CORE}$`);
 
 const shortModel = (model) => String(model ?? '').trim().replace(/^claude-/, '');
 
@@ -1202,6 +1204,7 @@ module.exports = {
   HELP_COMMAND,
   DEFAULT_COMMAND,
   defaultCommandFor,
+  MODEL_CORE,
   MODEL_SHAPE,
   KNOWN_MODELS,
   RECORDED_TIERS,
