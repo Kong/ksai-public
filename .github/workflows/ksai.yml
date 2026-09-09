@@ -739,7 +739,7 @@ jobs:
         if: ${{ steps.authz-token.outcome == 'failure' }}
         run: |
           set -euo pipefail
-          echo "::error::the App minted no read token for this repository, so nothing below can read its CODEOWNERS, its pull requests or its members; check the client_id input or the KSAI_CLIENT_ID variable, the ksai_private_key secret, and that the App is installed here"
+          echo "::error::the App minted no read token for this repository, so nothing below can read its CODEOWNERS, its pull requests or its members. It must be installed here and must grant contents: read, issues: read, members: read and pull requests: read - GitHub refuses the whole mint when one of them is missing and never says which. Check those grants, then the client_id input or the KSAI_CLIENT_ID variable and the ksai_private_key secret"
           exit 1
 
       - name: Resolve who asked and what they asked for
@@ -808,7 +808,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-help
           repository: Kong/ksai-public
-          ref: v3.42.1
+          ref: v3.42.2
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1211,7 +1211,7 @@ jobs:
         with:
           token: ${{ github.token }}
           repository: Kong/ksai-public
-          ref: v3.42.1
+          ref: v3.42.2
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1641,7 +1641,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-recover
           repository: Kong/ksai-public
-          ref: v3.42.1
+          ref: v3.42.2
           sparse-checkout: |
             .github/scripts
           persist-credentials: false
