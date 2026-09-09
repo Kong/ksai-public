@@ -25,6 +25,10 @@
     "sonnet": "balanced",
     "haiku": "fast"
   },
+  "legacyModelIds": {
+    "claude-haiku-4-5-20251001": "claude-haiku-4-5",
+    "glm-5.3-flash": "zai-org/GLM-5.3-Flash"
+  },
   "knownModels": [
     "claude-opus-5",
     "claude-sonnet-5",
