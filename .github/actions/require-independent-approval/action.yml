@@ -6,7 +6,9 @@ description: >
   trailer. GitHub only refuses an approval from the pull request's author, so a
   branch a bot opened on a person's behalf can be approved by that same person.
   Reports a commit status to make required, and dismisses a contributor's own
-  approval so GitHub recounts without it.
+  approval so GitHub recounts without it. A pull request carrying no
+  `Co-authored-by:` trailer on a commit an App published is reported green and
+  nothing on it is dismissed - GitHub's own rules already describe it.
 
 inputs:
   github-token:
@@ -18,6 +20,10 @@ inputs:
   head-sha:
     description: "head commit of that pull request, from the event payload, so a failure can be reported on it even when the pull request itself cannot be read"
     required: true
+  bot-login:
+    description: "login of the App this flow publishes as, with or without the `[bot]` suffix. Only a commit that App or `github-actions[bot]` published turns the hold on. An empty value holds any App-published trailer instead, since a commit of this flow's lands on pull requests other bots opened"
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -27,6 +33,7 @@ runs:
         INDEPENDENT_ACTION_PATH: ${{ github.action_path }}
         INDEPENDENT_PR: ${{ inputs.pr-number }}
         INDEPENDENT_HEAD_SHA: ${{ inputs.head-sha }}
+        INDEPENDENT_BOT_LOGIN: ${{ inputs.bot-login }}
         INDEPENDENT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       with:
         github-token: ${{ inputs.github-token }}
@@ -41,4 +48,5 @@ runs:
             prNumber: Number(process.env.INDEPENDENT_PR),
             headSha: process.env.INDEPENDENT_HEAD_SHA,
             targetUrl: process.env.INDEPENDENT_RUN_URL,
+            botLogin: process.env.INDEPENDENT_BOT_LOGIN,
           });

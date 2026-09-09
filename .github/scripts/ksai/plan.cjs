@@ -31,9 +31,42 @@ const DEFAULT_PLAN_DIR = 'docs/plans';
 
 const PHASE_HEADING = /^ {0,3}##[ \t]+Phase[ \t]+([1-9][0-9]{0,2})[ \t]*(?:[-:][ \t]*?(.*?))?(?:[ \t]+#+)?[ \t]*$/;
 
-const PHASE_ATTEMPT = /^ {0,3}#{1,6}[ \t]+Phase[ \t]*[0-9]/i;
+const CONTAINER_RUN = /^(?:[ \t]*>|[ \t]{0,3}(?:[-*+]|[0-9]{1,9}[.)])[ \t]+)+[ \t]*/;
 
-const PHASE_SETEXT = /^ {0,3}Phase[ \t]*[0-9]/i;
+const NESTED_RUN = /^(?:[ \t]*>|[ \t]*(?:[-*+]|[0-9]{1,9}[.)])[ \t]+)*[ \t]*/;
+
+const ATX_TEXT = /^ {0,3}#{1,6}[ \t]+(.*)$/;
+
+const INLINE_MARKUP = /[*_`~\\]/g;
+
+const NUMERIC_ENTITY = /&#(?:[xX]([0-9a-fA-F]{1,6})|([0-9]{1,7}));/g;
+
+const CLOSING_SEQUENCE = /[ \t]+#+[ \t]*$/;
+
+const ITEM_MARKER = /^([ \t]*(?:[-*+]|[0-9]{1,9}[.)]))([ \t]+)/;
+
+const columnAfter = (prefix) => {
+  let column = 0;
+  for (const one of String(prefix ?? '')) column += one === '\t' ? 4 - (column % 4) : 1;
+  return column;
+};
+
+const indentOf = (line) => {
+  const held = /^[ \t]*/.exec(String(line ?? ''));
+  return columnAfter(held[0]);
+};
+
+const contentColumn = (marker, gap) => {
+  const ends = columnAfter(marker);
+  const wide = columnAfter(`${marker}${gap}`) - ends;
+  return wide > 4 ? ends + 1 : ends + wide;
+};
+
+const NAMED_ENTITY = /&[a-zA-Z][a-zA-Z0-9]*;/g;
+
+const NAMES_PHASE = /^[^\p{L}\p{N}\n]*Phase[^\p{L}\p{N}\n]*[0-9]/iu;
+
+const NAMES_STEPS = /^[^\p{L}\p{N}\n]*Steps[^\p{L}\p{N}\n#]*$/iu;
 
 const HTML_BLOCK_AT = /^<(?:\/?[a-zA-Z][a-zA-Z0-9-]*(?:[ \t/>]|$)|\?|!(?:[a-zA-Z]|\[CDATA\[))/;
 
@@ -50,6 +83,8 @@ const RULED_ITEM = /^ {0,3}(?:[-*+][ \t]+\S|[0-9]{1,9}[.)][ \t]+\S)/;
 const SETEXT_UNDERLINE = /^[ \t]{0,3}(?:=+|-+)[ \t]*$/;
 
 const ANY_HEADING = /^ {0,3}#{1,6}([ \t]|$)/;
+
+const SIBLING_HEADING = /^#{1,3}([ \t]|$)/;
 
 const DOC_FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
 
@@ -68,6 +103,33 @@ const FENCES = [
 ];
 
 const fencesIn = (text) => FENCES.filter((pair) => text.includes(pair.begin) || text.includes(pair.end));
+
+function headingText(said) {
+  return String(said ?? '')
+    .replace(NUMERIC_ENTITY, (whole, hex, decimal) => {
+      const point = hex ? Number.parseInt(hex, 16) : Number.parseInt(decimal, 10);
+      if (point <= 0 || point > 0x10ffff) return whole;
+      return point <= 0x20 ? ' ' : String.fromCodePoint(point);
+    })
+    .replace(NAMED_ENTITY, ' ')
+    .replace(INLINE_MARKUP, '');
+}
+
+function uncontained(line, nested = false) {
+  return String(line ?? '').replace(nested ? NESTED_RUN : CONTAINER_RUN, '');
+}
+
+function atxText(line, listed = false) {
+  const opened = ATX_TEXT.exec(uncontained(line, listed));
+  return opened ? headingText(opened[1].replace(CLOSING_SEQUENCE, '')) : null;
+}
+
+function underlinedNames(shape, said) {
+  const lines = String(said ?? '')
+    .split('\n')
+    .map((one) => uncontained(one));
+  return [lines.join(' '), ...lines].some((one) => shape.test(headingText(one)));
+}
 
 function fenceOf(text) {
   const seen = fencesIn(String(text ?? ''));
@@ -534,6 +596,8 @@ function parsePlanDocument(text) {
     'that list - a list item anywhere else renders as one and would not be carried out';
   let region = '';
   let stepped = false;
+  let listed = false;
+  let itemAt = -1;
   let fenced = '';
   let fencedAt = 0;
   let commented = false;
@@ -552,7 +616,9 @@ function parsePlanDocument(text) {
     let hidden = false;
     let tagged = false;
     const fence = DOC_FENCE.exec(line);
-    if (fenced === '') {
+    if (fenced === '' && fence !== null && !line.startsWith(' ') && opensFence(fence)) listed = false;
+    const coded = was !== 'prose' && indentOf(line) >= (itemAt >= 0 ? itemAt + 4 : 4);
+    if (fenced === '' && (!coded || commented)) {
       const seen = outsideComments(line, commented);
       if (!(!commented && fence !== null && opensFence(fence))) {
         const wasCommented = commented;
@@ -593,6 +659,15 @@ function parsePlanDocument(text) {
       };
     }
     if (fence && (fenced !== '' || opensFence(fence))) {
+      if (fenced === '' && listed) {
+        return {
+          error:
+            `line ${i + 1} of the plan document opens a code fence inside a list item. ` +
+            'The item closes a fence the reader is still inside, and this reads one fence for the ' +
+            'whole document, so the two part company and everything below reads as code to one and as ' +
+            'markdown to the other - write the fence at the left margin, outside the list',
+        };
+      }
       if (fenced === '') {
         fenced = fence[1];
         fencedAt = i + 1;
@@ -611,7 +686,10 @@ function parsePlanDocument(text) {
       };
     }
     const underlines = was === 'prose' && SETEXT_UNDERLINE.test(line);
-    if (underlines && PHASE_SETEXT.test(wasText)) {
+    const ruled = uncontained(line, listed);
+    const broken = RULED_ITEM.test(String(wasText).split('\n')[0] ?? '') && !CONTAINER_RUN.test(line);
+    const underlinesCarried = was === 'prose' && !broken && SETEXT_UNDERLINE.test(ruled);
+    if (underlinesCarried && underlinedNames(NAMES_PHASE, wasText)) {
       return {
         error:
           `line ${wasAt} of the plan document names a phase and line ${i + 1} underlines it, which writes a ` +
@@ -622,10 +700,20 @@ function parsePlanDocument(text) {
           'names the blob it read',
       };
     }
+    if (underlinesCarried && underlinedNames(NAMES_STEPS, wasText)) {
+      return {
+        error:
+          `line ${wasAt} of the plan document opens a step list and line ${i + 1} underlines it, which ` +
+          'writes a heading this cannot read. It is `### Steps`, three hashes and the bare word - an ' +
+          'underlined one reads as prose here, and the bullets a reviewer sees under it are dropped ' +
+          'rather than becoming steps',
+      };
+    }
     if (region === 'steps' && (underlines || THEMATIC_BREAK.test(line))) {
       region = underlines ? '' : 'ruled';
       continue;
     }
+    const headed = atxText(line, listed);
     const heading = PHASE_HEADING.exec(line);
     if (heading) {
       const at = Number(heading[1]);
@@ -633,11 +721,12 @@ function parsePlanDocument(text) {
         return { error: `line ${i + 1} of the plan document is phase ${at} where phase ${phases.length + 1} was expected` };
       }
       phases.push({ name: String(heading[2] ?? '').trim(), steps: [] });
+      listed = false;
       region = '';
       stepped = false;
       continue;
     }
-    if (PHASE_ATTEMPT.test(line)) {
+    if (headed !== null && NAMES_PHASE.test(headed)) {
       return {
         error:
           `line ${i + 1} of the plan document names a phase in a shape this cannot read. A phase heading ` +
@@ -654,22 +743,54 @@ function parsePlanDocument(text) {
         return { error: `line ${i + 1} of the plan document opens a second step list inside one phase` };
       }
       stepped = true;
+      listed = false;
       region = 'steps';
       continue;
+    }
+    if (headed !== null && NAMES_STEPS.test(headed)) {
+      return {
+        error:
+          `line ${i + 1} of the plan document opens a step list in a shape this cannot read. It is ` +
+          '`### Steps`, three hashes and the bare word - anything else reads as an ordinary heading, ' +
+          'and the bullets a reviewer sees under it are dropped rather than becoming steps',
+      };
     }
     if (region !== 'steps') {
       if (ANY_HEADING.test(line)) {
         region = '';
+        if (!/^[ \t]/.test(line)) {
+          listed = false;
+          itemAt = -1;
+        }
         continue;
       }
+      if (THEMATIC_BREAK.test(line) && !/^[ \t]/.test(line)) {
+        listed = false;
+        itemAt = -1;
+      }
       if (region === 'ruled' && RULED_ITEM.test(line)) return { error: notAStep(i + 1) };
+      if (RULED_ITEM.test(line)) listed = true;
+      const marker = coded ? null : ITEM_MARKER.exec(line);
+      if (marker) itemAt = contentColumn(marker[1], marker[2]);
+      else if (indentOf(line) === 0 && was !== 'bullet') itemAt = -1;
+      if (underlines && !/^[ \t]/.test(line)) listed = false;
       last = 'prose';
-      said = was === 'prose' ? wasText : line;
+      said = was === 'prose' ? `${wasText}\n${line}` : line;
       saidAt = was === 'prose' ? wasAt : i + 1;
       continue;
     }
     if (ANY_HEADING.test(line)) {
+      if (!SIBLING_HEADING.test(line)) {
+        return {
+          error:
+            `line ${i + 1} of the plan document opens a heading inside its phase's steps that does not ` +
+            'close them. A heading deeper than `### Steps`, or one written in from the margin, stays ' +
+            'inside the list for the reader while it ends it here, so every step below it is approved ' +
+            'and never carried out - move it above the steps, or write it as `### <name>` at the margin',
+        };
+      }
       region = '';
+      listed = false;
       continue;
     }
     const bullet = DOC_BULLET.exec(line);
@@ -695,7 +816,7 @@ function parsePlanDocument(text) {
       };
     }
     last = 'prose';
-    said = was === 'prose' ? wasText : line;
+    said = was === 'prose' ? `${wasText}\n${line}` : line;
     saidAt = was === 'prose' ? wasAt : i + 1;
   }
   if (fenced !== '') {

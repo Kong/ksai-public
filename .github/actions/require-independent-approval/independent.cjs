@@ -1,4 +1,5 @@
 const CO_AUTHOR_LINE = /^co-authored-by:\s*[^<]*<([^>]+)>\s*$/i;
+const RELEASED_BY_LINE = /^released-by:\s*\S/i;
 const NOREPLY = /^(?:(\d+)\+)?([A-Za-z0-9-[\]]+)@users\.noreply\.github\.com$/i;
 const BOT_LOGIN = /\[bot\]$/i;
 const DECIDING = new Set(['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED']);
@@ -6,6 +7,7 @@ const MAX_DESCRIPTION = 140;
 const STATUS_CONTEXT = 'KSAI / independent approval';
 const LEGACY_STATUS_CONTEXT = 'KSAI / hold';
 const SHA = /^[0-9a-f]{40}$/i;
+const ACTIONS_LOGIN = 'github-actions';
 
 function coAuthorsOf(message) {
   const found = [];
@@ -23,6 +25,12 @@ function coAuthorsOf(message) {
   return found;
 }
 
+function claimsRelease(message) {
+  return String(message ?? '')
+    .split('\n')
+    .some((line) => RELEASED_BY_LINE.test(line.trim()));
+}
+
 function publishedByApp(entry) {
   return (
     entry?.author?.type === 'Bot' &&
@@ -31,15 +39,26 @@ function publishedByApp(entry) {
   );
 }
 
-function contributorsOf({ pull, commits }) {
+function appLogin(value) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(BOT_LOGIN, '');
+}
+
+function contributorsOf({ pull, commits, botLogin }) {
   const logins = new Set();
   const ids = new Set();
   const unresolved = new Set();
+  let involved = false;
 
   const add = (login, id) => {
     if (login) logins.add(String(login).toLowerCase());
     if (Number.isInteger(id)) ids.add(id);
   };
+
+  const ours = appLogin(botLogin);
+  const published = new Set();
 
   add(pull?.user?.login, pull?.user?.id);
 
@@ -48,7 +67,13 @@ function contributorsOf({ pull, commits }) {
     if (entry?.author?.login) add(entry.author.login, entry.author.id);
     else unresolved.add(String(entry?.commit?.author?.email ?? '(a commit author with no email)'));
     if (!publishedByApp(entry)) continue;
-    for (const co of coAuthorsOf(entry?.commit?.message)) {
+    const trailers = coAuthorsOf(entry?.commit?.message);
+    const credited = trailers.length > 0 || claimsRelease(entry?.commit?.message);
+    const wrote = appLogin(entry.author?.login);
+    if (wrote) published.add(wrote);
+    if (ours && wrote === ours) involved = true;
+    else if (credited && (!ours || wrote === ACTIONS_LOGIN)) involved = true;
+    for (const co of trailers) {
       if (co.login) add(co.login, co.id);
       else unresolved.add(co.email);
     }
@@ -56,7 +81,7 @@ function contributorsOf({ pull, commits }) {
 
   const people = [...logins].filter((login) => !BOT_LOGIN.test(login)).sort();
 
-  return { logins, ids, unresolved: [...unresolved].sort(), people };
+  return { logins, ids, unresolved: [...unresolved].sort(), people, involved, published, ours };
 }
 
 function approvalsOf(reviews) {
@@ -121,7 +146,19 @@ function blameOf({ own, people, unresolved }) {
   return "; every commit here is a bot's, so this is only waiting for a person to approve";
 }
 
-function verdictOf({ required, declared, own, independent, unresolved, people }) {
+function verdictOf({ required, declared, own, independent, unresolved, people, involved }) {
+  if (typeof involved !== 'boolean') {
+    throw new TypeError(
+      'verdictOf was handed no `involved`, and an absent one reads as a pull request this flow never wrote, which is the verdict that holds nothing',
+    );
+  }
+  if (!involved) {
+    return {
+      state: 'success',
+      description: "KSAI wrote no commit here, so it holds nobody and the base branch's own approval rules decide alone",
+      dismissable: [],
+    };
+  }
   const note = unresolved.length ? ` (${unresolved.length} contributors GitHub resolved to no account)` : '';
   if (required === 0) {
     return {
@@ -150,7 +187,7 @@ function unreadable(error, prNumber) {
   return `this gate reads #${prNumber} with contents:read, pull-requests:write and statuses:write, and GitHub answered ${status}: ${error.message}`;
 }
 
-async function run({ github, core, owner, repo, prNumber, headSha, targetUrl }) {
+async function run({ github, core, owner, repo, prNumber, headSha, targetUrl, botLogin }) {
   let sha = String(headSha ?? '');
   let statusContexts = [STATUS_CONTEXT, LEGACY_STATUS_CONTEXT];
   if (!SHA.test(sha) || !Number.isInteger(prNumber) || prNumber < 1) {
@@ -200,7 +237,7 @@ async function run({ github, core, owner, repo, prNumber, headSha, targetUrl }) 
       );
     }
 
-    const contributors = contributorsOf({ pull, commits });
+    const contributors = contributorsOf({ pull, commits, botLogin });
     const { required, declared } = requiredCountOf(rules);
     const split = splitApprovals(approvalsOf(reviews), contributors);
     verdict = verdictOf({
@@ -210,8 +247,16 @@ async function run({ github, core, owner, repo, prNumber, headSha, targetUrl }) 
       independent: split.independent,
       unresolved: contributors.unresolved,
       people: contributors.people,
+      involved: contributors.involved,
     });
-    for (const email of contributors.unresolved) {
+    if (contributors.ours && contributors.published.size && !contributors.published.has(contributors.ours)) {
+      core.warning(
+        `bot-login names ${contributors.ours} and every App-published commit on #${prNumber} is by ` +
+          `${[...contributors.published].sort().join(', ')}. A login naming no App on this pull request ` +
+          'holds nothing here, so check it against the App this repository runs KSAI as',
+      );
+    }
+    for (const email of contributors.involved ? contributors.unresolved : []) {
       core.warning(`<${email}> contributed to #${prNumber} and GitHub resolves it to no account, so it is held against no reviewer. require_last_push_approval is what covers a contributor this gate cannot name`);
     }
     if (!declared) {

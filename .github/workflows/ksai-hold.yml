@@ -11,6 +11,16 @@ on:
         required: false
         type: string
         default: ubuntu-latest
+      app_login:
+        description: >-
+          login of the App this repository runs KSAI as, with or without the `[bot]` suffix. Only a
+          commit that App or `github-actions[bot]` published holds a pull request; every other one
+          is reported green. The default names the shared App, and the public snapshot carries no
+          default - an empty value holds any App-published trailer instead, which is the safe
+          reading where nothing says which App is this repository's.
+        required: false
+        type: string
+        default: ""
 
 permissions: {}
 
@@ -37,3 +47,4 @@ jobs:
           github-token: ${{ github.token }}
           pr-number: ${{ github.event.pull_request.number }}
           head-sha: ${{ github.event.pull_request.head.sha }}
+          bot-login: ${{ inputs.app_login }}
