@@ -32,7 +32,7 @@ jobs:
           egress-policy: audit
 
       - name: Hold the pull request for an independent approval
-        uses: Kong/ksai-public/.github/actions/require-independent-approval@v3.40.10
+        uses: Kong/ksai-public/.github/actions/require-independent-approval@v3.40.11
         with:
           github-token: ${{ github.token }}
           pr-number: ${{ github.event.pull_request.number }}

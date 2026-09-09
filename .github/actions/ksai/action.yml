@@ -225,7 +225,7 @@ inputs:
       latest, because that CLI cuts releases daily and an unpinned reviewer is a different reviewer every run.
     required: false
     # renovate: datasource=npm depName=opencode-ai
-    default: "1.18.29"
+    default: "1.18.30"
   model:
     description: "model id or catalog alias for the run. Exposed as an input so one value feeds both the CLI and any later record; `--model` stays forbidden in extra_claude_args."
     required: false
