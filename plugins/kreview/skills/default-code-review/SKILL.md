@@ -119,13 +119,13 @@ The prompt MUST include, verbatim:
   output format."*
 
 The auditor returns SHIP / SHIP WITH CHANGES / HOLD, challenged findings
-(UPHOLD / DOWNGRADE / REMOVE / REWORD), what survived scrutiny, any escaped bug, and bad locations.
+(UPHOLD / DOWNGRADE / UPGRADE / REMOVE / REWORD), what survived scrutiny, any escaped bug, and bad locations.
 
 ### 4. Fold the verdict in and report
 
 Apply the auditor's verdict before presenting anything:
 
-- REMOVE / DOWNGRADE / REWORD verdicts revise findings in place — never present a contested
+- REMOVE / DOWNGRADE / UPGRADE / REWORD verdicts revise findings in place — never present a contested
   finding without the correction applied.
 - Mark "survived scrutiny" findings as high-confidence.
 - Promote any escaped bug into the report with proper severity and `file:line`.

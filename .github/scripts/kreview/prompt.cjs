@@ -408,9 +408,12 @@ ${budget === '' || !told || !measurable(budgetMinutes) ? '' : `
      and High against the actual code with Grep/Read. Return your verdict in the required
      output format."*
 
-4. Fold its verdict in before anything reaches the author. REMOVE, DOWNGRADE and REWORD
-   revise a finding in place; never report a contested finding without the correction
-   applied. Promote any bug it caught that you missed. Drop or fix every bad location.
+4. Fold its verdict in before anything reaches the author. REMOVE, DOWNGRADE, UPGRADE and
+   REWORD revise a finding in place; never report a contested finding without the correction
+   applied. An UPGRADE is applied on the same terms as a DOWNGRADE - the auditor read the
+   evidence and the tier disagreed with it, and a severity only ever revised downward is a
+   report that reads quieter than the code is. Promote any bug it caught that you missed.
+   Drop or fix every bad location.
 
 5. Gather Additional Risk findings covering:
 
