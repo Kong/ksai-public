@@ -4,6 +4,7 @@ const {
   EVERY_COMMAND,
   HELP_COMMAND,
   PLAN_MODES,
+  canonicalCommand,
   deliveredCommand,
   safeEcho,
   unknownCommandIn,
@@ -180,7 +181,7 @@ function parseConfig(text) {
       };
     }
 
-    if (COMMANDS.includes(name)) {
+    if (COMMANDS.includes(canonicalCommand(name))) {
       return {
         error: `alias \`${safeEcho(name)}\` in \`${CONFIG_PATH}\` is already a command, so it cannot be remapped to another one`,
       };
@@ -200,7 +201,7 @@ function parseConfig(text) {
         error: `alias \`${safeEcho(name)}\` in \`${CONFIG_PATH}\` maps to ${describe(target)}; it must name one of ${COMMANDS.join(', ')}`,
       };
     }
-    const command = target.trim().toLowerCase();
+    const command = canonicalCommand(target.trim());
     if (!COMMANDS.includes(command)) {
       return {
         error: `alias \`${safeEcho(name)}\` in \`${CONFIG_PATH}\` maps to \`${safeEcho(target)}\`, which is not one of ${COMMANDS.join(', ')}`,
@@ -238,7 +239,7 @@ function parseConfig(text) {
         error: `\`write_access_commands\` in \`${CONFIG_PATH}\` holds ${describe(wrong)}; every entry names one of ${COMMANDS.join(', ')}`,
       };
     }
-    writeAccess = asked.map((entry) => entry.trim().toLowerCase());
+    writeAccess = [...new Set(asked.map((entry) => canonicalCommand(entry.trim())))];
     const unknownName = unknownCommandIn(writeAccess.filter((entry) => entry !== EVERY_COMMAND), {
       where: `\`write_access_commands\` in \`${CONFIG_PATH}\``,
       commandAliases: aliases,

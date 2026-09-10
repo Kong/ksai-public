@@ -5,7 +5,8 @@ const { readCount } = require('./continue.cjs');
 
 const { pagedProbe } = require('./pages.cjs');
 const { scrub, hasPlanRegion, heldBy, planFileIn } = require('./plan.cjs');
-const { surfaceOf, asAlert, commandEnabled, ownerOf, JIRA_KEY_SHAPE } = require('../lib/select-arm.cjs');
+const { asAlert, canonicalCommand, JIRA_KEY_SHAPE, plansWorkHere } = require('../lib/select-arm.cjs');
+const { EXPLICIT_SOURCE } = require('../lib/request-intent.cjs');
 
 const MAX_PAGES = 10;
 const PER_PAGE = 100;
@@ -161,9 +162,8 @@ const PHASE_FLOWS = Object.freeze(
     approve: 'plan',
     resume: 'plan',
     revise: 'plan',
-    fix: 'fix',
-    unlock: 'fix',
-    do: 'do',
+    fix: 'work',
+    unlock: 'work',
   }),
 );
 
@@ -199,12 +199,7 @@ const PHASE_PROSE = Object.freeze(
       work: 'plan',
       noun: 'This issue',
     }),
-    fix: Object.freeze({
-      stop: 'I could not work out what there is to answer here, so I stopped rather than guess:',
-      work: 'push to',
-      noun: 'This pull request',
-    }),
-    do: Object.freeze({
+    work: Object.freeze({
       stop: 'I did not do the work you asked for:',
       work: 'work on',
       noun: 'This pull request',
@@ -221,8 +216,14 @@ function familyOf(command) {
   return Object.prototype.hasOwnProperty.call(PHASE_FLOWS, candidate) ? PHASE_FLOWS[candidate] : undefined;
 }
 
-function renderPhaseStop(command, error, { triggerPhrase = null } = {}) {
+function familyHere(command, onIssue) {
   const family = familyOf(command);
+  if (family !== undefined && plansWorkHere(command, onIssue)) return 'plan';
+  return family;
+}
+
+function renderPhaseStop(command, error, { triggerPhrase = null, onIssue = null } = {}) {
+  const family = familyHere(command, onIssue);
   if (family === undefined) return '';
   const named = String(command ?? '').trim().toLowerCase();
   const lead = COMMAND_STOP[named] ?? PHASE_PROSE[family]?.stop ?? GENERIC_STOP;
@@ -242,31 +243,29 @@ const PHASE_NOTICE = Object.freeze(
       'Close or rename all but one and comment again',
     fix:
       'No review thread here is waiting on an answer, so nothing ran. Threads I have already replied in count ' +
-      'as answered, and so do the ones a human has resolved - resolve or re-open as needed and ask again',
+      'as answered, and so do the ones a human has resolved - resolve or re-open as needed and ask again. If ' +
+      'the work you want was never raised in a thread - a red check, a conflict, a missing test - say what you ' +
+      'want done after the command and it will do that instead',
     do:
-      'That named no work and nothing I can see is failing on this branch, so nothing ran. Say what you want ' +
-      'done after the command - "fix the failing unit test", "add a test for the empty-slice case" - or ask again ' +
-      'once a check has gone red and it will work from that',
+      'Nothing I can see here is waiting on me, so nothing ran: no review thread is unanswered, and nothing ' +
+      'I could read is failing or conflicting. Say what you want done after the command - "fix the failing ' +
+      'unit test", "add a test for the empty-slice case" - or ask again once a check has gone red and it will ' +
+      'work from that',
   }),
 );
 
-const DO_INSTEAD =
-  '. If the work you want was never raised in a thread - a red check, a conflict, a missing test - ask for ' +
-  '`do` and say what to do';
-
-function renderPhaseNotice(phase, { pending = null, triggerPhrase = null, disabledCommands = null } = {}) {
+function renderPhaseNotice(phase, { pending = null, triggerPhrase = null } = {}) {
   const key = String(phase ?? '')
     .trim()
     .toLowerCase();
   const body = PHASE_NOTICE[key];
   if (!body) return '';
   if (key !== 'ambiguous' && String(pending ?? '') !== '0') return '';
-  const offered = key === 'fix' && commandEnabled('do', { flow: ownerOf('do'), disabledCommands }) ? DO_INSTEAD : '';
-  return asAlert('WARNING', scrub(`${body}${offered}`, { triggerPhrase }));
+  return asAlert('WARNING', scrub(body, { triggerPhrase }));
 }
 
-function renderClosed(command, { state = null, triggerPhrase = null } = {}) {
-  const prose = PHASE_PROSE[familyOf(command)];
+function renderClosed(command, { state = null, triggerPhrase = null, onIssue = null } = {}) {
+  const prose = PHASE_PROSE[familyHere(command, onIssue)];
   const work = prose?.work;
   if (!work) return '';
   const noun = prose.noun;
@@ -335,6 +334,8 @@ async function resolvePhase({
   defaultBranch = null,
   botLogin = null,
   guidance = null,
+  onIssue = null,
+  routeSource = null,
   threadsFile = null,
   threadStateFile = null,
   commentId = null,
@@ -343,57 +344,66 @@ async function resolvePhase({
   sleep = null,
   writeFile = (at, body) => require('node:fs').writeFileSync(at, body),
 } = {}) {
-  const wanted = String(command ?? '')
-    .trim()
-    .toLowerCase();
-  const family = familyOf(wanted);
-  const onPullSurface = surfaceOf(wanted) === 'pull';
-  const onBranch = onPullSurface ? 'true' : '';
+  const wanted = canonicalCommand(String(command ?? '').trim());
+  const family = familyHere(wanted, onIssue);
+  const onBranch = family === undefined || plansWorkHere(wanted, onIssue) ? '' : 'true';
   const standingHold = (value) => (wanted === 'resume' ? '' : String(value ?? ''));
   if (family === undefined) {
     return refuse(`\`${wanted}\` is not a command with a phase in this flow, so there is nothing to work on`);
   }
 
-  if (family === 'fix') {
-    if (wanted === 'unlock' && String(threadRootId ?? '').trim() === '') {
+  if (family === 'work') {
+    const scoped = String(threadRootId ?? '').trim() !== '';
+    if (wanted === 'unlock' && !scoped) {
       return refuse('`unlock` must be written inside the review thread it releases');
     }
-    const { resolveFixPhase } = require('./threads.cjs');
-    const out = await resolveFixPhase({
-      github,
-      core,
-      owner,
-      repo,
-      prNumber: number,
-      botLogin,
-      guidance,
-      threadRootId,
-      allowLocked: wanted === 'unlock',
-    });
-    if (out.error) return refuse(out.error);
-    if (!threadsFile) return refuse('no path was given to write the review threads to');
-    if (!threadStateFile) return refuse('no path was given to write the review thread state to');
-    const { phase, ref, prNumber, pending, threads, deferred, disputed, baseRef, held } = out;
-    writeFile(threadsFile, JSON.stringify(pending));
-    writeFile(threadStateFile, JSON.stringify(threads));
-    return normalize({
-      phase,
-      ref,
-      prNumber,
-      pending: pending.length,
-      disputed,
-      deferred,
-      baseRef,
-      held: standingHold(held),
-      threadsFile,
-      threadStateFile,
-      onBranch,
-    });
-  }
+    const asked = String(guidance ?? '').trim() !== '' && String(routeSource ?? '') === EXPLICIT_SOURCE;
+    const answersThreads = scoped || !asked;
+    let known = null;
 
-  if (family === 'do') {
+    if (answersThreads) {
+      const { resolveFixPhase } = require('./threads.cjs');
+      const out = await resolveFixPhase({
+        github,
+        core,
+        owner,
+        repo,
+        prNumber: number,
+        botLogin,
+        guidance,
+        threadRootId,
+        allowLocked: wanted === 'unlock',
+      });
+      if (out.error) return refuse(out.error);
+      if (!threadsFile) return refuse('no path was given to write the review threads to');
+      if (!threadStateFile) return refuse('no path was given to write the review thread state to');
+      const { phase, ref, prNumber, pending, threads, deferred, disputed, baseRef, held, target, total } = out;
+      known = target ?? null;
+      if (scoped || pending.length > 0 || total > 0) {
+        writeFile(threadsFile, JSON.stringify(pending));
+        writeFile(threadStateFile, JSON.stringify(threads));
+        return normalize({
+          phase,
+          ref,
+          prNumber,
+          pending: pending.length,
+          disputed,
+          deferred,
+          baseRef,
+          held: standingHold(held),
+          threadsFile,
+          threadStateFile,
+          onBranch,
+        });
+      }
+      core?.info?.(
+        `#${String(prNumber ?? number)}: this pull request has no review thread at all, so this run looks for other work.`,
+      );
+    }
+
     const { resolveDoPhase } = require('./do.cjs');
     const out = await resolveDoPhase({
+      known,
       github,
       checksGithub,
       core,

@@ -92,13 +92,26 @@ function positive(value) {
 
 const DEAD_REASON = Object.freeze(['approve-disabled']);
 
+function surfacePageFor(answers) {
+  if (answers === undefined || answers === null) return null;
+  const surface = SURFACE[answers];
+  if (surface === null || surface === undefined) return null;
+  const page = PAGE_OF[surface];
+  if (page === undefined) {
+    throw new Error(
+      `\`${String(answers)}\` is answered on \`${String(surface)}\`, which names no page a reader can be sent to`,
+    );
+  }
+  return page;
+}
+
 function resolve({ kind = null, needs = null, where = null, reason = null } = {}) {
   if (!KINDS.includes(kind)) throw new Error(`\`${String(kind)}\` is not a ksai comment kind`);
   const dead = DEAD_REASON.includes(String(reason ?? ''));
   const declared = NEEDS.includes(needs) ? needs : KIND_TABLE[kind].needs;
   const wanted = dead ? 'manual' : (declared ?? 'manual');
   const answers = KIND_TABLE[kind]?.answers;
-  const at = WHERE.includes(where) ? where : PAGE_OF[SURFACE[answers]];
+  const at = WHERE.includes(where) ? where : surfacePageFor(answers);
   return { needs: wanted, where: at ?? null };
 }
 

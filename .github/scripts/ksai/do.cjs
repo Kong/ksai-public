@@ -190,7 +190,14 @@ async function alreadyReported({
 } = {}) {
   const wanted = String(commentId ?? '');
   if (!COMMENT_ID_SHAPE.test(wanted)) {
-    return { answered: false, unreadable: `\`${wanted}\` is not a comment id` };
+    return {
+      answered: false,
+      unreadable:
+        wanted.trim() === ''
+          ? 'no comment id was passed, so this cannot tell whether it has already done this work. A run ' +
+            'dispatched with a request in its body carries the id of the comment that asked, in `comment_id`.'
+          : `\`${wanted}\` is not a comment id`,
+    };
   }
   /*
    * Without a bot login nothing can be attributed, so this cannot answer at all.
@@ -268,6 +275,7 @@ const REPLAYED_PHASE = 'replayed';
  * and an injection surface.
  */
 async function resolveDoPhase({
+  known = null,
   github = null,
   checksGithub = null,
   core = null,
@@ -283,16 +291,18 @@ async function resolveDoPhase({
   sleep = null,
   writeFile = (at, body) => require('node:fs').writeFileSync(at, body),
 } = {}) {
-  const target = await resolvePullTarget({
-    github,
-    core,
-    owner,
-    repo,
-    prNumber,
-    noun: 'branch to work on',
-    awaitMergeable: true,
-    ...(typeof sleep === 'function' ? { sleep } : {}),
-  });
+  const target = known?.mergeable != null
+    ? known
+    : await resolvePullTarget({
+      github,
+      core,
+      owner,
+      repo,
+      prNumber,
+      noun: 'branch to work on',
+      awaitMergeable: true,
+      ...(typeof sleep === 'function' ? { sleep } : {}),
+    });
   if (target.error) return { error: target.error };
   const { ref, baseRef, reportedHeadSha } = target;
   const number = String(target.prNumber);

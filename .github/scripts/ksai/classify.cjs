@@ -1,6 +1,7 @@
 'use strict';
 
 const {
+  ANY_SURFACE,
   COMMANDS,
   SURFACE,
   THREAD_SURFACE,
@@ -21,7 +22,7 @@ const NEVER_CLASSIFIED = Object.freeze([...NEVER_INFERRED].sort());
 const OWN_PULL_SURFACE = 'own-pull';
 
 const SURFACES = Object.freeze([
-  ...new Set(Object.values(SURFACE).filter(Boolean)),
+  ...new Set(Object.values(SURFACE).filter((surface) => Boolean(surface) && surface !== ANY_SURFACE)),
   THREAD_SURFACE,
   OWN_PULL_SURFACE,
 ]);
@@ -33,9 +34,8 @@ const NO_VERDICT = 'none';
 const CLARIFY_VERDICT = 'clarify';
 
 const EXAMPLES = Object.freeze([
-  Object.freeze({ said: 'the build is red, sort it out', answer: 'do', quiet: false }),
-  Object.freeze({ said: 'triage this and fix everything that blocks it from being merged', answer: 'do', quiet: false }),
-  Object.freeze({ said: 'resolve the conflicts with the base branch', answer: 'do', quiet: false }),
+  Object.freeze({ said: 'the build is red, sort it out', answer: 'fix', quiet: false }),
+  Object.freeze({ said: 'resolve the conflicts with the base branch', answer: 'fix', quiet: false }),
   Object.freeze({ said: 'answer the comments you left on this', answer: 'fix', quiet: false }),
   Object.freeze({ said: 'take another look at the error handling', answer: 'review', quiet: false }),
   Object.freeze({ said: 'rework the plan so it covers the notes left on it', answer: 'revise', quiet: false }),
@@ -102,7 +102,7 @@ const commandFitsClassifierSurface = (command, surface) => {
   if (asked === '') return true;
   const where = asked === THREAD_SURFACE || asked === OWN_PULL_SURFACE || asked === 'review' ? 'pull' : asked;
   const wanted = SURFACE[command];
-  return wanted === null || wanted === undefined || wanted === where;
+  return wanted === null || wanted === undefined || wanted === ANY_SURFACE || wanted === where;
 };
 
 const answerable = (disabledCommands, surface = null) => {

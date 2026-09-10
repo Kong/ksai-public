@@ -51,6 +51,7 @@ const MAX_CURRENT_CHARS = 7_000;
 const MAX_STATUS_RUNS = 200;
 const PLAN_KINDS = Object.freeze(['implement', 'revise']);
 const REQUEST_KINDS = Object.freeze(['fix', 'do', 'unlock']);
+const PLAN_PHASES = Object.freeze(['plan', 'plan-review', 'step', 'direct', 'revise']);
 const PLAN_IDENTITY_KIND = 'implement';
 const PLAN_PHASE = 'plan';
 const DIRECT_PHASE = 'direct';
@@ -58,10 +59,14 @@ const MAX_ARM_ROWS = 12;
 const PUBLISHED_LIMIT = 65_536;
 const RESERVED_BODY_CHARS = 64;
 
+function plansIn(env) {
+  return PLAN_KINDS.includes(String(env.COMMAND ?? '')) || PLAN_PHASES.includes(String(env.PHASE ?? ''));
+}
+
 function identityOf(env = process.env) {
   const pr = positive(env.PR_NUMBER);
   const command = String(env.COMMAND ?? '');
-  if (PLAN_KINDS.includes(command)) {
+  if (plansIn(env)) {
     if (pr === null && String(env.PHASE ?? '') !== DIRECT_PHASE) {
       return { error: 'the write report has no implementation pull request to identify' };
     }
@@ -826,9 +831,7 @@ async function updateWriteProgressUnlocked({
     if (read.state === null) return { outputs: blank, failure: 'there is no durable write report to publish live progress into' };
     const before = read.state.attempts.map((entry) => entry.id);
     const existingRequest = doRequestOf(read.ref.body);
-    const doRequest = identity.kind === 'do' && existingRequest === String(identity.request)
-      ? existingRequest
-      : null;
+    const doRequest = existingRequest === String(identity.request) ? existingRequest : null;
     const grown = note === null
       ? historyOf(read.state)
       : noted(read.state, currentText(note.said, env.TRIGGER), note.at ?? now(), env.TRIGGER);

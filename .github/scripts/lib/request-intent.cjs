@@ -10,13 +10,10 @@ const RECEIPTS = bare({
   implement: bare({ issue: 'plan and implement it' }),
   approve: bare({ review: 'release the approved implementation plan' }),
   fix: bare({
-    pull: 'address every unresolved review thread on it',
+    issue: 'plan and implement it',
+    pull: 'do the work it asks for on this branch',
     thread: 'address it',
     review: 'address the feedback in it',
-  }),
-  do: bare({
-    pull: 'make the change it describes',
-    thread: 'make the change it asks for',
   }),
   revise: bare({
     pull: 'revise the implementation plan to answer the review feedback',
@@ -35,12 +32,16 @@ const WHERE = bare({
   review: 'this submitted review',
 });
 
+const EXPLICIT_SOURCE = 'explicit';
+
 const READ = bare({
-  explicit: (where) => `Read your comment on ${where} as a request to`,
+  [EXPLICIT_SOURCE]: (where) => `Read your comment on ${where} as a request to`,
   classifier: (where) => `Read your comment on ${where}, which named no command, as a request to`,
   context: (where) => `Read ${where} as a request to`,
   continuation: (where) => `Carried on from the run before this one on ${where}, to`,
 });
+
+const SOURCES = Object.freeze(Object.keys(READ));
 
 function receiptOf(command, surface, source = 'context') {
   const bySurface = RECEIPTS[String(command ?? '')];
@@ -55,7 +56,7 @@ function receiptOf(command, surface, source = 'context') {
 function sourceOf({ continuation = false, classified = false, named = false } = {}) {
   if (continuation === true || String(continuation) === 'true') return 'continuation';
   if (classified === true) return 'classifier';
-  return named === true ? 'explicit' : 'context';
+  return named === true ? EXPLICIT_SOURCE : 'context';
 }
 
-module.exports = { receiptOf, sourceOf };
+module.exports = { receiptOf, sourceOf, EXPLICIT_SOURCE, SOURCES };

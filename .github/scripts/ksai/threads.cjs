@@ -376,6 +376,7 @@ async function resolveFixPhase({
     resolved: selected.resolved,
     disputed: selected.disputed,
     scope: selected.scope,
+    target,
   };
 }
 

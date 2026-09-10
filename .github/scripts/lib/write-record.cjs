@@ -1,6 +1,6 @@
 'use strict';
 
-const { COMMANDS, MODEL_CORE, MODEL_SHAPE } = require('./select-arm.cjs');
+const { COMMANDS, MODEL_CORE, MODEL_SHAPE, canonicalCommand } = require('./select-arm.cjs');
 const { markerJson } = require('./run-record.cjs');
 const { escapeForRegExp } = require('./text.cjs');
 
@@ -23,7 +23,7 @@ const UNCLASSIFIED_REASON = 'unclassified';
 const ARMS = Object.freeze(['classifier', 'triage', 'dispute', 'main', 'status']);
 const ARM_MODEL_SHAPE = new RegExp(`^(?:${MODEL_CORE})?$`);
 const ARM_EFFORT_SHAPE = /^[a-z]{0,16}$/;
-const ROUTE_SOURCES = Object.freeze(['explicit', 'classifier', 'context', 'continuation']);
+const { SOURCES: ROUTE_SOURCES } = require('./request-intent.cjs');
 const ROUTE_SURFACES = Object.freeze(['issue', 'pull', 'thread', 'review']);
 const SELECTION_SOURCES = Object.freeze(['input', 'comment', 'triage']);
 
@@ -103,7 +103,7 @@ function validAttempt(attempt) {
   }
   if (!validNullableNumber(attempt.cost_usd) || Number(attempt.cost_usd) > 1_000_000_000) return false;
   if (!validArms(attempt.arms)) return false;
-  if (attempt.route_command !== '' && !COMMANDS.includes(attempt.route_command)) return false;
+  if (attempt.route_command !== '' && !COMMANDS.includes(canonicalCommand(attempt.route_command))) return false;
   if (attempt.route_surface !== '' && !ROUTE_SURFACES.includes(attempt.route_surface)) return false;
   if (attempt.route_source !== '' && !ROUTE_SOURCES.includes(attempt.route_source)) return false;
   if (attempt.at !== null && !(Number.isSafeInteger(attempt.at) && attempt.at > 0)) return false;

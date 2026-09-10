@@ -578,6 +578,8 @@ async function decidePhase({ github, core, owner, repo, env }) {
     defaultBranch: env.DEFAULT_BRANCH,
     botLogin: env.BOT_LOGIN,
     guidance: env.GUIDANCE,
+    onIssue: env.ON_ISSUE,
+    routeSource: env.ROUTE_SOURCE,
     threadsFile: env.THREADS_FILE,
     threadStateFile: env.THREAD_STATE_FILE,
     commentId: env.COMMENT_ID,
@@ -608,7 +610,10 @@ async function decidePhase({ github, core, owner, repo, env }) {
   };
 
   if (out.error) {
-    outputs.stop_notice = renderPhaseStop(env.COMMAND, out.error, { triggerPhrase: env.TRIGGER });
+    outputs.stop_notice = renderPhaseStop(env.COMMAND, out.error, {
+      triggerPhrase: env.TRIGGER,
+      onIssue: env.ON_ISSUE,
+    });
     return { notices: [`The phase could not be decided: ${out.error}`], outputs };
   }
 
@@ -639,7 +644,6 @@ async function decidePhase({ github, core, owner, repo, env }) {
     notice: renderPhaseNotice(out.phase, {
       pending: out.pending,
       triggerPhrase: env.TRIGGER,
-      disabledCommands: env.DISABLED_COMMANDS,
     }),
   });
   return { notices: [], outputs };
@@ -1010,7 +1014,11 @@ async function fetchIssue({ github, core, owner, repo, env }) {
   if (state !== 'OPEN') {
     outputs.state = state;
     outputs.default_branch = env.DEFAULT_BRANCH ?? '';
-    outputs.closed_notice = renderClosed(env.COMMAND, { state, triggerPhrase: env.TRIGGER });
+    outputs.closed_notice = renderClosed(env.COMMAND, {
+      state,
+      triggerPhrase: env.TRIGGER,
+      onIssue: env.ON_ISSUE,
+    });
     if (outputs.closed_notice === '') {
       return { outputs, notices: [], failure: `no closed notice for command: ${env.COMMAND}` };
     }

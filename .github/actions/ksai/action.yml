@@ -1974,6 +1974,7 @@ runs:
         ISSUE_NUM: ${{ steps.subject.outputs.number }}
         HEAD_FILE: ${{ runner.temp }}/ksai-issue-head.json
         COMMAND: ${{ steps.select.outputs.command }}
+        ON_ISSUE: ${{ steps.context.outputs.on_issue }}
         TRIGGER: ${{ inputs.trigger_phrase }}
         DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
@@ -2007,10 +2008,11 @@ runs:
         SERVER_URL: ${{ github.server_url }}
         REPOSITORY: ${{ github.repository }}
         COMMAND: ${{ steps.select.outputs.command }}
+        ON_ISSUE: ${{ steps.context.outputs.on_issue }}
         TRIGGER: ${{ inputs.trigger_phrase }}
-        DISABLED_COMMANDS: ${{ inputs.disabled_commands }}
         BOT_LOGIN: ${{ inputs.bot_login }}
         GUIDANCE: ${{ steps.select.outputs.guidance_html }}
+        ROUTE_SOURCE: ${{ steps.select.outputs.route_source }}
         THREADS_FILE: ${{ runner.temp }}/ksai-threads.json
         THREAD_STATE_FILE: ${{ runner.temp }}/ksai-thread-state.json
         THREAD_ROOT_ID: ${{ steps.context.outputs.thread_root_id }}

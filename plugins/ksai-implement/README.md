@@ -29,8 +29,7 @@ Use exact commands for options, compatibility, or a route you do not want classi
 | :--- | :--- |
 | `/ksai implement --plan` | Requires a plan for one issue request |
 | `/ksai approve` | Explicit approval fallback |
-| `/ksai fix [scope]` | Handles open review threads |
-| `/ksai do <request>` | Completes one focused pull request task |
+| `/ksai fix [request]` | Does the work the request names, or the open review threads, a failing check or a conflict when it names none |
 | `/ksai revise [request]` | Reworks the plan from review feedback |
 | `/ksai help` | Lists enabled controls without starting model work |
 

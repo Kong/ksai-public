@@ -98,11 +98,11 @@ const FLAG_ALIASES = Object.freeze(Object.assign(Object.create(null), { '-f': '-
 
 const PLAN_MODES = Object.freeze(['auto', 'always', 'never']);
 
-const PLAN_ASK_COMMANDS = Object.freeze(['implement']);
-
 const OPTIONS = Object.freeze([...VALUE_OPTIONS, ...FLAGS]);
 
 const HELP_COMMAND = 'help';
+
+const ANY_SURFACE = 'any';
 
 const COMMAND_TABLE = Object.freeze(
   Object.assign(Object.create(null), {
@@ -129,15 +129,8 @@ const COMMAND_TABLE = Object.freeze(
     }),
     fix: Object.freeze({
       owner: 'implement',
-      surface: 'pull',
-      doc: 'answers the open review threads, changing the code where the review asks for it',
-      delivered: false,
-      named: false,
-    }),
-    do: Object.freeze({
-      owner: 'implement',
-      surface: 'pull',
-      doc: 'does one piece of work you describe on this branch - fixing a failing check, resolving conflicts, adding a missing test',
+      surface: ANY_SURFACE,
+      doc: 'does the work in front of it - what you describe after the command, the open review threads, a failing check or a conflict, or an issue nothing has been built for yet',
       delivered: false,
       named: false,
     }),
@@ -209,6 +202,13 @@ const SURFACE = columnOf('surface');
 
 const NAMED_ONLY = columnOf('named');
 
+const PLAN_ASK_COMMANDS = Object.freeze(
+  Object.keys(COMMAND_TABLE).filter((command) => SURFACE[command] === 'issue' || SURFACE[command] === ANY_SURFACE),
+);
+
+const plansWorkHere = (command, onIssue) =>
+  SURFACE[command] === 'issue' || (SURFACE[command] === ANY_SURFACE && String(onIssue) === 'true');
+
 const namedOnly = (command) => NAMED_ONLY[String(command ?? '').toLowerCase()] === true;
 
 const NEVER_INFERRED = Object.freeze(Object.keys(COMMAND_TABLE).filter((command) => namedOnly(command)));
@@ -222,8 +222,6 @@ const WRONG_SURFACE_EXTRA = Object.freeze(
     approve:
       '. An approval on an issue does count - the next run to look will pick it up - but it starts nothing' +
       ' by itself',
-    fix: '. It answers open review threads, and only a pull request has any',
-    do: '. It works on a branch a pull request already has, and an issue has none - describe the work in the issue and `implement` it instead',
     test: '. It executes the tree a pull request holds, and an issue has no tree to run',
   }),
 );
@@ -242,15 +240,23 @@ const commandsFor = (surface, flow, disabledCommands) =>
   Object.keys(COMMAND_TABLE).filter(
     (command) =>
       OWNER[command] !== null &&
-      SURFACE[command] === surface &&
+      (SURFACE[command] === surface || SURFACE[command] === ANY_SURFACE) &&
       (!flow || OWNER[command] === flow) &&
       commandEnabled(command, { flow: OWNER[command], disabledCommands }),
   );
 
+const commandsElsewhere = (here, there, flow, disabledCommands) => {
+  const shown = commandsFor(here, flow, disabledCommands);
+  return commandsFor(there, flow, disabledCommands).filter((command) => !shown.includes(command));
+};
+
 function renderUnnamedCommand({ onIssue = null, triggerPhrase = null, flow = null, disabledCommands = null } = {}) {
   const here = String(onIssue) === 'true' ? 'issue' : 'pull';
   const there = here === 'issue' ? 'pull' : 'issue';
-  const named = (surface) => commandsFor(surface, flow, disabledCommands).map((command) => `- \`${command}\` ${docOf(command)}`);
+  const hereCommands = commandsFor(here, flow, disabledCommands);
+  const thereCommands = commandsElsewhere(here, there, flow, disabledCommands);
+  const rowsFor = (commands) => commands.map((command) => `- \`${command}\` ${docOf(command)}`);
+  const named = (surface) => rowsFor(surface === here ? hereCommands : thereCommands);
   const where = (surface) => (surface === 'issue' ? 'an issue' : 'a pull request');
   const section = (surface, lead) => {
     const rows = named(surface);
@@ -312,10 +318,9 @@ function renderHelp({
   const inThread = String(threadRootId ?? '').trim() !== '';
   const here = !inThread && String(onIssue) === 'true' ? 'issue' : 'pull';
   const there = here === 'issue' ? 'pull' : 'issue';
-  const named = (surface, thread = false) =>
-    commandsFor(surface, null, disabledCommands).filter((command) => command !== 'unlock' || thread);
-  const hereCommands = named(here, inThread);
-  const thereCommands = named(there);
+  const withoutUnlock = (commands, thread) => commands.filter((command) => command !== 'unlock' || thread);
+  const hereCommands = withoutUnlock(commandsFor(here, null, disabledCommands), inThread);
+  const thereCommands = withoutUnlock(commandsElsewhere(here, there, null, disabledCommands), false);
   const controlCommands = Object.keys(COMMAND_TABLE).filter((command) => deliveredCommand(command));
   const offered = new Set([...hereCommands, ...thereCommands, ...controlCommands]);
   const rows = (commands) => commands.map((command) => `- \`${command}\` ${docOf(command)}`);
@@ -549,7 +554,7 @@ function renderWrongSurface(command, { triggerPhrase = null } = {}) {
 
 function commandFitsSurface(command, { onIssue = null, threadRootId = null, onReview = null } = {}) {
   const wants = surfaceOf(command);
-  if (wants === null || wants === undefined) return true;
+  if (wants === null || wants === undefined || wants === ANY_SURFACE) return true;
   const where = surfaceOfEvent(onIssue, threadRootId, onReview);
   return wants === where || (wants === 'pull' && (where === THREAD_SURFACE || where === REVIEW_SURFACE));
 }
@@ -605,11 +610,16 @@ const expandEveryCommand = (names) => names.flatMap((name) => (name === EVERY_CO
 
 const writeAccessNames = (input) => expandEveryCommand(parseDisabledCommands(input));
 
+function aliasedCommand(aliases, candidate) {
+  const found = aliases ? aliases[candidate] : undefined;
+  return typeof found === 'string' ? canonicalCommand(found) : undefined;
+}
+
 function resolveCommand(token, aliases) {
-  const candidate = String(token ?? '').toLowerCase();
+  const candidate = canonicalCommand(token);
   if (COMMANDS.includes(candidate)) return candidate;
-  const aliased = aliases ? aliases[candidate] : undefined;
-  return typeof aliased === 'string' && COMMANDS.includes(aliased) ? aliased : null;
+  const aliased = aliasedCommand(aliases, candidate);
+  return COMMANDS.includes(aliased) ? aliased : null;
 }
 
 const DEFAULT_COMMAND = 'review';
@@ -644,8 +654,15 @@ function parseAllowedModels(raw) {
     .filter(Boolean);
 }
 
+const COMMAND_ALIASES = Object.freeze(Object.assign(Object.create(null), { do: 'fix' }));
+
+function canonicalCommand(token) {
+  const candidate = String(token ?? '').toLowerCase();
+  return Object.prototype.hasOwnProperty.call(COMMAND_ALIASES, candidate) ? COMMAND_ALIASES[candidate] : candidate;
+}
+
 function parseDisabledCommands(raw) {
-  return parseAllowedModels(raw).map((command) => command.toLowerCase());
+  return parseAllowedModels(raw).map((command) => canonicalCommand(command));
 }
 
 function commandEnabled(command, { flow = null, disabledCommands = null } = {}) {
@@ -675,8 +692,8 @@ function undecidedWriteAccess(command, { subject = null } = {}) {
 function unknownCommandIn(named, { where = null, commandAliases = null } = {}) {
   const unknown = named.find((command) => !COMMANDS.includes(command));
   if (unknown === undefined) return null;
-  const aliased = commandAliases?.[unknown];
-  return typeof aliased === 'string' && COMMANDS.includes(aliased)
+  const aliased = aliasedCommand(commandAliases, unknown);
+  return COMMANDS.includes(aliased)
     ? `${where} lists the alias \`${safeEcho(unknown)}\`; list the command \`${aliased}\` instead`
     : `${where} names \`${safeEcho(unknown)}\`, which is not a command; the commands are ${COMMANDS.join(', ')}`;
 }
@@ -695,7 +712,7 @@ function resolveWriteAccess({ input = null, fromFile = null, commandAliases = nu
   if (fromFile === null || fromFile === undefined) {
     return { commands: Object.freeze(named) };
   }
-  const asked = [...new Set([...fromFile].map((command) => String(command ?? '').trim().toLowerCase()))];
+  const asked = [...new Set([...fromFile].map((command) => canonicalCommand(String(command ?? '').trim())))];
   const held = [...new Set(expandEveryCommand(asked))];
   const heldCarried = held.find((command) => deliveredCommand(command));
   if (heldCarried !== undefined) {
@@ -715,7 +732,7 @@ function resolveWriteAccess({ input = null, fromFile = null, commandAliases = nu
 }
 
 const namedCommand = (command) => {
-  const said = String(command ?? '').trim().toLowerCase();
+  const said = canonicalCommand(String(command ?? '').trim());
   return COMMANDS.includes(said) ? said : '';
 };
 
@@ -966,9 +983,11 @@ function selectArm({
     if (!JIRA_KEY_SHAPE.test(wanted)) {
       return reject(`\`--jira\` needs a Jira issue key like \`KONG-1234\`, got: ${safeEcho(requested['--jira'])}`);
     }
-    if (command !== 'implement') {
+    if (!plansWorkHere(command, onIssue)) {
       return reject(
-        `\`--jira\` names the work to plan, so it belongs on \`implement\` rather than on \`${safeEcho(command)}\``,
+        '`--jira` names the work to plan, so it belongs on a request that starts work from a ticket - ' +
+          `${PLAN_ASK_COMMANDS.map((named) => `\`${named}\``).join(' or ')} on an issue - rather than on ` +
+          `\`${safeEcho(command)}\` here`,
       );
     }
     jiraKey = wanted;
@@ -1014,10 +1033,11 @@ function selectArm({
   }
   const planAsk = wantsPlan || planGiven ? 'always' : wantsNoPlan ? 'never' : '';
   const askedBy = planGiven ? '--plan-given' : wantsPlan ? '--plan' : '--no-plan';
-  if (planAsk !== '' && !PLAN_ASK_COMMANDS.includes(command)) {
+  if (planAsk !== '' && !plansWorkHere(command, onIssue)) {
     return reject(
-      `\`${askedBy}\` decides whether work is planned before it starts, so it belongs ` +
-        `on ${PLAN_ASK_COMMANDS.map((named) => `\`${named}\``).join(' or ')} rather than on \`${safeEcho(command)}\``,
+      `\`${askedBy}\` decides whether work is planned before it starts, so it belongs on a request that ` +
+        `starts work - ${PLAN_ASK_COMMANDS.map((named) => `\`${named}\``).join(' or ')} on an issue - rather ` +
+        `than on \`${safeEcho(command)}\` here`,
     );
   }
   if (planGiven) {
@@ -1163,6 +1183,11 @@ module.exports = {
   primaryCommandOf,
   SURFACE,
   THREAD_SURFACE,
+  ANY_SURFACE,
+  COMMAND_ALIASES,
+  WRONG_SURFACE_EXTRA,
+  canonicalCommand,
+  plansWorkHere,
   surfaceOf,
   docOf,
   commandFitsSurface,
