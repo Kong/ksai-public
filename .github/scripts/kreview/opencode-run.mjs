@@ -37,7 +37,10 @@ const SCRUBBED = ['GITHUB_TOKEN', 'GH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AU
 
 export const scrubbing = (env) => String(env.SUBPROCESS_ENV_SCRUB ?? '1').trim() !== '0';
 
-const BROKER_PERIOD_MS = 60_000;
+// Half the gateway token's 300s life minus the 120s advisory margin, so a tick that drifts still
+// lands well inside the window. Measured at 60s: renewals fell 180s, 195s and 164s apart on run
+// 34442575839 - the 195s one had already drifted 15s past the point it was due.
+const BROKER_PERIOD_MS = 30_000;
 
 const READ_ONLY_ON_TEST = ['.git', '.ksai'];
 
