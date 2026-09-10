@@ -80,6 +80,8 @@ const ORDERED_ITEM = /^[0-9]{1,9}[.)][ \t]+\S/;
 
 const RULED_ITEM = /^ {0,3}(?:[-*+][ \t]+\S|[0-9]{1,9}[.)][ \t]+\S)/;
 
+const EMPTY_ITEM = /^ {0,3}(?:[-*+]|[0-9]{1,9}[.)])[ \t]*$/;
+
 const SETEXT_UNDERLINE = /^[ \t]{0,3}(?:=+|-+)[ \t]*$/;
 
 const ANY_HEADING = /^ {0,3}#{1,6}([ \t]|$)/;
@@ -799,6 +801,15 @@ function parsePlanDocument(text) {
       last = 'bullet';
       continue;
     }
+    if (EMPTY_ITEM.test(line)) {
+      return {
+        error:
+          `line ${i + 1} of the plan document is a list marker with nothing after it. A reader opens a list ` +
+          'item there and reads every line below it as part of that list, while this reads the line as prose ' +
+          'and every step under it as prose too - so the two disagree about what this phase holds. Give it a ' +
+          'title, or delete the line',
+      };
+    }
     if (ORDERED_ITEM.test(line)) return { error: notAStep(i + 1) };
     if (INDENTED_UNDER_STEPS.test(line)) {
       return {
@@ -1018,10 +1029,10 @@ function stepDigest(body) {
   return createHash('sha256').update(titles, 'utf8').digest('hex').slice(0, DIGEST_CHARS);
 }
 
-function renderShape(checkpoints, requestedBy = null, digest = null) {
+function renderShape(checkpoints, requestedBy = null, { sealedWith = null } = {}) {
   const count = String(checkpoints ?? '');
   const who = String(requestedBy ?? '').trim();
-  const sum = String(digest ?? '').trim();
+  const sum = String(sealedWith ?? '').trim();
   const named = LOGIN_SHAPE.test(who) ? who : '';
   const sealed = `${count}/${named}/${sum}`;
   if (DIGEST_SHAPE.test(sum) && SHAPE_SHAPE.test(sealed)) return `${SHAPE_MARKER_PREFIX} ${sealed} -->`;
@@ -1061,7 +1072,7 @@ function criteriaRef({ issueNumber = null, repository = null, jira = null } = {}
 
 const RELEASE_MARKER_PREFIX = '<!-- ksai-released:';
 
-const GITHUB_RELEASE_SHAPE = /^github\/([A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38})$/;
+const GITHUB_RELEASE_SHAPE = new RegExp(`^github\\/(${LOGIN_SHAPE.source.slice(1, -1)})$`);
 
 const JIRA_RELEASE_SHAPE = new RegExp(`^jira\\/(${JIRA_ACCOUNT_CORE})$`);
 

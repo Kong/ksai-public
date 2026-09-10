@@ -215,7 +215,7 @@ The reconcile command writes unconditionally. Issue #42 asks for a flag that sho
   non-goals are safe to write as bullets under headings of their own.
 - Write the phase heading exactly: `## Phase N - <name>`, two hashes, the number with no leading zero, then a plain hyphen or colon. A heading that names a phase in any other shape - an em dash, a bracket, `###`, or the name on its own line underlined with `---` or `===` - is refused rather than read as prose, because its steps would join the phase above it and lose the checkpoint that would have held them.
 - Raw HTML anywhere in the document is refused. A reviewer approves what it looks like rendered, and `<details>` renders collapsed, so anything inside one is work nobody saw before approving it - and a tag opened above the steps folds those too. Write an example of markup inside a fenced code block.
-- A step is one `-` bullet in column 0. A second line under a step is refused rather than read,
+- A step is one `-` bullet in column 0, carrying a title. A line that is only a list marker with nothing after it is refused: a reader opens an empty list item there and reads every step below it as part of that item, so the document you write and the document they approve hold different work. A second line under a step is refused rather than read,
   indented or not - a sub-bullet, a wrapped line, a sentence continuing the one above - and an empty
   bullet carries no title and is refused with the plan. A numbered item, and a bullet below a `---` or
   `***` rule inside a `### Steps` section, are refused rather than read - both render as list items an

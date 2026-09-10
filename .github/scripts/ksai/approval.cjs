@@ -3,6 +3,7 @@ const { parseOptions, DEFAULT_COMMAND } = require('../lib/select-arm.cjs');
 const { nativeApprovalOf, readNativeApprovalRef } = require('./native-approval-ref.cjs');
 const { triggerAlternation } = require('../lib/text.cjs');
 const { markerOf } = require('./marker.cjs');
+const { planDocsIn } = require('./plan.cjs');
 
 function requestOf(body, { trigger = null, commandAliases = null } = {}) {
   const text = String(body ?? '');
@@ -99,13 +100,20 @@ function findAcknowledgment(comments, { botLogin = null, approvalRef = null } = 
   return { acknowledged: false };
 }
 
+const ANSWERED_KIND = 'revise-answered';
+
+function offersPlan(comment) {
+  if (markerOf(comment?.body)?.kind === ANSWERED_KIND) return true;
+  return planDocsIn(comment?.body).length > 0;
+}
+
 function lastRework(comments, { botLogin = null } = {}) {
   const known = String(botLogin ?? '').trim();
   if (known === '') return null;
   let newest = null;
   for (const comment of comments ?? []) {
     if (ownState(comment, known) === FOREIGN) continue;
-    if (markerOf(comment?.body)?.kind !== 'revise-answered') continue;
+    if (!offersPlan(comment)) continue;
     const at = Date.parse(String(comment.created_at ?? ''));
     if (!Number.isFinite(at)) continue;
     if (newest === null || at > newest) newest = at;
@@ -118,6 +126,7 @@ module.exports = {
   findApprovals,
   findAcknowledgment,
   lastRework,
+  offersPlan,
   editState,
   wasEdited,
   vouchedUnedited,

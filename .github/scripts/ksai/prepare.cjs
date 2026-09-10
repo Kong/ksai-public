@@ -877,6 +877,13 @@ const PLAN_REFUSAL = Object.freeze(
       'longer be there. The plan reads fine, the comments read fine, and the token is not the problem: either ' +
       'this plan was published before I started recording that count, or the comment recording it has been ' +
       'deleted. Delete the whole task list to have the work planned again from scratch:',
+    'no-release-record':
+      'I could not find the comment recording what an approver released, so I stopped rather than reconcile ' +
+      'this task list against the record I wrote before the plan was approved. That earlier record seals ' +
+      'nothing about the task wording, so carrying on would build from a list nobody has checked since. The ' +
+      'plan reads fine, the releases read fine, and the token is not the problem: either this plan was ' +
+      'released before I started recording what it sealed, or the comment recording it has been deleted. ' +
+      'Delete the whole task list to have the work planned again from scratch:',
     'edited-steps':
       'The task titles in this list are not the ones an approver released, so I stopped rather than build from ' +
       'an instruction nobody reviewed. A title is not a label for the work: it is what this flow is handed ' +

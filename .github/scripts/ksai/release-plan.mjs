@@ -152,7 +152,7 @@ export function releasePlan({
   }
 
   const digest = stepDigest(rendered.body);
-  const shape = renderShape(rendered.checkpoints, trusted, digest);
+  const shape = renderShape(rendered.checkpoints, trusted, { sealedWith: digest });
   if (!shape || !digest) {
     return block(`The plan holds ${String(rendered.checkpoints)} phase boundaries, which cannot be recorded.`);
   }

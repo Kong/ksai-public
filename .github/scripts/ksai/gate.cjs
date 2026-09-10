@@ -294,6 +294,7 @@ async function resolveApproval({
   });
 
   let ownReplies = null;
+  let ownComments = null;
   for (const { thread, asked, askedReview, failures } of read) {
     const comments = await asked;
     const reviewComments = await askedReview;
@@ -301,7 +302,10 @@ async function resolveApproval({
     if (failures.review !== null) unreadable.push(failures.review);
 
     if (comments === null && reviewComments === null) continue;
-    if (Number(thread) === Number(prNumber) && reviewComments !== null) ownReplies = reviewComments;
+    if (Number(thread) === Number(prNumber)) {
+      if (reviewComments !== null) ownReplies = reviewComments;
+      if (comments !== null) ownComments = comments;
+    }
     const conversation = mergeByArrival(comments ?? [], (reviewComments ?? []).filter((one) => one?.user?.type !== 'Bot'));
     byThread.set(thread, comments ?? []);
     const batch = findApprovals(conversation, { trigger, commandAliases });
@@ -340,7 +344,7 @@ async function resolveApproval({
   }
 
   const ownScanned = threads.includes(Number(prNumber));
-  const reworked = lastRework(ownReplies ?? [], { botLogin });
+  const reworked = lastRework([...(ownReplies ?? []), ...(ownComments ?? [])], { botLogin });
   const confirmed = already?.kind === 'github' ? found.filter((one) => one.login === already.login) : found;
 
   if (confirmed.length === 0) {
@@ -440,13 +444,13 @@ async function resolveApproval({
     });
     if (refusal) return refusal;
 
-    if (ownScanned && ownReplies === null) {
+    if (ownScanned && (ownReplies === null || ownComments === null)) {
       return {
         required: true,
         blocked: true,
         reason:
           unreadable[0] ??
-          `the review threads on #${prNumber} could not be read, and that is where this flow records that ` +
+          `the conversation on #${prNumber} could not be read, and that is where this flow records that ` +
             'the plan was reworked - an approval given before a rework releases a document nobody approved, ' +
             'so this run cannot tell whether that is what it is looking at',
         candidates: considered.length,
@@ -493,56 +497,83 @@ function describeApproval({ required = null, blocked = null, reason = null, appr
   return approval?.login ? `approved by @${approval.login}` : 'approved';
 }
 
-function renderAwaiting({ reason = null, triggerPhrase = null, openThreads = null, writeAccessCommands = null } = {}) {
-  const releaser = releaserOf(writeAccessCommands);
-  const lines = [];
-  if (reason === 'approve-disabled') {
-    return asAlert(
-      'WARNING',
-      scrub(
+const AWAITING = Object.freeze(
+  Object.assign(Object.create(null), {
+    'approve-disabled': Object.freeze({
+      kind: 'plan-blocked',
+      level: 'WARNING',
+      said: () =>
         'A plan has to be approved before any of it is written, and this repository has the ' +
-          '`approve` command turned off - so no review or comment can release this one and nothing will run. A code owner ' +
-          'has to take `approve` out of `disabled_commands` in the workflow file',
-        { triggerPhrase },
-      ),
-    );
-  }
-  if (reason === 'unauthorized-approver') {
-    lines.push(
-      'Someone approved this plan, but not anybody who may release it here, so nothing has started. ' +
+        '`approve` command turned off - so no review or comment can release this one and nothing will run. A code owner ' +
+        'has to take `approve` out of `disabled_commands` in the workflow file',
+    }),
+    'unauthorized-approver': Object.freeze({
+      kind: 'plan-waiting',
+      level: 'IMPORTANT',
+      said: ({ releaser }) =>
+        'Someone approved this plan, but not anybody who may release it here, so nothing has started. ' +
         `${releaser[0].toUpperCase()}${releaser.slice(1)} can approve the draft pull request in GitHub or leave ` +
         'an explicit approval request in its conversation',
-    );
-  } else if (reason === 'reworked-since-approval') {
-    lines.push(
-      'This plan was approved and the plan document has been reworked since, so nothing has ' +
+    }),
+    'reworked-since-approval': Object.freeze({
+      kind: 'plan-waiting',
+      level: 'IMPORTANT',
+      said: () =>
+        'This plan was approved and the plan document has been reworked since, so nothing has ' +
         'started. The approval released the document that was there when it was given, not this one - read ' +
         'the plan again and approve the draft pull request, or leave an explicit approval request in its ' +
         'conversation',
-    );
-  } else if (reason === 'unresolved-threads') {
-    const many = Number(openThreads);
-    const named = Number.isFinite(many) && many > 0 ? counted(many, 'review thread') : 'review threads';
-    lines.push(
-      `This plan was approved, and ${named} on the plan document ${plural(many, 'is', 'are')} waiting for an answer, so ` +
-        'nothing has started. Submit a review and the plan is reworked in answer, or resolve each thread ' +
-        'yourself, and then approve the draft pull request again. To approve over the wait instead, add `--force` ' +
-        'to an explicit approval request: each waiting thread gets a reply and is resolved',
-    );
-  } else if (reason && reason !== 'awaiting-approval') {
-    lines.push(`This plan has not been released, and it is not simply waiting: ${scrub(reason, { triggerPhrase })}`);
-  } else {
-    lines.push(
-      `The plan is ready and waiting for ${releaser} to approve it. Nothing will run until one does, and ` +
+    }),
+    'unresolved-threads': Object.freeze({
+      kind: 'plan-waiting',
+      level: 'IMPORTANT',
+      said: ({ openThreads }) => {
+        const many = Number(openThreads);
+        const named = Number.isFinite(many) && many > 0 ? counted(many, 'review thread') : 'review threads';
+        return (
+          `This plan was approved, and ${named} on the plan document ${plural(many, 'is', 'are')} waiting for an answer, so ` +
+          'nothing has started. Submit a review and the plan is reworked in answer, or resolve each thread ' +
+          'yourself, and then approve the draft pull request again. To approve over the wait instead, add `--force` ' +
+          'to an explicit approval request: each waiting thread gets a reply and is resolved'
+        );
+      },
+    }),
+    'awaiting-approval': Object.freeze({
+      kind: 'plan-waiting',
+      level: 'IMPORTANT',
+      said: ({ releaser }) =>
+        `The plan is ready and waiting for ${releaser} to approve it. Nothing will run until one does, and ` +
         'the plan is on this draft pull request. Approve the pull request in GitHub or leave an explicit approval ' +
         'request in its conversation',
-    );
-  }
-  return asAlert('IMPORTANT', scrub(lines.join('\n'), { triggerPhrase }));
+    }),
+  }),
+);
+
+const AWAITING_UNNAMED = Object.freeze({
+  kind: 'plan-blocked',
+  level: 'WARNING',
+  said: ({ reason }) => `This plan has not been released, and it is not simply waiting: ${reason}`,
+});
+
+function awaitingCase(reason) {
+  const named = String(reason ?? '').trim();
+  if (named === '') return AWAITING['awaiting-approval'];
+  return AWAITING[named] ?? AWAITING_UNNAMED;
+}
+
+function awaitingKind(reason) {
+  return awaitingCase(reason).kind;
+}
+
+function renderAwaiting({ reason = null, triggerPhrase = null, openThreads = null, writeAccessCommands = null } = {}) {
+  const held = awaitingCase(reason);
+  const releaser = releaserOf(writeAccessCommands);
+  return asAlert(held.level, scrub(held.said({ releaser, openThreads, reason }), { triggerPhrase }));
 }
 
 module.exports = {
   APPROVABLE,
+  awaitingKind,
   MAX_CANDIDATES,
   approvalApplies,
   isTrue,

@@ -12,7 +12,7 @@ const {
   stopsHere,
 } = require('./continue.cjs');
 const { finish } = require('./finish.cjs');
-const { renderAwaiting } = require('./gate.cjs');
+const { renderAwaiting, awaitingKind } = require('./gate.cjs');
 const { workRefFor } = require('./context.cjs');
 const { KINDS, KIND_TABLE, payloadFor, marked } = require('./marker.cjs');
 const { decideFinish } = require('./phase.cjs');
@@ -280,7 +280,7 @@ async function publishAwaiting({ github, owner, repo, env }) {
         openThreads: env.OPEN_THREADS,
         writeAccessCommands: env.WRITE_ACCESS_COMMANDS,
       }),
-      payloadFor(env, { kind: 'plan-waiting', reason: env.REASON }),
+      payloadFor(env, { kind: awaitingKind(env.REASON), reason: env.REASON }),
     ),
   });
   return { notices: [`the plan is waiting on an approver (${env.REASON})`] };

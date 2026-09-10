@@ -284,16 +284,27 @@ async function nextStep({ github = null, owner = null, repo = null, prNumber = n
       errorKind: 'no-boundary-record',
     };
   }
-  if (seen.shape.checkpoints !== boundaries.length) {
+  if (seen.sealed === null) {
     return {
       error:
-        `this plan was published with ${counted(seen.shape.checkpoints, 'phase boundary row')} and the body now holds ` +
+        `no comment on #${String(prNumber)} records what an approver released, and the record left behind is ` +
+        'the one written before the plan was approved. That earlier record carries no seal over the step ' +
+        'wording, so reconciling against it would run a body nobody has checked. Either this plan was released ' +
+        'before that seal was recorded, or the comment recording it has been deleted - which is the same ' +
+        'access that can reword the steps themselves',
+      errorKind: 'no-release-record',
+    };
+  }
+  if (seen.sealed.checkpoints !== boundaries.length) {
+    return {
+      error:
+        `this plan was released with ${counted(seen.sealed.checkpoints, 'phase boundary row')} and the body now holds ` +
         `${boundaries.length}. A boundary is an approver's review, so a plan whose boundaries have changed ` +
         'is not run',
       errorKind: 'edited-plan',
     };
   }
-  if (seen.shape.digest && seen.shape.digest !== stepDigest(body)) {
+  if (seen.sealed.digest !== stepDigest(body)) {
     return {
       error:
         'the step titles in this body are not the ones an approver released. A title is the task this flow ' +

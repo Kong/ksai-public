@@ -10,7 +10,7 @@ const {
 } = require('../lib/select-arm.cjs');
 const { LOGIN_SHAPE, markerValues, scrub, shapesIn } = require('./plan.cjs');
 const { PAGE_SIZE: RELEASE_PER_PAGE, probeComments } = require('./pages.cjs');
-const { ownState, EDITED, FOREIGN, UNEDITED } = require('./approval.cjs');
+const { offersPlan, ownState, EDITED, FOREIGN, UNEDITED } = require('./approval.cjs');
 const { counted, plural } = require('../lib/text.cjs');
 
 const RELEASE_MARKER_PREFIX = '<!-- ksai-phase:';
@@ -55,6 +55,7 @@ async function releasedTokens({ github = null, owner = null, repo = null, prNumb
       tokens: new Set(),
       bound: [],
       shape: null,
+      sealed: null,
       editedRelease: false,
       unreadable: 'no bot login was given to gate the marker on',
     };
@@ -63,6 +64,7 @@ async function releasedTokens({ github = null, owner = null, repo = null, prNumb
   const tokens = new Set();
   const bound = [];
   let shape = null;
+  let sealed = null;
   let editedShape = false;
   let editedRelease = false;
   const { unreadable } = await probeComments({
@@ -75,6 +77,7 @@ async function releasedTokens({ github = null, owner = null, repo = null, prNumb
     take: (comment) => {
       const state = ownState(comment, known);
       if (state === FOREIGN) return;
+      if (offersPlan(comment)) sealed = null;
       if (state !== UNEDITED) {
         if (shapesIn(comment?.body).length > 0) editedShape = true;
         if (releasesIn(comment?.body).length > 0) editedRelease = true;
@@ -86,23 +89,24 @@ async function releasedTokens({ github = null, owner = null, repo = null, prNumb
         bound.push(release);
       }
       const found = shapesIn(comment.body).at(-1);
-      if (found !== undefined) shape = found;
+      if (found !== undefined) {
+        shape = found;
+        if (found.digest !== '') sealed = found;
+      }
     },
   });
 
-  if (unreadable) return { tokens, bound, shape, editedRelease, unreadable };
+  const answer = { tokens, bound, shape, sealed, editedRelease };
+  if (unreadable) return { ...answer, unreadable };
   if (editedShape) {
     return {
-      tokens,
-      bound,
-      shape,
-      editedRelease,
+      ...answer,
       unreadable:
         `a comment on ${owner}/${repo}#${String(prNumber)} recording this plan's phase boundary count has been ` +
         'edited, so what it published is no longer evidence of how many boundaries were planned',
     };
   }
-  return { tokens, bound, shape, editedRelease, unreadable: null };
+  return { ...answer, unreadable: null };
 }
 
 async function alreadyReleased({
