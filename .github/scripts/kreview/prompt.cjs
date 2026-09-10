@@ -85,6 +85,17 @@ const OUTPUT_CONTRACT = `7. Emit your final message as exactly one fenced \`\`\`
      reader renders one run of pipes instead of a report.
    - \`body\` is 80 words or fewer of prose, one paragraph, not counting a code block,
      per the format policy's Length rules.
+   - A code fix belongs in a \`\`\`suggestion fence and no other: only that one renders an
+     Apply button, and any other fence leaves the author retyping the change by hand.
+     GitHub replaces exactly the anchored lines - \`start_line\` through \`line\` - with the
+     content of the fence, so write the full replacement for those lines at their own
+     indentation and nothing else: no diff markers, no surrounding lines, no ellipsis.
+     If what must change is not those lines, anchor the finding on the lines that must
+     change or say it in prose; a suggestion pointing anywhere else applies wrongly.
+   - Open and close a suggestion with MORE backticks than the longest run inside it. A
+     replacement that is itself markdown holding a \`\`\` block needs \`\`\`\`suggestion and
+     \`\`\`\`. A three-backtick suggestion ends at the first bare \`\`\` inside it, which
+     truncates the fix and renders the rest of the comment as code.
    - Write both fields in ASD-STE100 Simplified Technical English: one idea per
      sentence, 20 words or fewer, active voice, present tense, one term for one thing.
      Identifiers, code and paths are exempt.`;

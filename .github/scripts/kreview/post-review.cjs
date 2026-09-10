@@ -133,6 +133,72 @@ const fromModel = (text) =>
     .replace(HTML_COMMENT, (comment) => (PUBLISHER_COMMENT.test(comment) ? '' : comment))
     .replace(ANY_FOLDED_HEADING, '');
 
+const FENCE_LINE = /^( {0,3})(`{3,}|~{3,})[ \t]*(.*)$/;
+
+function scanFences(lines) {
+  const blocks = [];
+  let open = null;
+  for (let i = 0; i < lines.length; i += 1) {
+    const m = FENCE_LINE.exec(lines[i]);
+    if (!m) continue;
+    const [, indent, marker, rest] = m;
+    const info = rest.trim();
+    if (!open) {
+      if (marker[0] === '`' && info.includes('`')) continue;
+      open = { start: i, indent, char: marker[0], len: marker.length, info };
+      continue;
+    }
+    if (marker[0] === open.char && marker.length >= open.len && info === '') {
+      blocks.push({ ...open, end: i });
+      open = null;
+    }
+  }
+  return { blocks, open };
+}
+
+const longestRun = (text, char) => {
+  const runs = text.match(char === '`' ? /`+/g : /~+/g);
+  return runs ? Math.max(...runs.map((run) => run.length)) : 0;
+};
+
+function trimStrayClosers(payload) {
+  let kept = payload;
+  while (kept.length) {
+    const m = FENCE_LINE.exec(kept.at(-1));
+    if (!m || m[3].trim() !== '') return kept;
+    const inner = kept.slice(0, -1);
+    if (scanFences(inner).open) return kept;
+    kept = inner;
+  }
+  return kept;
+}
+
+function balanceFences(body) {
+  const lines = body.split('\n');
+  const { blocks, open } = scanFences(lines);
+  if (!open) return body;
+  const outer = blocks.at(-1);
+  const nested =
+    open.info === '' &&
+    open.start === lines.length - 1 &&
+    outer !== undefined &&
+    outer.char === open.char &&
+    outer.end === open.start - 1;
+  const opener = nested ? outer : open;
+  const payload = trimStrayClosers(lines.slice(opener.start + 1, nested ? open.start : lines.length));
+  const fence = opener.char.repeat(
+    Math.max(opener.len, longestRun(payload.join('\n'), opener.char) + 1),
+  );
+  return [
+    ...lines.slice(0, opener.start),
+    `${opener.indent}${fence}${opener.info}`,
+    ...payload,
+    `${opener.indent}${fence}`,
+  ].join('\n');
+}
+
+const modelMarkdown = (text) => balanceFences(fromModel(text).trim());
+
 const oneLine = (text) =>
   fromModel(text)
     .replace(/[`*]/g, '')
@@ -140,16 +206,16 @@ const oneLine = (text) =>
     .trim();
 
 function renderBody(f) {
-  return `${sevLabel(f)}${tagLabel(f)}\n\n${fromModel(f.body).trim()}\n\n${FEEDBACK_FOOTER}\n\n${MARKER}${idMarker(f)}`;
+  return `${sevLabel(f)}${tagLabel(f)}\n\n${modelMarkdown(f.body)}\n\n${FEEDBACK_FOOTER}\n\n${MARKER}${idMarker(f)}`;
 }
 
 function renderSummary(summary, folded) {
   // The model writes this too, and it is the one string with no per-finding scrub of its own.
-  let out = fromModel(summary).trim() || '_Review complete._';
+  let out = modelMarkdown(summary) || '_Review complete._';
   if (folded.length) {
     out += `\n\n${FOLDED_HEADING}\n`;
     for (const f of folded) {
-      const body = fromModel(f.body).trim();
+      const body = modelMarkdown(f.body);
       out += `\n- ${sevLabel(f)}${tagLabel(f)} \`${oneLine(f.path) || '?'}:${lineLabel(f)}\` — ${body}${idMarker(f)}\n${BULLET_END}`;
     }
   }
