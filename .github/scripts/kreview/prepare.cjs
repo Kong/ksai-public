@@ -21,6 +21,7 @@ const { ceilingMinutes } = require('../lib/watchdog.cjs');
 const { skipsAuthor, triage } = require('../triage/policy.cjs');
 const { renderReviewPrompt, renderPipelineContext } = require('./prompt.cjs');
 const { STRATEGIES, experimentOf, promptDigest } = require('./review-pipeline.cjs');
+const { materializeScopes } = require('./review-scopes.cjs');
 const { availableReviewers, bodyOf, resolveReviewers, sharedFields } = require('./reviewers.cjs');
 
 const PLUGIN_DIR = '_ksai/plugins/kreview';
@@ -287,8 +288,22 @@ function buildReviewPrompt({ env }) {
   const prompt = (strategy === 'baseline' ? renderReviewPrompt : renderPipelineContext)(options);
   const context = renderPipelineContext({ ...options, channelNonce: null });
   const comparable = env.WORKSPACE ? context.replaceAll(env.WORKSPACE, '<workspace>') : context;
+  let scoping;
+  if (strategy !== 'baseline') {
+    try {
+      if (!env.DIFF_PATCH || !env.DIFF_STATUS) throw new Error('scoped review requires the trusted patch and NUL status inventory');
+      scoping = materializeScopes(env.DIFF_PATCH, env.DIFF_STATUS);
+      scoping.scopes = scoping.scopes.map((scope) => ({ ...scope,
+        context: renderPipelineContext({ ...options, diffPath: scope.diffPath, changedFilesPath: scope.changedFilesPath, shortstat: `${scope.files.length} files; ${scope.lines} changed lines in this scope` }),
+      }));
+    } catch (error) {
+      outputs.error = error.message;
+      return { outputs, error: outputs.error };
+    }
+  }
   fs.writeFileSync(env.PROMPT_FILE, prompt);
   fs.writeFileSync(`${env.PROMPT_FILE}.pipeline.json`, JSON.stringify({
+      scoping,
       prior: experiment.prior_findings === 'ignore' ? '' : env.PRIOR_FINDINGS || '',
       identity: { head_sha: env.COMMIT_ID, base_sha: env.BASE_SHA, plugin_sha: env.PLUGIN_SHA, runtime_sha: env.RUNTIME_SHA,
         prompt_sha256: promptDigest(prompt), context_sha256: promptDigest(comparable), ...experiment },

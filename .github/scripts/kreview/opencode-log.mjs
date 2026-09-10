@@ -59,12 +59,25 @@ const log = executionLog({
 });
 if (process.env.FLOW === 'review') {
   const held = process.env.REVIEW_PIPELINE_FILE ? JSON.parse(readFileSync(process.env.REVIEW_PIPELINE_FILE, 'utf8')) : null;
-  const { candidates = [], decisions = [], ...protocol } = held ?? {};
+  const { candidates = [], decisions = [], scope_plan: scopePlan, ...protocol } = held ?? {};
+  const coverage = scopePlan ? { scope_plan: {
+    version: scopePlan.version,
+    digest: scopePlan.digest,
+    total_files: scopePlan.total_files,
+    total_units: scopePlan.total_units,
+    omitted_units: scopePlan.omitted.length,
+    scopes: scopePlan.scopes.map((scope) => ({
+      id: scope.id, files: scope.files.length, units: scope.units.length,
+      bytes: scope.bytes, lines: scope.lines, coverage: scope.coverage,
+      completed_focuses: scope.completed_focuses,
+    })),
+  } } : {};
   const metadata = process.env.PROMPT_FILE ? JSON.parse(readFileSync(`${process.env.PROMPT_FILE}.pipeline.json`, 'utf8')) : {};
   Object.assign(log[0], { review_protocol: {
     ...metadata.identity,
     strategy: process.env.REVIEW_STRATEGY || 'baseline',
     ...protocol,
+    ...coverage,
     candidates_count: held ? candidates.length : null,
     rejected_count: held ? decisions.filter((d) => d.verdict !== 'keep').length : null,
     measured_children: children?.sessions.length ?? null,

@@ -452,11 +452,16 @@ function renderPipelineContext(options) {
   const context = rendered.slice(0, start);
   const contract = /Your final message MUST be exactly one fenced[^]*?before or after the block\./;
   const prior = /<prior-findings>[^]*?<\/prior-findings>/;
+  const subject = 'Read those two files. They are the review\'s subject, and they are the same bytes for\nyou and for every subagent you spawn.';
   if (!contract.test(context) || !prior.test(context)) throw new Error('review prompt has no output or prior-findings boundary');
+  if (!context.includes(subject)) throw new Error('review prompt has no scope-assignment boundary');
   return context.replace(
     contract,
     'Your final message follows the stage contract below. Do not delegate: the trusted runner starts each independent stage.',
-  ).replace(prior, '');
+  ).replace(prior, '').replace(
+    subject,
+    'These immutable files define the available change evidence. The stage below assigns the scope to investigate. Read that scope and its supporting callers; an audit need not reread the whole PR.',
+  );
 }
 
 module.exports = { AUDIT_MINUTES, renderReviewPrompt, renderPipelineContext, CONSTRAINTS };

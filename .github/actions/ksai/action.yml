@@ -2566,14 +2566,17 @@ runs:
         fi
         rm -rf -- "$DEST"
         mkdir -p -- "$DEST"
-        git diff "origin/${BASE_REF}...HEAD" > "${DEST}/diff.patch"
-        git diff --name-only "origin/${BASE_REF}...HEAD" > "${DEST}/changed-files.txt"
+        diff_options=(--no-ext-diff --no-textconv --no-color --no-relative --submodule=short --ignore-submodules=none)
+        git diff "${diff_options[@]}" "origin/${BASE_REF}...HEAD" > "${DEST}/diff.patch"
+        git diff "${diff_options[@]}" --name-only "origin/${BASE_REF}...HEAD" > "${DEST}/changed-files.txt"
+        git diff "${diff_options[@]}" --name-status -z "origin/${BASE_REF}...HEAD" > "${DEST}/changed-files.z"
         stat="$(git diff --shortstat "origin/${BASE_REF}...HEAD")"
         {
           printf 'base_sha=%s\n' "$(git rev-parse "origin/${BASE_REF}")"
           printf 'plugin_sha=%s\n' "$(git -C _ksai rev-parse HEAD)"
           printf 'patch=%s\n' "${DEST}/diff.patch"
           printf 'files_file=%s\n' "${DEST}/changed-files.txt"
+          printf 'status_file=%s\n' "${DEST}/changed-files.z"
           printf 'shortstat=%s\n' "${stat# }"
         } >> "$GITHUB_OUTPUT"
         echo "The review reads ${stat# }"
@@ -3602,6 +3605,7 @@ runs:
         TRIAGE_SKILLS: ${{ steps.triage.outputs.skills }}
         DIFF_PATCH: ${{ steps.diff.outputs.patch }}
         DIFF_FILES: ${{ steps.diff.outputs.files_file }}
+        DIFF_STATUS: ${{ steps.diff.outputs.status_file }}
         DIFF_SHORTSTAT: ${{ steps.diff.outputs.shortstat }}
         REPO_RULES: ${{ steps.repo_rules.outputs.rules }}
         JOB_TIMEOUT_MINUTES: ${{ inputs.job_timeout_minutes }}

@@ -22,8 +22,9 @@ export async function completeStage({ name, prompt, timeoutMs, invoke, now = Dat
     }, {}) : null,
     invocations: calls.map(({ phase, code: exit_code, session_id, usage, completion, coverage }) => ({ phase, exit_code, session_id, usage, completion, coverage, thinking: phase === 'research' ? 'selected' : 'enabled', effort: phase === 'research' ? 'selected' : 'low', thinking_budget: phase === 'research' ? undefined : LIMITS.finalizeThinkingTokens })),
   });
-  if (timeoutMs <= LIMITS.finalizeMs) return answer(124);
-  const research = await invoke({ prompt, timeoutMs: timeoutMs - LIMITS.finalizeMs });
+  if (timeoutMs < LIMITS.minStageMs) return answer(124);
+  const finalizeMs = Math.min(LIMITS.finalizeMs, Math.floor(timeoutMs / 3));
+  const research = await invoke({ prompt, timeoutMs: timeoutMs - finalizeMs });
   const researched = typeof research.text === 'string' ? readReviewOutput(research.text).review : null;
   calls.push({ phase: 'research', ...research, coverage: coverageOf(researched) });
   if (research.code !== 0) return answer(research.code);
@@ -31,7 +32,7 @@ export async function completeStage({ name, prompt, timeoutMs, invoke, now = Dat
   if (name.startsWith('discover-') && coverageOf(researched) && research.completion?.status === 'recorded' && research.completion.text_bytes > 0) return answer(0, research.text);
   const remaining = timeoutMs - (now() - began);
   if (remaining <= 0) return answer(124);
-  const deadline = now() + Math.min(remaining, LIMITS.finalizeMs);
+  const deadline = now() + Math.min(remaining, finalizeMs);
   let session = research.session_id;
   for (let attempt = 0; attempt < 2 && now() < deadline; attempt += 1) {
     const left = deadline - now();
