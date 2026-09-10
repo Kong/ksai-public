@@ -72,6 +72,26 @@ inputs:
     description: pull request number for a dispatch whose event carries none
     required: false
     default: ""
+  comment_id:
+    description: >-
+      the comment a dispatched request answers. A control plane routes the delivery and dispatches this
+      workflow, so the comment never reaches the run as an event; naming it here has the gate read it back
+      and route off the words, the surface and the thread root GitHub holds rather than off an empty payload.
+    required: false
+    default: ""
+  comment_kind:
+    description: >-
+      which comment space `comment_id` came from, `issue` or `review`. The two endpoints answer 404 for each
+      other's ids, so it is named rather than guessed. This is the input that asks for the comment to be read
+      back: an id without it names an identity rather than a comment to route off.
+    required: false
+    default: ""
+  app_slug:
+    description: >-
+      the App this flow authenticates as, which is what a dispatched comment's starter is measured against.
+      Named apart from `bot_login`, which is the login a flow posts as and differs between them.
+    required: false
+    default: ""
   requester:
     description: >-
       the login this run is authorized as, and the one the notice stands down for where it is a `[bot]`.
@@ -173,6 +193,16 @@ outputs:
   thread_root_id:
     description: id of the review thread the comment was left in, empty elsewhere
     value: ${{ steps.trigger.outputs.thread_root_id }}
+  on_issue:
+    description: >-
+      whether this request is on an issue rather than a pull request, resolved from the comment this run
+      answers. A caller cannot derive it for a dispatched comment, where the event names no surface.
+    value: ${{ steps.trigger.outputs.on_issue }}
+  issue_number:
+    description: >-
+      the issue or pull request the comment this run answers sits on, resolved from the comment itself. A
+      caller cannot derive it for a dispatched comment, where the event names no thread.
+    value: ${{ steps.trigger.outputs.issue_number }}
   verdict:
     description: what the classifier read the comment as, empty where none ran
     value: ${{ steps.verdict.outputs.verdict }}
@@ -220,13 +250,34 @@ runs:
           .github/scripts
         persist-credentials: false
 
+    - name: Resolve who asked
+      id: requester
+      if: ${{ inputs.authorization_github_token != '' }}
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        REQUESTER: ${{ inputs.requester }}
+        COMMENT_ID: ${{ inputs.comment_id }}
+        COMMENT_KIND: ${{ inputs.comment_kind }}
+        PR_NUMBER: ${{ inputs.pr_number }}
+        TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        APP_SLUG: ${{ inputs.app_slug }}
+        SCRIPTS: ${{ github.workspace }}/_ksai/.github/scripts
+      with:
+        github-token: ${{ inputs.authorization_github_token }}
+        retries: 3
+        script: |
+          const { resolveRequester } = require(`${process.env.SCRIPTS}/ksai/route.cjs`);
+          const { login, failure } = await resolveRequester({ github, context, env: process.env });
+          core.setOutput('login', login);
+          if (failure) core.setFailed(failure);
+
     - name: Authorize commenter against CODEOWNERS
       id: authz
       if: ${{ inputs.authorization_github_token != '' }}
       uses: ./_ksai/.github/actions/codeowners-authz
       with:
         github-token: ${{ inputs.authorization_github_token }}
-        username: ${{ inputs.requester }}
+        username: ${{ steps.requester.outputs.login }}
         write_access: ${{ inputs.write_access_commands != '' }}
 
     - name: Work out which flow this comment invokes
@@ -245,6 +296,11 @@ runs:
           ${{ (steps.authz.outputs.authorized == 'true' || steps.authz.outputs.write_access == 'true') &&
           inputs.bare_comments || 'off' }}
         BOT_LOGIN: ${{ inputs.bot_login }}
+        COMMENT_ID: ${{ inputs.authorization_github_token != '' && inputs.comment_id || '' }}
+        COMMENT_KIND: ${{ inputs.authorization_github_token != '' && inputs.comment_kind || '' }}
+        PR_NUMBER: ${{ inputs.pr_number }}
+        TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        APP_SLUG: ${{ inputs.app_slug }}
         PROMPT_FILE: ${{ runner.temp }}/ksai-classify-prompt.txt
         SCRIPTS: ${{ github.workspace }}/_ksai/.github/scripts
       with:
@@ -262,7 +318,9 @@ runs:
         inputs.continuation != 'true' && !endsWith(inputs.requester, '[bot]') }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
-        ISSUE_NUMBER: ${{ inputs.pr_number || github.event.issue.number || github.event.pull_request.number }}
+        ISSUE_NUMBER: >-
+          ${{ steps.trigger.outputs.issue_number || inputs.pr_number || github.event.issue.number ||
+          github.event.pull_request.number }}
         REPO: ${{ github.repository }}
         TRIGGER: ${{ inputs.trigger_phrase }}
         SCRIPTS: ${{ github.workspace }}/_ksai/.github/scripts
@@ -361,7 +419,7 @@ runs:
         EXECUTION_FILE: ${{ steps.classify_run.outputs.execution_file }}
         CLASSIFY_MODEL: ${{ steps.trigger.outputs.classify_model }}
         DISABLED_COMMANDS: ${{ inputs.disabled_commands }}
-        ON_ISSUE: ${{ github.event_name == 'issue_comment' && !github.event.issue.pull_request }}
+        ON_ISSUE: ${{ steps.trigger.outputs.on_issue }}
         ON_OWN_PULL: ${{ steps.trigger.outputs.own_pull }}
         THREAD_ROOT_ID: ${{ steps.trigger.outputs.thread_root_id }}
         REVIEW: ${{ steps.trigger.outputs.review }}
@@ -398,8 +456,10 @@ runs:
         inputs.continuation != 'true' && !endsWith(inputs.requester, '[bot]') }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
-        ISSUE_NUMBER: ${{ inputs.pr_number || github.event.issue.number || github.event.pull_request.number }}
-        ON_ISSUE: ${{ github.event_name == 'issue_comment' && !github.event.issue.pull_request }}
+        ISSUE_NUMBER: >-
+          ${{ steps.trigger.outputs.issue_number || inputs.pr_number || github.event.issue.number ||
+          github.event.pull_request.number }}
+        ON_ISSUE: ${{ steps.trigger.outputs.on_issue }}
         REPO: ${{ github.repository }}
         COMMAND: ${{ steps.bar.outputs.command }}
         BAR: ${{ steps.bar.outputs.bar }}
@@ -503,7 +563,9 @@ runs:
       if: ${{ steps.federation.outputs.refused == 'true' }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
-        ISSUE_NUMBER: ${{ inputs.pr_number || github.event.issue.number || github.event.pull_request.number }}
+        ISSUE_NUMBER: >-
+          ${{ steps.trigger.outputs.issue_number || inputs.pr_number || github.event.issue.number ||
+          github.event.pull_request.number }}
         REPO: ${{ github.repository }}
         TRIGGER: ${{ inputs.trigger_phrase }}
         SCRIPTS: ${{ github.workspace }}/_ksai/.github/scripts

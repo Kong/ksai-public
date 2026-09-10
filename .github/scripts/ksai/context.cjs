@@ -2,7 +2,7 @@
 
 const { readCount, MAX_ATTEMPTS } = require('./continue.cjs');
 const { JIRA_KEY_SHAPE, anyCommandOpen } = require('../lib/select-arm.cjs');
-const { editState, UNEDITED } = require('./approval.cjs');
+const { editState, isOwnLogin, UNEDITED } = require('./approval.cjs');
 
 const editRefusal = (comment, where) => {
   const state = editState(comment);
@@ -17,6 +17,8 @@ const editRefusal = (comment, where) => {
 };
 
 const NUMBER_SHAPE = /^[1-9][0-9]{0,9}$/;
+
+const COMMENT_ID_SHAPE = /^[1-9][0-9]{0,18}$/;
 
 const WORK_REF_PREFIX = 'jira/';
 
@@ -33,6 +35,13 @@ function readNumber(value) {
   return NUMBER_SHAPE.test(text) ? Number(text) : null;
 }
 
+function readCommentId(value) {
+  const text = String(value ?? '').trim();
+  if (!COMMENT_ID_SHAPE.test(text)) return null;
+  const held = Number(text);
+  return Number.isSafeInteger(held) ? held : null;
+}
+
 function commenterOf(comment) {
   const login = String(comment?.user?.login ?? '');
   return AUTHZ_LOGIN_SHAPE.test(login) ? login : null;
@@ -41,7 +50,7 @@ function commenterOf(comment) {
 function threadRootOf({ eventName = null, payload = null } = {}) {
   if (String(eventName ?? '') !== REVIEW_COMMENT_EVENT) return null;
   const comment = payload?.comment ?? null;
-  return readNumber(comment?.in_reply_to_id) ?? readNumber(comment?.id);
+  return readCommentId(comment?.in_reply_to_id) ?? readCommentId(comment?.id);
 }
 
 function workRefFor(key) {
@@ -105,7 +114,7 @@ function resolveContext({ eventName = null, payload = null, inputs = null } = {}
         isContinuation: false,
         onIssue: String(onIssueInput ?? 'true') !== 'false',
         commenter: AUTHZ_LOGIN_SHAPE.test(actor) ? actor : null,
-        commentId: readNumber(commentIdInput),
+        commentId: readCommentId(commentIdInput),
         commentBody: asked,
         dispatched: true,
         threadRootId: null,
@@ -142,7 +151,7 @@ function resolveContext({ eventName = null, payload = null, inputs = null } = {}
       isContinuation: false,
       onIssue: issue?.pull_request == null,
       commenter: commenterOf(comment),
-      commentId: readNumber(comment?.id),
+      commentId: readCommentId(comment?.id),
       commentBody: String(comment?.body ?? ''),
       commentEdited: editState(comment),
       threadRootId: null,
@@ -166,7 +175,7 @@ function resolveContext({ eventName = null, payload = null, inputs = null } = {}
       onIssue: false,
       onReview: true,
       reviewState: String(payload?.review?.state ?? '').trim().toLowerCase(),
-      reviewId: readNumber(payload?.review?.id),
+      reviewId: readCommentId(payload?.review?.id),
       reviewSubmittedAt: String(payload?.review?.submitted_at ?? '').trim(),
       reviewCommitId: String(payload?.review?.commit_id ?? '').trim().toLowerCase(),
       reviewUrl: String(payload?.review?.html_url ?? '').trim(),
@@ -205,7 +214,7 @@ function resolveContext({ eventName = null, payload = null, inputs = null } = {}
       isContinuation: false,
       onIssue: false,
       commenter: commenterOf(comment),
-      commentId: readNumber(comment?.id),
+      commentId: readCommentId(comment?.id),
       commentBody: String(comment?.body ?? ''),
       commentEdited: editState(comment),
       threadRootId,
@@ -220,6 +229,123 @@ function resolveContext({ eventName = null, payload = null, inputs = null } = {}
       `this action does not know what to do with a \`${event || '(none)'}\` event. ` +
       `It expects \`${COMMENT_EVENT}\`, \`${REVIEW_COMMENT_EVENT}\` or \`${REVIEW_EVENT}\` for a request, or ` +
       `\`${CONTINUATION_EVENT}\` for a continuation.`,
+  };
+}
+
+const COMMENT_KINDS = Object.freeze(
+  Object.assign(Object.create(null), { issue: COMMENT_EVENT, review: REVIEW_COMMENT_EVENT }),
+);
+
+const KIND_NAMES = Object.freeze(Object.keys(COMMENT_KINDS));
+
+const numberFrom = (url) => {
+  const tail = String(url ?? '').trim().split('/').at(-1) ?? '';
+  return NUMBER_SHAPE.test(tail) ? Number(tail) : null;
+};
+
+async function resolveDispatchedComment({
+  eventName,
+  commentId,
+  commentKind,
+  issueNumber,
+  actor = null,
+  appSlug = null,
+  getIssueComment,
+  getReviewComment,
+}) {
+  if (String(eventName ?? '') !== CONTINUATION_EVENT) return { held: false };
+
+  const id = String(commentId ?? '').trim();
+  const kind = String(commentKind ?? '').trim().toLowerCase();
+  if (kind === '') return { held: false };
+  if (id === '') {
+    return {
+      error:
+        '`comment_kind` names a comment space and no `comment_id` says which comment in it, so this run has ' +
+        'nothing to read back. The pair is what asks for a comment to be read; an id on its own is the ' +
+        "request's identity and carries no words.",
+    };
+  }
+  const wanted = readCommentId(id);
+  if (wanted === null) {
+    return { error: `\`comment_id\` is not a comment id (got \`${id}\`).` };
+  }
+  if (!Object.prototype.hasOwnProperty.call(COMMENT_KINDS, kind)) {
+    return {
+      error: `\`comment_kind\` names no comment space this action reads (got \`${kind}\`). It expects ${KIND_NAMES.join(' or ')}.`,
+    };
+  }
+
+  const review = kind === 'review';
+  let data = null;
+  try {
+    data = review ? await getReviewComment(wanted) : await getIssueComment(wanted);
+  } catch (error) {
+    return {
+      error:
+        `could not read the ${review ? 'review ' : ''}comment #${id} this run was dispatched for ` +
+        `(status ${error?.status}): ${error?.message}. A run answers a comment it can read, or it answers none.`,
+    };
+  }
+
+  if (String(data?.user?.type ?? '') === 'Bot') {
+    return {
+      error:
+        `the ${review ? 'review ' : ''}comment #${id} this run was dispatched for was written by a Bot ` +
+        `(\`${String(data?.user?.login ?? '')}\`), so nothing ran. Every comment event is gated on the author not ` +
+        'being one, and a dispatch carries an id rather than an author, so the same term is applied here - it is ' +
+        'what stands between what this flow publishes and a run answering its own output.',
+    };
+  }
+
+  const refused = editRefusal(data, review ? 'review comment' : 'comment');
+  if (refused) return refused;
+
+  const wrote = String(data?.user?.login ?? '');
+  const sent = String(actor ?? '').trim();
+  if (sent !== '' && !isOwnLogin(sent, appSlug) && sent.toLowerCase() !== wrote.toLowerCase()) {
+    return {
+      error:
+        `comment #${id} was written by \`${wrote}\` and this run was started by \`${sent}\`, so nothing ran. A ` +
+        'run answers its own author or is started by this flow itself: which comment a dispatch names is free ' +
+        'text to whoever holds `actions: write`, and replaying somebody else\'s command would run it under ' +
+        'their authorization rather than the dispatcher\'s.',
+    };
+  }
+
+  const number = numberFrom(review ? data?.pull_request_url : data?.issue_url);
+  if (number === null) {
+    return {
+      error:
+        `the ${review ? 'review ' : ''}comment #${id} named no pull request or issue of its own, so this run has ` +
+        'nothing to work on.',
+    };
+  }
+  const named = String(issueNumber ?? '').trim();
+  if (named !== '' && named !== String(number)) {
+    return {
+      error:
+        `the dispatch names #${named} and comment #${id} sits on #${number}. The comment decides what a run is ` +
+        'about, so a pair that disagrees is a dispatch pointed at the wrong thread rather than a surface to pick.',
+    };
+  }
+
+  return { held: true, review, id: wanted, number, comment: data };
+}
+
+const commentReaders = ({ github, context }) => ({
+  getIssueComment: async (comment_id) => (await github.rest.issues.getComment({ ...context.repo, comment_id })).data,
+  getReviewComment: async (comment_id) =>
+    (await github.rest.pulls.getReviewComment({ ...context.repo, comment_id })).data,
+});
+
+function asCommentEvent({ dispatched, onIssue, payload = null }) {
+  const { comment, number, review } = dispatched;
+  const carried = { ...payload, comment };
+  if (review) return { eventName: REVIEW_COMMENT_EVENT, payload: { ...carried, pull_request: { number } } };
+  return {
+    eventName: COMMENT_EVENT,
+    payload: { ...carried, issue: { number, pull_request: onIssue ? null : {} } },
   };
 }
 
@@ -294,6 +420,9 @@ const AUTHZ_REASONS = Object.freeze(
 
 module.exports = {
   NUMBER_SHAPE,
+  asCommentEvent,
+  commentReaders,
+  resolveDispatchedComment,
   AUTHZ_LOGIN_SHAPE,
   AUTHZ_REASONS,
   CONTINUATION_EVENT,

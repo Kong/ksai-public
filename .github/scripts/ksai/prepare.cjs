@@ -26,7 +26,16 @@ const {
 const { bareMode, ownPull, renderNudge } = require('./bare.cjs');
 const { afterTrigger } = require('../lib/text.cjs');
 const loadKsaiConfig = require('./config.cjs');
-const { AUTHZ_REASONS, resolveAuthorization, resolveContext, resolveOnIssue } = require('./context.cjs');
+const {
+  AUTHZ_REASONS,
+  CONTINUATION_EVENT,
+  asCommentEvent,
+  commentReaders,
+  resolveAuthorization,
+  resolveContext,
+  resolveDispatchedComment,
+  resolveOnIssue,
+} = require('./context.cjs');
 const { classifyTarget, nextStep, resolveRequest } = require('./dispatch.cjs');
 const { approvalApplies, describeApproval, resolveApproval } = require('./gate.cjs');
 const { alreadyReleased, needsReleaseRead, decideCheckpoint, releaseTokenFor } = require('./checkpoint.cjs');
@@ -415,17 +424,36 @@ function dispatchedActor(env) {
 }
 
 async function resolveRunContext({ github, context, env }) {
-  const surface = await resolveOnIssue({
+  const dispatched = await resolveDispatchedComment({
     eventName: context.eventName,
-    commentBody: env.IN_COMMENT_BODY,
+    commentId: env.IN_COMMENT_ID,
+    commentKind: env.IN_COMMENT_KIND,
     issueNumber: env.IN_ISSUE_NUMBER,
-    pullsGet: (pull_number) => github.rest.pulls.get({ ...context.repo, pull_number }),
+    actor: env.IN_TRIGGERING_ACTOR,
+    appSlug: env.IN_APP_SLUG,
+    ...commentReaders({ github, context }),
   });
+  if (dispatched.error) return { outputs: {}, failure: dispatched.error };
+
+  const pullsGet = (pull_number) => github.rest.pulls.get({ ...context.repo, pull_number });
+
+  const surface = dispatched.review
+    ? { onIssue: false }
+    : await resolveOnIssue({
+        eventName: dispatched.held ? CONTINUATION_EVENT : context.eventName,
+        commentBody: dispatched.held ? String(dispatched.comment?.body ?? '') : env.IN_COMMENT_BODY,
+        issueNumber: dispatched.held ? String(dispatched.number) : env.IN_ISSUE_NUMBER,
+        pullsGet,
+      });
   if (surface.error) return { outputs: {}, failure: surface.error };
 
+  const carried = dispatched.held
+    ? asCommentEvent({ dispatched, onIssue: surface.onIssue, payload: context.payload })
+    : null;
+
   const out = resolveContext({
-    eventName: context.eventName,
-    payload: context.payload,
+    eventName: carried?.eventName ?? context.eventName,
+    payload: carried?.payload ?? context.payload,
     inputs: {
       issue_number: env.IN_ISSUE_NUMBER,
       work_ref: env.IN_WORK_REF,

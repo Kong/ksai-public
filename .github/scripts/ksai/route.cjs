@@ -28,7 +28,16 @@ const {
   verdictFromExecution,
   verdictOf,
 } = require('./classify.cjs');
-const { COMMENT_EVENT, REVIEW_EVENT, threadRootOf } = require('./context.cjs');
+const {
+  AUTHZ_LOGIN_SHAPE,
+  COMMENT_EVENT,
+  REVIEW_EVENT,
+  asCommentEvent,
+  commentReaders,
+  resolveDispatchedComment,
+  resolveOnIssue,
+  threadRootOf,
+} = require('./context.cjs');
 const { classifyTarget } = require('./dispatch.cjs');
 const { bareMode, ownPull } = require('./bare.cjs');
 const loadKsaiConfig = require('./config.cjs');
@@ -106,8 +115,8 @@ async function routeCommand({ eventName, onIssue, threadRootId, onReview, review
   return decide({ command: parsed.command ?? here, spelled: parsed.command, onIssue, disabledCommands });
 }
 
-async function bareTarget({ github, core, context, env, onIssue, threadRootId, body, readConfig, opened }) {
-  if (context.eventName !== COMMENT_EVENT) return false;
+async function bareTarget({ github, core, context, payload, eventName, env, onIssue, threadRootId, body, readConfig, opened }) {
+  if (eventName !== COMMENT_EVENT) return false;
   if (onIssue || String(threadRootId ?? '').trim() !== '') return false;
   if (String(body).trim() === '') return false;
   const asked = bareMode({ input: env.BARE_COMMENTS });
@@ -123,7 +132,7 @@ async function bareTarget({ github, core, context, env, onIssue, threadRootId, b
     core,
     owner: context.repo.owner,
     repo: context.repo.repo,
-    prNumber: context.payload?.issue?.number,
+    prNumber: payload?.issue?.number,
     botLogin: env.BOT_LOGIN,
   });
   if (!mine) return false;
@@ -149,12 +158,73 @@ async function resolvedWriteCommands({ core, env, readConfig }) {
   return opened.commands.join(' ');
 }
 
+async function resolveRequester({ github, context, env }) {
+  const held = await resolveDispatchedComment({
+    eventName: context.eventName,
+    commentId: env.COMMENT_ID,
+    commentKind: env.COMMENT_KIND,
+    issueNumber: env.PR_NUMBER,
+    actor: env.TRIGGERING_ACTOR,
+    appSlug: env.APP_SLUG,
+    ...commentReaders({ github, context }),
+  });
+  if (held.error) return { login: '', failure: held.error };
+  if (!held.held) return { login: String(env.REQUESTER ?? ''), failure: null };
+
+  const login = String(held.comment?.user?.login ?? '');
+  if (!AUTHZ_LOGIN_SHAPE.test(login)) {
+    return {
+      login: '',
+      failure:
+        `comment #${env.COMMENT_ID} names no author this gate can authorize (got \`${login}\`), so nothing ran. ` +
+        'A run is authorized against the account that wrote the comment, and an unreadable one is refused ' +
+        'rather than falling back to the login the dispatch named.',
+    };
+  }
+  return { login, failure: null };
+}
+
 async function route({ github, core, context, env }) {
-  const onIssue = resolveSurface({ eventName: context.eventName, payload: context.payload });
-  const onReview = resolveReview({ eventName: context.eventName });
-  const reviewState = String(context.payload?.review?.state ?? '').trim().toLowerCase();
-  const threadRootId = threadRootOf({ eventName: context.eventName, payload: context.payload });
-  const body = context.payload?.comment?.body ?? '';
+  const readers = commentReaders({ github, context });
+  const dispatched = await resolveDispatchedComment({
+    eventName: context.eventName,
+    commentId: env.COMMENT_ID,
+    commentKind: env.COMMENT_KIND,
+    issueNumber: env.PR_NUMBER,
+    actor: env.TRIGGERING_ACTOR,
+    appSlug: env.APP_SLUG,
+    ...readers,
+  });
+  if (dispatched.error) {
+    core.setFailed(dispatched.error);
+    return null;
+  }
+
+  let carried = null;
+  if (dispatched.held) {
+    const surface = dispatched.review
+      ? { onIssue: false }
+      : await resolveOnIssue({
+          eventName: context.eventName,
+          commentBody: String(dispatched.comment?.body ?? ''),
+          issueNumber: String(dispatched.number),
+          pullsGet: (pull_number) => github.rest.pulls.get({ ...context.repo, pull_number }),
+        });
+    if (surface.error) {
+      core.setFailed(surface.error);
+      return null;
+    }
+    carried = asCommentEvent({ dispatched, onIssue: surface.onIssue, payload: context.payload });
+  }
+
+  const eventName = carried?.eventName ?? context.eventName;
+  const payload = carried?.payload ?? context.payload;
+
+  const onIssue = resolveSurface({ eventName, payload });
+  const onReview = resolveReview({ eventName });
+  const reviewState = String(payload?.review?.state ?? '').trim().toLowerCase();
+  const threadRootId = threadRootOf({ eventName, payload });
+  const body = payload?.comment?.body ?? '';
   const disabledCommands = env.DISABLED_COMMANDS;
 
   let pending;
@@ -167,7 +237,7 @@ async function route({ github, core, context, env }) {
   const opened = () => (openedPending ??= resolvedWriteCommands({ core, env, readConfig }));
 
   const decision = await routeCommand({
-    eventName: context.eventName,
+    eventName,
     onIssue,
     threadRootId,
     onReview,
@@ -186,10 +256,15 @@ async function route({ github, core, context, env }) {
   core.setOutput('classify', 'false');
   core.setOutput('own_pull', 'false');
   core.setOutput('thread_root_id', threadRootId ?? '');
+  core.setOutput('on_issue', onIssue ? 'true' : 'false');
+  core.setOutput(
+    'issue_number',
+    String(dispatched.held ? dispatched.number : (payload?.issue?.number ?? payload?.pull_request?.number ?? '')),
+  );
 
-  const dispatched = context.eventName === 'workflow_dispatch';
-  const request = dispatched ? null : afterTrigger(body, env.TRIGGER);
-  const asked = dispatched ? null : afterTrigger(unquoted(body), env.TRIGGER);
+  const continued = eventName === 'workflow_dispatch';
+  const request = continued ? null : afterTrigger(body, env.TRIGGER);
+  const asked = continued ? null : afterTrigger(unquoted(body), env.TRIGGER);
   const ownReview =
     onReview &&
     (await ownPull({
@@ -197,14 +272,14 @@ async function route({ github, core, context, env }) {
       core,
       owner: context.repo.owner,
       repo: context.repo.repo,
-      prNumber: context.payload?.pull_request?.number,
+      prNumber: payload?.pull_request?.number,
       botLogin: env.BOT_LOGIN,
     }));
-  const requested = ownReview || dispatched || asked !== null;
+  const requested = ownReview || continued || asked !== null;
   core.setOutput('requested', requested ? 'true' : 'false');
   const bare =
     request === null &&
-    (await bareTarget({ github, core, context, env, onIssue, threadRootId, body, readConfig, opened }));
+    (await bareTarget({ github, core, context, payload, eventName, env, onIssue, threadRootId, body, readConfig, opened }));
   core.setOutput('write_access_commands', requested || bare ? await opened() : '');
   if (bare) {
     core.setOutput('own_pull', 'true');
@@ -367,6 +442,7 @@ function settleAuthorization({ core, env }) {
 }
 
 module.exports = {
+  resolveRequester,
   route,
   routeCommand,
   routeVerdict,

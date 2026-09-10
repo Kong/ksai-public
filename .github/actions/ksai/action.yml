@@ -187,7 +187,24 @@ inputs:
   comment_id:
     description: >-
       the comment a dispatched request answers, reacted to and recorded as the request's identity. The `do`
-      phase records a request by this id and refuses to push without one; the plan phases need none.
+      phase records a request by this id and refuses to push without one; the plan phases need none. Given
+      with `comment_kind`, the comment is read back from GitHub and answered as the event it arrived on, so
+      the words, the author the CODEOWNERS check runs against and the edit state all come from GitHub.
+    required: false
+    default: ""
+  comment_kind:
+    description: >-
+      which comment space `comment_id` came from, `issue` or `review`. The two endpoints answer 404 for each
+      other's ids, so it is named rather than guessed. This is the input that asks for the comment to be read
+      back: an id without it keeps the older meaning, the identity a run records itself against, with the
+      words carried in `comment_body`.
+    required: false
+    default: ""
+  app_slug:
+    description: >-
+      the App this flow authenticates as, which is what a dispatched comment's starter is measured against.
+      Named apart from `bot_login`, which is the login a flow *posts* as and differs between them - the
+      tester posts as `github-actions[bot]` whatever App dispatched the run.
     required: false
     default: ""
   additional_prompt:
@@ -1052,6 +1069,8 @@ runs:
         IN_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
         IN_ACTOR: ${{ inputs.actor }}
         IN_COMMENT_ID: ${{ inputs.comment_id }}
+        IN_COMMENT_KIND: ${{ inputs.comment_kind }}
+        IN_APP_SLUG: ${{ inputs.app_slug }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:
         github-token: ${{ inputs.authorization_github_token || inputs.source_org_github_token }}

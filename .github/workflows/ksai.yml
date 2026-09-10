@@ -585,6 +585,25 @@ on:
         required: false
         type: string
         default: ""
+      comment_id:
+        description: >-
+          the comment a dispatched request answers. A control plane that routes deliveries dispatches this
+          workflow instead of the comment reaching it as an event, so naming the comment here, beside
+          `comment_kind`, is what lets a command and the words after it decide the run. The comment is read
+          back from GitHub, never carried in the dispatch: an input is free text whoever holds
+          `actions: write` chooses.
+        required: false
+        type: string
+        default: ""
+      comment_kind:
+        description: >-
+          which comment space `comment_id` came from, `issue` or `review`. The two endpoints answer 404 for
+          each other's ids, so it is named rather than guessed. This is the input that asks for the comment
+          to be read back, and every job here reads it rather than the id to decide whether a dispatch is a
+          request: an id without it names the identity a run records itself against and nothing more.
+        required: false
+        type: string
+        default: ""
     secrets:
       ksai_private_key:
         description: private key for the KSAI GitHub App used to authorize, publish, and push
@@ -626,7 +645,7 @@ jobs:
   gate:
     if: >-
       !(github.event_name == 'pull_request' && github.event.action == 'review_requested') &&
-      (github.event_name != 'workflow_dispatch' || inputs.pr != '')
+      (github.event_name != 'workflow_dispatch' || inputs.pr != '' || inputs.comment_kind != '')
     runs-on: ${{ startsWith(inputs.runs_on, '[') && fromJSON(inputs.runs_on) || inputs.runs_on }}
     timeout-minutes: 5
     environment: ${{ inputs.job_environment }}
@@ -645,6 +664,8 @@ jobs:
       test: ${{ steps.gate.outputs.test }}
       help: ${{ steps.gate.outputs.help }}
       thread_root_id: ${{ steps.gate.outputs.thread_root_id }}
+      on_issue: ${{ steps.gate.outputs.on_issue }}
+      issue_number: ${{ steps.gate.outputs.issue_number }}
       verdict: ${{ steps.gate.outputs.verdict }}
       classifier_model: ${{ steps.gate.outputs.classifier_model }}
       classifier_cost: ${{ steps.gate.outputs.classifier_cost }}
@@ -758,13 +779,14 @@ jobs:
           private-key: ${{ secrets.ksai_private_key }}
           permission-contents: read
           permission-members: read
+          permission-issues: read
           permission-pull-requests: read
 
       - name: Refuse a call whose credentials cannot read this repository
         if: ${{ steps.authz-token.outcome == 'failure' }}
         run: |
           set -euo pipefail
-          echo "::error::the App minted no read token for this repository, so nothing below can read its CODEOWNERS, its pull requests or its members. It must be installed here and must grant contents: read, members: read and pull requests: read, which is what this mint asked for - GitHub refuses the whole mint when one of them is missing and never says which. Grant issues: read beside them, or the run that answers this comment fails the same way one step later. Check those grants, then the client_id input or the KSAI_CLIENT_ID variable and the ksai_private_key secret"
+          echo "::error::the App minted no read token for this repository, so nothing below can read its CODEOWNERS, its comments, its pull requests or its members. It must be installed here and must grant contents: read, members: read, issues: read and pull requests: read, which is what this mint asked for - GitHub refuses the whole mint when one of them is missing and never says which. Check those grants, then the client_id input or the KSAI_CLIENT_ID variable and the ksai_private_key secret"
           exit 1
 
       - name: Resolve who asked and what they asked for
@@ -782,14 +804,17 @@ jobs:
           anthropic_auth: ${{ inputs.anthropic_auth }}
           trigger_phrase: ${{ inputs.trigger_phrase }}
           bot_login: ${{ inputs.push_as_app && format('{0}[bot]', steps.authz-token.outputs.app-slug) || 'github-actions[bot]' }}
+          app_slug: ${{ steps.authz-token.outputs.app-slug }}
           team: ${{ inputs.team }}
           actor: ${{ inputs.actor }}
           pr_number: ${{ inputs.pr }}
+          comment_id: ${{ inputs.comment_id }}
+          comment_kind: ${{ inputs.comment_kind }}
           requester: >-
             ${{ inputs.actor || github.event.comment.user.login ||
             github.event.review.user.login || github.actor }}
           sidebar_withdrawal: ${{ inputs.actor != '' && inputs.clear_request }}
-          continuation: ${{ inputs.issue_number != '' || inputs.work_ref != '' }}
+          continuation: ${{ inputs.comment_kind == '' && (inputs.issue_number != '' || inputs.work_ref != '') }}
           disabled_commands: ${{ inputs.disabled_commands }}
           write_access_commands: ${{ inputs.write_access_commands }}
           allowed_commands: ${{ inputs.allowed_commands }}
@@ -833,7 +858,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-help
           repository: Kong/ksai-public
-          ref: v3.46.1
+          ref: v3.47.0
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -841,8 +866,10 @@ jobs:
         id: render-help
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
-          ISSUE_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
-          ON_ISSUE: ${{ github.event_name == 'issue_comment' && !github.event.issue.pull_request }}
+          ISSUE_NUMBER: >-
+            ${{ needs.gate.outputs.issue_number || github.event.issue.number ||
+            github.event.pull_request.number }}
+          ON_ISSUE: ${{ needs.gate.outputs.on_issue }}
           THREAD_ROOT_ID: ${{ needs.gate.outputs.thread_root_id }}
           TRIGGER: ${{ inputs.trigger_phrase }}
           DISABLED_COMMANDS: ${{ inputs.disabled_commands }}
@@ -972,7 +999,12 @@ jobs:
           allowed_commands: ${{ inputs.allowed_commands }}
           issue_number: ${{ inputs.pr }}
           actor: ${{ inputs.actor }}
-          comment_body: ${{ github.event_name == 'workflow_dispatch' && '/ksai review this pull request' || '' }}
+          comment_body: >-
+            ${{ (github.event_name == 'workflow_dispatch' && inputs.comment_kind == '')
+            && '/ksai review this pull request' || '' }}
+          comment_id: ${{ inputs.comment_id }}
+          comment_kind: ${{ inputs.comment_kind }}
+          app_slug: ${{ steps.authz-token.outputs.app-slug }}
           source_org_github_token: ${{ inputs.push_as_app && steps.post-token.outputs.token || github.token }}
           authorization_github_token: ${{ steps.authz-token.outputs.token }}
           kong_org_github_token: ${{ github.token }}
@@ -1128,6 +1160,9 @@ jobs:
           allowed_commands: ${{ inputs.allowed_commands }}
           issue_number: ${{ inputs.pr || github.event.issue.number || github.event.pull_request.number }}
           actor: ${{ inputs.actor }}
+          comment_id: ${{ inputs.comment_id }}
+          comment_kind: ${{ inputs.comment_kind }}
+          app_slug: ${{ steps.authz-token.outputs.app-slug }}
           source_org_github_token: ${{ github.token }}
           authorization_github_token: ${{ steps.authz-token.outputs.token }}
           kong_org_github_token: ${{ github.token }}
@@ -1239,7 +1274,7 @@ jobs:
         with:
           token: ${{ github.token }}
           repository: Kong/ksai-public
-          ref: v3.46.1
+          ref: v3.47.0
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1307,7 +1342,12 @@ jobs:
           write_access_commands: ${{ inputs.write_access_commands }}
           issue_number: ${{ inputs.pr || github.event.issue.number || github.event.pull_request.number }}
           actor: ${{ inputs.actor }}
-          comment_body: ${{ github.event_name == 'workflow_dispatch' && '/ksai review this pull request' || '' }}
+          comment_body: >-
+            ${{ (github.event_name == 'workflow_dispatch' && inputs.comment_kind == '')
+            && '/ksai review this pull request' || '' }}
+          comment_id: ${{ inputs.comment_id }}
+          comment_kind: ${{ inputs.comment_kind }}
+          app_slug: ${{ steps.authz-token.outputs.app-slug }}
           source_org_github_token: ${{ steps.authz-token.outputs.token }}
           authorization_github_token: ${{ steps.authz-token.outputs.token }}
           kong_org_github_token: ${{ github.token }}
@@ -1351,7 +1391,7 @@ jobs:
     needs: gate
     if: >-
       !cancelled() && !(github.event_name == 'pull_request' && github.event.action == 'review_requested') &&
-      ((github.event_name == 'workflow_dispatch' &&
+      ((github.event_name == 'workflow_dispatch' && inputs.comment_kind == '' &&
         (inputs.issue_number != '' || inputs.work_ref != '')) ||
        (needs.gate.result == 'success' &&
         needs.gate.outputs.authorized == 'true' &&
@@ -1370,9 +1410,10 @@ jobs:
     concurrency:
       group: >-
         ksai-implement-${{ vars.KSAI_IMPLEMENT_LANE ||
-        format('{0}-{1}', (github.event.issue.pull_request || github.event.pull_request) && 'pr' || 'issue',
+        format('{0}-{1}',
+        (github.event.issue.pull_request || github.event.pull_request || inputs.pr) && 'pr' || 'issue',
         github.event.issue.number || github.event.pull_request.number || inputs.issue_number ||
-        inputs.work_ref) }}
+        inputs.work_ref || inputs.pr || inputs.comment_id) }}
       cancel-in-progress: false
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -1587,6 +1628,9 @@ jobs:
           continuation_workflow: ${{ inputs.continuation_workflow }}
           issue_number: ${{ inputs.issue_number }}
           work_ref: ${{ inputs.work_ref }}
+          comment_id: ${{ inputs.comment_id }}
+          comment_kind: ${{ inputs.comment_kind }}
+          app_slug: ${{ steps.authz-token.outputs.app-slug }}
           jira_cloud_id: ${{ inputs.jira_cloud_id }}
           jira_site: ${{ inputs.jira_site }}
           jira_projects: ${{ inputs.jira_projects }}
@@ -1615,9 +1659,9 @@ jobs:
       ((needs.gate.result == 'success' &&
         (needs.review.result == 'success' ||
          (needs.review.result == 'failure' && needs.recover.outputs.retried != 'true') ||
-         (github.event_name == 'workflow_dispatch' &&
+         (github.event_name == 'workflow_dispatch' && inputs.comment_kind == '' &&
           (needs.gate.outputs.authorized != 'true' || needs.gate.outputs.review != 'true')))) ||
-       (needs.gate.result == 'failure' && github.event_name == 'workflow_dispatch'))
+       (needs.gate.result == 'failure' && github.event_name == 'workflow_dispatch' && inputs.comment_kind == ''))
     runs-on: ${{ startsWith(inputs.runs_on, '[') && fromJSON(inputs.runs_on) || inputs.runs_on }}
     timeout-minutes: 5
     permissions:
@@ -1636,7 +1680,9 @@ jobs:
           client-id: ${{ inputs.client_id || vars.KSAI_CLIENT_ID }}
           private-key: ${{ secrets.ksai_private_key }}
           refused-actor: ${{ needs.gate.outputs.authorized != 'true' && inputs.actor || '' }}
-          refused-command-off: ${{ github.event_name == 'workflow_dispatch' && needs.gate.outputs.authorized == 'true' && needs.gate.outputs.review != 'true' }}
+          refused-command-off: >-
+            ${{ github.event_name == 'workflow_dispatch' && inputs.comment_kind == '' &&
+            needs.gate.outputs.authorized == 'true' && needs.gate.outputs.review != 'true' }}
 
       - name: Say the authorization check could not be completed
         if: ${{ needs.gate.result == 'failure' }}
@@ -1676,7 +1722,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-recover
           repository: Kong/ksai-public
-          ref: v3.46.1
+          ref: v3.47.0
           sparse-checkout: |
             .github/scripts
           persist-credentials: false
