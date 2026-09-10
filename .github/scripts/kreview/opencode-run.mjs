@@ -187,12 +187,27 @@ function expiryOf(env, now, held) {
   return Number.isFinite(seeded) && seeded > now ? seeded : now + BROKER_PERIOD_MS * 2;
 }
 
-async function broker(at, env) {
-  const said = await writeToken(at, env).catch((error) => {
+let brokering = false;
+
+/**
+ * broker writes the run's token to the file the sandbox reads, at most one write at a time.
+ *
+ * A mint that outlasts the tick used to leave every tick behind it queued on the same refusal, and
+ * each one of those is another mint against an exchange that rate-limits exactly this. One write in
+ * flight is therefore the whole policy: a tick that arrives on top of a slow one is dropped, and the
+ * next one sixty seconds later finds the mint either finished or still worth skipping.
+ */
+export async function broker(at, env, write = writeToken) {
+  if (brokering) return false;
+  brokering = true;
+  try {
+    return await write(at, env);
+  } catch (error) {
     console.log(`::warning::the run's token could not be brokered (${error?.message}), so it holds the one it started on`);
     return false;
-  });
-  return said;
+  } finally {
+    brokering = false;
+  }
 }
 
 async function main(env = process.env) {
