@@ -10,11 +10,11 @@ const MAX_ARRAY_ITEMS = 100;
 const MAX_STRING_CHARS = 2_000;
 const FIX_KEYS = new Set(['fix', 'suggested_fix', 'patch', 'diff', 'suggestion']);
 const PATH_SEGMENT = /^(?!\.{1,2}$)[\w.+-]+$/;
-const VERDICT_KEYS = new Set(['outcome', 'summary', 'criteria', 'probes', 'findings']);
+const VERDICT_KEYS = new Set(['outcome', 'summary', 'criteria', 'probes', 'findings', 'hypothesis_results']);
 const PROBE_KEYS = new Set(['name', 'kind', 'command', 'observed', 'passed']);
 const FINDING_KEYS = new Set(['title', 'file', 'line', 'reproduction', 'evidence']);
 
-export function validateVerdict(verdict) {
+export function validateVerdict(verdict, hypotheses = null) {
   const problems = [];
   const fail = (message) => problems.push(message);
 
@@ -48,8 +48,53 @@ export function validateVerdict(verdict) {
     fail('outcome is pass and there are findings; one of the two is wrong');
   }
   findings.forEach((finding, index) => checkFinding(finding, index, fail));
+  checkHypothesisResults(verdict, hypotheses, fail);
 
   return problems;
+}
+
+const HYPOTHESIS_KEYS = new Set(['id', 'outcome', 'reason', 'probe_names', 'finding_index']);
+const HYPOTHESIS_OUTCOMES = new Set(['confirmed', 'refuted', 'insufficient_evidence']);
+
+function checkHypothesisResults(verdict, hypotheses, fail) {
+  const candidates = hypotheses?.candidates ?? [];
+  const results = verdict.hypothesis_results;
+  if (results === undefined && (!candidates.length || !['pass', 'defect'].includes(verdict.outcome))) return;
+  if (!Array.isArray(results) || results.length > 12) return fail('hypothesis_results must be an array of at most 12 results');
+  const expected = new Set(candidates.map((candidate) => candidate.id));
+  const seen = new Set();
+  for (const [index, result] of results.entries()) {
+    const where = `hypothesis_results[${index}]`;
+    if (!isObject(result)) { fail(`${where} is not an object`); continue; }
+    checkKeys(result, HYPOTHESIS_KEYS, where, fail);
+    if (!expected.has(result.id) || seen.has(result.id)) fail(`${where}.id is unknown or duplicated`);
+    seen.add(result.id);
+    if (!HYPOTHESIS_OUTCOMES.has(result.outcome)) fail(`${where}.outcome is not a hypothesis outcome`);
+    checkString(result.reason, `${where}.reason`, fail);
+    const probes = checkArray(result.probe_names, `${where}.probe_names`, { nonempty: result.outcome !== 'insufficient_evidence' }, fail);
+    if (new Set(probes).size !== probes.length) fail(`${where}.probe_names repeats a probe`);
+    for (const name of probes) {
+      checkString(name, `${where}.probe_names entry`, fail);
+      const matches = (Array.isArray(verdict.probes) ? verdict.probes : []).filter((probe) => probe?.name === name);
+      if (matches.length !== 1 || matches[0].kind !== 'product') fail(`${where} must reference unique product probes; readiness is not reproduction`);
+    }
+    if (result.outcome !== 'insufficient_evidence' && !['pass', 'defect'].includes(verdict.outcome)) fail(`${where} cannot claim verification when the run has no product verdict`);
+    if (result.outcome === 'confirmed') {
+      if (verdict.outcome !== 'defect' || !Number.isInteger(result.finding_index) || result.finding_index < 0 || result.finding_index >= (verdict.findings?.length ?? 0)) fail(`${where} needs a defect verdict and an existing finding_index`);
+    } else if (result.finding_index !== undefined) fail(`${where}.finding_index belongs only to a confirmed defect`);
+  }
+  if (candidates.some((candidate) => !seen.has(candidate.id))) fail('hypothesis_results must decide every trusted candidate exactly once');
+}
+
+export function verificationRecord(verdict, hypotheses, problems = []) {
+  if (!hypotheses) return null;
+  const rejected = problems.length > 0 || validateVerdict(verdict, hypotheses).length > 0;
+  const decisions = rejected ? [] : verdict?.hypothesis_results ?? [];
+  return { version: 1, head_sha: hypotheses.head_sha, base_sha: hypotheses.base_sha, source: 'tester-verdict', verdict_valid: !rejected,
+    results: hypotheses.candidates.map((candidate) => decisions.find((result) => result.id === candidate.id) ?? {
+      id: candidate.id, outcome: 'insufficient_evidence', probe_names: [], reason: rejected ? 'The tester verdict was rejected; no hypothesis result is accepted.' : 'No product probe decided this hypothesis.',
+    }),
+  };
 }
 
 function checkProbe(probe, index, fail) {

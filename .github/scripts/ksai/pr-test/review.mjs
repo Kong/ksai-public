@@ -82,6 +82,7 @@ export function renderReview({
   criteria,
   environments,
   problems = [],
+  verification = null,
   triggerPhrase = '',
 }) {
   const oneLine = (text) => flatten(text, triggerPhrase);
@@ -134,6 +135,12 @@ export function renderReview({
   if ((verdict.findings ?? []).length > 0) {
     lines.push('### Findings', '');
     for (const finding of verdict.findings) lines.push(...findingLines(finding, oneLine));
+  }
+
+  if (verification) {
+    lines.push('### Review hypothesis checks', '', 'These are tester-reported probe results on the head and base above.', '', '| Candidate | Result | Probes | Evidence |', '| --- | --- | --- | --- |');
+    for (const result of verification.results) lines.push(`| ${cell(result.id)} | ${cell(result.outcome)} | ${cell(result.probe_names.join(', '))} | ${cell(result.reason)} |`);
+    lines.push('');
   }
 
   lines.push(

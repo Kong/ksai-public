@@ -5,7 +5,8 @@ import { join } from 'node:path';
 
 import { isHttpUrl, KINDS } from './contract.mjs';
 import { renderReview, testerRecord } from './review.mjs';
-import { validateVerdict } from './verdict.mjs';
+import { validateVerdict, verificationRecord } from './verdict.mjs';
+import { readHypotheses } from '../../lib/review-hypotheses.mjs';
 
 const usage = `Usage: publish-cli [--run-dir <path>] [--pr <number>] [--head-sha <sha>] [--base-ref <ref>] [--base-sha <sha>] [--trigger-phrase <phrase>] [--stdout]
 
@@ -40,18 +41,29 @@ async function main(argv) {
   );
   const environmentProblems = validateEnvironments(environmentRecord);
   const environments = Array.isArray(environmentRecord) ? environmentRecord : [];
+  let hypotheses = null;
+  try {
+    hypotheses = readHypotheses(criteria?.hypotheses === undefined ? '' : JSON.stringify(criteria.hypotheses), {
+      headSha: criteria?.pull_request?.head_sha, baseSha: criteria?.pull_request?.base_sha,
+    });
+  } catch (error) {
+    criteriaProblems.push(`trusted hypothesis packet is invalid: ${error.message}`);
+  }
 
   const problems = [
-    ...(problem ? [problem] : validateVerdict(verdict)),
+    ...(problem ? [problem] : validateVerdict(verdict, hypotheses)),
     ...criteriaProblems,
     ...environmentProblems,
   ];
+  const verification = verificationRecord(verdict, hypotheses, problems);
+  await writeFile(join(runDir, 'verification.json'), JSON.stringify(verification, null, 2) + '\n', 'utf8');
   const spend = await readJson(join(runDir, 'spend.json')).catch(() => null);
   const rendered = renderReview({
     verdict: verdict ?? {},
     criteria,
     environments,
     problems,
+    verification,
     triggerPhrase: typeof options['trigger-phrase'] === 'string' ? options['trigger-phrase'] : '',
   });
   const body = spend ? `${rendered}\n\n${testerRecord({ spend, verdict, criteria, problems })}` : rendered;

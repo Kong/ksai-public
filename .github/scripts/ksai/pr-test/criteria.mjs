@@ -65,7 +65,10 @@ export async function collectCriteria({
     source: issues.some((issue) => issue.readable) ? 'closing_issue' : 'pull_request',
   };
   const packet = readHypotheses(hypotheses, { headSha: pr.headRefOid, baseSha: pr.baseRefOid });
-  if (packet) await writeFile(join(runDir, 'HYPOTHESES.json'), `${JSON.stringify(packet)}\n`, 'utf8');
+  if (packet) {
+    Object.assign(record, { hypotheses: packet });
+    await writeFile(join(runDir, 'HYPOTHESES.json'), `${JSON.stringify(packet)}\n`, 'utf8');
+  }
 
   const path = join(runDir, 'CRITERIA.md');
   await writeFile(path, render(record), 'utf8');
