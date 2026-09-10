@@ -8,7 +8,7 @@ const { ALLOWED_FLAGS, claimsAny, toPattern } = require('../lib/path-pattern.cjs
 const RULES_PATH = '.ksai/review-rules.md';
 const PACKS_PATH = '.ksai/review-rules';
 const MAX_BYTES = 16 * 1024;
-const MAX_TOTAL_BYTES = 48 * 1024;
+const MAX_TOTAL_BYTES = 96 * 1024;
 const MAX_PACKS = 16;
 const MODES = Object.freeze(['auto', 'off']);
 
