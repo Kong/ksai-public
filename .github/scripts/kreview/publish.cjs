@@ -79,6 +79,7 @@ function runSpend(raw, env = process.env) {
   const refused = deniedCalls(result, env);
 
   const outputs = {
+    review_protocol: result.review_protocol ? JSON.stringify(result.review_protocol) : '',
     total_cost: Number.isFinite(totalCost) ? totalCost.toFixed(4) : '0.0000',
     run_result: result.result ?? '',
     conclusion: result.subtype ?? '',
@@ -203,7 +204,8 @@ function evalRunRecord(env, { now = new Date() } = {}) {
       engine: env.ENGINE || 'claude',
       shadow: env.SHADOW === 'true',
       source: 'observed',
-      trial_index: 0,
+      trial_index: stagesOf(env.REVIEW_PROTOCOL)?.trial_index ?? 0,
+      review_protocol: stagesOf(env.REVIEW_PROTOCOL),
       selected_by: armRecord(env),
       repo_rules: rulesRecord(env),
       channel_notes: channelRecord(env),
@@ -337,6 +339,7 @@ function reviewRecord(env) {
     selected_by: armRecord(env),
     triage: env.TRIAGE_MODE === 'auto' ? triageRecord(env) : null,
     engine: env.ENGINE || 'claude',
+    review_protocol: stagesOf(env.REVIEW_PROTOCOL),
     repo_rules: rulesRecord(env),
     channel_notes: channelRecord(env),
     status_updates: held ? counting(held.updates) : null,

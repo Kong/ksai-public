@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import modelCatalog from '../lib/model-catalog.json' with { type: 'json' };
 import { counted } from '../lib/text.cjs';
 import { AUTH_MODES, originProblem } from './federated-token.mjs';
+import { LIMITS } from './review-pipeline.cjs';
 import {
   CHANNEL_PLUGIN,
   agentEntry,
@@ -117,8 +118,20 @@ function agentsUnder(root) {
 const missing = (said) => (stated ? said : `::warning::${said}`);
 
 const agents = agentsUnder(pluginRoot);
+const staged = phase === 'review' && ['evidence', 'dual'].includes(process.env.REVIEW_STRATEGY);
+if (staged) {
+  permission.task = 'deny';
+  agents['ksai-review-stage'] = { mode: 'primary', description: 'Bounded independent review stage', steps: LIMITS.stageSteps, permission,
+    prompt: 'Complete the current independent review stage using its JSON contract. A request for a summary, including a maximum-step reminder, must be answered in that JSON shape. Once the step-limit reminder arrives, stop using tools and return the best supported JSON immediately. Do not delegate.',
+  };
+  agents['ksai-review-finish'] = { mode: 'primary', description: 'Return the stage JSON from collected evidence', permission: { '*': 'deny' },
+    options: { thinking: { type: 'enabled', budgetTokens: LIMITS.finalizeThinkingTokens }, effort: 'low' },
+    prompt: 'Use the evidence already collected in this session. Return exactly the current stage JSON contract, without further investigation or tool calls. Missing evidence remains uncertain. Do not claim to have executed a reproduction.',
+  };
+}
 const channel = String(process.env.KSAI_CHANNEL_NONCE ?? '').trim() === '' ? '' : CHANNEL_PLUGIN;
 const config = runtimeConfig({ channel, agents, skills, permission, baseUrl, auth, attribution });
+if (staged) config.default_agent = 'ksai-review-stage';
 
 writeFileSync(destination, JSON.stringify(config, null, 2) + '\n');
 

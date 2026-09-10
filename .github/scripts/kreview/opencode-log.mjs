@@ -1,7 +1,8 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
-import { answer, collectSecrets, endedOn, everything, executionLog, parsed, scrub } from '../lib/opencode.mjs';
+import { answer, collectSecrets, endedOn, everything, executionLog, parsed, scrub, spending } from '../lib/opencode.mjs';
+import { writeOutputs } from '../lib/outputs.mjs';
 
 const require = createRequire(import.meta.url);
 const { extractReviewJson } = require('../lib/review-output.cjs');
@@ -26,7 +27,12 @@ const secrets = collectSecrets(process.env);
 // The stream is scrubbed first, before anything that can throw. It was rewritten last, so a full
 // RUNNER_TEMP answering ENOSPC on the execution file left the raw stream on disk - and the upload
 // step publishes it on `always()`, so the failure that lost the log also published the secrets.
-if (eventsFile) writeFileSync(eventsFile, scrub(raw, secrets));
+if (eventsFile) {
+  writeFileSync(eventsFile, scrub(raw, secrets));
+  writeOutputs(process.env.GITHUB_OUTPUT, {
+    events_file: eventsFile,
+  });
+}
 
 const events = parsed(raw);
 
@@ -43,12 +49,31 @@ const carries = whole !== null && said !== null && !extractReviewJson(said) && e
 if (carries) {
   console.log('::warning::the reviewer wrote its findings before its last turn, so the whole run is published');
 }
+const children = process.env.OPENCODE_CHILDREN_FILE ? JSON.parse(readFileSync(process.env.OPENCODE_CHILDREN_FILE, 'utf8')) : null;
+const staged = ['evidence', 'dual'].includes(process.env.REVIEW_STRATEGY);
 const log = executionLog({
-  events,
+  events: [...events, ...(children?.events ?? [])],
   exitCode: Number(process.env.OPENCODE_EXIT ?? 1),
   secrets,
-  said: carries ? whole : said,
+  said: staged ? (process.env.OPENCODE_REVIEW_FILE ? readFileSync(process.env.OPENCODE_REVIEW_FILE, 'utf8') : null) : carries ? whole : said,
 });
+if (process.env.FLOW === 'review') {
+  const held = process.env.REVIEW_PIPELINE_FILE ? JSON.parse(readFileSync(process.env.REVIEW_PIPELINE_FILE, 'utf8')) : null;
+  const { candidates = [], decisions = [], ...protocol } = held ?? {};
+  const metadata = process.env.PROMPT_FILE ? JSON.parse(readFileSync(`${process.env.PROMPT_FILE}.pipeline.json`, 'utf8')) : {};
+  Object.assign(log[0], { review_protocol: {
+    ...metadata.identity,
+    strategy: process.env.REVIEW_STRATEGY || 'baseline',
+    ...protocol,
+    candidates_count: held ? candidates.length : null,
+    rejected_count: held ? decisions.filter((d) => d.verdict !== 'keep').length : null,
+    measured_children: children?.sessions.length ?? null,
+    unmeasured_children: children?.missing ?? null,
+    cost_complete: spending(events).length > 0 && children !== null && children.missing === 0 && (held?.missing_usage ?? 0) === 0,
+    configured_effort: process.env.VARIANT || null,
+    thinking_wire_verified: false,
+  } });
+}
 
 writeFileSync(executionFile, JSON.stringify(log, null, 2) + '\n');
 

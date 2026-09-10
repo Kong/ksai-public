@@ -360,6 +360,23 @@ ${reviewStep(reviewers, available, conventions, common)}
    Read the tree around a hunk as the mandate requires. Anchor every finding to a concrete
    failure: the input, the sequence or the state that makes the change wrong.
 
+   Before audit, finish discovery with Additional Risk findings covering:
+
+   - Leaked secrets
+   - Security vulnerabilities, and any exposed attack surface relevant to the
+     detected language and framework.
+   - Memory leaks, resource leaks, unclosed handles, and unbounded growth
+     where applicable to the detected language and framework.
+   - Other Critical-severity issues appropriate to the detected language and
+     framework.
+
+   Step 2 is the source of truth for every file a mandate covered. Where the diff
+   also holds files outside every mandate's scope, do one bounded scan of only those files
+   for the categories above. Do NOT re-run a general whole-diff review. Emit each concrete Additional Risk issue as its own entry in
+   the \`findings\` array (same severities and tags as kreview findings), anchored to a
+   file and line. Summarize this pass in \`summary\`; if neither pass surfaced anything
+   in these dimensions, note "No additional concerns found." in the summary.
+
 3. Red-team your own findings with exactly one subagent, and do not skip this.
    You attacked the code; this attacks the findings, and it is the last gate before an
    author reads them. It is a subagent rather than a further pass of your own because the
@@ -415,22 +432,7 @@ ${budget === '' || !told || !measurable(budgetMinutes) ? '' : `
    report that reads quieter than the code is. Promote any bug it caught that you missed.
    Drop or fix every bad location.
 
-5. Gather Additional Risk findings covering:
-
-   - Leaked secrets
-   - Security vulnerabilities, and any exposed attack surface relevant to the
-     detected language and framework.
-   - Memory leaks, resource leaks, unclosed handles, and unbounded growth
-     where applicable to the detected language and framework.
-   - Other Critical-severity issues appropriate to the detected language and
-     framework.
-
-   Steps 2 to 4 are the source of truth for every file a mandate covered. Where the diff
-   also holds files outside every mandate's scope, do one bounded scan of only those files
-   for the categories above. Do NOT re-run a general whole-diff review. Emit each concrete Additional Risk issue as its own entry in
-   the \`findings\` array (same severities and tags as kreview findings), anchored to a
-   file and line. Summarize this pass in \`summary\`; if neither pass surfaced anything
-   in these dimensions, note "No additional concerns found." in the summary.
+5. Summarize the Additional Risk pass from step 2. Do not discover or promote new findings after audit.
 
 6. Deduplicate against prior findings. The <prior-findings> block above lists issues
    already posted as inline comments on this PR. Drop any finding that restates one of
@@ -443,4 +445,18 @@ ${OUTPUT_CONTRACT}
 `;
 }
 
-module.exports = { AUDIT_MINUTES, renderReviewPrompt, CONSTRAINTS };
+function renderPipelineContext(options) {
+  const rendered = renderReviewPrompt({ ...options, priorFindings: '', budgetMinutes: null });
+  const start = rendered.indexOf('\n2. Review the diff yourself');
+  if (start < 0) throw new Error('review prompt has no discovery boundary');
+  const context = rendered.slice(0, start);
+  const contract = /Your final message MUST be exactly one fenced[^]*?before or after the block\./;
+  const prior = /<prior-findings>[^]*?<\/prior-findings>/;
+  if (!contract.test(context) || !prior.test(context)) throw new Error('review prompt has no output or prior-findings boundary');
+  return context.replace(
+    contract,
+    'Your final message follows the stage contract below. Do not delegate: the trusted runner starts each independent stage.',
+  ).replace(prior, '');
+}
+
+module.exports = { AUDIT_MINUTES, renderReviewPrompt, renderPipelineContext, CONSTRAINTS };

@@ -352,6 +352,31 @@ on:
         required: false
         type: string
         default: "auto"
+      test_hypotheses:
+        description: 'Optional exact-head candidate packet for the tester; never acceptance criteria'
+        required: false
+        type: string
+        default: ''
+      review_strategy:
+        description: "baseline, evidence or dual; evidence and dual require OpenCode"
+        required: false
+        type: string
+        default: "baseline"
+      review_experiment:
+        description: "JSON exact-head replay controls; see review inputs"
+        required: false
+        type: string
+        default: ""
+      shadow_model:
+        description: "Explicit model override for the shadow; empty keeps the live model"
+        required: false
+        type: string
+        default: ""
+      shadow_strategy:
+        description: "Explicit review strategy override for the shadow; empty keeps the live strategy"
+        required: false
+        type: string
+        default: ""
       shadow_engine:
         description: >-
           run a second, silent review on this engine for a sampled share of reviews, to keep a
@@ -808,7 +833,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-help
           repository: Kong/ksai-public
-          ref: v3.42.3
+          ref: v3.43.0
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -939,6 +964,8 @@ jobs:
       - uses: $/.github/actions/ksai
         with:
           flow: review
+          review_strategy: ${{ inputs.review_strategy }}
+          review_experiment: ${{ inputs.review_experiment }}
           trigger_phrase: ${{ inputs.trigger_phrase }}
           disabled_commands: ${{ inputs.disabled_commands }}
           write_access_commands: ${{ inputs.write_access_commands }}
@@ -1092,6 +1119,7 @@ jobs:
       - uses: $/.github/actions/ksai
         with:
           flow: test
+          test_hypotheses: ${{ inputs.test_hypotheses }}
           engine: ${{ inputs.engine }}
           opencode_version: ${{ inputs.opencode_version }}
           trigger_phrase: ${{ inputs.trigger_phrase }}
@@ -1211,7 +1239,7 @@ jobs:
         with:
           token: ${{ github.token }}
           repository: Kong/ksai-public
-          ref: v3.42.3
+          ref: v3.43.0
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1241,6 +1269,10 @@ jobs:
         working-directory: ${{ runner.temp }}
         env:
           SHADOW_ENGINE: ${{ inputs.shadow_engine }}
+          LIVE_MODEL: ${{ inputs.model }}
+          SHADOW_MODEL: ${{ inputs.shadow_model }}
+          LIVE_STRATEGY: ${{ inputs.review_strategy }}
+          SHADOW_STRATEGY: ${{ inputs.shadow_strategy }}
           LIVE_ENGINE: ${{ inputs.engine }}
           SHADOW_PERCENT: ${{ vars.KSAI_SHADOW_PERCENT || inputs.shadow_percent }}
           REPOSITORY: ${{ github.repository }}
@@ -1266,6 +1298,8 @@ jobs:
         if: ${{ steps.sample.outputs.shadow == 'true' }}
         with:
           flow: review
+          review_strategy: ${{ inputs.shadow_strategy || inputs.review_strategy }}
+          review_experiment: ${{ inputs.review_experiment }}
           publish: "false"
           engine: ${{ steps.sample.outputs.engine }}
           trigger_phrase: ${{ inputs.trigger_phrase }}
@@ -1288,6 +1322,7 @@ jobs:
           verdict: ${{ needs.gate.outputs.verdict }}
           otel_endpoint: ${{ inputs.otel_endpoint }}
           model: ${{ inputs.model }}
+          shadow_model: ${{ inputs.shadow_model }}
           effort: ${{ inputs.effort }}
           allowed_models: ${{ inputs.allowed_models }}
           max_effort: ${{ inputs.max_effort }}
@@ -1641,7 +1676,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-recover
           repository: Kong/ksai-public
-          ref: v3.42.3
+          ref: v3.43.0
           sparse-checkout: |
             .github/scripts
           persist-credentials: false

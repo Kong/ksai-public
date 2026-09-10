@@ -97,6 +97,7 @@ async function writeCriteria({ options, repo, runDir }) {
     headSha: options['head-sha'],
     baseRef: options['base-ref'],
     baseSha: options['base-sha'],
+    hypotheses: process.env.TEST_HYPOTHESES || '',
   });
   await writeFile(join(runDir, 'criteria.json'), `${JSON.stringify(record, null, 2)}\n`, 'utf8');
   process.stdout.write(`${path}\n`);

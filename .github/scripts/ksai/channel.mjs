@@ -60,8 +60,8 @@ export function deadlineNote(killAtMs, flow) {
   }
   const cost = NOTICE[String(flow ?? '')] ?? '';
   return (
-    `This run is stopped at ${stamp}, epoch second ${Math.floor(at / 1000)}, ` +
-    `by a signal it cannot catch.${cost ? ` ${cost}` : ''}`
+    `Scheduled termination deadline: ${stamp}, epoch second ${Math.floor(at / 1000)}. ` +
+    `The watchdog will terminate the run at that time.${cost ? ` ${cost}` : ''}`
   );
 }
 

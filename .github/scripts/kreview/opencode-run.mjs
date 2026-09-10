@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   openSync,
+  readFileSync,
   closeSync,
   realpathSync,
   renameSync,
@@ -14,9 +15,10 @@ import { pathToFileURL } from 'node:url';
 
 import { conclusionOf, exitedOn, stopReason } from '../lib/execution-log.mjs';
 import modelCatalog from '../lib/model-catalog.json' with { type: 'json' };
-import { listed, sandboxScopes } from '../lib/opencode.mjs';
+import { answer, executionLog, listed, parsed, sandboxScopes, spending } from '../lib/opencode.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
 import { bearer, heldExpiry } from '../lib/opencode-token.mjs';
+import { completeStage, readExport, recordChildren, recordedCompletion, reviewSession } from './opencode-review.mjs';
 
 export { listed };
 
@@ -162,8 +164,9 @@ export function sandboxArgs(
 export function runArgs(env = process.env) {
   const named = String(env.MODEL ?? '').trim() || modelCatalog.aliases[modelCatalog.defaultAlias];
   const args = ['run', '--model', `anthropic/${named}`, '--format', 'json'];
+  if (env.FLOW === 'review' && ['evidence', 'dual'].includes(env.REVIEW_STRATEGY)) args.push('--agent', env.OPENCODE_REVIEW_FINALIZE === 'true' ? 'ksai-review-finish' : 'ksai-review-stage');
   const variant = String(env.VARIANT ?? '').trim();
-  if (variant) args.push('--variant', variant);
+  if (variant && !(env.FLOW === 'review' && ['evidence', 'dual'].includes(env.REVIEW_STRATEGY) && env.OPENCODE_REVIEW_FINALIZE === 'true')) args.push('--variant', variant);
   const session = String(env.OPENCODE_RESUME_SESSION ?? '').trim();
   if (session) args.push('--session', session, '--fork');
   return args;
@@ -199,7 +202,6 @@ async function main(env = process.env) {
   const execution = String(env.EXECUTION_FILE ?? '');
   writeFileSync(events, '');
   writeOutputs(env.GITHUB_OUTPUT, {
-    events_file: events,
     execution_file: execution,
   });
 
@@ -227,13 +229,42 @@ async function main(env = process.env) {
       ticking = setInterval(() => void broker(tokenFile, env), BROKER_PERIOD_MS);
       ticking.unref?.();
     }
-    const ran = spawn('bwrap', [...sandbox, 'opencode', ...runArgs(env)], {
-      stdio: [openSync(String(env.PROMPT_FILE ?? ''), 'r'), out, 'inherit'],
-    });
-    code = await new Promise((ended) => {
-      ran.on('error', () => ended(127));
-      ran.on('close', (status, signal) => ended(exitedOn(status, signal)));
-    });
+    const pipeline = env.FLOW === 'review' && ['evidence', 'dual'].includes(env.REVIEW_STRATEGY);
+    const invoke = async ({ prompt, timeoutMs = 0, resumeSession = '', finalize = false }) => {
+      const began = Date.now();
+      const offset = statSync(events).size;
+      const ran = spawn('bwrap', [...sandbox, 'opencode', ...runArgs(pipeline ? { ...env, OPENCODE_RESUME_SESSION: resumeSession, OPENCODE_REVIEW_FINALIZE: String(finalize) } : env)], {
+        stdio: ['pipe', out, 'inherit'],
+      });
+      let hardStop = null;
+      const timeout = timeoutMs ? setTimeout(() => {
+        ran.kill('SIGTERM');
+        hardStop = setTimeout(() => ran.kill('SIGKILL'), 2000);
+      }, timeoutMs) : null;
+      ran.stdin.on('error', () => {});
+      ran.stdin.end(prompt);
+      const status = await new Promise((ended) => {
+        ran.on('error', () => ended(127));
+        ran.on('close', (value, signal) => ended(exitedOn(value, signal)));
+      });
+      if (timeout) clearTimeout(timeout);
+      if (hardStop) clearTimeout(hardStop);
+      const segment = parsed(readFileSync(events).subarray(offset).toString('utf8'));
+      const [result] = executionLog({ events: segment, exitCode: status, said: answer(segment) });
+      const remaining = timeoutMs - (Date.now() - began);
+      const recorded = pipeline && status === 0 && remaining > 0 ? recordedCompletion(segment, (id) => readExport({ env, sandbox, id, timeoutMs: Math.min(15_000, remaining) })) : {};
+      return { code: status, text: recorded.text || answer(segment), completion: recorded.completion, session_id: segment.find((event) => typeof event.sessionID === 'string')?.sessionID,
+        usage: spending(segment).length ? { ...result.usage, cost_usd: result.total_cost_usd, num_turns: result.num_turns } : null };
+    };
+    const run = (options) => pipeline ? completeStage({ ...options, invoke }) : invoke(options);
+    const prompt = readFileSync(String(env.PROMPT_FILE ?? ''), 'utf8');
+    if (pipeline) {
+      Object.assign(env, await reviewSession({ env, events, prompt, run }));
+      code = Number(env.OPENCODE_REVIEW_EXIT);
+    } else code = (await run({ prompt })).code;
+  } catch {
+    code = 1;
+    console.log('::error::the model runner failed; reducing and redacting the partial stream');
   } finally {
     if (ticking) clearInterval(ticking);
     closeSync(out);
@@ -246,6 +277,13 @@ async function main(env = process.env) {
     );
   }
 
+  if (env.FLOW === 'review') {
+    try {
+      Object.assign(env, recordChildren({ env, events, sandbox }));
+    } catch {
+      console.log('::warning::child sessions could not be recorded; their usage remains unmeasured');
+    }
+  }
   const reduced = spawnSync(process.execPath, [join(String(env.SCRIPTS ?? ''), 'kreview/opencode-log.mjs')], {
     env: { ...env, OPENCODE_EXIT: String(code), OPENCODE_EVENTS_FILE: events, OPENCODE_EXECUTION_FILE: execution },
     stdio: 'inherit',
@@ -255,6 +293,9 @@ async function main(env = process.env) {
     return 1;
   }
   writeOutputs(env.GITHUB_OUTPUT, {
+    pipeline_file: env.REVIEW_PIPELINE_FILE || '',
+    children_file: env.OPENCODE_CHILDREN_FILE || '',
+    hypotheses_file: env.REVIEW_HYPOTHESES_FILE || '',
     conclusion: conclusionOf(execution),
   });
   return code;

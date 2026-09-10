@@ -1,7 +1,7 @@
 {
   "name": "kreview",
   "description": "Adversarial code review agents and skills for Kong review flows, locally and in CI",
-  "version": "1.4.2",
+  "version": "1.5.0",
   "author": {
     "name": "Kong"
   }

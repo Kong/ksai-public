@@ -209,6 +209,22 @@ inputs:
       suppression store, run report and eval record - is the same code either way.
     required: false
     default: ""
+  test_hypotheses:
+    description: 'Optional version 1 JSON candidate packet, bound to the tested head and base, at most 16 KiB. Hypotheses add probes and never replace acceptance criteria.'
+    required: false
+    default: ""
+  shadow_model:
+    description: 'Explicit bounded model override for unpublished review experiments; takes precedence over comment model flags.'
+    required: false
+    default: ''
+  review_strategy:
+    description: 'baseline keeps the existing reviewer; evidence runs independent evidence audits; dual adds an independent contract hunt. OpenCode review only.'
+    required: false
+    default: "baseline"
+  review_experiment:
+    description: 'JSON replay controls: expected_head, trial_index (0-99), prior_findings (current or ignore). Ignore requires an unpublished exact-head replay.'
+    required: false
+    default: ""
   publish:
     description: >-
       `false` runs the whole review and writes nothing to the pull request: no reaction, no start
@@ -883,6 +899,7 @@ runs:
         PUBLISH: ${{ inputs.publish }}
         DRY_RUN: ${{ inputs.dry_run }}
         MAX_TURNS: ${{ inputs.max_turns }}
+        REVIEW_STRATEGY: ${{ inputs.review_strategy }}
       run: |
         set -euo pipefail
         if [[ -n "${ENGINE}" && "${FLOW}" == "test-publish" ]]; then
@@ -915,6 +932,16 @@ runs:
           echo "::error::flow: implement refuses publish: false because paid writing must announce its progress and result"
           exit 1
         fi
+        case "${REVIEW_STRATEGY}" in
+          baseline) ;;
+          evidence|dual)
+            if [[ "${FLOW}" != "review" || "${ENGINE}" != "opencode" ]]; then
+              echo "::error::review_strategy: evidence and dual require flow: review and engine: opencode"
+              exit 1
+            fi
+            ;;
+          *) echo "::error::unknown review_strategy"; exit 1 ;;
+        esac
         echo "name=${ENGINE}" >> "$GITHUB_OUTPUT"
         echo "cli_pattern=${pattern}" >> "$GITHUB_OUTPUT"
 
@@ -948,6 +975,7 @@ runs:
         persist-credentials: false
 
     - name: Stage trusted scripts outside the workspace
+      id: staged_scripts
       if: ${{ steps.checkout_authz.outcome == 'success' }}
       shell: bash
       env:
@@ -956,6 +984,7 @@ runs:
         set -euo pipefail
         rm -rf -- "$DEST"
         cp -R -- "${GITHUB_WORKSPACE}/_ksai/.github/scripts" "$DEST"
+        echo "sha=$(git -C "${GITHUB_WORKSPACE}/_ksai" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
         cp -R -- "${GITHUB_WORKSPACE}/_ksai/.github/actions/codeowners-authz" "${DEST}/codeowners-authz"
         find "$DEST" -name '*.test.mjs' -delete
 
@@ -1349,6 +1378,8 @@ runs:
       if: ${{ inputs.flow == 'review' && steps.prompt.outputs.has_trigger == 'true' }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
+        SHADOW_MODEL: ${{ inputs.shadow_model }}
+        PUBLISH: ${{ inputs.publish }}
         PROMPT: ${{ steps.prompt.outputs.prompt_content_raw }}
         DEFAULT_MODEL: ${{ inputs.model }}
         DEFAULT_EFFORT: ${{ inputs.effort }}
@@ -1709,6 +1740,7 @@ runs:
       if: ${{ steps.test_paths.outcome == 'success' }}
       shell: bash
       env:
+        TEST_HYPOTHESES: ${{ inputs.test_hypotheses }}
         GH_TOKEN: ${{ inputs.source_org_github_token }}
         THREAD_NUM: ${{ steps.context.outputs.issue_number }}
         REPO: ${{ github.repository }}
@@ -2536,6 +2568,8 @@ runs:
         git diff --name-only "origin/${BASE_REF}...HEAD" > "${DEST}/changed-files.txt"
         stat="$(git diff --shortstat "origin/${BASE_REF}...HEAD")"
         {
+          printf 'base_sha=%s\n' "$(git rev-parse "origin/${BASE_REF}")"
+          printf 'plugin_sha=%s\n' "$(git -C _ksai rev-parse HEAD)"
           printf 'patch=%s\n' "${DEST}/diff.patch"
           printf 'files_file=%s\n' "${DEST}/changed-files.txt"
           printf 'shortstat=%s\n' "${stat# }"
@@ -3549,6 +3583,13 @@ runs:
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         CHANNEL_NONCE: ${{ steps.channel.outputs.nonce }}
+        REVIEW_STRATEGY: ${{ inputs.review_strategy }}
+        REVIEW_EXPERIMENT: ${{ inputs.review_experiment }}
+        PUBLISH: ${{ inputs.publish }}
+        COMMIT_ID: ${{ steps.checkout_pr.outputs.commit }}
+        BASE_SHA: ${{ steps.diff.outputs.base_sha }}
+        PLUGIN_SHA: ${{ steps.diff.outputs.plugin_sha }}
+        RUNTIME_SHA: ${{ steps.staged_scripts.outputs.sha }}
         ENGINE: ${{ steps.engine.outputs.name }}
         PROMPT_FILE: ${{ runner.temp }}/kreview-prompt.md
         BASE_REF: ${{ steps.base.outputs.ref }}
@@ -3772,6 +3813,7 @@ runs:
       if: ${{ steps.mint.outcome == 'success' }}
       shell: bash
       env:
+        REVIEW_STRATEGY: ${{ inputs.review_strategy }}
         OPENCODE_CONFIG: ${{ runner.temp }}/opencode-runtime.json
         KREVIEW_PLUGIN_ROOT: ${{ github.workspace }}/_ksai/plugins/kreview
         OPENCODE_MODEL: ${{ steps.write_arm.outputs.model || steps.select_test.outputs.model || steps.select_arm.outputs.model }}
@@ -4546,6 +4588,7 @@ runs:
         (inputs.flow == 'review' && steps.build_review.outcome == 'success')) }}
       shell: bash
       env:
+        REVIEW_STRATEGY: ${{ inputs.review_strategy }}
         PROMPT_FILE: ${{ steps.build_implement.outputs.file || steps.build_test.outputs.file || steps.build_review.outputs.file }}
         MODEL: ${{ steps.write_arm.outputs.model || steps.select_test.outputs.model || steps.select_arm.outputs.model }}
         VARIANT: ${{ steps.write_arm.outputs.effort || steps.select_test.outputs.effort || steps.select_arm.outputs.effort }}
@@ -4603,7 +4646,11 @@ runs:
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: ksai-opencode-events-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index || 0 }}
-        path: ${{ steps.opencode.outputs.events_file || steps.opencode_test.outputs.events_file }}
+        path: |
+          ${{ steps.opencode.outputs.events_file || steps.opencode_test.outputs.events_file }}
+          ${{ steps.opencode.outputs.pipeline_file || steps.opencode_test.outputs.pipeline_file }}
+          ${{ steps.opencode.outputs.children_file || steps.opencode_test.outputs.children_file }}
+          ${{ steps.opencode.outputs.hypotheses_file || steps.opencode_test.outputs.hypotheses_file }}
         retention-days: ${{ inputs.artifact_retention_days }}
         if-no-files-found: ignore
 
@@ -5579,6 +5626,8 @@ runs:
       env:
         RUN_RESULT: ${{ steps.report.outputs.run_result }}
         RUN_CONCLUSION: ${{ steps.report.outputs.conclusion }}
+        REVIEW_STRATEGY: ${{ inputs.review_strategy }}
+        REVIEW_PROTOCOL: ${{ steps.report.outputs.review_protocol }}
         PUBLISH: ${{ inputs.publish }}
         COMMIT_ID: ${{ steps.checkout_pr.outputs.commit }}
         PR_NUMBER: ${{ steps.context.outputs.issue_number }}
@@ -5604,6 +5653,8 @@ runs:
             commitId: process.env.COMMIT_ID,
             runResult: process.env.RUN_RESULT ?? '',
             conclusion: process.env.RUN_CONCLUSION ?? '',
+            reviewStrategy: process.env.REVIEW_STRATEGY,
+            protocol: JSON.parse(process.env.REVIEW_PROTOCOL || 'null'),
             publish: process.env.PUBLISH !== 'false',
             suppression: {
               rules: loadSuppressionRules({ bundlePath: process.env.SUPPRESSION_BUNDLE, core, fs }),
@@ -5666,6 +5717,7 @@ runs:
           steps.select_arm.outputs.stand_down_notice != '' && 'stood_down' ||
           steps.triage.outputs.skip == 'true' && 'triage_skipped' || steps.report.outputs.conclusion }}
         COST: ${{ steps.report.outputs.total_cost }}
+        REVIEW_PROTOCOL: ${{ steps.report.outputs.review_protocol }}
         HAS_RESULT: ${{ steps.report.outputs.has_result }}
         STOPPED_BY: ${{ steps.disarm_watchdog.outputs.cause }}
         INPUT_TOKENS: ${{ steps.report.outputs.input_tokens }}
@@ -5791,6 +5843,7 @@ runs:
         REPO_RULES_BYTES: ${{ steps.repo_rules.outputs.bytes }}
         PLUGIN_REF: ${{ steps.plugin_ref.outputs.ref }}
         PROMPT_REPORT: ${{ steps.select_arm.outputs.prompt_content_report }}
+        REVIEW_PROTOCOL: ${{ steps.report.outputs.review_protocol }}
         HAS_RESULT: ${{ steps.report.outputs.has_result }}
         DURATION: ${{ steps.report.outputs.duration }}
         NUM_TURNS: ${{ steps.report.outputs.num_turns }}

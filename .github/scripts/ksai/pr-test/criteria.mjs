@@ -2,6 +2,7 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { runGitHub } from './exec.mjs';
+import { readHypotheses } from '../../lib/review-hypotheses.mjs';
 
 const PR_FIELDS =
   'number,title,body,baseRefName,baseRefOid,headRefName,headRefOid,closingIssuesReferences';
@@ -14,6 +15,7 @@ export async function collectCriteria({
   headSha = null,
   baseRef = null,
   baseSha = null,
+  hypotheses = '',
 }) {
   const pr = await ghJson(['pr', 'view', String(prNumber), '--repo', repo, '--json', PR_FIELDS]);
 
@@ -62,6 +64,8 @@ export async function collectCriteria({
     issues,
     source: issues.some((issue) => issue.readable) ? 'closing_issue' : 'pull_request',
   };
+  const packet = readHypotheses(hypotheses, { headSha: pr.headRefOid, baseSha: pr.baseRefOid });
+  if (packet) await writeFile(join(runDir, 'HYPOTHESES.json'), `${JSON.stringify(packet)}\n`, 'utf8');
 
   const path = join(runDir, 'CRITERIA.md');
   await writeFile(path, render(record), 'utf8');

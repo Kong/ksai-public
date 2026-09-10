@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 
 import { writeOutputs } from '../lib/outputs.mjs';
+import { resolveModel } from '../lib/select-arm.cjs';
 
 const ENGINES = new Set(['claude', 'opencode']);
 
@@ -41,7 +42,8 @@ export function shadowEngine(engine, live) {
 
 /** decide answers the whole question one step asks: whether to run a shadow, and on which engine. */
 export function decide(env) {
-  const engine = shadowEngine(env.SHADOW_ENGINE, env.LIVE_ENGINE || 'claude');
+  const different = (env.SHADOW_MODEL && resolveModel(env.SHADOW_MODEL).toLowerCase() !== resolveModel(env.LIVE_MODEL || 'flagship').toLowerCase()) || (env.SHADOW_STRATEGY && env.SHADOW_STRATEGY !== (env.LIVE_STRATEGY || 'baseline'));
+  const engine = different && ENGINES.has(env.SHADOW_ENGINE) ? env.SHADOW_ENGINE : shadowEngine(env.SHADOW_ENGINE, env.LIVE_ENGINE || 'opencode');
   if (!engine) return { shadow: 'false', engine: '', why: 'no shadow engine, or it is the arm that already ran' };
   if (!shouldShadow({ key: `${env.REPOSITORY}#${env.PR_NUMBER}@${env.HEAD_SHA}`, percent: env.SHADOW_PERCENT })) {
     return { shadow: 'false', engine: '', why: `not in the sampled ${String(env.SHADOW_PERCENT ?? 0)}%` };

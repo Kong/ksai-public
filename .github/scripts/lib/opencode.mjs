@@ -15,7 +15,8 @@ const providerEntry = (model) => {
   const rate = modelCatalog.rates?.[model];
   if (!rate) return Object.freeze({});
   const cacheRead = Number.isFinite(rate.cacheRead) ? { cache_read: rate.cacheRead } : {};
-  return Object.freeze({ cost: Object.freeze({ input: rate.input, output: rate.output, ...cacheRead }) });
+  const thinking = modelCatalog.opencodeModels?.[model] ?? {};
+  return Object.freeze({ cost: Object.freeze({ input: rate.input, output: rate.output, ...cacheRead }), ...thinking });
 };
 
 const PROVIDER_MODELS = Object.freeze(

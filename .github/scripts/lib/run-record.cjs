@@ -14,6 +14,7 @@ const FIELDS = Object.freeze([
   'selected_by',
   'triage',
   'engine',
+  'review_protocol',
   'repo_rules',
   'channel_notes',
   'status_updates',

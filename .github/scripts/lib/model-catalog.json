@@ -91,5 +91,59 @@
       "output": 15,
       "cacheRead": 0.3
     }
+  },
+  "opencodeModels": {
+    "zai-org/GLM-5.3-Flash": {
+      "reasoning": true,
+      "limit": {
+        "context": 1000000,
+        "output": 16000
+      },
+      "options": {
+        "thinking": {
+          "type": "enabled",
+          "budgetTokens": 8192
+        },
+        "effort": "high",
+        "sendReasoning": true
+      },
+      "variants": {
+        "low": {
+          "thinking": {
+            "type": "enabled",
+            "budgetTokens": 1024
+          },
+          "effort": "low"
+        },
+        "medium": {
+          "thinking": {
+            "type": "enabled",
+            "budgetTokens": 4096
+          },
+          "effort": "medium"
+        },
+        "high": {
+          "thinking": {
+            "type": "enabled",
+            "budgetTokens": 8192
+          },
+          "effort": "high"
+        },
+        "xhigh": {
+          "thinking": {
+            "type": "enabled",
+            "budgetTokens": 12000
+          },
+          "effort": "high"
+        },
+        "max": {
+          "thinking": {
+            "type": "enabled",
+            "budgetTokens": 16000
+          },
+          "effort": "max"
+        }
+      }
+    }
   }
 }

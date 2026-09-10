@@ -14,11 +14,13 @@ const {
   renderUnauthorized,
   selectArm,
   surfaceOfEvent,
+  MODEL_SHAPE,
 } = require('../lib/select-arm.cjs');
 const { receiptOf, sourceOf } = require('../lib/request-intent.cjs');
 const { ceilingMinutes } = require('../lib/watchdog.cjs');
 const { skipsAuthor, triage } = require('../triage/policy.cjs');
-const { renderReviewPrompt } = require('./prompt.cjs');
+const { renderReviewPrompt, renderPipelineContext } = require('./prompt.cjs');
+const { STRATEGIES, experimentOf, promptDigest } = require('./review-pipeline.cjs');
 const { availableReviewers, bodyOf, resolveReviewers, sharedFields } = require('./reviewers.cjs');
 
 const PLUGIN_DIR = '_ksai/plugins/kreview';
@@ -128,6 +130,14 @@ async function selectReviewArm({ github, core, owner, repo, env }) {
     onIssue: false,
     threadRootId: env.THREAD_ROOT_ID,
   });
+  if (!result.error && env.SHADOW_MODEL) {
+    if (env.PUBLISH !== 'false' || !MODEL_SHAPE.test(env.SHADOW_MODEL)) result.error = 'shadow_model requires an unpublished review and a model ID';
+    else {
+      const shadow = selectArm({ prompt: `review --model ${env.SHADOW_MODEL}`, defaultModel: env.DEFAULT_MODEL, defaultEffort: result.effort, allowedModels: env.ALLOWED_MODELS, minEffort: env.MIN_EFFORT, maxEffort: env.MAX_EFFORT });
+      if (shadow.error) result.error = shadow.error;
+      else Object.assign(result, { model: shadow.model, selectedBy: 'override' });
+    }
+  }
   if (result.error) {
     const { error, allowed, ceiling, floor, command } = result;
     Object.assign(outputs, {
@@ -216,6 +226,16 @@ function buildReviewPrompt({ env }) {
     plugin_dir: '',
     error: '',
   };
+  const strategy = env.REVIEW_STRATEGY || 'baseline';
+  let experiment;
+  try {
+    if (!STRATEGIES.includes(strategy)) throw new Error('review_strategy must be baseline, evidence or dual');
+    if (env.RUNTIME_SHA && env.RUNTIME_SHA !== env.PLUGIN_SHA) throw new Error('review runtime and plugin checkouts disagree; retry against one immutable ref');
+    experiment = experimentOf(env.REVIEW_EXPERIMENT || '', { head: env.COMMIT_ID || '', base: env.BASE_SHA || '', plugin: env.PLUGIN_SHA || '', publish: env.PUBLISH !== 'false' });
+  } catch (error) {
+    outputs.error = error.message;
+    return { outputs, error: outputs.error };
+  }
 
   const policy = toolPolicy('review');
   const pluginRoot = `${env.WORKSPACE}/${PLUGIN_DIR}`;
@@ -247,26 +267,32 @@ function buildReviewPrompt({ env }) {
     return { outputs, error: refusal };
   }
 
-  fs.writeFileSync(
-    env.PROMPT_FILE,
-    renderReviewPrompt({
-      baseRef: env.BASE_REF,
-      workspace: env.WORKSPACE,
-      conventionsDir: env.CONVENTIONS_DIR,
-      request: env.REQUEST_HTML,
-      priorFindings: env.PRIOR_FINDINGS,
-      diffPath: env.DIFF_PATCH,
-      changedFilesPath: env.DIFF_FILES,
-      shortstat: env.DIFF_SHORTSTAT,
-      reviewers: mandates.routed,
-      available: mandates.open,
-      common,
-      auditorPath,
-      rules: env.REPO_RULES,
-      budgetMinutes: ceilingMinutes(env.JOB_TIMEOUT_MINUTES),
-      channelNonce: env.CHANNEL_NONCE,
-    }),
-  );
+  const options = {
+    baseRef: env.BASE_REF,
+    workspace: env.WORKSPACE,
+    conventionsDir: env.CONVENTIONS_DIR,
+    request: env.REQUEST_HTML,
+    priorFindings: experiment.prior_findings === 'ignore' ? '' : env.PRIOR_FINDINGS,
+    diffPath: env.DIFF_PATCH,
+    changedFilesPath: env.DIFF_FILES,
+    shortstat: env.DIFF_SHORTSTAT,
+    reviewers: mandates.routed,
+    available: mandates.open,
+    common,
+    auditorPath,
+    rules: env.REPO_RULES,
+    budgetMinutes: ceilingMinutes(env.JOB_TIMEOUT_MINUTES),
+    channelNonce: env.CHANNEL_NONCE,
+  };
+  const prompt = (strategy === 'baseline' ? renderReviewPrompt : renderPipelineContext)(options);
+  const context = renderPipelineContext({ ...options, channelNonce: null });
+  const comparable = env.WORKSPACE ? context.replaceAll(env.WORKSPACE, '<workspace>') : context;
+  fs.writeFileSync(env.PROMPT_FILE, prompt);
+  fs.writeFileSync(`${env.PROMPT_FILE}.pipeline.json`, JSON.stringify({
+      prior: experiment.prior_findings === 'ignore' ? '' : env.PRIOR_FINDINGS || '',
+      identity: { head_sha: env.COMMIT_ID, base_sha: env.BASE_SHA, plugin_sha: env.PLUGIN_SHA, runtime_sha: env.RUNTIME_SHA,
+        prompt_sha256: promptDigest(prompt), context_sha256: promptDigest(comparable), ...experiment },
+  }));
 
   Object.assign(outputs, {
     file: env.PROMPT_FILE,

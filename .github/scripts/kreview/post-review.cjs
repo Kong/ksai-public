@@ -186,8 +186,25 @@ module.exports = async ({
   suppression,
   publish = true,
   conclusion = SUCCESS,
+  reviewStrategy = 'baseline',
+  protocol = null,
 }) => {
+  if (!['baseline', 'evidence', 'dual'].includes(reviewStrategy)) throw new Error('unknown trusted review strategy');
+  const current = async () => {
+    const response = await github.rest.pulls.get({ owner, repo, pull_number: prNumber });
+    if (response.data?.head?.sha !== commitId) throw new Error('PR head moved; this review was not published');
+  };
+  const postComment = async (args) => {
+    await current();
+    return github.rest.issues.createComment(args);
+  };
+  if (publish) await current();
   const { review: parsed, reason: parseReason } = readReviewOutput(runResult);
+  if (reviewStrategy !== 'baseline' && parsed) {
+    const { findingProblem } = require('./review-pipeline.cjs');
+    if (protocol?.strategy !== reviewStrategy || protocol?.head_sha !== commitId || !Array.isArray(protocol?.published_candidates)) throw new Error('review protocol does not match the trusted run');
+    if (parsed.findings.some((finding) => findingProblem(finding) || !protocol.published_candidates.includes(finding.candidate_id))) throw new Error('review lacks independently audited evidence');
+  }
 
   if (!parsed) {
     core.warning('Structured review output missing or unparseable; posting a single comment.');
@@ -197,7 +214,7 @@ module.exports = async ({
     // the next run, which is told to drop duplicates of them. It also has to carry no marker for
     // parse compliance to stay measurable - the absence is the signal.
     if (publish) {
-      await github.rest.issues.createComment({
+      await postComment({
         owner,
         repo,
         issue_number: prNumber,
@@ -264,7 +281,7 @@ module.exports = async ({
   } catch (e) {
     core.warning(`Could not list PR files (${e.status ?? '?'}): ${e.message}. Posting body-only comment.`);
     if (publish) {
-      await github.rest.issues.createComment({
+      await postComment({
         owner,
         repo,
         issue_number: prNumber,
@@ -316,8 +333,9 @@ module.exports = async ({
 
   const body = renderSummary(parsed.summary, folded);
 
-  const postReview = (reviewBody, comments) =>
-    github.rest.pulls.createReview({
+  const postReview = async (reviewBody, comments) => {
+    await current();
+    return github.rest.pulls.createReview({
       owner,
       repo,
       pull_number: prNumber,
@@ -326,6 +344,7 @@ module.exports = async ({
       body: reviewBody,
       ...(comments ? { comments } : {}),
     });
+  };
 
   // findings_total counts what reached the PR, so it stays comparable with what the eval
   // extractor can reconstruct from posted comments. A withheld finding is counted by
@@ -353,10 +372,8 @@ module.exports = async ({
       const res = await postReview(body);
       return summarize({ inline: 0, review_id: res?.data?.id ?? null });
     } catch (e) {
-      // Same last-resort ladder as the inline path below: a stale commit_id or transient 5xx
-      // must not drop a fully body-only review.
       core.warning(`Body-only review failed (${e.status ?? '?'}): ${e.message}. Plain comment.`);
-      await github.rest.issues.createComment({ owner, repo, issue_number: prNumber, body });
+      await postComment({ owner, repo, issue_number: prNumber, body });
       return summarize({ inline: 0, posted_as: 'issue-comment' });
     }
   }
@@ -379,11 +396,8 @@ module.exports = async ({
         const res = await postReview(wholeBody);
         return summarize({ inline: 0, folded: findings.length, review_id: res?.data?.id ?? null, retried: 'body-only' });
       } catch (e3) {
-        // Last resort so a completed review is never lost (and the step never falsely trips
-        // the "run failed" notice): a plain issue comment always accepts the full text.
-        // kreview/fetch-prior.cjs scans issues.listComments too, so this still dedups.
         core.warning(`Body-only review failed (${e3.status ?? '?'}): ${e3.message}. Plain comment.`);
-        await github.rest.issues.createComment({
+        await postComment({
           owner,
           repo,
           issue_number: prNumber,

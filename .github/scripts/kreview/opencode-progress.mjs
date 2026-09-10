@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { TRIPPED, breaker, plain, rendered, summary, timeline } from '../ksai/progress.mjs';
 import { main as stagesMain } from '../ksai/stages.mjs';
 import { CLAUDE_NAME, detailed, parsed } from '../lib/opencode.mjs';
+import { sessionEvents } from './opencode-children.mjs';
 
 export { detailed };
 
@@ -35,6 +36,9 @@ function usageOf(part) {
 export function transcript(events) {
   const lines = [];
   for (const event of events) {
+    if (event?.type === 'step_start' && Number.isFinite(event.timestamp)) {
+      lines.push(JSON.stringify({ timestamp: new Date(event.timestamp).toISOString(), type: 'assistant', message: { content: [] } }));
+    }
     if (event?.type === 'step_finish') {
       const usage = usageOf(event.part);
       const at = Number(event.timestamp);
@@ -85,13 +89,6 @@ export function transcript(events) {
   return lines.join('\n');
 }
 
-/**
- * delegationsIn answers how many delegation calls a stream carries.
- *
- * They are subagents nothing here can measure: the events this engine writes carry only the parent
- * session, so a delegation's own calls are absent and cannot be recovered by splitting the stream.
- * The call itself is in the parent stream, which is what makes the count knowable at all.
- */
 export function delegationsIn(events) {
   if (!Array.isArray(events)) return 0;
   return events.filter((event) => event?.type === 'tool_use' && CLAUDE_NAME[event?.part?.tool] === 'Task').length;
@@ -99,12 +96,21 @@ export function delegationsIn(events) {
 
 function source(env = process.env) {
   const path = env.OPENCODE_EVENTS_FILE;
-  if (!path) return { text: '', why: 'No opencode event stream was named', delegations: 0 };
+  if (!path) return { text: '', why: 'No opencode event stream was named', delegations: 0, children: [] };
   try {
     const events = parsed(readFileSync(path, 'utf8'));
-    return { text: transcript(events), why: '', delegations: delegationsIn(events) };
+    let children = [];
+    let missing = delegationsIn(events);
+    try {
+      const record = JSON.parse(readFileSync(`${path}.children.json`, 'utf8'));
+      children = record.sessions.map((session) => ({ name: session.info.id, source: transcript(sessionEvents(session)) }));
+      missing = record.missing;
+    } catch {
+      children = [];
+    }
+    return { text: transcript(events), why: '', delegations: missing, children };
   } catch (error) {
-    return { text: '', why: `The opencode event stream could not be read: ${plain(error?.message)}`, delegations: 0 };
+    return { text: '', why: `The opencode event stream could not be read: ${plain(error?.message)}`, delegations: 0, children: [] };
   }
 }
 
@@ -125,11 +131,11 @@ const movedAt = (path) => {
  * one is absent rather than a run of zeroes, which a reader takes for a run that is stuck.
  */
 export function streams(env = process.env) {
-  const { text, why, delegations } = source(env);
+  const { text, why, delegations, children } = source(env);
   if (why) return { streams: [], why, dropped: 0 };
   if (text === '') return { streams: [], why: 'The opencode event stream carries no work yet', dropped: 0 };
   return {
-    streams: [{ name: '', source: text, at: movedAt(env.OPENCODE_EVENTS_FILE) }],
+    streams: [{ name: '', source: text, at: movedAt(env.OPENCODE_EVENTS_FILE) }, ...children.map((child) => ({ ...child, at: movedAt(`${env.OPENCODE_EVENTS_FILE}.children.json`) }))],
     why: '',
     dropped: delegations,
   };
@@ -139,13 +145,13 @@ export function streams(env = process.env) {
 export function main(argv) {
   const checking = argv.includes('--check');
   const measuring = argv.includes('--stages');
-  const { text, why, delegations } = source();
+  const { text, why, delegations, children } = source();
   if (why) {
     if (!checking) process.stdout.write(`${why}, so this run recorded no ${measuring ? 'stage timings' : 'timeline'}.\n`);
     return 0;
   }
   if (measuring)
-    return stagesMain(process.env, { streams: [{ name: '', source: text }], why: '', dropped: delegations });
+    return stagesMain(process.env, { streams: [{ name: '', source: text }, ...children], why: '', dropped: delegations });
   const view = timeline(text, { trim: process.env.TRIM_PREFIX });
   if (checking) {
     const verdict = breaker(view, {
