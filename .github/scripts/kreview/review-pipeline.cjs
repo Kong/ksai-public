@@ -62,6 +62,18 @@ function packet(raw) {
   return readReviewOutput(raw).review;
 }
 
+function auditProblem(review, ids) {
+  const decisions = review?.decisions;
+  if (!Array.isArray(decisions) || decisions.length !== ids.length || new Set(decisions.map((d) => d?.id)).size !== ids.length || !decisions.every((d) => ids.includes(d?.id) && ['keep', 'remove', 'insufficient_evidence'].includes(d?.verdict) && text(d?.reason))) return 'decide every original ID exactly once with a valid verdict and nonempty reason';
+  for (const decision of decisions) {
+    if (decision.verdict === 'keep') {
+      const problem = findingProblem(decision.finding);
+      if (problem) return problem;
+    }
+  }
+  return '';
+}
+
 function duplicateKey(finding) {
   return `${finding.path}\0${finding.root_cause}`.toLowerCase().replace(/\s+/g, ' ');
 }
@@ -81,7 +93,7 @@ async function runPipeline({ strategy, context, prior = '', identity, scoping = 
   if (scoping && scopes.length === 0) missing.add('scopes:empty');
   const save = () => { ledger.incomplete_stages = [...missing]; checkpoint(ledger); };
   save();
-  const stage = async (name, prompt, allowance = Number(LIMITS.stageMs), scopeId = null) => {
+  const stage = async (name, prompt, allowance = Number(LIMITS.stageMs), scopeId = null, candidateIds = null, resumeSession = '') => {
     missing.add(name);
     save();
     const began = now();
@@ -89,11 +101,11 @@ async function runPipeline({ strategy, context, prior = '', identity, scoping = 
     if (timeoutMs < LIMITS.minStageMs) return null;
     const researchMs = timeoutMs - Math.min(LIMITS.finalizeMs, Math.floor(timeoutMs / 3));
     const timedPrompt = `${prompt}\nResearch time allowance: ${Math.floor(researchMs / 1000)} seconds, including tool calls. The trusted runner reserves the remaining stage time for formatting. Return the assigned JSON before research ends; any uninvestigated assigned work means incomplete coverage.\n`;
-    const result = await run({ name, prompt: timedPrompt, timeoutMs });
+    const result = await run({ name, prompt: timedPrompt, timeoutMs, candidateIds, resumeSession });
     const parsed = result.code === 0 ? packet(result.text) : null;
     const measured = result.usage ?? null;
     const coverage = parsed?.coverage === 'complete' ? 'complete' : 'incomplete';
-    ledger.stages.push({ name, scope_id: scopeId, prompt_sha256: digest(timedPrompt), duration_ms: now() - began, timeout_ms: timeoutMs, exit_code: result.code, parse_ok: parsed !== null, coverage, usage: measured, invocations: result.invocations ?? [] });
+    ledger.stages.push({ name, scope_id: scopeId, attempt: 1 + ledger.stages.filter((entry) => entry.name === name).length, session_id: result.session_id, timed_out: result.timed_out === true, prompt_sha256: digest(timedPrompt), duration_ms: now() - began, timeout_ms: timeoutMs, exit_code: result.code, parse_ok: parsed !== null, coverage, usage: measured, invocations: result.invocations ?? [] });
     if (measured === null) ledger.missing_usage += 1;
     if (parsed && coverage === 'complete') missing.delete(name);
     save();
@@ -102,11 +114,9 @@ async function runPipeline({ strategy, context, prior = '', identity, scoping = 
   const candidates = [];
   const counts = { local: 0, contracts: 0 };
   const discoveryDeadline = started + LIMITS.totalMs - LIMITS.auditReserveMs;
-  for (const [taskIndex, { focus, scope, name }] of tasks.entries()) {
-    const remaining = discoveryDeadline - now();
-    const allowance = Math.min(remaining, Math.max(LIMITS.minStageMs, Math.floor(remaining / (tasks.length - taskIndex))));
-    const result = await stage(name, discoveryPrompt(scope.context, focus, scope.id ? scope : null), allowance, scope.id);
-    if (!result) continue;
+  const discover = async ({ focus, scope, name }, allowance, resumeSession = '') => {
+    const result = await stage(name, discoveryPrompt(scope.context, focus, scope.id ? scope : null), allowance, scope.id, null, resumeSession);
+    if (!result) return;
     const coverage = ledger.scope_plan?.scopes.find((entry) => entry.id === scope.id);
     if (coverage && result.coverage === 'complete') {
       coverage.completed_focuses.push(focus);
@@ -123,6 +133,19 @@ async function runPipeline({ strategy, context, prior = '', identity, scoping = 
       else candidates.push({ id, origin: focus, scope_id: scope.id, finding });
     }
     save();
+  };
+  const allowanceFor = (left) => {
+    const remaining = discoveryDeadline - now();
+    return Math.min(remaining, Math.max(LIMITS.minStageMs, Math.floor(remaining / left)));
+  };
+  for (const [index, task] of tasks.entries()) await discover(task, allowanceFor(tasks.length - index));
+  const retry = tasks.filter(({ name }) => {
+    const last = ledger.stages.findLast((entry) => entry.name === name);
+    return last?.timed_out && [124, 137, 143].includes(last.exit_code) && /^ses_[a-zA-Z0-9]+$/.test(last.session_id ?? '');
+  });
+  for (const [index, task] of retry.entries()) {
+    const last = ledger.stages.findLast((entry) => entry.name === task.name);
+    await discover(task, allowanceFor(retry.length - index), last.session_id);
   }
   const unique = [];
   const seen = new Map();
@@ -140,7 +163,7 @@ async function runPipeline({ strategy, context, prior = '', identity, scoping = 
   for (let start = 0; start < unique.length; start += LIMITS.batch) {
     const batch = unique.slice(start, start + LIMITS.batch);
     const name = `audit-${1 + start / LIMITS.batch}`;
-    const audited = await stage(name, auditPrompt(context, batch, prior));
+    const audited = await stage(name, auditPrompt(context, batch, prior), LIMITS.stageMs, null, batch.map((candidate) => candidate.id));
     const decisions = audited?.decisions;
     const ids = new Set(batch.map((candidate) => candidate.id));
     const valid = Array.isArray(decisions) && decisions.length === batch.length && new Set(decisions.map((d) => d?.id)).size === batch.length && decisions.every((d) => ids.has(d?.id) && ['keep', 'remove', 'insufficient_evidence'].includes(d?.verdict) && text(d?.reason));
@@ -177,4 +200,4 @@ async function runPipeline({ strategy, context, prior = '', identity, scoping = 
   return { code: missing.size ? 1 : 0, review: { summary, findings: [...kept.values()] }, ledger };
 }
 
-module.exports = { STRATEGIES, LIMITS, experimentOf, findingProblem, discoveryPrompt, auditPrompt, runPipeline, promptDigest: digest };
+module.exports = { STRATEGIES, LIMITS, experimentOf, findingProblem, discoveryPrompt, auditPrompt, auditProblem, runPipeline, promptDigest: digest };

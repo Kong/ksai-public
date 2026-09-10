@@ -9,16 +9,17 @@ import {
   renameSync,
   statSync,
   writeFileSync,
+  writeSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { conclusionOf, exitedOn, stopReason } from '../lib/execution-log.mjs';
 import modelCatalog from '../lib/model-catalog.json' with { type: 'json' };
-import { answer, executionLog, listed, parsed, sandboxScopes, spending } from '../lib/opencode.mjs';
+import { answer, collectSecrets, executionLog, listed, parsed, sandboxScopes, scrub, spending } from '../lib/opencode.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
 import { bearer, heldExpiry } from '../lib/opencode-token.mjs';
-import { completeStage, readExport, recordChildren, recordedCompletion, reviewSession } from './opencode-review.mjs';
+import { completeStage, LIMITS, readExport, recordChildren, recordedCompletion, recoverReview, reviewAnswer, reviewSession, streamFailure } from './opencode-review.mjs';
 
 export { listed };
 
@@ -240,6 +241,7 @@ async function main(env = process.env) {
 
   const out = openSync(events, 'w');
   let code = 0;
+  let deadlineExpired = false;
   let ticking = null;
   try {
     if (tokenFile) {
@@ -251,11 +253,13 @@ async function main(env = process.env) {
     const invoke = async ({ prompt, timeoutMs = 0, resumeSession = '', finalize = false }) => {
       const began = Date.now();
       const offset = statSync(events).size;
-      const ran = spawn('bwrap', [...sandbox, 'opencode', ...runArgs(pipeline ? { ...env, OPENCODE_RESUME_SESSION: resumeSession, OPENCODE_REVIEW_FINALIZE: String(finalize) } : env)], {
+      const ran = spawn('bwrap', [...sandbox, 'opencode', ...runArgs(env.FLOW === 'review' ? { ...env, OPENCODE_RESUME_SESSION: resumeSession, OPENCODE_REVIEW_FINALIZE: String(finalize) } : env)], {
         stdio: ['pipe', out, 'inherit'],
       });
       let hardStop = null;
+      let timedOut = false;
       const timeout = timeoutMs ? setTimeout(() => {
+        timedOut = true;
         ran.kill('SIGTERM');
         hardStop = setTimeout(() => ran.kill('SIGKILL'), 2000);
       }, timeoutMs) : null;
@@ -271,15 +275,33 @@ async function main(env = process.env) {
       const [result] = executionLog({ events: segment, exitCode: status, said: answer(segment) });
       const remaining = timeoutMs - (Date.now() - began);
       const recorded = pipeline && status === 0 && remaining > 0 ? recordedCompletion(segment, (id) => readExport({ env, sandbox, id, timeoutMs: Math.min(15_000, remaining) })) : {};
-      return { code: status, text: recorded.text || answer(segment), completion: recorded.completion, session_id: segment.find((event) => typeof event.sessionID === 'string')?.sessionID,
+      return { code: status, text: recorded.text || (env.FLOW === 'review' && !pipeline ? reviewAnswer(segment) : answer(segment)), completion: recorded.completion, session_id: segment.find((event) => typeof event.sessionID === 'string')?.sessionID,
+        failure: streamFailure(segment), timed_out: timedOut,
         usage: spending(segment).length ? { ...result.usage, cost_usd: result.total_cost_usd, num_turns: result.num_turns } : null };
     };
-    const run = (options) => pipeline ? completeStage({ ...options, invoke }) : invoke(options);
+    const budget = { remaining: 1 };
+    const recovering = async (options) => {
+      const result = await recoverReview({ ...options, flow: env.FLOW, invoke, budget });
+      for (const attempt of result.attempts) writeSync(out, `${JSON.stringify({ type: 'ksai_review_attempt', ...attempt })}\n`);
+      return result;
+    };
+    const run = (options) => pipeline ? completeStage({ ...options, invoke: recovering }) : env.FLOW === 'review' ? recovering(options) : invoke(options);
     const prompt = readFileSync(String(env.PROMPT_FILE ?? ''), 'utf8');
     if (pipeline) {
       Object.assign(env, await reviewSession({ env, events, prompt, run }));
       code = Number(env.OPENCODE_REVIEW_EXIT);
-    } else code = (await run({ prompt })).code;
+    } else {
+      const killAt = Number(env.KSAI_CHANNEL_KILL_AT);
+      const timeoutMs = env.FLOW === 'review' ? killAt > 0 ? Math.max(0, killAt - Date.now()) : LIMITS.totalMs : 0;
+      const result = env.FLOW === 'review' && timeoutMs === 0 ? { code: 124, timed_out: true } : await run({ prompt, timeoutMs });
+      code = result.code;
+      deadlineExpired = result.timed_out === true;
+      if (result.attempts?.length > 1) {
+        const reviewFile = `${events}.review.json`;
+        writeFileSync(reviewFile, scrub(result.text ?? '', collectSecrets(env)));
+        env.OPENCODE_REVIEW_FILE = reviewFile;
+      }
+    }
   } catch {
     code = 1;
     console.log('::error::the model runner failed; reducing and redacting the partial stream');
@@ -289,9 +311,11 @@ async function main(env = process.env) {
   }
   const reason = stopReason(code);
   console.log(`opencode exit=${code}`);
-  if (code > 128) {
+  if (deadlineExpired) {
+    console.log(`::error::${reason}; the review deadline expired, so this attempt has no finished answer`);
+  } else if (code > 128) {
     console.log(
-      `::error::${reason}; a run killed from outside is usually the runner out of memory, and nothing it wrote is a finished answer`,
+      `::error::${reason}; an external signal stopped this attempt before it returned a finished answer`,
     );
   }
 

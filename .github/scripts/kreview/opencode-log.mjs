@@ -3,6 +3,7 @@ import { createRequire } from 'node:module';
 
 import { answer, collectSecrets, endedOn, everything, executionLog, parsed, scrub, spending } from '../lib/opencode.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
+import { gatewayDiagnostics } from './opencode-review.mjs';
 
 const require = createRequire(import.meta.url);
 const { extractReviewJson } = require('../lib/review-output.cjs');
@@ -44,7 +45,8 @@ const events = parsed(raw);
  * falls back to every turn joined.
  */
 const said = answer(events);
-const whole = process.env.FLOW === 'review' ? everything(events) : null;
+const recovered = process.env.FLOW === 'review' && events.filter((event) => event.type === 'ksai_review_attempt').length > 1;
+const whole = process.env.FLOW === 'review' && !process.env.OPENCODE_REVIEW_FILE && !recovered ? everything(events) : null;
 const carries = whole !== null && said !== null && !extractReviewJson(said) && extractReviewJson(whole);
 if (carries) {
   console.log('::warning::the reviewer wrote its findings before its last turn, so the whole run is published');
@@ -55,10 +57,12 @@ const log = executionLog({
   events: [...events, ...(children?.events ?? [])],
   exitCode: Number(process.env.OPENCODE_EXIT ?? 1),
   secrets,
-  said: staged ? (process.env.OPENCODE_REVIEW_FILE ? readFileSync(process.env.OPENCODE_REVIEW_FILE, 'utf8') : null) : carries ? whole : said,
+  said: process.env.OPENCODE_REVIEW_FILE ? readFileSync(process.env.OPENCODE_REVIEW_FILE, 'utf8') : staged || recovered ? null : carries ? whole : said,
 });
 if (process.env.FLOW === 'review') {
   const held = process.env.REVIEW_PIPELINE_FILE ? JSON.parse(readFileSync(process.env.REVIEW_PIPELINE_FILE, 'utf8')) : null;
+  const completedCalls = held?.stages?.length > 0 && held.stages.every((stage) => stage.invocations?.length > 0 && stage.invocations.every((call) => call.exit_code === 0 && call.usage));
+  const measuredExit = Number(process.env.OPENCODE_EXIT) === 0 || (staged && Number(process.env.OPENCODE_EXIT) === 1 && completedCalls);
   const { candidates = [], decisions = [], scope_plan: scopePlan, ...protocol } = held ?? {};
   const coverage = scopePlan ? { scope_plan: {
     version: scopePlan.version,
@@ -82,7 +86,9 @@ if (process.env.FLOW === 'review') {
     rejected_count: held ? decisions.filter((d) => d.verdict !== 'keep').length : null,
     measured_children: children?.sessions.length ?? null,
     unmeasured_children: children?.missing ?? null,
-    cost_complete: spending(events).length > 0 && children !== null && children.missing === 0 && (held?.missing_usage ?? 0) === 0,
+    cost_complete: measuredExit && spending(events).length > 0 && !events.some((event) => event.type === 'error' || (event.type === 'ksai_review_attempt' && event.exit_code !== 0)) && children !== null && children.missing === 0 && (held?.missing_usage ?? 0) === 0,
+    stream_attempts: events.filter((event) => event.type === 'ksai_review_attempt').map(({ exit_code, session_id, failure }) => ({ exit_code, session_id, failure })),
+    gateway_failures: gatewayDiagnostics(events),
     configured_effort: process.env.VARIANT || null,
     thinking_wire_verified: false,
   } });
@@ -93,7 +99,7 @@ writeFileSync(executionFile, JSON.stringify(log, null, 2) + '\n');
 const [result] = log;
 const failure = endedOn(events);
 if (failure) {
-  console.log(`::warning::the opencode run ended on ${scrub(failure, secrets)}`);
+  console.log(`::warning::the opencode stream recorded ${scrub(failure, secrets)}`);
 }
 if (answer(events) === null) {
   console.log(`::warning::${events.length} opencode events carried no text, so this run posts no review`);
