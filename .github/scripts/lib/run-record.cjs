@@ -38,6 +38,7 @@ const DETAIL = Object.freeze([
   'rules_path',
   'rules_sha',
   'rules_bytes',
+  'rules_packs',
 ]);
 
 const VERSION = 1;

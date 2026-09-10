@@ -41,6 +41,8 @@
 
   "skillsByExtension": [
     { "ext": ".go", "skill": "go-code-review" },
+    { "ext": ".lua", "skill": "lua-code-review" },
+    { "ext": ".rockspec", "skill": "lua-code-review" },
     { "ext": ".vue", "skill": "vue-code-review" },
     { "ext": ".ts", "skill": "typescript-code-review" },
     { "ext": ".tsx", "skill": "typescript-code-review" },
@@ -54,6 +56,11 @@
 
   "skillsByPath": [
     {
+      "match": "(^|/)t/.*\\.t$",
+      "skill": "lua-code-review",
+      "why": "a Test::Nginx suite is Lua inside a Perl harness, and every Perl-classified repository in this organization is one"
+    },
+    {
       "match": "\\.(controller|module|service|resolver|guard|interceptor|pipe|filter|middleware|decorator)\\.ts$",
       "skill": "nestjs-code-review",
       "why": "NestJS names files by role, and the manifest that would prove it is not in the diff"
@@ -66,7 +73,7 @@
     }
   ],
 
-  "_skills_note": "Path rules are checked before extension rules, so a NestJS file, or a Vue/Nuxt composable or store, is not claimed by the plain TypeScript rules beneath them. They match the full path, not only the basename, which is what lets a rule key on a directory. The TypeScript and JavaScript extensions were uncovered until the gap was measured: across 420 real pull requests in seven wired repositories, 62% of reviewable lines matched no rule at all, and .ts, .mjs and .cjs were the three largest uncovered code extensions, behind only the .json and .yaml data files that no reviewer skill claims. Those files were always reviewed - by default-code-review, which carries no language catalog - so this routes them to one rather than reviewing anything that was skipped. A file no rule claims counts as uncovered, and the engine brings in default-code-review when enough of the diff is uncovered. A skill named here must exist under plugins/kreview/skills/, which a wiring test enforces.",
+  "_skills_note": "Lua is routed by extension, and Test::Nginx by path. `t/` holding `.t` is the canonical layout of an ordinary Perl distribution as much as it is the OpenResty one, so the rule was dropped once on the reasoning that no path tells the two apart - and then restored, because that risk is theoretical here and the coverage is not. Every Perl-classified repository in this organization is `lua-resty-*` or `openresty-patches`, classified Perl precisely because of the Test::Nginx suite in its `t/` directory. There is no Perl distribution in the fleet for the rule to claim, and there is a great deal of Lua in `t/` for it to cover. Path rules run first, so `.t` never reaches the extension table. `.rockspec` is a manifest rather than code, and it is deliberately not in `dependencyManifests`: a rockspec has no lockfile of its own, so it could never satisfy the pairing, and listing a manifest that can never be skipped reads as though it could. Lua was the largest uncovered surface in the fleet by a wide margin - the largest wired repository is 43.6 MB of Lua out of 52 MB, and every one of its pull requests was reviewed by `default-code-review`, which carries no language catalog at all. Path rules are checked before extension rules, so a NestJS file, or a Vue/Nuxt composable or store, is not claimed by the plain TypeScript rules beneath them. They match the full path, not only the basename, which is what lets a rule key on a directory. The TypeScript and JavaScript extensions were uncovered until the gap was measured: across 420 real pull requests in seven wired repositories, 62% of reviewable lines matched no rule at all, and .ts, .mjs and .cjs were the three largest uncovered code extensions, behind only the .json and .yaml data files that no reviewer skill claims. Those files were always reviewed - by default-code-review, which carries no language catalog - so this routes them to one rather than reviewing anything that was skipped. A file no rule claims counts as uncovered, and the engine brings in default-code-review when enough of the diff is uncovered. A skill named here must exist under plugins/kreview/skills/, which a wiring test enforces. `mise run triage:coverage` measures this now rather than leaving it to a language breakdown read by hand: over 121 repositories the median one has 52.2% of its reviewable lines covered by a language skill and 35 have none at all. Read the median rather than the line-weighted fleet total: one repository contributes 65% of every reviewable line measured, and 96% of its own are generated snapshot files that `nonReviewable` does not name, so they count toward both the size bands and the routing share. That is a finding about this table rather than about the script, and it is recorded in docs/decisions/routing-coverage.md for a change of its own. Path rules are checked before extension rules, so a NestJS file, or a Vue/Nuxt composable or store, is not claimed by the plain TypeScript rules beneath them. They match the full path, not only the basename, which is what lets a rule key on a directory. The TypeScript and JavaScript extensions were uncovered until the gap was measured: across 420 real pull requests in seven wired repositories, 62% of reviewable lines matched no rule at all, and .ts, .mjs and .cjs were the three largest uncovered code extensions, behind only the .json and .yaml data files that no reviewer skill claims. Those files were always reviewed - by default-code-review, which carries no language catalog - so this routes them to one rather than reviewing anything that was skipped. A file no rule claims counts as uncovered, and the engine brings in default-code-review when enough of the diff is uncovered. A skill named here must exist under plugins/kreview/skills/, which a wiring test enforces.",
 
   "skipAuthors": [
     { "login": "renovate[bot]" },

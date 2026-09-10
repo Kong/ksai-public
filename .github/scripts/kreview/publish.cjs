@@ -361,6 +361,7 @@ function reviewRecord(env) {
       rules_path: env.REPO_RULES_PATH || null,
       rules_sha: /^[0-9a-f]{7,40}$/.test(String(env.REPO_RULES_SHA ?? '')) ? env.REPO_RULES_SHA : null,
       rules_bytes: counting(env.REPO_RULES_BYTES),
+      rules_packs: packsRecord(env),
     },
   };
 }
@@ -369,6 +370,21 @@ function rulesRecord(env) {
   const mode = String(env.REPO_RULES_MODE ?? '');
   if (mode === '') return null;
   return !(mode === 'off' || env.REPO_RULES_ENABLED !== 'true');
+}
+
+function packsRecord(env) {
+  const raw = String(env.REPO_RULES_PACKS ?? '');
+  if (raw === '') return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) return null;
+  return parsed
+    .filter((pack) => pack && typeof pack.name === 'string')
+    .map((pack) => ({ name: pack.name, bytes: counting(pack.bytes), matched: pack.matched === true }));
 }
 
 function armRecord(env) {

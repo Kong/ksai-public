@@ -34,6 +34,7 @@
 'use strict';
 
 const { ALLOWED_EFFORTS, MODEL_TIERS } = require('../lib/select-arm.cjs');
+const { toPattern } = require('../lib/path-pattern.cjs');
 
 /*
  * A language claims a skill once it accounts for this much of the reviewable diff. Below it the
@@ -48,14 +49,6 @@ const ROUTING_SHARE = 0.2;
 
 /* At most this many skills, so a polyglot diff cannot fan out into every reviewer at once. */
 const MAX_SKILLS = 2;
-
-/*
- * The flag allowlist for a rule pattern, which admits `i` and nothing else. A `g` flag makes a
- * RegExp stateful across `.test()` calls through `lastIndex`, so the same path would match on one
- * file and miss on the next depending on what ran before it -- a bug that shows up as a rule
- * working intermittently, which is the hardest kind to catch in a review.
- */
-const ALLOWED_FLAGS = /^i?$/;
 
 /* The ruleset that changes nothing, and what any unusable rules file resolves to. */
 const EMPTY_RULES = Object.freeze({
@@ -77,23 +70,10 @@ const EMPTY_RULES = Object.freeze({
 const isPlainString = (value) => typeof value === 'string' && value.length > 0;
 
 /*
- * Turns one `{ match, flags }` entry into a RegExp, or null if it cannot.
- *
  * A rule that will not compile is dropped rather than thrown on. The rules file ships in this
  * repository and a test validates it, so a bad pattern is caught in CI where it is loud; at runtime
  * the same bad pattern must not take every consumer's review down with it.
  */
-function toPattern(entry) {
-  if (!entry || !isPlainString(entry.match)) return null;
-  const flags = entry.flags ?? '';
-  if (typeof flags !== 'string' || !ALLOWED_FLAGS.test(flags)) return null;
-  try {
-    return new RegExp(entry.match, flags);
-  } catch {
-    return null;
-  }
-}
-
 const compilePatterns = (list) =>
   (Array.isArray(list) ? list : [])
     .map((entry) => ({
@@ -487,6 +467,7 @@ module.exports = {
   // from a whole-diff verdict.
   isReviewable,
   skillFor,
+  extension,
   summarize,
   route,
   tierFor,

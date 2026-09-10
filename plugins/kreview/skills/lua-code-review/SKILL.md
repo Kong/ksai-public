@@ -1,19 +1,13 @@
 ---
-name: default-code-review
-description: Adversarial fallback code review for any language or framework that has no dedicated kreview skill. Orchestrates an adversarial reviewer over the diff against language-agnostic axes (correctness, edge cases, concurrency, failure paths, security, data integrity, hidden assumptions, tests that don't test), then audits the findings with a findings auditor before reporting. Use when reviewing a PR or diff whose primary language/framework has no matching kreview skill (e.g. Rust, Python, Terraform, YAML/config-only, shell) — this is the catch-all, not a per-language specialist.
+name: lua-code-review
+description: Adversarial Lua code review for .lua files, rockspecs, Test::Nginx .t suites, and PRs with OpenResty or Kong Gateway plugin code. Orchestrates an adversarial reviewer over the diff against a catalog of Lua, LuaJIT, OpenResty and Kong PDK mistakes, then audits the findings with a findings auditor before reporting. Use when reviewing Lua changes, an OpenResty or Kong plugin PR, or assessing Lua implementation quality.
 argument-hint: "<pr-url|file-paths|diff> [--no-audit]"
 allowed-tools: Agent, Task, Bash, Read, Grep, Glob
 ---
 
-# Default Code Review
+# Lua Code Review
 
-Orchestrate an adversarial review with no language-specific knowledge base. The skill resolves the diff, reviews it under the [`default-code-reviewer`](reviewer.md) mandate beside this file, then runs the [`findings-auditor`](../../agents/findings-auditor.md) agent to red-team the findings before anything reaches the user. Two passes: one attacks the **code**, the next attacks the **findings**.
-
-This is the fallback path: try a language-specific kreview skill first (e.g.
-`go-code-review`, `lua-code-review`, `vue-code-review`, `nestjs-code-review`, `typescript-code-review`). Reach for this skill only when none matches the
-diff's primary language or framework — it substitutes universal correctness/security axes
-for a per-language mistake catalog, so it catches fewer idiom-specific issues than a
-dedicated reviewer would.
+Orchestrate an adversarial Lua review. The skill resolves the diff, reviews it under the [`lua-code-reviewer`](reviewer.md) mandate beside this file, then runs the [`findings-auditor`](../../agents/findings-auditor.md) agent to red-team the findings before anything reaches the user. Two passes: one attacks the **code**, the next attacks the **findings**.
 
 > **This skill is the standalone path.** It resolves a target, reviews the diff under the mandate
 > beside it, and spawns one subagent to audit what it found. The CI review flow does not run this
@@ -38,8 +32,8 @@ Flags (parse from `$ARGUMENTS`, strip before resolving the target):
 
 ### 1. Resolve the target
 
-Take the diff from the path the invocation names, reading it once. Where it names none, determine the diff and the full list of changed files. If the diff is empty, say so and
-stop. For a PR, capture title/body so the reviewer can respect stated intent.
+Take the diff from the path the invocation names, reading it once. Where it names none, determine the diff and the changed Lua files — `.lua`, `.rockspec`, and the `.t` files under `t/` carrying Test::Nginx Lua blocks. If nothing Lua-related changed, say so and stop.
+For a PR, capture title/body so the reviewer can respect stated intent.
 
 ### 2. Adversarial review (you are the reviewer)
 
@@ -60,10 +54,12 @@ What the mandate needs from you, whether you hold it or hand it on:
 
 - The diff. Take the **path** when the invocation names one and read it once; a pasted diff is
   the whole thing typed again, and what a caller writes is the slowest part of a review.
-- The list of changed files, and the PR title and body when reviewing a PR.
+- The list of changed Lua files, and the PR title and body when reviewing a PR.
 - The catalogs and policies it names, at these paths:
 
   ```text
+  knowledge_base: ${CLAUDE_PLUGIN_ROOT}/skills/lua-code-review/knowledge-base.md
+  real_world_patterns: ${CLAUDE_PLUGIN_ROOT}/skills/lua-code-review/real-world-patterns.md
   review_instructions: ${CLAUDE_PLUGIN_ROOT}/resources/review-instructions.md
   format_policy: ${CLAUDE_PLUGIN_ROOT}/resources/format-policy.md
   ```
@@ -76,10 +72,14 @@ What the mandate needs from you, whether you hold it or hand it on:
 
 - The tooling and shell constraints the invocation carries. You cannot run this repository's
   tooling — no test runner, build, compile, lint, formatter or package manager — and a catalog
-  naming `go test` or `node --test` describes what to look for, never something to run. One
+  naming a spec runner or a linter describes what to look for, never something to run. One
   measured review spent nine of ten denied calls on a test runner. Every Bash call is a single
   plain command, since the allowlist matches the start of the command, so a loop, pipeline,
   `&&` chain, redirection or `git -C <path>` matches nothing.
+
+A Lua review turns on where the code runs, which the mandate covers in full: settle the nginx
+phase, whether the code sits on the request path, and how long its state lives before judging a
+line, because the same line is correct in one of those places and a fault in another.
 
 Produce prioritized findings, each with a severity, a tag and a `relative_file_path:line`
 location, and a one-line verdict.
@@ -95,8 +95,7 @@ breaks false positives, right-sizes severity, kills duplicates, and corrects hal
 
 1. Try `subagent_type: "kreview:findings-auditor"`.
 2. On unknown subagent type, retry with `subagent_type: "general-purpose"` and prepend the
-   auditor's mandate by reading
-   [../../agents/findings-auditor.md](../../agents/findings-auditor.md)
+   auditor's mandate by reading [../../agents/findings-auditor.md](../../agents/findings-auditor.md)
    into the prompt.
 
 The prompt MUST include, verbatim:
@@ -107,7 +106,7 @@ The prompt MUST include, verbatim:
   slowest part of a review. Paste a diff only when the invocation carried no path, which is how
   a human running this skill by hand usually reaches it.
 - The list of changed files.
-- The name of the reviewer that produced them, `default-code-reviewer`, whose severity rubric the auditor enforces.
+- The name of the reviewer that produced them, `lua-code-reviewer`, whose severity rubric the auditor enforces.
 - The tooling and shell constraints, verbatim when the invocation carries them. The auditor
   re-verifies each finding against the code, which makes it the agent most likely to reach for a
   test runner or a linter, and every attempt is a denied call that costs a turn. It cannot build,
@@ -140,16 +139,13 @@ Apply the auditor's verdict before presenting anything:
 ## Output
 
 ```markdown
-# Default Code Review: <target>
-
-_No kreview skill matches this diff's primary language/framework — reviewed against
-language-agnostic axes instead of a per-language mistake catalog._
+# Lua Code Review: <target>
 
 ## Summary
 
-| Verdict | Critical/High |
+| Verdict | <APPROVE \| APPROVE_WITH_COMMENTS \| REQUEST_CHANGES> |
 | --- | --- |
-| <APPROVE \| APPROVE_WITH_COMMENTS \| REQUEST_CHANGES> | <count> |
+| Critical/High | <count> |
 
 ## Findings
 <Findings after the audit pass, ordered by severity, in format-policy format.
@@ -158,6 +154,8 @@ Mark high-confidence findings that survived scrutiny.>
 
 ## Reference
 
+- Lua, LuaJIT and OpenResty mistakes catalog: [knowledge-base.md](knowledge-base.md)
+- Real-world PR patterns: [real-world-patterns.md](real-world-patterns.md)
 - Code reviewer mandate: [reviewer.md](reviewer.md)
 - Findings auditor: [../../agents/findings-auditor.md](../../agents/findings-auditor.md)
 - Output format & severities: `../../resources/format-policy.md`

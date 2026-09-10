@@ -82,6 +82,7 @@ const SECTION_TAGS = Object.freeze([
   tagPattern('user', 'request'),
   tagPattern('prior', 'findings'),
   tagPattern('repo', 'review', 'rules'),
+  tagPattern('reviewer', 'mandate'),
 ]);
 
 /** neutralizeSections answers `value` with the review prompt's own section delimiters marked as well. */
