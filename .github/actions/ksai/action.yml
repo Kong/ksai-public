@@ -3485,7 +3485,23 @@ runs:
         VERSION: ${{ inputs.opencode_version }}
       run: |
         set -euo pipefail
-        npm install --global "opencode-ai@${VERSION}"
+        cached="/opt/ksai-tools/opencode/${VERSION}/linux-x64/bin/opencode"
+        if [[ "${RUNNER_OS}" == 'Linux' && "${RUNNER_ARCH}" == 'X64' && "${VERSION}" == '1.18.30' && -f "${cached}" && -x "${cached}" ]] &&
+          echo "87bd160e053af86b5b409daabf71f8dc05bbc3a2a3a5f563f36011cdf706a999  ${cached}" | sha256sum --check --status; then
+          selected="${cached}"
+          echo "Reusing verified OpenCode ${VERSION}"
+        else
+          if [[ -f "${cached}" ]]; then
+            echo "::warning::Baked OpenCode cache is unusable for this run; installing from npm"
+          fi
+          npm install --global "opencode-ai@${VERSION}"
+          selected="$(npm prefix --global)/bin/opencode"
+        fi
+        tool_bin="${RUNNER_TEMP}/ksai-opencode/bin"
+        mkdir -p "${tool_bin}"
+        ln -sfn "${selected}" "${tool_bin}/opencode"
+        export PATH="${tool_bin}:${PATH}"
+        echo '${{ runner.temp }}/ksai-opencode/bin' >> "$GITHUB_PATH"
         actual="$(opencode --version)"
         echo "opencode ${actual}"
         case "${actual}" in
@@ -3701,8 +3717,12 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        sudo apt-get update
-        sudo apt-get install -y bubblewrap socat
+        if [[ ! -x /usr/bin/bwrap || ! -x /usr/bin/socat ]]; then
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap socat
+        else
+          echo "Reusing installed sandbox packages"
+        fi
         sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
 
         # CLI 2.1.216 onward collects .mcp.json deny paths by walking all the way to / from both

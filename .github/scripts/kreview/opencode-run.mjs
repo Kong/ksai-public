@@ -100,7 +100,11 @@ export function sandboxArgs(
     MASKED_RUNTIME,
     ...resolverBinds(real),
   ];
-  if (temp) args.push('--tmpfs', temp);
+  if (temp) {
+    args.push('--tmpfs', temp);
+    const tools = join(temp, 'ksai-opencode', 'bin');
+    if (exists(tools)) args.push('--ro-bind', tools, tools);
+  }
 
   for (const name of MASKED_HOMES) {
     const at = join(home, name);
