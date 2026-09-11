@@ -49,6 +49,17 @@ outputs:
       the command the control plane decided this run is for, or empty where it decided none - which is
       every run answering a comment, since a comment names its own
     value: ${{ steps.record.outputs.command }}
+  label:
+    description: >-
+      the label a run nobody typed rests on, or empty. It names a fact for the runner to read back from
+      GitHub - that the pull request still carries it, and who applied it - and grants nothing by itself
+    value: ${{ steps.record.outputs.label }}
+  pr:
+    description: the pull request the record was decided for, or empty
+    value: ${{ steps.record.outputs.pr }}
+  head_sha:
+    description: the head commit the record was decided for, or empty; a run finding the head moved stands down
+    value: ${{ steps.record.outputs.head_sha }}
 
 runs:
   using: composite
@@ -78,3 +89,6 @@ runs:
           }
           core.setOutput('read', answer.read ? 'true' : 'false');
           core.setOutput('command', answer.command);
+          core.setOutput('label', answer.label);
+          core.setOutput('pr', answer.pr);
+          core.setOutput('head_sha', answer.head_sha);

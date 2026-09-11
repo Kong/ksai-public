@@ -86,6 +86,26 @@ inputs:
       back: an id without it names an identity rather than a comment to route off.
     required: false
     default: ""
+  record_command:
+    description: >-
+      the command the dispatch record names, read by the job around this action over the run's own OIDC
+      token. `fix` with a label below starts a run nobody typed; anything else leaves today's routing alone
+    required: false
+    default: ""
+  record_label:
+    description: >-
+      the label the record says the run rests on. The gate reads back that the pull request still carries
+      it and who applied it, and authorizes that account; the label grants nothing by itself
+    required: false
+    default: ""
+  record_pr:
+    description: the pull request the record was decided for; the label is read there and nowhere else
+    required: false
+    default: ""
+  record_head_sha:
+    description: the head commit the record was decided for; a pull request whose head has moved stands the run down
+    required: false
+    default: ""
   app_slug:
     description: >-
       the App this flow authenticates as, which is what a dispatched comment's starter is measured against.
@@ -255,6 +275,10 @@ runs:
       if: ${{ inputs.authorization_github_token != '' }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
+        RECORD_COMMAND: ${{ inputs.record_command }}
+        RECORD_LABEL: ${{ inputs.record_label }}
+        RECORD_PR: ${{ inputs.record_pr }}
+        RECORD_HEAD_SHA: ${{ inputs.record_head_sha }}
         REQUESTER: ${{ inputs.requester }}
         COMMENT_ID: ${{ inputs.comment_id }}
         COMMENT_KIND: ${{ inputs.comment_kind }}
@@ -284,6 +308,10 @@ runs:
       id: trigger
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
+        RECORD_COMMAND: ${{ inputs.record_command }}
+        RECORD_LABEL: ${{ inputs.record_label }}
+        RECORD_PR: ${{ inputs.record_pr }}
+        RECORD_HEAD_SHA: ${{ inputs.record_head_sha }}
         TRIGGER: ${{ inputs.trigger_phrase }}
         DISABLED_COMMANDS: ${{ inputs.disabled_commands }}
         WRITE_ACCESS_COMMANDS: ${{ inputs.write_access_commands }}

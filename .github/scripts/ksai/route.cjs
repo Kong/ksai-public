@@ -39,6 +39,7 @@ const {
   resolveOnIssue,
   threadRootOf,
 } = require('./context.cjs');
+const { labelReaders, readLabelBasis, recordBasis } = require('./label-basis.cjs');
 const { classifyTarget } = require('./dispatch.cjs');
 const { bareMode, ownPull, ownSurface } = require('./bare.cjs');
 const loadKsaiConfig = require('./config.cjs');
@@ -162,6 +163,13 @@ async function resolvedWriteCommands({ core, env, readConfig }) {
 }
 
 async function resolveRequester({ github, context, env }) {
+  const basis = recordBasis(env);
+  if (basis?.error) return { login: '', failure: basis.error };
+  if (basis) {
+    const read = await readLabelBasis({ basis, ...labelReaders({ github, context }) });
+    return read.error ? { login: '', failure: read.error } : { login: read.login, failure: null };
+  }
+
   const held = await resolveDispatchedComment({
     eventName: context.eventName,
     commentId: env.COMMENT_ID,
@@ -187,7 +195,37 @@ async function resolveRequester({ github, context, env }) {
   return { login, failure: null };
 }
 
+async function routeLabelled({ github, core, context, env, basis }) {
+  const decision = decide({ command: basis.command, spelled: basis.command, onIssue: false, disabledCommands: env.DISABLED_COMMANDS });
+  let pending;
+  const readConfig = () => {
+    pending ??= loadKsaiConfig({ github, core, owner: context.repo.owner, repo: context.repo.repo });
+    return pending;
+  };
+  core.setOutput('review', decision.review ? 'true' : 'false');
+  core.setOutput('implement', decision.implement ? 'true' : 'false');
+  core.setOutput('test', decision.test ? 'true' : 'false');
+  core.setOutput('help', decision.help ? 'true' : 'false');
+  core.setOutput('command', COMMANDS.includes(decision.command) ? decision.command : '');
+  core.setOutput('classify', 'false');
+  core.setOutput('own_pull', 'false');
+  core.setOutput('thread_root_id', '');
+  core.setOutput('on_issue', 'false');
+  core.setOutput('issue_number', String(basis.pr));
+  core.setOutput('requested', 'true');
+  core.setOutput('write_access_commands', await resolvedWriteCommands({ core, env, readConfig }));
+  core.info(`A label on pull request #${basis.pr} asked for \`${basis.command}\` at ${basis.headSha}.`);
+  return decision;
+}
+
 async function route({ github, core, context, env }) {
+  const basis = recordBasis(env);
+  if (basis?.error) {
+    core.setFailed(basis.error);
+    return null;
+  }
+  if (basis) return routeLabelled({ github, core, context, env, basis });
+
   const readers = commentReaders({ github, context });
   const dispatched = await resolveDispatchedComment({
     eventName: context.eventName,

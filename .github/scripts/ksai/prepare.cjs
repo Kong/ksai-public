@@ -24,7 +24,8 @@ const {
   verdictFromExecution,
 } = require('./classify.cjs');
 const { bareMode, ownPull, ownSurface, renderNudge, renderUnaddressed } = require('./bare.cjs');
-const { afterTrigger } = require('../lib/text.cjs');
+const { DEFAULT_TRIGGER_PHRASE, afterTrigger } = require('../lib/text.cjs');
+const { labelReaders, readLabelBasis, recordBasis } = require('./label-basis.cjs');
 const loadKsaiConfig = require('./config.cjs');
 const {
   AUTHZ_REASONS,
@@ -451,14 +452,20 @@ function dispatchedActor(env) {
   return env.FLOW === 'review' && named !== '' ? named : String(env.IN_TRIGGERING_ACTOR ?? '');
 }
 
-async function resolveRunContext({ github, context, env }) {
-  const commented = context.eventName === COMMENT_EVENT || context.eventName === REVIEW_COMMENT_EVENT;
-  const surfaced = String(context.payload?.issue?.number ?? context.payload?.pull_request?.number ?? '');
-  const refuse = (failure) => ({
-    outputs: { refusal: failure, refused_on: commented ? surfaced : '' },
-    failure,
+function labelledContext(labelled) {
+  return resolveContext({
+    eventName: CONTINUATION_EVENT,
+    payload: {},
+    inputs: {
+      issue_number: String(labelled.pr),
+      comment_body: `${DEFAULT_TRIGGER_PHRASE} ${labelled.command}`,
+      triggering_actor: labelled.login,
+      on_issue: 'false',
+    },
   });
+}
 
+async function eventContext({ github, context, env, commented }) {
   const dispatched = await resolveDispatchedComment({
     eventName: context.eventName,
     commentId: env.IN_COMMENT_ID,
@@ -468,7 +475,7 @@ async function resolveRunContext({ github, context, env }) {
     appSlug: env.IN_APP_SLUG,
     ...commentReaders({ github, context }),
   });
-  if (dispatched.error) return refuse(dispatched.error);
+  if (dispatched.error) return { error: dispatched.error };
 
   const pullsGet = (pull_number) => github.rest.pulls.get({ ...context.repo, pull_number });
 
@@ -480,7 +487,7 @@ async function resolveRunContext({ github, context, env }) {
         issueNumber: dispatched.held ? String(dispatched.number) : env.IN_ISSUE_NUMBER,
         pullsGet,
       });
-  if (surface.error) return refuse(surface.error);
+  if (surface.error) return { error: surface.error };
 
   const carried = dispatched.held
     ? asCommentEvent({ dispatched, onIssue: surface.onIssue, payload: context.payload })
@@ -502,6 +509,23 @@ async function resolveRunContext({ github, context, env }) {
       on_issue: surface.onIssue ? 'true' : 'false',
     },
   });
+  return out;
+}
+
+async function resolveRunContext({ github, context, env }) {
+  const commented = context.eventName === COMMENT_EVENT || context.eventName === REVIEW_COMMENT_EVENT;
+  const surfaced = String(context.payload?.issue?.number ?? context.payload?.pull_request?.number ?? '');
+  const refuse = (failure) => ({
+    outputs: { refusal: failure, refused_on: commented ? surfaced : '' },
+    failure,
+  });
+
+  const basis = recordBasis(env);
+  if (basis?.error) return refuse(basis.error);
+  const labelled = basis ? await readLabelBasis({ basis, ...labelReaders({ github, context }) }) : null;
+  if (labelled?.error) return refuse(labelled.error);
+
+  const out = labelled ? labelledContext(labelled) : await eventContext({ github, context, env, commented });
   if (out.error) return refuse(out.error);
 
   const outputs = {

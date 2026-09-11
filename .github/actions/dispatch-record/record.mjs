@@ -15,7 +15,18 @@ const WHY_STATUS = Object.freeze({
   503: 'the control plane could not reach its records',
 });
 
-const unread = (why) => ({ read: false, command: '', why });
+const PR_SHAPE = /^[1-9][0-9]{0,9}$/;
+
+const SHA_SHAPE = /^[0-9a-fA-F]{40}$/;
+
+const LABEL_MAX = 50;
+
+const hasControl = (text) => [...text].some((character) => {
+  const point = character.codePointAt(0) ?? 0;
+  return point < 32 || point === 127;
+});
+
+const unread = (why) => ({ read: false, command: '', label: '', pr: '', head_sha: '', why });
 
 /**
  * bare reports whether an endpoint is an https URL with a host and nothing a request would carry
@@ -103,10 +114,26 @@ export async function readRecord({
     return unread('the control plane answered something other than a record');
   }
 
-  const command = /** @type {Record<string, unknown>} */ (served).command;
-  if (command === undefined) return { read: true, command: '', why: '' };
-  if (typeof command !== 'string' || !COMMANDS.includes(command)) {
+  const record = /** @type {Record<string, unknown>} */ (served);
+  const { command, label, pr, head_sha: headSha } = record;
+  if (command !== undefined && (typeof command !== 'string' || !COMMANDS.includes(command))) {
     return unread('the record names a command this runner does not answer');
   }
-  return { read: true, command, why: '' };
+  if (label !== undefined && (typeof label !== 'string' || label === '' || label.length > LABEL_MAX || hasControl(label))) {
+    return unread('the record names a label GitHub could not hold');
+  }
+  if (pr !== undefined && (typeof pr !== 'string' || !PR_SHAPE.test(pr))) {
+    return unread('the record names a pull request that is not a number');
+  }
+  if (headSha !== undefined && (typeof headSha !== 'string' || !SHA_SHAPE.test(headSha))) {
+    return unread('the record names a head that is not a commit');
+  }
+  return {
+    read: true,
+    command: command ?? '',
+    label: label ?? '',
+    pr: pr ?? '',
+    head_sha: typeof headSha === 'string' ? headSha.toLowerCase() : '',
+    why: '',
+  };
 }

@@ -200,6 +200,20 @@ inputs:
       words carried in `comment_body`.
     required: false
     default: ""
+  fleet_dials_endpoint:
+    description: >-
+      Base URL of the control plane that dispatched this run, or empty. The dispatch record is read from it
+      with `record_id` over the run's own OIDC token, so the record names only what the control plane
+      decided for this run
+    required: false
+    default: ""
+  record_id:
+    description: >-
+      The dispatch record the control plane named, or empty. A record naming `fix` and a label starts a
+      run nobody typed, authorized as whoever applied that label, and only while the pull request still
+      carries it at the head the record was decided for
+    required: false
+    default: ""
   app_slug:
     description: >-
       the App this flow authenticates as, which is what a dispatched comment's starter is measured against.
@@ -1015,6 +1029,7 @@ runs:
         ref: ${{ steps.plugin_ref.outputs.ref }}
         sparse-checkout: |
           .github/actions/codeowners-authz
+          .github/actions/dispatch-record
           .github/actions/ksai-jira-report
           .github/scripts
         persist-credentials: false
@@ -1082,11 +1097,25 @@ runs:
           const { writeGatewayTokenHelper } = require(`${process.env.SCRIPTS}/ksai/gateway-token.cjs`);
           core.setOutput('helper', writeGatewayTokenHelper({ core, audience: process.env.BASE_URL }));
 
+    - name: Read the dispatch record
+      id: dispatch_record
+      if: >-
+        ${{ steps.checkout_authz.outcome == 'success' && inputs.flow == 'implement' &&
+        inputs.record_id != '' }}
+      uses: ./_ksai/.github/actions/dispatch-record
+      with:
+        endpoint: ${{ inputs.fleet_dials_endpoint }}
+        record_id: ${{ inputs.record_id }}
+
     - name: Resolve the run context
       id: context
       if: ${{ steps.checkout_authz.outcome == 'success' && inputs.flow != 'test-publish' }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
+        RECORD_COMMAND: ${{ steps.dispatch_record.outputs.command }}
+        RECORD_LABEL: ${{ steps.dispatch_record.outputs.label }}
+        RECORD_PR: ${{ steps.dispatch_record.outputs.pr }}
+        RECORD_HEAD_SHA: ${{ steps.dispatch_record.outputs.head_sha }}
         FLOW: ${{ inputs.flow }}
         IN_ISSUE_NUMBER: ${{ inputs.issue_number }}
         IN_WORK_REF: ${{ inputs.work_ref }}
