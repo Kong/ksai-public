@@ -41,18 +41,14 @@ const OWNER_IN_PATH = /(?<![A-Za-z0-9._+-])github\.com\/([A-Za-z0-9][A-Za-z0-9-]
 
 const MAX_CASINGS = 4;
 
-function recase(pairs, text, whole = true) {
-  const read = String(text ?? '');
+function recase(pairs, text) {
   const minted = new Map(pairs.map((pair) => [pair.owner.toLowerCase(), pair]));
   const spellings = new Map(pairs.map((pair) => [pair.owner.toLowerCase(), []]));
-  const named = new Set();
   const capped = [];
-  for (const [, owner] of read.matchAll(OWNER_IN_PATH)) {
+  for (const [, owner] of String(text ?? '').matchAll(OWNER_IN_PATH)) {
     const key = owner.toLowerCase();
     const pair = minted.get(key);
-    if (!pair || !OWNER.test(owner)) continue;
-    named.add(key);
-    if (owner === pair.owner) continue;
+    if (!pair || owner === pair.owner || !OWNER.test(owner)) continue;
     const found = spellings.get(key);
     if (found.includes(owner)) continue;
     if (found.length >= MAX_CASINGS) {
@@ -69,9 +65,7 @@ function recase(pairs, text, whole = true) {
   }
   const out = [];
   for (const pair of pairs) {
-    const key = pair.owner.toLowerCase();
-    if (whole && read !== '' && !named.has(key)) continue;
-    out.push(pair, ...spellings.get(key).map((owner) => ({ owner, token: pair.token })));
+    out.push(pair, ...spellings.get(pair.owner.toLowerCase()).map((owner) => ({ owner, token: pair.token })));
   }
   return out;
 }

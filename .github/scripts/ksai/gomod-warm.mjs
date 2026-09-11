@@ -41,32 +41,21 @@ function toolchainOf(workspace) {
 function modulesIn(workspace, dirs) {
   const read = [];
   let left = MODULE_READ_BUDGET;
-  let whole = true;
   for (const dir of dirs) {
     for (const name of [MODULE_FILE, SUM_FILE]) {
-      if (left <= 0) return { text: read.join('\n'), whole: false };
+      if (left <= 0) return read.join('\n');
       const at = `${dir === '.' ? workspace : `${workspace}/${dir}`}/${name}`;
-      let found;
       try {
-        found = lstatSync(at);
-      } catch {
-        if (name === MODULE_FILE) whole = false;
-        continue;
-      }
-      if (!found.isFile() || found.size > left) {
-        whole = false;
-        continue;
-      }
-      try {
+        const found = lstatSync(at);
+        if (!found.isFile() || found.size > left) continue;
         read.push(readFileSync(at, 'utf8'));
+        left -= found.size;
       } catch {
-        whole = false;
         continue;
       }
-      left -= found.size;
     }
   }
-  return { text: read.join('\n'), whole };
+  return read.join('\n');
 }
 
 function downloadIn(cwd, child, timeout) {
@@ -126,8 +115,7 @@ export function main(
     );
   }
   const named = open ? [] : read.pairs;
-  const files = named.length > 0 ? modulesIn(workspace, dirs) : { text: '', whole: false };
-  const pairs = named.length > 0 ? recase(named, files.text, files.whole) : named;
+  const pairs = named.length > 0 ? recase(named, modulesIn(workspace, dirs)) : named;
 
   const child = {
     ...process.env,

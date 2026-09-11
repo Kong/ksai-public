@@ -89,11 +89,10 @@ on:
           private module a Kong repository has ever needed. A public repository defaults to no owner,
           because the warm step would refuse the credential.
 
-          A minted token is placed in the git config of the one step that downloads only for an owner
-          the tree's own `go.mod` or `go.sum` spells - and only where every one of those files could be
-          read. A `go.sum` is optional, so one that is simply absent is no gap; a tracked `go.mod` that
-          is gone, and either file oversized or not a regular one, keep every owner instead, since
-          losing a credential to a file this step could not open is the worse of the two failures.
+          A minted token reaches one command, `go mod download`, through `GIT_CONFIG_*` on that child
+          alone. It is spent for every owner minted rather than only the ones the tree's own `go.mod`
+          and `go.sum` spell: those two files do not describe the whole graph the go command resolves,
+          and a rewrite matching nothing costs nothing while a missing one is a download that fails.
 
           The implement flow reads the tree it is about to work on, and a repository tracking a `go.mod`
           gets the Go that file pins plus a module cache filled before the sandbox closes the network.
@@ -867,7 +866,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-help
           repository: Kong/ksai-public
-          ref: v3.50.1
+          ref: v3.50.2
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1295,7 +1294,7 @@ jobs:
         with:
           token: ${{ github.token }}
           repository: Kong/ksai-public
-          ref: v3.50.1
+          ref: v3.50.2
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1755,7 +1754,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-recover
           repository: Kong/ksai-public
-          ref: v3.50.1
+          ref: v3.50.2
           sparse-checkout: |
             .github/scripts
           persist-credentials: false
