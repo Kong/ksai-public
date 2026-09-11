@@ -21,10 +21,14 @@ const NEVER_CLASSIFIED = Object.freeze([...NEVER_INFERRED].sort());
 
 const OWN_PULL_SURFACE = 'own-pull';
 
+const OWN_THREAD_SURFACE = 'own-thread';
+
+const BARE_SURFACES = Object.freeze([OWN_PULL_SURFACE, OWN_THREAD_SURFACE]);
+
 const SURFACES = Object.freeze([
   ...new Set(Object.values(SURFACE).filter((surface) => Boolean(surface) && surface !== ANY_SURFACE)),
   THREAD_SURFACE,
-  OWN_PULL_SURFACE,
+  ...BARE_SURFACES,
 ]);
 
 const NUDGE_VERDICT = 'approve-nudge';
@@ -84,6 +88,20 @@ const SURFACE_NOTES = Object.freeze(
         '  "the retry loop is still wrong" and "there is no test for the empty case" are both requests.',
       ]),
     }),
+    [OWN_THREAD_SURFACE]: Object.freeze({
+      where: 'a pull request, as a reply inside a review thread that opened with a finding this bot posted, without naming any command',
+      note: Object.freeze([
+        'Nobody addressed this reply to the bot. People answer a finding to say they fixed it themselves, to',
+        'disagree, to ask about it or to thank, and the bot should leave all of those alone. A reply that wants',
+        'the bot to make the change the finding describes is asking for work.',
+      ]),
+      noneRule: Object.freeze([
+        '- Answer none when the words want nothing done by the bot. Nothing is published and nothing runs, which is',
+        '  the right outcome for a remark nobody wanted acted on - so it costs nothing here, unlike elsewhere.',
+        '- "fixed in 1a2b3c4", "done", "good catch" and "not an issue, the caller checks it" want nothing from the bot.',
+        '  "good catch, please fix", "go ahead and address this" and "can you apply that" are all requests.',
+      ]),
+    }),
   }),
 );
 
@@ -100,7 +118,7 @@ const extrasFor = (surface, disabledCommands) =>
 const commandFitsClassifierSurface = (command, surface) => {
   const asked = String(surface ?? '');
   if (asked === '') return true;
-  const where = asked === THREAD_SURFACE || asked === OWN_PULL_SURFACE || asked === 'review' ? 'pull' : asked;
+  const where = asked === THREAD_SURFACE || BARE_SURFACES.includes(asked) || asked === 'review' ? 'pull' : asked;
   const wanted = SURFACE[command];
   return wanted === null || wanted === undefined || wanted === ANY_SURFACE || wanted === where;
 };
@@ -126,7 +144,9 @@ function answerSet(disabledCommands, surface = null) {
 
 const surfaceForComment = ({ onOwnPull = null, onIssue = null, threadRootId = null, onReview = null } = {}) => {
   const where = surfaceOfEvent(onIssue, threadRootId, onReview);
-  return String(onOwnPull) === 'true' && where === 'pull' ? OWN_PULL_SURFACE : where;
+  if (String(onOwnPull) !== 'true') return where;
+  if (where === 'pull') return OWN_PULL_SURFACE;
+  return where === THREAD_SURFACE ? OWN_THREAD_SURFACE : where;
 };
 
 function renderCommandClassifierPrompt({ comment = null, surface = null, disabledCommands = null } = {}) {
@@ -339,6 +359,7 @@ function verdictFromExecution(raw, surface = null) {
 }
 
 module.exports = {
+  BARE_SURFACES,
   NEVER_CLASSIFIED,
   NO_VERDICT,
   NUDGE_VERDICT,

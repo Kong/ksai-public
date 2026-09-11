@@ -1,6 +1,6 @@
 'use strict';
 
-const { findApprovals, findAcknowledgment, lastRework } = require('./approval.cjs');
+const { findApprovals, findAcknowledgment, lastRework, withLastEdits } = require('./approval.cjs');
 const { AUTHZ_LOGIN_SHAPE } = require('./context.cjs');
 const { scrub, readRelease, releaseRef } = require('./plan.cjs');
 
@@ -276,12 +276,15 @@ async function resolveApproval({
 
     const askedReview =
       Number(thread) === Number(prNumber)
-        ? Promise.resolve().then(() => github.paginate(github.rest.pulls.listReviewComments, {
-            owner,
-            repo,
-            pull_number: Number(thread),
-            per_page: 100,
-          })).catch((error) => {
+        ? Promise.resolve().then(async () => {
+            const listed = await github.paginate(github.rest.pulls.listReviewComments, {
+              owner,
+              repo,
+              pull_number: Number(thread),
+              per_page: 100,
+            });
+            return withLastEdits(listed, { graphql: github.graphql }).catch(() => listed);
+          }).catch((error) => {
             failures.review =
               `could not read the review comments on #${thread}: ${error.message}. ` +
               'An approval left as a reply in a review thread counts, so the approval gate reads them with ' +

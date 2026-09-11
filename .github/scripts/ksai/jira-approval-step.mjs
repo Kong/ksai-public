@@ -6,6 +6,7 @@ import { writeOutputs } from '../lib/outputs.mjs';
 const require = createRequire(import.meta.url);
 const { resolveKeyFrom } = require('./jira.cjs');
 const { resolveJiraApproval, phaseToken } = require('./jira-approval.cjs');
+const { jiraForBranch } = require('./phase.cjs');
 
 export async function main(env = process.env, { fetchImpl = fetch } = {}) {
   const done = ({ accountId = '', at = '', refused = '', error = '' }) => {
@@ -22,6 +23,15 @@ export async function main(env = process.env, { fetchImpl = fetch } = {}) {
   const resolved = resolveKeyFrom(env);
   if (resolved.none) return done({});
   if (resolved.error) return done({ error: resolved.error });
+  const branchKey = jiraForBranch(env.BRANCH);
+  if (branchKey === null) return done({});
+  if (resolved.key !== branchKey) {
+    return done({
+      error:
+        `this pull request names Jira ticket \`${resolved.key}\` and its branch was cut for \`${branchKey}\`, ` +
+        'so no Jira approval was read from either',
+    });
+  }
 
   const out = await resolveJiraApproval({
     cloudId: env.JIRA_CLOUD_ID,

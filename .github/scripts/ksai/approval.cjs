@@ -27,6 +27,11 @@ const UNEDITED = 'unedited';
 const UNKNOWN = 'unknown';
 
 function editState(comment) {
+  if (comment && Object.hasOwn(comment, 'last_edited_at')) {
+    const edited = comment.last_edited_at;
+    if (edited === null) return UNEDITED;
+    return typeof edited === 'string' && edited !== '' ? EDITED : UNKNOWN;
+  }
   const made = String(comment?.created_at ?? '');
   const changed = String(comment?.updated_at ?? '');
   if (made === '' || changed === '') return UNKNOWN;
@@ -35,7 +40,28 @@ function editState(comment) {
 
 const wasEdited = (comment) => editState(comment) === EDITED;
 
-const vouchedUnedited = (comment) => editState(comment) === UNEDITED;
+const LAST_EDITS_QUERY = 'query ($ids: [ID!]!) { nodes(ids: $ids) { ... on Comment { id lastEditedAt } } }';
+
+const NODES_PER_QUERY = 100;
+
+async function withLastEdits(comments, { graphql }) {
+  const listed = comments ?? [];
+  const ids = [
+    ...new Set(listed.filter((comment) => comment?.node_id && wasEdited(comment)).map((comment) => comment.node_id)),
+  ];
+  const edits = new Map();
+  for (let at = 0; at < ids.length; at += NODES_PER_QUERY) {
+    const data = await graphql(LAST_EDITS_QUERY, { ids: ids.slice(at, at + NODES_PER_QUERY) });
+    for (const node of data?.nodes ?? []) {
+      if (node?.id && (node.lastEditedAt === null || typeof node.lastEditedAt === 'string')) {
+        edits.set(node.id, node.lastEditedAt);
+      }
+    }
+  }
+  return listed.map((comment) =>
+    edits.has(comment?.node_id) ? { ...comment, last_edited_at: edits.get(comment.node_id) } : comment,
+  );
+}
 
 const FOREIGN = 'foreign';
 
@@ -129,7 +155,7 @@ module.exports = {
   offersPlan,
   editState,
   wasEdited,
-  vouchedUnedited,
+  withLastEdits,
   isOwnLogin,
   ownState,
   ownUnedited,

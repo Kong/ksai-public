@@ -7,7 +7,7 @@ const { neutralCut } = require('../lib/prompt-text.cjs');
 const { afterTrigger, triggerMatcher } = require('../lib/text.cjs');
 const { HELP_COMMAND } = require('../lib/select-arm.cjs');
 const { PAGE_SIZE, pagedProbe } = require('./pages.cjs');
-const { wasEdited } = require('./approval.cjs');
+const { wasEdited, withLastEdits } = require('./approval.cjs');
 const { isOwnLogin } = require('./threads.cjs');
 
 const DEFAULT_API_URL = 'https://api.github.com';
@@ -154,6 +154,29 @@ export async function listComments({
   return comments;
 }
 
+const graphqlOver = ({ token, apiUrl, fetchImpl }) => async (query, variables) => {
+  const response = await fetchImpl(`${String(apiUrl).replace(/\/+$/, '').replace(/\/v3$/, '')}/graphql`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ query, variables }),
+  });
+  if (!response.ok) throw new Error(`the GraphQL API answered ${response.status}`);
+  const body = await response.json();
+  if (body?.errors?.length) throw new Error(`the GraphQL API answered ${body.errors.length} errors`);
+  return body?.data;
+};
+
+async function readReviewEdits(comments, { seen, botLogin, token, apiUrl, fetchImpl }) {
+  const asked = comments.filter(
+    (comment) => !seen.has(`${REVIEW_KIND}-${comment?.id}`) && !isOwnLogin(comment?.user?.login, botLogin),
+  );
+  try {
+    return await withLastEdits(asked, { graphql: graphqlOver({ token, apiUrl, fetchImpl }) });
+  } catch {
+    return asked;
+  }
+}
+
 export async function sweep({
   repo,
   number,
@@ -175,7 +198,9 @@ export async function sweep({
   const candidates = [];
   let order = 0;
   for (const kind of [MESSAGE_KIND, REVIEW_KIND]) {
-    const comments = await listComments({ repo, number, kind, since, token, apiUrl, fetchImpl });
+    const listed = await listComments({ repo, number, kind, since, token, apiUrl, fetchImpl });
+    const comments =
+      kind === REVIEW_KIND ? await readReviewEdits(listed, { seen, botLogin, token, apiUrl, fetchImpl }) : listed;
     for (const comment of comments) {
       const id = `${kind}-${comment?.id}`;
       if (seen.has(id) || !wanted({ comment, kind, triggerPhrase, botLogin, ownPull })) continue;

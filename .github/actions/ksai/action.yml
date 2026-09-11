@@ -2120,6 +2120,7 @@ runs:
       env:
         PLAN_KEY: ${{ steps.jira_ref.outputs.plan_key }}
         STEP_KEY: ${{ steps.jira_ref.outputs.step_key }}
+        BRANCH: ${{ steps.phase.outputs.ref }}
         JIRA_CLOUD_ID: ${{ inputs.jira_cloud_id }}
         JIRA_PROJECTS: ${{ inputs.jira_projects }}
         JIRA_CLIENT_ID: ${{ inputs.jira_client_id }}
@@ -2728,6 +2729,8 @@ runs:
         ISSUE_NUM: ${{ steps.subject.outputs.number }}
         PR_NUMBER: ${{ steps.phase.outputs.pr_number }}
         RUN_ID: ${{ github.run_id }}
+        CONTEXT_NOTICE: ${{ steps.context.outputs.refusal }}
+        REFUSED_ON: ${{ steps.context.outputs.refused_on }}
         SELECT_NOTICE: ${{ steps.select.outputs.notice }}
         SELECT_NOTICE_KIND: ${{ steps.select.outputs.notice_kind }}
         SUBJECT_NOTICE: ${{ steps.subject.outputs.stop_notice }}
@@ -2776,6 +2779,7 @@ runs:
         BOT_LOGIN: ${{ inputs.bot_login }}
         JIRA_KEY: ${{ steps.subject.outputs.jira_key || steps.fetch_jira.outputs.key }}
         JIRA_SITE: ${{ steps.fetch_jira.outputs.site }}
+        PHASE_TOKEN: ${{ steps.jira_approval.outputs.phase_token }}
         RUN_ID: ${{ github.run_id }}
         REQUESTER: ${{ steps.context.outputs.commenter }}
         COMMAND: ${{ steps.select.outputs.command }}
@@ -3492,7 +3496,7 @@ runs:
       with:
         github-token: ${{ inputs.ci_evidence_github_token }}
         script: |
-          const { artifactName } = await import(`${process.env.SCRIPTS}/ksai/plan-session.mjs`);
+          const { artifactName, carriedSession } = await import(`${process.env.SCRIPTS}/ksai/plan-session.mjs`);
           const name = artifactName(process.env.PR_NUMBER);
           let found = null;
           try {
@@ -3502,7 +3506,7 @@ runs:
               name,
               per_page: 20,
             });
-            found = (data.artifacts ?? []).filter((one) => one?.expired !== true)[0] ?? null;
+            found = carriedSession(data.artifacts);
           } catch (error) {
             core.info(`no carried planning session could be looked for: ${error.message}`);
           }

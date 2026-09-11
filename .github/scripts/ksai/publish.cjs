@@ -146,6 +146,7 @@ async function dispatchNext({ github, core, owner, repo, env }) {
 }
 
 const NOTICE_ORDER = Object.freeze([
+  Object.freeze({ body: 'CONTEXT_NOTICE', at: 'REFUSED_ON', reason: true, kind: '' }),
   Object.freeze({ body: 'SELECT_NOTICE', at: 'THREAD_NUM', reason: false, kind: 'SELECT_NOTICE_KIND' }),
   Object.freeze({ body: 'SUBJECT_NOTICE', at: 'THREAD_NUM', reason: false, kind: '' }),
   Object.freeze({ body: 'CLOSED_NOTICE', at: 'THREAD_NUM', reason: false, kind: '' }),

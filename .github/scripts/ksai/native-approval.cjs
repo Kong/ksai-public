@@ -1,14 +1,7 @@
 'use strict';
 
 const { LOGIN_SHAPE } = require('./plan.cjs');
-const {
-  COMMIT_SHAPE,
-  MARKER_PREFIX,
-  nativeApprovalRef,
-  readNativeApprovalRef,
-  nativeApprovalMarker,
-  nativeApprovalOf,
-} = require('./native-approval-ref.cjs');
+const { nativeApprovalRef, readNativeApprovalRef } = require('./native-approval-ref.cjs');
 
 const DECIDING = new Set(['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED']);
 
@@ -39,13 +32,4 @@ function latestNativeApprovals(reviews = []) {
   return [...latest.values()].filter((candidate) => candidate.state === 'APPROVED' && candidate.approvalRef !== '');
 }
 
-module.exports = {
-  COMMIT_SHAPE,
-  DECIDING,
-  MARKER_PREFIX,
-  nativeApprovalRef,
-  readNativeApprovalRef,
-  nativeApprovalMarker,
-  nativeApprovalOf,
-  latestNativeApprovals,
-};
+module.exports = { latestNativeApprovals };

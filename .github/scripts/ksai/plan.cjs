@@ -426,16 +426,14 @@ function askedLine(who, where) {
 }
 
 function creditBlock({ issueNumber = null, requestedBy = null, repository = null, jira = null }, options) {
-  const below = [];
   const who = mention(requestedBy, options);
   const browse = jiraBrowseUrl(jira);
   const issue = Number(issueNumber);
-  const extra = [];
-  if (who) extra.push(askedLine(who, issueUrl({ issueNumber, repository }) || browse));
-  if (browse) extra.push(`- Implements Jira ticket [${jira.key}](${browse})`);
-  extra.push(`- ${aboutLink()}`);
-  if (Number.isInteger(issue) && issue > 0) extra.push(`- Closes #${issue}`);
-  if (extra.length) below.push('', CREDIT_HEADING, '', ...extra);
+  const below = ['', CREDIT_HEADING, ''];
+  if (who) below.push(askedLine(who, issueUrl({ issueNumber, repository }) || browse));
+  if (browse) below.push(`- Implements Jira ticket [${jira.key}](${browse})`);
+  below.push(`- ${aboutLink()}`);
+  if (Number.isInteger(issue) && issue > 0) below.push(`- Closes #${issue}`);
   const criteria = criteriaRef({ issueNumber, repository, jira });
   if (criteria) below.push('', `${CRITERIA_MARKER_PREFIX} ${criteria} -->`);
   return below;
@@ -464,7 +462,7 @@ function renderPlaceholder({
     scrub(out.join('\n'), options),
   ].join('\n');
   const below = creditBlock({ issueNumber, requestedBy, repository, jira }, options);
-  return { body: below.length ? `${prose}\n${below.join('\n')}\n` : `${prose}\n` };
+  return { body: `${prose}\n${below.join('\n')}\n` };
 }
 
 function hasPlanRegion(body) {
@@ -892,7 +890,7 @@ function renderPlanWaiting({
   const below = creditBlock({ issueNumber, requestedBy, repository, jira }, options);
   const alert = asAlert('CAUTION', scrub('Work in progress - the plan is written and nothing is implemented yet', options));
   return {
-    body: `${alert}\n\n${out.join('\n')}${below.length ? `\n${below.join('\n')}` : ''}\n\n${marker}\n`,
+    body: `${alert}\n\n${out.join('\n')}\n${below.join('\n')}\n\n${marker}\n`,
     shortened: motivation.shortened,
   };
 }
@@ -920,7 +918,7 @@ function renderDirectBody({
   ];
   const below = creditBlock({ issueNumber, requestedBy, repository, jira }, options);
   return {
-    body: `${out.join('\n')}${below.length ? `\n${below.join('\n')}` : ''}\n`,
+    body: `${out.join('\n')}\n${below.join('\n')}\n`,
     shortened: motivation.shortened,
   };
 }
@@ -1134,6 +1132,8 @@ function markerValue(body, prefix, read) {
   return markerValues(body, prefix, read)[0] ?? null;
 }
 
+const appended = (body, record) => `${String(body ?? '').replace(/\s+$/, '')}\n\n${record}\n`;
+
 function releaseOf(body) {
   return markerValue(body, RELEASE_MARKER_PREFIX, readRelease);
 }
@@ -1227,8 +1227,7 @@ function withRelease(body, ref, { name = null, url = null } = {}) {
   const asked = askedIn(span);
   const credit = APPROVED_SHAPE.test(span) ? null : creditLine(value, { name, url, asked });
   const said = credit ? withCredit(text, credit, asked) : text;
-  const trimmed = said.replace(/\s+$/, '');
-  return { body: `${trimmed}\n\n${RELEASE_MARKER_PREFIX} ${value} -->\n`, changed: true };
+  return { body: appended(said, `${RELEASE_MARKER_PREFIX} ${value} -->`), changed: true };
 }
 
 const HOLD_MARKER_PREFIX = '<!-- ksai-paused:';
@@ -1251,14 +1250,14 @@ function withHold(body, runId) {
   if (marker === null) return null;
   const text = String(body ?? '');
   if (heldBy(text) !== null) return { body: text, changed: false };
-  return { body: `${text.replace(/\s+$/, '')}\n\n${marker}\n`, changed: true };
+  return { body: appended(text, marker), changed: true };
 }
 
 function withoutHold(body) {
   const text = String(body ?? '');
   if (heldBy(text) === null) return { body: text, changed: false };
   const next = text.split('\n').filter((line) => heldBy(line) === null).join('\n');
-  return { body: next, changed: heldBy(next) === null };
+  return { body: next, changed: true };
 }
 
 function linked(text, url) {
@@ -1282,7 +1281,7 @@ function carryRecords(from, to) {
       .split('\n')
       .filter((line) => !line.trimStart().startsWith(CRITERIA_MARKER_PREFIX))
       .join('\n');
-    body = `${without.replace(/\s+$/, '')}\n\n${marker.trim()}\n`;
+    body = appended(without, marker.trim());
   }
   const carried = new Set(body.split('\n').map((line) => line.trim()));
   const phases = [
@@ -1293,7 +1292,7 @@ function carryRecords(from, to) {
         .filter((line) => line.startsWith(PHASE_MARKER_PREFIX) && !carried.has(line)),
     ),
   ];
-  if (phases.length > 0) body = `${body.replace(/\s+$/, '')}\n\n${phases.join('\n')}\n`;
+  if (phases.length > 0) body = appended(body, phases.join('\n'));
   const status = locateStatus(was);
   if (!status.absent && !status.error) {
     const spliced = spliceStatus(body, was.slice(status.start, status.end));
@@ -1499,6 +1498,7 @@ function pullUrl({ serverUrl = null, repository = null, prNumber = null } = {}) 
 
 module.exports = {
   LOGIN_SHAPE,
+  appended,
   criteriaOf,
   markerValue,
   markerValues,

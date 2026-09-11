@@ -69,19 +69,13 @@ const LEGACY_DO_MARKER_PREFIX = '<!-- muthur-do:';
  * The pull request number needs no shape here at all: `resolvePullTarget` checks it before any call, which is why
  * this module stopped importing `NUMBER_SHAPE` rather than keeping it for a second reader.
  */
-/*
- * The escape the marker's own reader needs, from the module that owns the scrub the marker is protected by.
- *
- * No cycle: `ksai/plan.cjs` requires nothing at all, which is the property its own header states and which
- * every module here relies on.
- */
 const { markerValue, POSITIVE_ID_SHAPE } = require('./plan.cjs');
 const { counted } = require('../lib/text.cjs');
 
 const COMMENT_ID_SHAPE = POSITIVE_ID_SHAPE;
-/* One answer to "which branch, and may this push to it", shared with every other pull-surface phase. */
 const { probeComments } = require('./pages.cjs');
 
+/* One answer to "which branch, and may this push to it", shared with every other pull-surface phase. */
 const { resolvePullTarget } = require('./pull.cjs');
 
 const MERGE_BLOCKING_RULES = Object.freeze(
@@ -124,9 +118,6 @@ async function mergeBlockedBy({ github = null, core = null, owner = null, repo =
   return '';
 }
 
-/* What CI says about the head, bounded and failing open. Required late, in `resolveDoPhase`, see there. */
-
-/** Whether a login is this flow's own bot, tolerant of the `[bot]` suffix on either side. */
 const { hydrateScopedThread, readThreads, selectThreads } = require('./threads.cjs');
 const { vouchedOwn } = require('./approval.cjs');
 
@@ -240,14 +231,7 @@ async function alreadyReported({
   return { answered: false, unreadable };
 }
 
-/*
- * The phase a request that already has a report resolves to.
- *
- * Named rather than written twice, because its second reader is a string comparison in YAML: the run-failed notice
- * has to exclude it, or a duplicate webhook - which is meant to do nothing and say nothing - gets told the run did
- * not complete. A literal here and a literal there is a rename away from that notice firing again, so the wiring
- * test pins the YAML against this constant.
- */
+/* The phase a request that already has a report resolves to; action-wiring.test.mjs pins the run-failed notice to it. */
 const REPLAYED_PHASE = 'replayed';
 
 /**
@@ -425,9 +409,8 @@ module.exports = {
   renderDoMarker,
   doRequestOf,
   alreadyReported,
-  mergeBlockedBy,
-  MERGE_BLOCKING_RULES,
   resolveDoPhase,
-  // The exception to the rule above, and the reason is that its other reader is YAML: see the constant.
+  // The exceptions to the rule above: do-record.mjs and prompt.cjs share the cap, and the wiring test pins the YAML to the phase.
   MAX_REPORT_CHARS,
+  REPLAYED_PHASE,
 };

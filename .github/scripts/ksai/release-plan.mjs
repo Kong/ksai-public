@@ -24,38 +24,59 @@ const {
 } = require('./plan.cjs');
 const { NUMBER_SHAPE } = require('./context.cjs');
 const { safeEcho } = require('./verify-chunk.cjs');
-const { vouchedOwn } = require('./approval.cjs');
+const { planReleaseMarker } = require('./checkpoint.cjs');
+const { FOREIGN, ownState, vouchedOwn, withLastEdits } = require('./approval.cjs');
 import { runCommand } from './run.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
 
 const MAX_DOC_BYTES = 256 * 1024;
 
-function recordedBy({ repo, prNumber, botLogin, run }) {
+const graphqlOver = (run) => async (query, variables) => {
+  const asked = run('gh', ['api', 'graphql', '--input', '-'], { input: JSON.stringify({ query, variables }), stderr: 'ignore' });
+  if (!asked.ok) throw new Error('the GraphQL API could not be reached');
+  const answer = JSON.parse(String(asked.stdout));
+  if (answer?.errors?.length) throw new Error(`the GraphQL API answered ${answer.errors.length} errors`);
+  return answer?.data;
+};
+
+async function recordedBy({ repo, prNumber, botLogin, run }) {
   const login = String(botLogin ?? '').trim();
   if (login === '') return { requester: null, docs: [], readable: true };
-  const listed = run('gh', [
-    'api',
-    `repos/${repo}/issues/${prNumber}/comments`,
-    '--paginate',
-    '--jq',
-    '.[] | [.user.login, .created_at, .updated_at, (.body | @base64)] | @tsv',
-  ]);
-  if (!listed.ok) return { requester: null, docs: [], readable: false };
+  const list = (space) =>
+    run('gh', [
+      'api',
+      `repos/${repo}/${space}/${prNumber}/comments`,
+      '--paginate',
+      '--jq',
+      '.[] | [.user.login, .created_at, .updated_at, .node_id, (.body | @base64)] | @tsv',
+    ]);
+  const listed = [list('issues'), list('pulls')];
+  if (listed.some((one) => !one.ok)) return { requester: null, docs: [], readable: false };
+  const comments = listed
+    .flatMap((one) => String(one.stdout).split('\n'))
+    .filter((row) => row !== '')
+    .map((row) => {
+      const [who, created, updated, nodeId, encoded] = row.split('\t');
+      const body = encoded ? Buffer.from(encoded, 'base64').toString('utf8') : '';
+      return { login: who, created_at: created, updated_at: updated, node_id: nodeId, body };
+    })
+    .filter((comment) => ownState(comment, login) !== FOREIGN && comment.body !== '')
+    .sort((left, right) => String(left.created_at).localeCompare(String(right.created_at)));
+  const read = await withLastEdits(comments, { graphql: graphqlOver(run) }).catch(() => comments);
   let found = null;
   const docs = [];
-  for (const row of String(listed.stdout).split('\n')) {
-    const [who, created, updated, encoded] = row.split('\t');
-    if (!vouchedOwn({ login: who, created_at: created, updated_at: updated }, login) || !encoded) continue;
-    const said = Buffer.from(encoded, 'base64').toString('utf8');
-    const shape = shapesIn(said).at(-1);
+  for (const comment of read) {
+    const offered = planDocsIn(comment.body);
+    if (offered.length) docs.length = 0;
+    if (!vouchedOwn(comment, login)) continue;
+    const shape = shapesIn(comment.body).at(-1);
     if (shape?.requestedBy) found = shape.requestedBy;
-    const offered = planDocsIn(said);
-    if (offered.length) docs.splice(0, docs.length, ...offered);
+    docs.push(...offered);
   }
   return { requester: found, docs, readable: true };
 }
 
-export function releasePlan({
+export async function releasePlan({
   prNumber = null,
   issueNumber = null,
   branch = null,
@@ -68,6 +89,7 @@ export function releasePlan({
   bodyFile = null,
   serverUrl = null,
   marker = null,
+  phaseToken = null,
   run = runCommand,
 } = {}) {
   const number = String(prNumber ?? '');
@@ -111,7 +133,7 @@ export function releasePlan({
   const parsed = parsePlanDocument(document);
   if (parsed.error) return block(`\`${planFile}\` is not a plan this flow can run: ${parsed.error}.`);
 
-  const recorded = recordedBy({ repo, prNumber: number, botLogin, run });
+  const recorded = await recordedBy({ repo, prNumber: number, botLogin, run });
   const offered = String(blob ?? '').trim().toLowerCase();
   if (!recorded.readable) {
     return block('I could not read this pull request\'s comments to find which plan document was approved, so no plan was released.');
@@ -153,6 +175,7 @@ export function releasePlan({
 
   const digest = stepDigest(rendered.body);
   const shape = renderShape(rendered.checkpoints, trusted, { sealedWith: digest });
+  const planGate = planReleaseMarker(phaseToken);
   if (!shape || !digest) {
     return block(`The plan holds ${String(rendered.checkpoints)} phase boundaries, which cannot be recorded.`);
   }
@@ -162,7 +185,7 @@ export function releasePlan({
         'as its own commit here. This comment seals what was approved, so rewording a task or changing a phase ' +
         'boundary stops the next run',
       { triggerPhrase },
-    ) + `\n\n${shape}`,
+    ) + `\n\n${shape}${planGate ? `\n${planGate}` : ''}`,
     { ...marker, kind: 'plan-approved', triggerPhrase },
   );
   if (!run('gh', ['pr', 'comment', number, '--repo', repo, '--body', said]).ok) {
@@ -192,11 +215,11 @@ export function releasePlan({
   };
 }
 
-export function main(env = process.env, { run = runCommand } = {}) {
+export async function main(env = process.env, { run = runCommand } = {}) {
   const tmp = env.RUNNER_TEMP || '/tmp';
   const messageFile = path.join(tmp, 'ksai-release-plan.txt');
 
-  const result = releasePlan({
+  const result = await releasePlan({
     prNumber: env.PR_NUMBER,
     issueNumber: env.ISSUE_NUM,
     branch: env.BRANCH,
@@ -209,6 +232,7 @@ export function main(env = process.env, { run = runCommand } = {}) {
     bodyFile: path.join(tmp, 'ksai-pr-body.md'),
     serverUrl: env.GITHUB_SERVER_URL,
     marker: payloadFor(env, {}),
+    phaseToken: env.PHASE_TOKEN,
     run,
   });
 
@@ -223,5 +247,5 @@ export function main(env = process.env, { run = runCommand } = {}) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  process.exit(main());
+  process.exitCode = await main();
 }

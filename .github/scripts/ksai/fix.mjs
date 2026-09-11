@@ -141,6 +141,7 @@ export function recordFix({
 
   let sha = '';
   let localSha = '';
+  let offeredDoc = '';
   if (pushing) {
     const verified = verifyChunk({
       cwd,
@@ -180,6 +181,7 @@ export function recordFix({
       if (!doc) {
         return block(`I could not name the content of \`${onlyPath}\` that was pushed, so it was not offered for approval.`);
       }
+      offeredDoc = doc;
       const offer = marked(
         scrub(
           'This comment records the exact content of the plan document now being offered. An approval is only ' +
@@ -212,7 +214,7 @@ export function recordFix({
   const answered = [];
   let failure = null;
   for (const reply of replies) {
-    const answer = marked(`${reply.body}\n\n${footer}`, { ...marker, kind: pass.kind });
+    const answer = marked(`${reply.body}\n\n${footer}${offeredDoc ? `\n\n${offeredDoc}` : ''}`, { ...marker, kind: pass.kind });
     writeFileSync(bodyFile, `${JSON.stringify({ body: answer })}\n`);
     const posted = run('gh', [
       'api',

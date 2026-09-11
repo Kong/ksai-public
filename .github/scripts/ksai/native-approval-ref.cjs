@@ -37,8 +37,6 @@ function nativeApprovalOf(body) {
 }
 
 module.exports = {
-  COMMIT_SHAPE,
-  MARKER_PREFIX,
   nativeApprovalRef,
   readNativeApprovalRef,
   nativeApprovalMarker,

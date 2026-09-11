@@ -516,6 +516,7 @@ module.exports = {
   isBranchForIssue,
   isBranchForWork,
   issueForBranch,
+  jiraForBranch,
   resolveSubject,
   renderSubjectStop,
   discoverPhase,

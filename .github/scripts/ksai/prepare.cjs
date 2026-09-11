@@ -23,18 +23,21 @@ const {
   surfaceForComment,
   verdictFromExecution,
 } = require('./classify.cjs');
-const { bareMode, ownPull, renderNudge } = require('./bare.cjs');
+const { bareMode, ownPull, ownSurface, renderNudge, renderUnaddressed } = require('./bare.cjs');
 const { afterTrigger } = require('../lib/text.cjs');
 const loadKsaiConfig = require('./config.cjs');
 const {
   AUTHZ_REASONS,
+  COMMENT_EVENT,
   CONTINUATION_EVENT,
+  REVIEW_COMMENT_EVENT,
   asCommentEvent,
   commentReaders,
   resolveAuthorization,
   resolveContext,
   resolveDispatchedComment,
   resolveOnIssue,
+  withLastEdit,
 } = require('./context.cjs');
 const { classifyTarget, nextStep, resolveRequest } = require('./dispatch.cjs');
 const { approvalApplies, describeApproval, resolveApproval } = require('./gate.cjs');
@@ -111,16 +114,17 @@ async function resolveBareGate({ github, core, owner, repo, env }) {
     env.ON_ISSUE !== 'true' &&
     env.ON_REVIEW !== 'true' &&
     env.IS_CONTINUATION !== 'true' &&
-    String(env.THREAD_ROOT_ID ?? '').trim() === '' &&
     said.trim() !== '' &&
     afterTrigger(said, env.TRIGGER) === null;
   if (!addressed) return { outputs, notices: [], failure: null };
 
-  const mine = await ownPull({ github, core, owner, repo, prNumber: env.THREAD_NUM, botLogin: env.BOT_LOGIN });
+  const rootId = String(env.THREAD_ROOT_ID ?? '').trim();
+  const mine = await ownSurface({ github, core, owner, repo, rootId, prNumber: env.THREAD_NUM, botLogin: env.BOT_LOGIN });
   outputs.mine = mine ? 'true' : 'false';
+  const where = rootId ? 'This thread opened with a finding this flow posted' : 'This pull request is one this flow opened';
   return {
     outputs,
-    notices: mine ? ['This pull request is one this flow opened, so a comment naming no command steers it.'] : [],
+    notices: mine ? [`${where}, so a comment naming no command steers it.`] : [],
     failure: null,
   };
 }
@@ -201,6 +205,7 @@ async function selectImplementArm({ github, core, owner, repo, env }) {
         })
       : '') ||
     (out.nudge ? renderNudge({ triggerPhrase: env.TRIGGER }) : '') ||
+    (out.unaddressed ? renderUnaddressed(out.unaddressed, { triggerPhrase: env.TRIGGER }) : '') ||
     (out.clarify
       ? renderClarification({ triggerPhrase: env.TRIGGER, disabledCommands: env.DISABLED_COMMANDS })
       : '') ||
@@ -259,6 +264,10 @@ async function selectImplementArm({ github, core, owner, repo, env }) {
   if (out.unauthorized) return refusedByBar(out.unauthorized, { outputs, notices });
   if (out.nudge) {
     notices.push('Comment reads as consent to the plan, which is named rather than classified; asking for the command.');
+    return { outputs, notices, failure: null };
+  }
+  if (out.unaddressed) {
+    notices.push(`Comment names no command and reads as \`${out.unaddressed}\`, which another flow runs; asking for the command.`);
     return { outputs, notices, failure: null };
   }
   if (out.clarify) {
@@ -426,6 +435,13 @@ function dispatchedActor(env) {
 }
 
 async function resolveRunContext({ github, context, env }) {
+  const commented = context.eventName === COMMENT_EVENT || context.eventName === REVIEW_COMMENT_EVENT;
+  const surfaced = String(context.payload?.issue?.number ?? context.payload?.pull_request?.number ?? '');
+  const refuse = (failure) => ({
+    outputs: { refusal: failure, refused_on: commented ? surfaced : '' },
+    failure,
+  });
+
   const dispatched = await resolveDispatchedComment({
     eventName: context.eventName,
     commentId: env.IN_COMMENT_ID,
@@ -435,7 +451,7 @@ async function resolveRunContext({ github, context, env }) {
     appSlug: env.IN_APP_SLUG,
     ...commentReaders({ github, context }),
   });
-  if (dispatched.error) return { outputs: {}, failure: dispatched.error };
+  if (dispatched.error) return refuse(dispatched.error);
 
   const pullsGet = (pull_number) => github.rest.pulls.get({ ...context.repo, pull_number });
 
@@ -447,15 +463,16 @@ async function resolveRunContext({ github, context, env }) {
         issueNumber: dispatched.held ? String(dispatched.number) : env.IN_ISSUE_NUMBER,
         pullsGet,
       });
-  if (surface.error) return { outputs: {}, failure: surface.error };
+  if (surface.error) return refuse(surface.error);
 
   const carried = dispatched.held
     ? asCommentEvent({ dispatched, onIssue: surface.onIssue, payload: context.payload })
     : null;
+  const comment = commented ? await withLastEdit(github, context.payload?.comment) : undefined;
 
   const out = resolveContext({
     eventName: carried?.eventName ?? context.eventName,
-    payload: carried?.payload ?? context.payload,
+    payload: carried?.payload ?? (comment ? { ...context.payload, comment } : context.payload),
     inputs: {
       issue_number: env.IN_ISSUE_NUMBER,
       work_ref: env.IN_WORK_REF,
@@ -468,7 +485,7 @@ async function resolveRunContext({ github, context, env }) {
       on_issue: surface.onIssue ? 'true' : 'false',
     },
   });
-  if (out.error) return { outputs: {}, failure: out.error };
+  if (out.error) return refuse(out.error);
 
   const outputs = {
     issue_number: out.issueNumber == null ? '' : String(out.issueNumber),
@@ -495,6 +512,8 @@ async function resolveRunContext({ github, context, env }) {
     attempt: String(out.attempt),
     stall: String(out.stall),
     prev_remaining: out.prevRemaining == null ? '' : String(out.prevRemaining),
+    refusal: '',
+    refused_on: '',
   };
   return { failure: null, outputs };
 }

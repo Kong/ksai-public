@@ -24,11 +24,11 @@ const THREAD_QUERY = `
             path
             line
             root: comments(first: 1) {
-              nodes { databaseId author { login } body createdAt updatedAt }
+              nodes { databaseId author { login } body createdAt updatedAt lastEditedAt }
             }
             recent: comments(last: ${REPLY_SEARCH_DEPTH}) {
               totalCount
-              nodes { databaseId author { login } body createdAt updatedAt replyTo { databaseId } }
+              nodes { databaseId author { login } body createdAt updatedAt lastEditedAt replyTo { databaseId } }
             }
           }
         }
@@ -43,7 +43,7 @@ const THREAD_COMMENTS_QUERY = `
       ... on PullRequestReviewThread {
         comments(first: ${PER_PAGE}, after: $cursor) {
           pageInfo { hasNextPage endCursor }
-          nodes { databaseId author { login } body createdAt updatedAt replyTo { databaseId } }
+          nodes { databaseId author { login } body createdAt updatedAt lastEditedAt replyTo { databaseId } }
         }
       }
     }
@@ -84,6 +84,7 @@ const shapeComment = (comment) => ({
   commentId: Number.isInteger(comment?.databaseId) ? comment.databaseId : null,
   created_at: String(comment?.createdAt ?? ''),
   updated_at: String(comment?.updatedAt ?? ''),
+  ...(comment && Object.hasOwn(comment, 'lastEditedAt') ? { last_edited_at: comment.lastEditedAt } : {}),
 });
 
 async function readThreads({ github = null, owner = null, repo = null, prNumber = null, maxPages = MAX_PAGES } = {}) {

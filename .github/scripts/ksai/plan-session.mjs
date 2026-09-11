@@ -12,6 +12,12 @@ export const RETENTION_DAYS = 7;
 
 export const artifactName = (prNumber) => `${ARTIFACT_PREFIX}${String(prNumber ?? '').trim()}`;
 
+export const carriedSession = (artifacts) =>
+  (artifacts ?? []).find((one) => {
+    const run = one?.workflow_run;
+    return one?.expired !== true && Number.isSafeInteger(run?.repository_id) && run.head_repository_id === run.repository_id;
+  }) ?? null;
+
 export function retentionDays(allowed) {
   const capped = Number(allowed);
   return Number.isSafeInteger(capped) && capped > 0 ? Math.min(RETENTION_DAYS, capped) : RETENTION_DAYS;

@@ -8,7 +8,7 @@ const {
   releaserOf,
   JIRA_ACCOUNT_CORE,
 } = require('../lib/select-arm.cjs');
-const { LOGIN_SHAPE, PHASE_MARKER_PREFIX, markerValues, scrub, shapesIn } = require('./plan.cjs');
+const { LOGIN_SHAPE, PHASE_MARKER_PREFIX, appended, markerValues, scrub, shapesIn } = require('./plan.cjs');
 const { PAGE_SIZE: RELEASE_PER_PAGE, probeComments } = require('./pages.cjs');
 const { offersPlan, ownState, EDITED, FOREIGN, UNEDITED } = require('./approval.cjs');
 const { counted, plural } = require('../lib/text.cjs');
@@ -23,6 +23,16 @@ const RELEASE_TOKEN_SHAPE = new RegExp(`^(?:${RELEASE_TOKEN_CORE})$`);
 const RELEASE_VALUE_SHAPE = new RegExp(`^(${RELEASE_TOKEN_CORE})(?::([1-9][0-9]{0,2}))?$`);
 
 const MAX_RELEASE_PAGES = 5;
+
+const PLAN_RELEASE_MARKER_PREFIX = '<!-- ksai-plan-release:';
+
+function planReleaseMarker(token) {
+  const wanted = String(token ?? '').trim();
+  return RELEASE_TOKEN_SHAPE.test(wanted) ? `${PLAN_RELEASE_MARKER_PREFIX}${wanted} -->` : '';
+}
+
+const planReleasesIn = (body) =>
+  markerValues(body, PLAN_RELEASE_MARKER_PREFIX, (value) => (RELEASE_TOKEN_SHAPE.test(value) ? value : null));
 
 function releaseMarker(token, at = 0) {
   const bound = Number(at) > 0 ? `:${String(Number(at))}` : '';
@@ -41,7 +51,7 @@ function withPhaseRelease(body, token, at = 0) {
   if (!RELEASE_TOKEN_SHAPE.test(wanted)) return null;
   const text = String(body ?? '');
   if (releasesIn(text).some((release) => release.token === wanted)) return { body: text, changed: false };
-  return { body: `${text.replace(/\s*$/, '')}\n\n${releaseMarker(wanted, at)}\n`, changed: true };
+  return { body: appended(text, releaseMarker(wanted, at)), changed: true };
 }
 
 function phaseReleaseOf(body) {
@@ -53,6 +63,7 @@ async function releasedTokens({ github = null, owner = null, repo = null, prNumb
   if (!known) {
     return {
       tokens: new Set(),
+      planTokens: new Set(),
       bound: [],
       shape: null,
       sealed: null,
@@ -62,6 +73,7 @@ async function releasedTokens({ github = null, owner = null, repo = null, prNumb
   }
 
   const tokens = new Set();
+  const planTokens = new Set();
   const bound = [];
   let shape = null;
   let sealed = null;
@@ -83,6 +95,7 @@ async function releasedTokens({ github = null, owner = null, repo = null, prNumb
         if (releasesIn(comment?.body).length > 0) editedRelease = true;
         return;
       }
+      for (const token of planReleasesIn(comment.body)) planTokens.add(token);
       const release = releasesIn(comment.body).at(-1);
       if (release !== undefined) {
         tokens.add(release.token);
@@ -96,7 +109,7 @@ async function releasedTokens({ github = null, owner = null, repo = null, prNumb
     },
   });
 
-  const answer = { tokens, bound, shape, sealed, editedRelease };
+  const answer = { tokens, planTokens, bound, shape, sealed, editedRelease };
   if (unreadable) return { ...answer, unreadable };
   if (editedShape) {
     return {
@@ -134,7 +147,7 @@ async function alreadyReleased({
   if (releasesIn(body).some((release) => release.token === wanted)) return { released: true, unreadable: null };
 
   const seen = await releasedTokens({ github, owner, repo, prNumber, botLogin });
-  if (seen.tokens.has(wanted)) return { released: true, unreadable: null };
+  if (seen.tokens.has(wanted) || seen.planTokens.has(wanted)) return { released: true, unreadable: null };
   return { released: false, unreadable: seen.unreadable };
 }
 
@@ -197,28 +210,8 @@ function needsReleaseRead(env) {
   return withoutRelease(env) === null;
 }
 
-function decideCheckpoint({
-  atCheckpoint = null,
-  command = null,
-  authorized = null,
-  write = null,
-  writeAccessCommands = null,
-  released = null,
-  unreadable = null,
-  disabledCommands = null,
-  jiraToken = null,
-  commentEdited = null,
-} = {}) {
-  const settled = withoutRelease({
-    atCheckpoint,
-    command,
-    authorized,
-    write,
-    writeAccessCommands,
-    disabledCommands,
-    jiraToken,
-    commentEdited,
-  });
+function decideCheckpoint({ released = null, unreadable = null, ...asked } = {}) {
+  const settled = withoutRelease(asked);
   if (settled) return settled;
   if (unreadable) return { release: false, waiting: true, reason: 'unreadable' };
   if (released === true) return { release: false, waiting: true, reason: 'already-released' };
@@ -344,6 +337,7 @@ module.exports = {
   RELEASE_MARKER_PREFIX,
   MAX_RELEASE_PAGES,
   RELEASE_PER_PAGE,
+  planReleaseMarker,
   releaseMarker,
   phaseReleaseOf,
   releasesIn,

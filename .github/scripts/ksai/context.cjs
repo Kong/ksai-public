@@ -2,7 +2,7 @@
 
 const { readCount, MAX_ATTEMPTS } = require('./continue.cjs');
 const { JIRA_KEY_SHAPE, anyCommandOpen } = require('../lib/select-arm.cjs');
-const { editState, isOwnLogin, UNEDITED } = require('./approval.cjs');
+const { editState, isOwnLogin, withLastEdits, UNEDITED } = require('./approval.cjs');
 
 const editRefusal = (comment, where) => {
   const state = editState(comment);
@@ -333,10 +333,20 @@ async function resolveDispatchedComment({
   return { held: true, review, id: wanted, number, comment: data };
 }
 
+async function withLastEdit(github, comment) {
+  try {
+    const [read] = await withLastEdits([comment], { graphql: github?.graphql });
+    return read;
+  } catch {
+    return { ...comment, last_edited_at: undefined };
+  }
+}
+
 const commentReaders = ({ github, context }) => ({
-  getIssueComment: async (comment_id) => (await github.rest.issues.getComment({ ...context.repo, comment_id })).data,
+  getIssueComment: async (comment_id) =>
+    withLastEdit(github, (await github.rest.issues.getComment({ ...context.repo, comment_id })).data),
   getReviewComment: async (comment_id) =>
-    (await github.rest.pulls.getReviewComment({ ...context.repo, comment_id })).data,
+    withLastEdit(github, (await github.rest.pulls.getReviewComment({ ...context.repo, comment_id })).data),
 });
 
 function asCommentEvent({ dispatched, onIssue, payload = null }) {
@@ -422,6 +432,7 @@ module.exports = {
   NUMBER_SHAPE,
   asCommentEvent,
   commentReaders,
+  withLastEdit,
   resolveDispatchedComment,
   AUTHZ_LOGIN_SHAPE,
   AUTHZ_REASONS,

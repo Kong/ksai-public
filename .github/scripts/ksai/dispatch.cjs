@@ -28,7 +28,7 @@ const {
   CLASSIFIER_SOURCE,
   NO_VERDICT,
   NUDGE_VERDICT,
-  OWN_PULL_SURFACE,
+  BARE_SURFACES,
 } = require('./classify.cjs');
 const {
   parseBody,
@@ -79,7 +79,7 @@ async function classifyTarget({
           commandFitsSurface(command, { onIssue, threadRootId, onReview }),
         );
   if (usable.every((command) => ownerOf(command) === null)) return { classify: false };
-  if (surface === OWN_PULL_SURFACE) {
+  if (BARE_SURFACES.includes(surface)) {
     const said = String(prompt ?? '').trim();
     return said === '' ? { classify: false } : { classify: true, comment: said };
   }
@@ -153,7 +153,7 @@ async function resolveRequest({
   }
 
   const classifierSurface = surfaceForComment({ onOwnPull: bare, onIssue, threadRootId, onReview });
-  const asked = classifierSurface === OWN_PULL_SURFACE;
+  const asked = BARE_SURFACES.includes(classifierSurface);
   const direct = parseOptions(prompt ?? '', { defaultCommand: here, bare: asked });
   if (!direct.error && direct.command !== null && direct.command === HELP_COMMAND) {
     return { mine: false, help: true };
@@ -194,9 +194,13 @@ async function resolveRequest({
   if (verdict === CLARIFY_VERDICT) return { mine: false, clarify: true };
   if (verdict === NUDGE_VERDICT) return { mine: false, nudge: true, routeSource: CLASSIFIER_SOURCE };
   const classified = verdict !== '' && commandFitsSurface(verdict, { onIssue, threadRootId }) ? verdict : '';
+  if (asked && classified === '') return { mine: false };
   const command = classified || result.command;
   const named = result.commandNamed || classified !== '';
   const routeSource = sourceOf({ classified: classified !== '', named: result.commandNamed, commented });
+  if (asked && ownerOf(classified) && ownerOf(classified) !== own) {
+    return { mine: false, unaddressed: classified, routeSource };
+  }
 
   if (command === HELP_COMMAND) return { mine: false, help: true, routeSource };
 

@@ -31,6 +31,7 @@ const {
 const {
   AUTHZ_LOGIN_SHAPE,
   COMMENT_EVENT,
+  REVIEW_COMMENT_EVENT,
   REVIEW_EVENT,
   asCommentEvent,
   commentReaders,
@@ -39,7 +40,7 @@ const {
   threadRootOf,
 } = require('./context.cjs');
 const { classifyTarget } = require('./dispatch.cjs');
-const { bareMode, ownPull } = require('./bare.cjs');
+const { bareMode, ownPull, ownSurface } = require('./bare.cjs');
 const loadKsaiConfig = require('./config.cjs');
 
 function unquoted(body) {
@@ -116,8 +117,9 @@ async function routeCommand({ eventName, onIssue, threadRootId, onReview, review
 }
 
 async function bareTarget({ github, core, context, payload, eventName, env, onIssue, threadRootId, body, readConfig, opened }) {
-  if (eventName !== COMMENT_EVENT) return false;
-  if (onIssue || String(threadRootId ?? '').trim() !== '') return false;
+  const inThread = String(threadRootId ?? '').trim() !== '';
+  if (eventName !== (inThread ? REVIEW_COMMENT_EVENT : COMMENT_EVENT)) return false;
+  if (onIssue) return false;
   if (String(body).trim() === '') return false;
   const asked = bareMode({ input: env.BARE_COMMENTS });
   if (asked.error) {
@@ -127,13 +129,14 @@ async function bareTarget({ github, core, context, payload, eventName, env, onIs
   if (asked.mode === 'off') return false;
   const byWrite = String(env.CODEOWNER ?? '') !== 'true' && String(env.WRITE_ACCESS ?? '') === 'true';
   if (byWrite && (await opened()) === '') return false;
-  const mine = await ownPull({
+  const mine = await ownSurface({
     github,
     core,
     owner: context.repo.owner,
     repo: context.repo.repo,
-    prNumber: payload?.issue?.number,
     botLogin: env.BOT_LOGIN,
+    rootId: threadRootId,
+    prNumber: payload?.issue?.number,
   });
   if (!mine) return false;
   const config = await readConfig();
@@ -283,7 +286,11 @@ async function route({ github, core, context, env }) {
   core.setOutput('write_access_commands', requested || bare ? await opened() : '');
   if (bare) {
     core.setOutput('own_pull', 'true');
-    core.info('This comment names no command and sits on a pull request this flow opened, so it is classified.');
+    core.info(
+      threadRootId
+        ? 'This reply names no command and sits in a thread this flow\'s review opened, so it is classified.'
+        : 'This comment names no command and sits on a pull request this flow opened, so it is classified.',
+    );
   }
   if (request === null && !bare) return decision;
 
@@ -408,6 +415,10 @@ function settle({ core, env, readFile = (at) => fs.readFileSync(at, 'utf8') }) {
   if (verdict === NUDGE_VERDICT) {
     core.info('The comment reads as consent, which is named rather than classified; the implement flow says so.');
     return publish({ review: false, implement: true });
+  }
+  if (onOwnPull && ownerOf(verdict) !== 'implement') {
+    core.info(`The comment reads as \`${verdict}\`, which no bare comment starts; the implement flow asks for the command.`);
+    return publish({ review: false, implement: true, test: false });
   }
 
   core.info(`The comment reads as \`${verdict}\`.`);
