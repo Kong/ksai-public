@@ -63,6 +63,7 @@ const DENIED_PATH_FLOOR = Object.freeze([
   'opencode.json',
   'opencode.jsonc',
   '.opencode',
+  '.agents',
 ]);
 
 const DENIED_PREFIX_FLOOR = Object.freeze(['.env.']);
@@ -137,6 +138,8 @@ const ANY_DEPTH_FLOOR = Object.freeze([
   'CLAUDE.md',
   'AGENTS.md',
   '.claude',
+  '.opencode',
+  '.agents',
   '.env',
   '.npmrc',
   '.yarnrc',

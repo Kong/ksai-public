@@ -402,9 +402,10 @@ inputs:
     default: "auto"
   repo_rules:
     description: >-
-      `auto` to read `.ksai/review-rules.md` from the reviewed repository's DEFAULT branch and splice it into
-      the review prompt, so a team states its own review rules once and every review applies them. `off` reviews
-      as this action did before they existed. Review flow only.
+      `auto` to read `.ksai/review-rules.md`, `.ksai/review-rules.json` and `.ksai/review-rules/` from the
+      reviewed repository's DEFAULT branch and splice what a diff matched into the review prompt, so a team
+      states its own review rules once and every review applies them. `off` reviews as this action did before
+      they existed. Review flow only.
 
       The default branch is the whole trust argument, and there is no input for another ref: a pull request
       cannot change the rules its own review reads. The rules may only ADD checks - the prompt says so - because
@@ -1582,9 +1583,10 @@ runs:
         }
         find . -path ./.git -prune -o \
           \( -name AGENTS.md -o -name CLAUDE.md -o -name CONTRIBUTING.md \
-             -o -name .mcp.json -o -name .claude -o -name bunfig.toml \) \
+             -o -name .mcp.json -o -name .claude -o -name .opencode -o -name .agents \
+             -o -name bunfig.toml \) \
           -print0 | xargs -0 -r rm -rf --
-        rm -rf -- .ksai .npmrc
+        rm -rf -- .ksai .npmrc .yarnrc .yarnrc.yml opencode.json opencode.jsonc
         find . -maxdepth 1 -name '.env*' ! -name '.env.example' -exec rm -rf -- {} +
         mkdir -p -- .ksai
         cp -- "${DEST}/pr-test.json" .ksai/pr-test.json
@@ -2416,7 +2418,7 @@ runs:
       run: |
         set -euo pipefail
         rm -rf -- .mcp.json .claude _ksai bunfig.toml .env .npmrc .yarnrc .yarnrc.yml
-        rm -rf -- opencode.json opencode.jsonc .opencode
+        rm -rf -- opencode.json opencode.jsonc .opencode .agents
         rm -rf -- CONTRIBUTING.md AGENTS.md CLAUDE.md .ksai
         find . -maxdepth 1 -name '.env.*' -exec rm -rf -- {} +
 

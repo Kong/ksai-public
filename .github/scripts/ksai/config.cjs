@@ -9,7 +9,7 @@ const {
   safeEcho,
   unknownCommandIn,
 } = require('../lib/select-arm.cjs');
-const { counted, safeText } = require('../lib/text.cjs');
+const { counted, describe, locate, safeText } = require('../lib/text.cjs');
 const { BARE_MODES } = require('./bare.cjs');
 const { MAX_GRACE_SECONDS, PRESERVE_MODES, STOP_MODES } = require('./halt.cjs');
 
@@ -48,21 +48,6 @@ const NO_ALIASES = Object.freeze(Object.create(null));
 const NO_HALT = Object.freeze(Object.create(null));
 
 const stripBom = (text) => (text.codePointAt(0) === 0xfeff ? text.slice(1) : text);
-
-function locate(message) {
-  const text = String(message ?? '');
-  const lineColumn = /line (\d+) column (\d+)/.exec(text);
-  if (lineColumn) return ` at line ${lineColumn[1]}, column ${lineColumn[2]}`;
-  const position = /position (\d+)/.exec(text);
-  return position ? ` at position ${position[1]}` : '';
-}
-
-function describe(value) {
-  if (value === null) return 'null';
-  if (Array.isArray(value)) return 'an array';
-  const type = typeof value;
-  return `${/^[aeiou]/.test(type) ? 'an' : 'a'} ${type}`;
-}
 
 function parseConfig(text) {
   const raw = String(text ?? '');

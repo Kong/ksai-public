@@ -441,8 +441,8 @@ on:
         default: "1.18.30"
       repo_rules:
         description: >-
-          `auto` applies the reviewed repository's own `.ksai/review-rules.md`, read from its default branch;
-          `off` reviews as if the file were not there. Those two words only - any other value stops the run
+          `auto` applies the reviewed repository's own rules under `.ksai/`, read from its default branch;
+          `off` reviews as if they were not there. Those two words only - any other value stops the run
           rather than guessing which side of the switch it meant.
         required: false
         type: string
@@ -905,7 +905,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-help
           repository: Kong/ksai-public
-          ref: v3.52.2
+          ref: v3.53.0
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1332,7 +1332,7 @@ jobs:
         with:
           token: ${{ github.token }}
           repository: Kong/ksai-public
-          ref: v3.52.2
+          ref: v3.53.0
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1792,7 +1792,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-recover
           repository: Kong/ksai-public
-          ref: v3.52.2
+          ref: v3.53.0
           sparse-checkout: |
             .github/scripts
           persist-credentials: false

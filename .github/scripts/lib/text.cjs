@@ -58,8 +58,25 @@ const counted = (count, one, many = '') => `${count} ${plural(count, one, many)}
 
 const annotation = (message) => `::error::${String(message).replaceAll('%', '%25').replaceAll(/[\r\n]/g, ' ')}`;
 
+function locate(message) {
+  const text = String(message ?? '');
+  const lineColumn = /line (\d+) column (\d+)/.exec(text);
+  if (lineColumn) return ` at line ${lineColumn[1]}, column ${lineColumn[2]}`;
+  const position = /position (\d+)/.exec(text);
+  return position ? ` at position ${position[1]}` : '';
+}
+
+function describe(value) {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return 'an array';
+  const type = typeof value;
+  return `${/^[aeiou]/.test(type) ? 'an' : 'a'} ${type}`;
+}
+
 module.exports = {
   annotation,
+  describe,
+  locate,
   safeText,
   escapeForRegExp,
   DEFAULT_TRIGGER_PHRASE,
