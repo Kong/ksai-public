@@ -361,27 +361,13 @@ runs:
         RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
         ACTOR: ${{ inputs.actor || github.actor }}
         MODEL: ${{ steps.trigger.outputs.classify_model }}
+        WORKFLOW: ksai-gate
+        ACTION: ksai:classify
+        EFFORT: low
       shell: bash
       run: |
         set -euo pipefail
-        {
-          echo "value<<KSAI_HEADERS_EOF"
-          printf 'X-Caller-Name: KSAI\n'
-          printf 'X-Initiated-By: KSAI\n'
-          printf 'X-Ksai-Repo: %s\n' "${REPO}"
-          printf 'X-Ksai-Team: %s\n' "${TEAM}"
-          printf 'X-Ksai-Federation-Rule: %s\n' "${FEDERATION_RULE}"
-          printf 'X-Ksai-Service-Account: %s\n' "${SERVICE_ACCOUNT}"
-          printf 'X-Ksai-Workflow: ksai-gate\n'
-          printf 'X-Ksai-Run-Id: %s\n' "${RUN_ID}"
-          printf 'X-Ksai-Actor: %s\n' "${ACTOR}"
-          printf 'X-Ksai-Action: ksai:classify\n'
-          printf 'X-Ksai-Model: %s\n' "${MODEL}"
-          printf 'X-Ksai-Effort: low\n'
-          printf 'Ai-Cost-Repository: %s\n' "${REPO}"
-          printf 'Ai-Cost-Initiated-By: KSAI\n'
-          echo "KSAI_HEADERS_EOF"
-        } >> "$GITHUB_OUTPUT"
+        node "${GITHUB_WORKSPACE}/_ksai/.github/scripts/ksai/attribution.mjs"
 
     - name: Classify the comment
       id: classify_run
