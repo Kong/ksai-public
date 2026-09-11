@@ -41,21 +41,32 @@ function toolchainOf(workspace) {
 function modulesIn(workspace, dirs) {
   const read = [];
   let left = MODULE_READ_BUDGET;
+  let whole = true;
   for (const dir of dirs) {
     for (const name of [MODULE_FILE, SUM_FILE]) {
-      if (left <= 0) return read.join('\n');
+      if (left <= 0) return { text: read.join('\n'), whole: false };
       const at = `${dir === '.' ? workspace : `${workspace}/${dir}`}/${name}`;
+      let found;
       try {
-        const found = lstatSync(at);
-        if (!found.isFile() || found.size > left) continue;
-        read.push(readFileSync(at, 'utf8'));
-        left -= found.size;
+        found = lstatSync(at);
       } catch {
+        if (name === MODULE_FILE) whole = false;
         continue;
       }
+      if (!found.isFile() || found.size > left) {
+        whole = false;
+        continue;
+      }
+      try {
+        read.push(readFileSync(at, 'utf8'));
+      } catch {
+        whole = false;
+        continue;
+      }
+      left -= found.size;
     }
   }
-  return read.join('\n');
+  return { text: read.join('\n'), whole };
 }
 
 function downloadIn(cwd, child, timeout) {
@@ -115,10 +126,12 @@ export function main(
     );
   }
   const named = open ? [] : read.pairs;
-  const pairs = named.length > 0 ? recase(named, modulesIn(workspace, dirs)) : named;
+  const files = named.length > 0 ? modulesIn(workspace, dirs) : { text: '', whole: false };
+  const pairs = named.length > 0 ? recase(named, files.text, files.whole) : named;
 
   const child = {
     ...process.env,
+    GO_MODULE_TOKENS: '',
     ...gitConfigEnv(pairs),
     GOTOOLCHAIN: 'local',
     GOVCS: '*:git',

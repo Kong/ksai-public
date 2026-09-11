@@ -85,7 +85,15 @@ on:
       go_module_owners:
         description: >-
           space-separated GitHub owners whose PRIVATE Go modules this repository imports, at most two.
-          Empty (the default) still gets a Go repository its pinned toolchain and every public module.
+          Leave it out: on a private repository the default is its own owner and `Kong`, which is every
+          private module a Kong repository has ever needed. A public repository defaults to no owner,
+          because the warm step would refuse the credential.
+
+          A minted token is placed in the git config of the one step that downloads only for an owner
+          the tree's own `go.mod` or `go.sum` spells - and only where every one of those files could be
+          read. A `go.sum` is optional, so one that is simply absent is no gap; a tracked `go.mod` that
+          is gone, and either file oversized or not a regular one, keep every owner instead, since
+          losing a credential to a file this step could not open is the worse of the two failures.
 
           The implement flow reads the tree it is about to work on, and a repository tracking a `go.mod`
           gets the Go that file pins plus a module cache filled before the sandbox closes the network.
@@ -94,10 +102,11 @@ on:
           step rather than a loop; a third owner is refused loudly rather than dropped, since a module
           silently unreachable reads as a repository whose build is simply broken.
 
-          The value is checked before either mint, so a typo and a third owner are refused there. The
-          mint itself is carried rather than refused: an owner the KSAI App is not installed on answers
-          an error this run cannot fix, and losing every plan run to it is worse than losing the
-          modules, which the phase then reports as missing.
+          Set it only for a repository whose private modules sit under some third owner, which the
+          default cannot guess. The value is checked before either mint, so a typo and a third owner are
+          refused there. The mint itself is carried rather than refused: an owner the KSAI App is not
+          installed on answers an error this run cannot fix, and losing every plan run to it is worse
+          than losing the modules, which the phase then reports as missing.
         required: false
         type: string
         default: ""
@@ -858,7 +867,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-help
           repository: Kong/ksai-public
-          ref: v3.49.0
+          ref: v3.50.0
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1092,11 +1101,23 @@ jobs:
 
       - name: Read the owners of this repository's private Go modules
         id: go-owners
-        if: ${{ inputs.go_module_owners != '' }}
         env:
           OWNERS: ${{ inputs.go_module_owners }}
+          HOME_OWNER: ${{ github.repository_owner }}
+          PRIVATE: ${{ github.event.repository.private }}
         run: |
           set -euo pipefail
+          if [ -z "${OWNERS}" ]; then
+            if [ "${PRIVATE}" = "false" ]; then
+              printf 'one=\ntwo=\n' >> "${GITHUB_OUTPUT}"
+              exit 0
+            fi
+            if [ "$(printf '%s' "${HOME_OWNER}" | tr '[:upper:]' '[:lower:]')" = "kong" ]; then
+              OWNERS="${HOME_OWNER}"
+            else
+              OWNERS="${HOME_OWNER} Kong"
+            fi
+          fi
           read -r -a named <<< "${OWNERS//[$'\n\r\t']/ }"
           if [ "${#named[@]}" -eq 0 ]; then
             echo "::error::go_module_owners holds only whitespace; leave it out rather than blank, or name the owners whose private Go modules this repository imports"
@@ -1274,7 +1295,7 @@ jobs:
         with:
           token: ${{ github.token }}
           repository: Kong/ksai-public
-          ref: v3.49.0
+          ref: v3.50.0
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1516,11 +1537,23 @@ jobs:
 
       - name: Read the owners of this repository's private Go modules
         id: go-owners
-        if: ${{ inputs.go_module_owners != '' }}
         env:
           OWNERS: ${{ inputs.go_module_owners }}
+          HOME_OWNER: ${{ github.repository_owner }}
+          PRIVATE: ${{ github.event.repository.private }}
         run: |
           set -euo pipefail
+          if [ -z "${OWNERS}" ]; then
+            if [ "${PRIVATE}" = "false" ]; then
+              printf 'one=\ntwo=\n' >> "${GITHUB_OUTPUT}"
+              exit 0
+            fi
+            if [ "$(printf '%s' "${HOME_OWNER}" | tr '[:upper:]' '[:lower:]')" = "kong" ]; then
+              OWNERS="${HOME_OWNER}"
+            else
+              OWNERS="${HOME_OWNER} Kong"
+            fi
+          fi
           read -r -a named <<< "${OWNERS//[$'\n\r\t']/ }"
           if [ "${#named[@]}" -eq 0 ]; then
             echo "::error::go_module_owners holds only whitespace; leave it out rather than blank, or name the owners whose private Go modules this repository imports"
@@ -1722,7 +1755,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-recover
           repository: Kong/ksai-public
-          ref: v3.49.0
+          ref: v3.50.0
           sparse-checkout: |
             .github/scripts
           persist-credentials: false
