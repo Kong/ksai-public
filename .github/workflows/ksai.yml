@@ -702,6 +702,9 @@ jobs:
       model: ${{ steps.dials.outputs.model }}
       effort: ${{ steps.dials.outputs.effort }}
       record_command: ${{ steps.record.outputs.command }}
+      number: ${{ github.event.issue.number || github.event.pull_request.number }}
+      on_pull_request: ${{ (github.event.issue.pull_request || github.event.pull_request) && 'true' || '' }}
+      head_sha: ${{ github.event.pull_request.head.sha }}
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
@@ -902,7 +905,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-help
           repository: Kong/ksai-public
-          ref: v3.52.0
+          ref: v3.52.1
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -911,8 +914,7 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           ISSUE_NUMBER: >-
-            ${{ needs.gate.outputs.issue_number || github.event.issue.number ||
-            github.event.pull_request.number }}
+            ${{ needs.gate.outputs.issue_number || needs.gate.outputs.number }}
           ON_ISSUE: ${{ needs.gate.outputs.on_issue }}
           THREAD_ROOT_ID: ${{ needs.gate.outputs.thread_root_id }}
           TRIGGER: ${{ inputs.trigger_phrase }}
@@ -999,7 +1001,7 @@ jobs:
       id-token: write
     concurrency:
       group: >-
-        ksai-${{ inputs.pr || github.event.issue.number || github.event.pull_request.number || github.run_id }}
+        ksai-${{ inputs.pr || needs.gate.outputs.number || github.run_id }}
       cancel-in-progress: true
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -1109,7 +1111,7 @@ jobs:
       id-token: write
     concurrency:
       group: >-
-        ksai-test-${{ inputs.pr || github.event.issue.number || github.event.pull_request.number || github.run_id }}
+        ksai-test-${{ inputs.pr || needs.gate.outputs.number || github.run_id }}
       cancel-in-progress: false
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -1214,7 +1216,7 @@ jobs:
           disabled_commands: ${{ inputs.disabled_commands }}
           write_access_commands: ${{ inputs.write_access_commands }}
           allowed_commands: ${{ inputs.allowed_commands }}
-          issue_number: ${{ inputs.pr || github.event.issue.number || github.event.pull_request.number }}
+          issue_number: ${{ inputs.pr || needs.gate.outputs.number }}
           actor: ${{ inputs.actor }}
           comment_id: ${{ inputs.comment_id }}
           comment_kind: ${{ inputs.comment_kind }}
@@ -1283,7 +1285,7 @@ jobs:
         with:
           flow: test-publish
           trigger_phrase: ${{ inputs.trigger_phrase }}
-          issue_number: ${{ inputs.pr || github.event.issue.number || github.event.pull_request.number }}
+          issue_number: ${{ inputs.pr || needs.gate.outputs.number }}
           source_org_github_token: ${{ inputs.push_as_app && steps.post-token.outputs.token || github.token }}
           kong_org_github_token: ${{ github.token }}
           bot_login: ${{ inputs.push_as_app && format('{0}[bot]', steps.post-token.outputs.app-slug) || 'github-actions[bot]' }}
@@ -1319,7 +1321,7 @@ jobs:
       id-token: write
     concurrency:
       group: >-
-        ksai-shadow-${{ inputs.pr || github.event.issue.number || github.event.pull_request.number || github.run_id }}
+        ksai-shadow-${{ inputs.pr || needs.gate.outputs.number || github.run_id }}
       cancel-in-progress: true
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -1330,16 +1332,16 @@ jobs:
         with:
           token: ${{ github.token }}
           repository: Kong/ksai-public
-          ref: v3.52.0
+          ref: v3.52.1
           sparse-checkout: .github/scripts
           persist-credentials: false
 
       - name: Resolve the reviewed head sha
         id: head
-        if: ${{ github.event.pull_request.head.sha == '' }}
+        if: ${{ needs.gate.outputs.head_sha == '' }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
-          PR_NUMBER: ${{ inputs.pr || github.event.issue.number || github.event.pull_request.number }}
+          PR_NUMBER: ${{ inputs.pr || needs.gate.outputs.number }}
         with:
           github-token: ${{ github.token }}
           result-encoding: string
@@ -1367,8 +1369,8 @@ jobs:
           LIVE_ENGINE: ${{ inputs.engine }}
           SHADOW_PERCENT: ${{ vars.KSAI_SHADOW_PERCENT || inputs.shadow_percent }}
           REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ inputs.pr || github.event.issue.number || github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || steps.head.outputs.result }}
+          PR_NUMBER: ${{ inputs.pr || needs.gate.outputs.number }}
+          HEAD_SHA: ${{ needs.gate.outputs.head_sha || steps.head.outputs.result }}
         run: node "${GITHUB_WORKSPACE}/.github/scripts/kreview/shadow.mjs"
 
       - name: Mint this repository's read token
@@ -1396,7 +1398,7 @@ jobs:
           trigger_phrase: ${{ inputs.trigger_phrase }}
           disabled_commands: ${{ inputs.disabled_commands }}
           write_access_commands: ${{ inputs.write_access_commands }}
-          issue_number: ${{ inputs.pr || github.event.issue.number || github.event.pull_request.number }}
+          issue_number: ${{ inputs.pr || needs.gate.outputs.number }}
           actor: ${{ inputs.actor }}
           comment_body: >-
             ${{ (github.event_name == 'workflow_dispatch' && inputs.comment_kind == '')
@@ -1467,8 +1469,8 @@ jobs:
       group: >-
         ksai-implement-${{ vars.KSAI_IMPLEMENT_LANE ||
         format('{0}-{1}',
-        (github.event.issue.pull_request || github.event.pull_request || inputs.pr) && 'pr' || 'issue',
-        github.event.issue.number || github.event.pull_request.number || inputs.issue_number ||
+        (needs.gate.outputs.on_pull_request || inputs.pr) && 'pr' || 'issue',
+        needs.gate.outputs.number || inputs.issue_number ||
         inputs.work_ref || inputs.pr || inputs.comment_id) }}
       cancel-in-progress: false
     steps:
@@ -1743,7 +1745,7 @@ jobs:
       - uses: $/.github/actions/clear-review-request
         if: ${{ needs.gate.result == 'success' }}
         with:
-          pr_number: ${{ inputs.pr || github.event.issue.number || github.event.pull_request.number }}
+          pr_number: ${{ inputs.pr || needs.gate.outputs.number }}
           team_slug: ${{ vars.KSAI_REVIEW_TEAM || 'ksai' }}
           client-id: ${{ inputs.client_id || vars.KSAI_CLIENT_ID }}
           private-key: ${{ secrets.ksai_private_key }}
@@ -1790,7 +1792,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-recover
           repository: Kong/ksai-public
-          ref: v3.52.0
+          ref: v3.52.1
           sparse-checkout: |
             .github/scripts
           persist-credentials: false
