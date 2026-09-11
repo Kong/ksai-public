@@ -4033,7 +4033,7 @@ runs:
         steps.engine.outputs.name == 'claude' }}
       id: tester
       continue-on-error: true
-      uses: anthropics/claude-code-action/base-action@19dda84776b3518d98b8798e591daee763049ed3 # v1.0.220
+      uses: anthropics/claude-code-action/base-action@0a8d3c9443bbff909ab973b6a17a340b913f229f # v1.0.221
       env:
         CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
         CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
@@ -4517,7 +4517,7 @@ runs:
         ((inputs.flow == 'implement' && steps.write_comment.outcome == 'success' &&
         steps.write_arm.outcome == 'success' && steps.build_implement.outcome == 'success') ||
         (inputs.flow == 'review' && steps.build_review.outcome == 'success')) }}
-      uses: anthropics/claude-code-action/base-action@19dda84776b3518d98b8798e591daee763049ed3 # v1.0.220
+      uses: anthropics/claude-code-action/base-action@0a8d3c9443bbff909ab973b6a17a340b913f229f # v1.0.221
       env:
         CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
         CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
