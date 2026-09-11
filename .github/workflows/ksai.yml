@@ -447,6 +447,22 @@ on:
         required: false
         type: string
         default: "auto"
+      repo_rules_max_bytes:
+        description: >-
+          bytes of matched rules one review may stage. Empty is 98304; a number raises it, up to
+          262144. Scope with `paths` first, since a model handed more rules applies less of them.
+
+        required: false
+        type: string
+        default: ""
+      repo_rules_max_rules:
+        description: >-
+          packs a directory may hold, and rules a manifest may name. Empty is 16; a number raises it,
+          up to 64, and carries the source-file budget with it.
+
+        required: false
+        type: string
+        default: ""
       additional_prompt:
         description: additional text appended to the model's trusted prompt context
         required: false
@@ -906,7 +922,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-help
           repository: Kong/ksai-public
-          ref: v3.54.0
+          ref: v3.55.0
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1086,6 +1102,8 @@ jobs:
           engine: ${{ inputs.engine }}
           opencode_version: ${{ inputs.opencode_version }}
           repo_rules: ${{ inputs.repo_rules }}
+          repo_rules_max_bytes: ${{ inputs.repo_rules_max_bytes }}
+          repo_rules_max_rules: ${{ inputs.repo_rules_max_rules }}
           additional_prompt: ${{ inputs.additional_prompt }}
           bot_login: ${{ inputs.push_as_app && format('{0}[bot]', steps.post-token.outputs.app-slug) || 'github-actions[bot]' }}
           team: ${{ inputs.team }}
@@ -1335,7 +1353,7 @@ jobs:
         with:
           token: ${{ github.token }}
           repository: Kong/ksai-public
-          ref: v3.54.0
+          ref: v3.55.0
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1437,6 +1455,8 @@ jobs:
           triage: ${{ inputs.triage }}
           opencode_version: ${{ inputs.opencode_version }}
           repo_rules: ${{ inputs.repo_rules }}
+          repo_rules_max_bytes: ${{ inputs.repo_rules_max_bytes }}
+          repo_rules_max_rules: ${{ inputs.repo_rules_max_rules }}
           additional_prompt: ${{ inputs.additional_prompt }}
           bot_login: ${{ needs.review.outputs.bot_login }}
           team: ${{ inputs.team }}
@@ -1797,7 +1817,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-recover
           repository: Kong/ksai-public
-          ref: v3.54.0
+          ref: v3.55.0
           sparse-checkout: |
             .github/scripts
           persist-credentials: false

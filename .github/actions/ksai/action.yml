@@ -426,6 +426,25 @@ inputs:
       forgiven; nothing else is.
     required: false
     default: "auto"
+  repo_rules_max_bytes:
+    description: >-
+      bytes of matched rules one review may stage. Empty is 98304, the default every repository
+      gets; a number raises it, up to 262144.
+
+      Not larger by default because a model handed more rules applies less of them, not more. Scope
+      with `paths` first; this is for a repository that already has and still has a diff touching
+      everything. Below the default is refused, because lowering it would retire rules silently.
+    required: false
+    default: ""
+  repo_rules_max_rules:
+    description: >-
+      packs a directory may hold, and rules a manifest may name. Empty is 16; a number raises it, up
+      to 64, and carries the source-file budget to twice the count, capped at 128.
+
+      Both are checked before anything is fetched, so a directory somebody filled costs one API call
+      rather than a hundred. Raising them raises that exposure, which is why the ceiling exists.
+    required: false
+    default: ""
   reviewer_id:
     description: >-
       logical reviewer name the suppression match IDs are derived from - not a model release, so it survives a
@@ -2573,6 +2592,8 @@ runs:
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         MODE: ${{ inputs.repo_rules }}
+        MAX_BYTES: ${{ inputs.repo_rules_max_bytes }}
+        MAX_RULES: ${{ inputs.repo_rules_max_rules }}
         TRIGGER: ${{ inputs.trigger_phrase }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
         DIFF_PATHS: ${{ steps.diff.outputs.paths_file }}
@@ -2594,6 +2615,8 @@ runs:
             owner: context.repo.owner,
             repo: context.repo.repo,
             mode: process.env.MODE,
+            maxBytes: process.env.MAX_BYTES,
+            maxRules: process.env.MAX_RULES,
             trigger: process.env.TRIGGER,
             changedFiles,
           });

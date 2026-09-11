@@ -10,8 +10,12 @@ const PACKS_PATH = '.ksai/review-rules';
 const MANIFEST_PATH = '.ksai/review-rules.json';
 const MAX_BYTES = 16 * 1024;
 const MAX_TOTAL_BYTES = 96 * 1024;
+const MAX_TOTAL_CEILING = 256 * 1024;
 const MAX_PACKS = 16;
+const MAX_PACKS_CEILING = 64;
 const MAX_SOURCES = 32;
+const MAX_SOURCES_CEILING = 128;
+const DEFAULT_LIMITS = Object.freeze({ rules: MAX_PACKS, sources: MAX_SOURCES });
 const MODES = Object.freeze(['auto', 'off']);
 
 const PACK_SHAPE = /^[A-Za-z0-9][A-Za-z0-9._-]*\.md$/;
@@ -180,20 +184,52 @@ function patternOf(header, label) {
 const scopeClaims = (scope, paths) =>
   scope?.pattern ? claimsAny(scope.pattern, paths) : claimsAnyGlob(scope?.globs, paths);
 
+
+function resolveRuleCount(value) {
+  const asked = String(value ?? '').trim();
+  if (asked === '') return { rules: MAX_PACKS, sources: MAX_SOURCES };
+  if (!/^[0-9]+$/.test(asked)) {
+    return { error: `\`repo_rules_max_rules\` must be a whole number of rules, got \`${safeEcho(value)}\`` };
+  }
+  const rules = Number(asked);
+  if (rules < MAX_PACKS) {
+    return { error: `\`repo_rules_max_rules\` is ${rules}, below the ${MAX_PACKS} every review already gets` };
+  }
+  if (rules > MAX_PACKS_CEILING) {
+    return { error: `\`repo_rules_max_rules\` is ${rules}, over the ceiling of ${MAX_PACKS_CEILING}` };
+  }
+  return { rules, sources: Math.min(MAX_SOURCES_CEILING, Math.max(MAX_SOURCES, rules * 2)) };
+}
+
+function resolveBudget(value) {
+  const asked = String(value ?? '').trim();
+  if (asked === '') return { bytes: MAX_TOTAL_BYTES };
+  if (!/^[0-9]+$/.test(asked)) {
+    return { error: `\`repo_rules_max_bytes\` must be a whole number of bytes, got \`${safeEcho(value)}\`` };
+  }
+  const bytes = Number(asked);
+  if (bytes < MAX_TOTAL_BYTES) {
+    return { error: `\`repo_rules_max_bytes\` is ${bytes}, below the ${MAX_TOTAL_BYTES} every review already gets` };
+  }
+  if (bytes > MAX_TOTAL_CEILING) {
+    return { error: `\`repo_rules_max_bytes\` is ${bytes}, over the ceiling of ${MAX_TOTAL_CEILING}` };
+  }
+  return { bytes };
+}
+
+const RULES_REMEDY = [
+  'Nothing was reviewed. Fix `review-rules.md` in `.ksai/` on the default branch, or set the',
+  '`repo_rules` input to `off`, then ask again',
+].join('\n');
+
+const INPUT_REMEDY = [
+  'Nothing was reviewed. No rules file is at fault and `repo_rules: off` does not bypass this.',
+  'Fix the named input where this workflow is called, then ask again',
+].join('\n');
+
 /** renderRulesRejection answers the comment a run publishes when it refused to review without the rules. */
-function renderRulesRejection(error, trigger) {
-  return asAlert(
-    'WARNING',
-    scrubTrigger(
-      [
-        `**${error}**`,
-        '',
-        'Nothing was reviewed. Fix `review-rules.md` in `.ksai/` on the default branch, or set the',
-        '`repo_rules` input to `off`, then ask again',
-      ].join('\n'),
-      trigger,
-    ),
-  );
+function renderRulesRejection(error, trigger, remedy = RULES_REMEDY) {
+  return asAlert('WARNING', scrubTrigger([`**${error}**`, '', remedy].join('\n'), trigger));
 }
 
 async function fetchOne({ github, owner, repo, path }) {
@@ -321,9 +357,9 @@ async function readSources({ github, owner, repo, label, source, resolve, budget
   if (budget) {
     for (const target of targets) {
       if (budget.read?.has(target) || budget.charged.has(target)) continue;
-      if (budget.charged.size >= MAX_SOURCES) {
+      if (budget.charged.size >= budget.sources) {
         return {
-          error: `${label} takes the rules past ${counted(MAX_SOURCES, 'source file')}, which is all one review reads`,
+          error: `${label} takes the rules past ${counted(budget.sources, 'source file')}, which is all one review reads`,
         };
       }
       budget.charged.add(target);
@@ -364,7 +400,7 @@ const ENTRY_KEYS = Object.freeze(['name', 'paths', 'match', 'flags', 'source', '
 
 const NAME_SHAPE = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,60}$/;
 
-function parseManifest(raw) {
+function parseManifest(raw, limits = DEFAULT_LIMITS) {
   let parsed;
   try {
     parsed = JSON.parse(String(raw ?? '').replace(/^﻿/, ''));
@@ -387,8 +423,8 @@ function parseManifest(raw) {
   if (rules.length === 0) {
     return { error: `\`${MANIFEST_PATH}\` names no rules; delete the file, or name the rules the review must apply` };
   }
-  if (rules.length > MAX_PACKS) {
-    return { error: `\`${MANIFEST_PATH}\` holds ${counted(rules.length, 'rule')}, over the limit of ${MAX_PACKS}` };
+  if (rules.length > limits.rules) {
+    return { error: `\`${MANIFEST_PATH}\` holds ${counted(rules.length, 'rule')}, over the limit of ${limits.rules}` };
   }
 
   const entries = [];
@@ -442,7 +478,7 @@ function parseManifest(raw) {
   return { entries };
 }
 
-async function readManifest({ github, owner, repo, budget }) {
+async function readManifest({ github, owner, repo, budget, limits }) {
   const found = await fetchOne({ github, owner, repo, path: MANIFEST_PATH });
   if (found.error) return { error: found.error };
   if (found.missing) return { packs: [], present: false };
@@ -450,7 +486,7 @@ async function readManifest({ github, owner, repo, budget }) {
   const inline = inlineOf(found.data, MANIFEST_PATH, `${owner}/${repo}`);
   if (inline.error) return { error: inline.error };
 
-  const read = parseManifest(inline.text);
+  const read = parseManifest(inline.text, limits);
   if (read.error) return { error: read.error };
 
   const named = new Set();
@@ -464,9 +500,9 @@ async function readManifest({ github, owner, repo, budget }) {
       named.add(target);
     }
   }
-  if (named.size > MAX_SOURCES) {
+  if (named.size > limits.sources) {
     return {
-      error: `\`${MANIFEST_PATH}\` names ${counted(named.size, 'source file')}, over the limit of ${MAX_SOURCES}`,
+      error: `\`${MANIFEST_PATH}\` names ${counted(named.size, 'source file')}, over the limit of ${limits.sources}`,
     };
   }
 
@@ -503,7 +539,7 @@ async function readManifest({ github, owner, repo, budget }) {
   return { packs, present: true };
 }
 
-async function readPacks({ github, owner, repo, budget }) {
+async function readPacks({ github, owner, repo, budget, limits }) {
   const found = await fetchOne({ github, owner, repo, path: PACKS_PATH });
   if (found.error) return { error: found.error };
   if (found.missing) return { packs: [], present: false };
@@ -514,8 +550,8 @@ async function readPacks({ github, owner, repo, budget }) {
   }
 
   const entries = [...data].sort((left, right) => String(left?.name).localeCompare(String(right?.name)));
-  if (entries.length > MAX_PACKS) {
-    return { error: `\`${PACKS_PATH}\` holds ${entries.length} entries, over the limit of ${MAX_PACKS}` };
+  if (entries.length > limits.rules) {
+    return { error: `\`${PACKS_PATH}\` holds ${entries.length} entries, over the limit of ${limits.rules}` };
   }
 
   const packs = [];
@@ -542,7 +578,7 @@ async function readPacks({ github, owner, repo, budget }) {
  *
  * Answers the step outputs, plus `failure` when the run must stop before a model is called.
  */
-async function loadRepoRules({ github, core, owner, repo, mode, trigger, changedFiles }) {
+async function loadRepoRules({ github, core, owner, repo, mode, trigger, changedFiles, maxBytes, maxRules }) {
   const outputs = {
     rules: '',
     path: RULES_PATH,
@@ -557,10 +593,21 @@ async function loadRepoRules({ github, core, owner, repo, mode, trigger, changed
     outputs.rejection = renderRulesRejection(error, trigger);
     return { outputs, failure: error };
   };
+  const refuseInput = (error) => {
+    outputs.rejection = renderRulesRejection(error, trigger, INPUT_REMEDY);
+    return { outputs, failure: error };
+  };
+
+  const budgetRead = resolveBudget(maxBytes);
+  if (budgetRead.error) return refuseInput(budgetRead.error);
+  const ceiling = budgetRead.bytes;
+
+  const limits = resolveRuleCount(maxRules);
+  if (limits.error) return refuseInput(limits.error);
 
   const wanted = String(mode ?? '').trim().toLowerCase();
   if (!MODES.includes(wanted)) {
-    return stop(`\`repo_rules\` must be \`${MODES.join('` or `')}\`, got \`${safeEcho(mode)}\``);
+    return refuseInput(`\`repo_rules\` must be \`${MODES.join('` or `')}\`, got \`${safeEcho(mode)}\``);
   }
   outputs.mode = wanted;
   if (wanted === 'off') {
@@ -584,11 +631,11 @@ async function loadRepoRules({ github, core, owner, repo, mode, trigger, changed
     });
   }
 
-  const budget = { charged: new Set(), read: new Map() };
-  const listed = await readManifest({ github, owner, repo, budget });
+  const budget = { charged: new Set(), read: new Map(), sources: limits.sources };
+  const listed = await readManifest({ github, owner, repo, budget, limits });
   if (listed.error) return stop(listed.error);
 
-  const read = await readPacks({ github, owner, repo, budget });
+  const read = await readPacks({ github, owner, repo, budget, limits });
   if (read.error) return stop(read.error);
 
   const groups = [...listed.packs, ...read.packs];
@@ -635,9 +682,12 @@ async function loadRepoRules({ github, core, owner, repo, mode, trigger, changed
     ? only.rules
     : neutralizeSections(units.map((unit) => `# ${unit.path}\n\n${unit.rules}`).join('\n\n'));
   const total = Buffer.byteLength(rendered, 'utf-8');
-  if (total > MAX_TOTAL_BYTES) {
+  if (total > ceiling) {
     return stop(
-      `${counted(units.length, 'rule source')} match this diff and hold ${total} bytes together, over the limit of ${MAX_TOTAL_BYTES}; scope them more tightly with \`paths\``,
+      `${counted(units.length, 'rule source')} match this diff and hold ${total} bytes together, over the limit of ${ceiling}; ` +
+        (ceiling < MAX_TOTAL_CEILING
+          ? `scope them more tightly with \`paths\`, or raise \`repo_rules_max_bytes\` up to ${MAX_TOTAL_CEILING}`
+          : 'scope them more tightly with `paths`'),
     );
   }
 
@@ -658,6 +708,11 @@ Object.assign(module.exports, {
   MANIFEST_PATH,
   MAX_BYTES,
   MAX_TOTAL_BYTES,
+  MAX_TOTAL_CEILING,
+  MAX_PACKS_CEILING,
+  MAX_SOURCES_CEILING,
+  resolveBudget,
+  resolveRuleCount,
   MAX_PACKS,
   MODES,
   parseRules,
