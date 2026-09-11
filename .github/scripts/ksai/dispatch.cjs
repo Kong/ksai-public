@@ -247,6 +247,7 @@ async function resolveRequest({
       jiraKey: result.jiraKey ?? null,
       planAsk: result.planAsk ?? '',
       planGiven: result.planGiven === true,
+      dryRun: result.dryRun === true,
       classified: classified !== '',
       routeSource: source,
       routeSurface: requestSurface,

@@ -312,6 +312,20 @@ async function selectImplementArm({ github, core, owner, repo, env }) {
   return { outputs, notices, failure: null };
 }
 
+/**
+ * testModeFor answers the mode a resolved request runs under. `--dry-run` asks for one on the
+ * request rather than through `test_mode`, which a comment cannot reach: a comment runs the
+ * workflow file on the default branch, so that input is only settable by merging it.
+ *
+ * @param {boolean | undefined} asked
+ * @param {string | undefined} configured
+ * @returns {string}
+ */
+function testModeFor(asked, configured) {
+  if (asked === true) return 'dry-run';
+  return String(configured ?? '') === '' ? 'test' : String(configured);
+}
+
 async function selectTesterArm({ github, core, owner, repo, env }) {
   const out = await resolveRequest({
     github,
@@ -386,6 +400,7 @@ async function selectTesterArm({ github, core, owner, repo, env }) {
     route_source: out.routeSource ?? '',
     route_surface: '',
     receipt: '',
+    test_mode: testModeFor(out.dryRun, env.TEST_MODE),
   };
   const notices = [];
   if (out.unnamed) notices.push('Comment carries the phrase and names no command; answering with the command list.');
@@ -417,13 +432,15 @@ async function selectTesterArm({ github, core, owner, repo, env }) {
     return { outputs, notices, failure: null };
   }
   if (out.mine) {
-    notices.push(`Answering the \`test\` command at ${out.model} / ${out.effort}.`);
+    const mode = out.dryRun ? ' as a dry run, starting no tester,' : '';
+    notices.push(`Answering the \`${out.command}\` command${mode} at ${out.model} / ${out.effort}.`);
     Object.assign(outputs, {
       command: out.command,
       model: out.model,
       effort: out.effort,
       route_surface: out.routeSurface,
       receipt: out.receipt,
+      test_mode: testModeFor(out.dryRun, env.TEST_MODE),
     });
   }
   return { outputs, notices, failure: null };

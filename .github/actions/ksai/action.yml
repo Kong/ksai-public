@@ -1455,6 +1455,7 @@ runs:
         THREAD_ROOT_ID: ${{ steps.context.outputs.thread_root_id }}
         CLASSIFIED_COMMAND: ${{ steps.verdict.outputs.verdict }}
         COMMENT_ID: ${{ steps.context.outputs.comment_id }}
+        TEST_MODE: ${{ inputs.test_mode }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:
         github-token: ${{ inputs.authorization_github_token || inputs.source_org_github_token }}
@@ -1544,7 +1545,7 @@ runs:
     - name: Comment what the tester understood
       if: >-
         ${{ inputs.flow == 'test' && inputs.publish == 'true' && inputs.dry_run == 'false' &&
-        inputs.test_mode == 'test' && steps.test_base.outcome == 'success' &&
+        steps.select_test.outputs.test_mode == 'test' && steps.test_base.outcome == 'success' &&
         steps.select_test.outputs.receipt != '' }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
@@ -1807,7 +1808,7 @@ runs:
 
     - name: Sweep every declared environment
       id: sweep_test_environments
-      if: ${{ steps.test_paths.outcome == 'success' && inputs.test_mode == 'sweep' }}
+      if: ${{ steps.test_paths.outcome == 'success' && steps.select_test.outputs.test_mode == 'sweep' }}
       shell: bash
       env:
         THREAD_NUM: ${{ steps.context.outputs.issue_number }}
@@ -1823,7 +1824,7 @@ runs:
       id: start_test_environments
       if: >-
         ${{ steps.test_paths.outcome == 'success' &&
-        (inputs.test_mode == 'test' || inputs.test_mode == 'dry-run') }}
+        (steps.select_test.outputs.test_mode == 'test' || steps.select_test.outputs.test_mode == 'dry-run') }}
       shell: bash
       env:
         THREAD_NUM: ${{ steps.context.outputs.issue_number }}
@@ -1857,7 +1858,9 @@ runs:
         printf 'sha256=%s\n' "$(sha256sum "${ARCHIVE}" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
     - name: Write a dry-run verdict
-      if: ${{ always() && steps.test_paths.outcome == 'success' && inputs.test_mode == 'dry-run' }}
+      if: >-
+        ${{ always() && steps.test_paths.outcome == 'success' &&
+        steps.select_test.outputs.test_mode == 'dry-run' }}
       shell: bash
       env:
         RUN: ${{ steps.test_paths.outputs.dir }}
@@ -1866,7 +1869,8 @@ runs:
 
     - name: Write a provisioning failure verdict
       if: >-
-        ${{ always() && steps.test_paths.outcome == 'success' && inputs.test_mode == 'test' &&
+        ${{ always() && steps.test_paths.outcome == 'success' &&
+        steps.select_test.outputs.test_mode == 'test' &&
         steps.start_test_environments.outcome == 'failure' }}
       shell: bash
       env:
@@ -1909,7 +1913,8 @@ runs:
     - name: Mint the tester's gateway bearer after environment setup
       id: test_gateway_token
       if: >-
-        ${{ steps.start_test_environments.outcome == 'success' && inputs.test_mode == 'test' &&
+        ${{ steps.start_test_environments.outcome == 'success' &&
+        steps.select_test.outputs.test_mode == 'test' &&
         inputs.dry_run == 'false' && steps.engine.outputs.name == 'claude' &&
         inputs.anthropic_auth == 'oidc-bearer' }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
@@ -1923,7 +1928,7 @@ runs:
 
     - name: Assemble the tester prompt
       if: >-
-        ${{ steps.test_paths.outcome == 'success' && inputs.test_mode == 'test' &&
+        ${{ steps.test_paths.outcome == 'success' && steps.select_test.outputs.test_mode == 'test' &&
         steps.start_test_environments.outcome == 'success' }}
       id: build_test
       shell: bash

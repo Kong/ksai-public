@@ -93,7 +93,7 @@ const JIRA_ACCOUNT_CORE = '[A-Za-z0-9](?:[A-Za-z0-9:_-]{0,126}[A-Za-z0-9])?';
 
 const JIRA_ACCOUNT_SHAPE = new RegExp(`^${JIRA_ACCOUNT_CORE}$`);
 
-const FLAGS = Object.freeze(['--force', '--plan', '--no-plan', '--plan-given']);
+const FLAGS = Object.freeze(['--force', '--plan', '--no-plan', '--plan-given', '--dry-run']);
 
 const FLAG_ALIASES = Object.freeze(Object.assign(Object.create(null), { '-f': '--force' }));
 
@@ -1022,6 +1022,7 @@ function selectArm({
     return reject(`resolved model is not a usable model id: ${safeEcho(model)}`);
   }
 
+  const dryRun = '--dry-run' in requested;
   const force = '--force' in requested;
   const wantsPlan = '--plan' in requested;
   const wantsNoPlan = '--no-plan' in requested;
@@ -1060,6 +1061,7 @@ function selectArm({
     writeAccess: opened.commands,
     model,
     effort,
+    dryRun,
     planAsk,
     planGiven,
     jiraKey,
