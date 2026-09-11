@@ -1710,42 +1710,10 @@ runs:
       shell: bash
       env:
         RUN_DIR: ${{ inputs.run_dir }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: |
         set -euo pipefail
-        workspace="$(realpath -e -- "${GITHUB_WORKSPACE}")"
-        target="${workspace}/${RUN_DIR}"
-        if [[ -e "${target}" || -L "${target}" ]]; then
-          echo "::error::run_dir must not already exist in the pull request tree: ${RUN_DIR}"
-          exit 1
-        fi
-        current="${workspace}"
-        IFS='/' read -r -a segments <<< "${RUN_DIR}"
-        for segment in "${segments[@]}"; do
-          current="${current}/${segment}"
-          if [[ -L "${current}" ]]; then
-            echo "::error::run_dir may not contain symlink components: ${RUN_DIR}"
-            exit 1
-          fi
-          if [[ -e "${current}" && ! -d "${current}" ]]; then
-            echo "::error::run_dir contains a non-directory component: ${RUN_DIR}"
-            exit 1
-          fi
-        done
-        mkdir -p -- "${current}"
-        run="$(realpath -e -- "${current}")"
-        case "${run}/" in
-          "${workspace}/"*) ;;
-          *) echo "::error::run_dir resolves outside the workspace: ${RUN_DIR}"; exit 1 ;;
-        esac
-        relative="${run#"${workspace}/"}"
-        case "${relative%%/*}" in
-          .git|.ksai|_ksai)
-            echo "::error::run_dir resolves inside a reserved top-level directory: ${RUN_DIR}"
-            exit 1
-            ;;
-        esac
-        echo "dir=${run}" >> "$GITHUB_OUTPUT"
-        echo "verdict=${run}/.pr-test-verdict.json" >> "$GITHUB_OUTPUT"
+        node "${SCRIPTS}/ksai/pr-test/run-dir.mjs"
 
     - name: Resolve acceptance criteria
       if: ${{ steps.test_paths.outcome == 'success' }}
@@ -1772,17 +1740,12 @@ runs:
       env:
         RUN: ${{ steps.test_paths.outputs.dir }}
         DEST: ${{ runner.temp }}/pr-test-criteria
+        FILE: criteria.json
+        PRODUCER: the trusted criteria collector
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: |
         set -euo pipefail
-        rm -rf -- "${DEST}"
-        mkdir -p -- "${DEST}"
-        source="${RUN}/criteria.json"
-        if [[ ! -f "${source}" || -L "${source}" ]]; then
-          echo "::error::the trusted criteria collector produced no regular criteria.json"
-          exit 1
-        fi
-        cp -- "${source}" "${DEST}/criteria.json"
-        echo "dir=${DEST}" >> "$GITHUB_OUTPUT"
+        node "${SCRIPTS}/ksai/pr-test/stage-artifact.mjs"
 
     - name: Upload the acceptance criteria before executing the pull request
       if: ${{ steps.test_criteria_artifact.outcome == 'success' }}
@@ -1876,17 +1839,12 @@ runs:
       env:
         RUN: ${{ steps.test_paths.outputs.dir }}
         DEST: ${{ runner.temp }}/pr-test-environments
+        FILE: environments.json
+        PRODUCER: the trusted provisioner
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: |
         set -euo pipefail
-        rm -rf -- "${DEST}"
-        mkdir -p -- "${DEST}"
-        source="${RUN}/environments.json"
-        if [[ ! -f "${source}" || -L "${source}" ]]; then
-          echo "::error::the trusted provisioner produced no regular environments.json"
-          exit 1
-        fi
-        cp -- "${source}" "${DEST}/environments.json"
-        echo "dir=${DEST}" >> "$GITHUB_OUTPUT"
+        node "${SCRIPTS}/ksai/pr-test/stage-artifact.mjs"
 
     - name: Upload the environment record before running the tester
       if: ${{ always() && steps.test_environment_artifact.outcome == 'success' }}
@@ -4110,26 +4068,10 @@ runs:
         RUN: ${{ steps.test_paths.outputs.dir }}
         SPEND: ${{ runner.temp }}/pr-test-spend/spend.json
         DEST: ${{ runner.temp }}/pr-test-verdict
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: |
         set -euo pipefail
-        rm -rf -- "${DEST}"
-        mkdir -p -- "${DEST}"
-        source="${RUN}/.pr-test-verdict.json"
-        present=false
-        staged=false
-        if [[ -f "${source}" && ! -L "${source}" ]]; then
-          cp -- "${source}" "${DEST}/.pr-test-verdict.json"
-          printf 'sha256=%s\n' "$(sha256sum "${DEST}/.pr-test-verdict.json" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
-          present=true
-          staged=true
-        fi
-        if [[ -f "${SPEND}" && ! -L "${SPEND}" ]]; then
-          cp -- "${SPEND}" "${DEST}/spend.json"
-          staged=true
-        fi
-        echo "dir=${DEST}" >> "$GITHUB_OUTPUT"
-        echo "present=${present}" >> "$GITHUB_OUTPUT"
-        echo "staged=${staged}" >> "$GITHUB_OUTPUT"
+        node "${SCRIPTS}/ksai/pr-test/stage-verdict.mjs"
 
     - name: Tear the environments down
       if: >-
@@ -4162,13 +4104,10 @@ runs:
       env:
         VERDICT: ${{ steps.test_artifact.outputs.dir }}/.pr-test-verdict.json
         SHA256: ${{ steps.test_artifact.outputs.sha256 }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: |
         set -euo pipefail
-        if [[ ! -f "${VERDICT}" || -L "${VERDICT}" ]]; then
-          echo "::error::the staged verdict changed during teardown"
-          exit 1
-        fi
-        printf '%s  %s\n' "${SHA256}" "${VERDICT}" | sha256sum --check --status
+        node "${SCRIPTS}/ksai/pr-test/verify-verdict.mjs"
 
     - name: Upload the tester's execution log
       if: >-
