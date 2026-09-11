@@ -4,14 +4,23 @@ const ASSUMED_CEILING_MINUTES = 35;
 
 const SALVAGE_MARGIN_MINUTES = 1;
 
+const MAX_CEILING_MINUTES = 7200;
+
 const CEILING_SHAPE = /^[0-9]+$/;
+
+function wholeNumber(value) {
+  const said = String(value ?? '').trim();
+  if (!CEILING_SHAPE.test(said)) return null;
+  const got = Number(said);
+  return Number.isSafeInteger(got) ? got : null;
+}
 
 function ceilingMinutes(value) {
   const said = String(value ?? '').trim();
   if (said === '') return ASSUMED_CEILING_MINUTES;
-  if (!CEILING_SHAPE.test(said)) return null;
-  const minutes = Number(said);
-  return minutes > SALVAGE_MARGIN_MINUTES ? minutes : null;
+  const minutes = wholeNumber(said);
+  if (minutes === null) return null;
+  return minutes > SALVAGE_MARGIN_MINUTES && minutes <= MAX_CEILING_MINUTES ? minutes : null;
 }
 
 /**
@@ -35,4 +44,12 @@ function watchdogDetail(env) {
   return ` It stopped because ${shown}.`;
 }
 
-module.exports = { ASSUMED_CEILING_MINUTES, MAX_REASON_CHARS, SALVAGE_MARGIN_MINUTES, ceilingMinutes, watchdogDetail };
+module.exports = {
+  ASSUMED_CEILING_MINUTES,
+  MAX_CEILING_MINUTES,
+  MAX_REASON_CHARS,
+  SALVAGE_MARGIN_MINUTES,
+  ceilingMinutes,
+  watchdogDetail,
+  wholeNumber,
+};

@@ -3952,123 +3952,14 @@ runs:
         REASON_FILE: ${{ runner.temp }}/ksai-watchdog.reason
         CAUSE_FILE: ${{ runner.temp }}/ksai-watchdog.cause
         STOP_FILE: ${{ steps.channel.outputs.state_dir && format('{0}/stop.json', steps.channel.outputs.state_dir) || '' }}
-        LOOP_FILE: ${{ runner.temp }}/ksai-watchdog.sh
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
         MAX_CONSECUTIVE_FAILURES: ${{ inputs.max_consecutive_tool_failures }}
         MAX_REPEATED_CALLS: ${{ inputs.max_repeated_tool_calls }}
         TRIM_PREFIX: ${{ github.workspace }}
         POLL_SECONDS: "20"
-      run: |
-        set -euo pipefail
-        if [[ -z "$JOB_TIMEOUT_MINUTES" ]]; then
-          JOB_TIMEOUT_MINUTES=35
-          echo "::warning::job_timeout_minutes was not set, so the watchdog assumes a ${JOB_TIMEOUT_MINUTES}-minute job ceiling. GitHub cancels a job whose own timeout-minutes is lower before the watchdog can fire, and that run reports nothing at all. Pass this job's timeout-minutes"
-        fi
-        if ! [[ "$JOB_TIMEOUT_MINUTES" =~ ^[0-9]+$ ]]; then
-          echo "::error::job_timeout_minutes must be a non-negative integer, got '${JOB_TIMEOUT_MINUTES}'"
-          exit 1
-        fi
-        if (( JOB_TIMEOUT_MINUTES == 0 )); then
-          echo "Watchdog disabled (job_timeout_minutes=0)"
-          exit 0
-        fi
-        if (( JOB_TIMEOUT_MINUTES <= 1 )); then
-          echo "::error::job_timeout_minutes must exceed the 1-minute salvage margin, got ${JOB_TIMEOUT_MINUTES}"
-          exit 1
-        fi
-        if ! [[ "$MAX_CONSECUTIVE_FAILURES" =~ ^[0-9]+$ ]]; then
-          echo "::error::max_consecutive_tool_failures must be a non-negative integer, got '${MAX_CONSECUTIVE_FAILURES}'"
-          exit 1
-        fi
-        if ! [[ "$MAX_REPEATED_CALLS" =~ ^[0-9]+$ ]]; then
-          echo "::error::max_repeated_tool_calls must be a non-negative integer, got '${MAX_REPEATED_CALLS}'"
-          exit 1
-        fi
-        if (( 10#$MAX_REPEATED_CALLS == 1 )); then
-          echo "::error::max_repeated_tool_calls of 1 would stop every run at its first tool call, since one call is already a run of one. Use 0 to turn the check off, or 2 or more"
-          exit 1
-        fi
-        if [[ -z "$CLI_PATTERN" ]]; then
-          echo "::error::the watchdog was armed with no CLI pattern, so it would stop nothing"
-          exit 1
-        fi
-        MAX_CONSECUTIVE_FAILURES=$(( 10#$MAX_CONSECUTIVE_FAILURES ))
-        MAX_REPEATED_CALLS=$(( 10#$MAX_REPEATED_CALLS ))
-        rm -f "$FIRED_FILE" "$REASON_FILE" "$CAUSE_FILE"
-        DEADLINE=$(( (JOB_TIMEOUT_MINUTES - 1) * 60 - POLL_SECONDS ))
-        if (( DEADLINE < 1 )); then DEADLINE=1; fi
-        ARMED_AT_MS=$(( $(date +%s) * 1000 ))
-        TRANSCRIPT_WINDOW_MS=$(( POLL_SECONDS * 3000 ))
-        export DEADLINE ARMED_AT_MS TRANSCRIPT_WINDOW_MS JOB_TIMEOUT_MINUTES CLI_PATTERN ENGINE OPENCODE_EVENTS_FILE STOP_FILE
-        cat > "$LOOP_FILE" <<'LOOP'
-        set -uo pipefail
-        end=$(( $(date +%s) + DEADLINE ))
-        while :; do
-          sleep "$POLL_SECONDS"
-          reason=""
-          ceiling=0
-          cause="progress"
-          halt=""
-          if [[ -n "$STOP_FILE" && -r "$STOP_FILE" ]]; then
-            halt="$(STOP_FILE="$STOP_FILE" node "${SCRIPTS}/ksai/stop-due.mjs" 2>/dev/null || true)"
-          fi
-          if [[ -n "$halt" ]]; then
-            reason="$halt"
-            cause="halt"
-          elif (( $(date +%s) >= end )); then
-            reason="the job ceiling (${JOB_TIMEOUT_MINUTES}m) was reached"
-            ceiling=1
-            cause="ceiling"
-          elif (( MAX_CONSECUTIVE_FAILURES > 0 || MAX_REPEATED_CALLS > 0 )); then
-            if [ "${ENGINE}" = "opencode" ]; then
-              said="$(TRANSCRIPT_SINCE="$ARMED_AT_MS" node "${SCRIPTS}/kreview/opencode-progress.mjs" --check)"
-            else
-              said="$(TRANSCRIPT_SINCE="$ARMED_AT_MS" node "${SCRIPTS}/ksai/progress.mjs" --check)"
-            fi
-            if (( $? == 3 )); then
-              reason="$said"
-            fi
-          fi
-          if [[ -z "$reason" ]]; then
-            continue
-          fi
-          trap '' TERM
-          printf '%s\n' "$reason" > "$REASON_FILE"
-          printf '%s\n' "$cause" > "$CAUSE_FILE"
-          touch "$FIRED_FILE"
-          killed=0
-          workspace="$(cd "$GITHUB_WORKSPACE" 2>/dev/null && pwd -P || printf '%s' "$GITHUB_WORKSPACE")"
-          for pid in $(pgrep -f "$CLI_PATTERN" 2>/dev/null || true); do
-            if [[ "$(readlink -f "/proc/${pid}/cwd" 2>/dev/null)" == "$workspace" ]]; then
-              kill -TERM "$pid" 2>/dev/null && killed=1
-            fi
-          done
-          if (( killed == 1 )); then
-            trap - TERM
-            break
-          fi
-          rm -f "$REASON_FILE" "$CAUSE_FILE" "$FIRED_FILE"
-          trap - TERM
-          if (( ceiling == 1 )); then
-            echo "::warning::The job ceiling was reached, but no CLI process running in ${GITHUB_WORKSPACE} was found to stop. Nothing was salvaged by the watchdog"
-            break
-          fi
-        done
-        LOOP
-        nohup bash "$LOOP_FILE" >/dev/null 2>&1 &
-        echo "$!" > "$PID_FILE"
-        echo "fired_file=${FIRED_FILE}" >> "$GITHUB_OUTPUT"
-        echo "reason_file=${REASON_FILE}" >> "$GITHUB_OUTPUT"
-        echo "cause_file=${CAUSE_FILE}" >> "$GITHUB_OUTPUT"
-        echo "armed_at_ms=${ARMED_AT_MS}" >> "$GITHUB_OUTPUT"
-        echo "kill_at_ms=$(( ARMED_AT_MS + DEADLINE * 1000 ))" >> "$GITHUB_OUTPUT"
-        echo "ceiling=${JOB_TIMEOUT_MINUTES}" >> "$GITHUB_OUTPUT"
-        echo "Watchdog armed: SIGTERM to the CLI after ${DEADLINE}s (job ceiling ${JOB_TIMEOUT_MINUTES}m)"
-        if (( MAX_CONSECUTIVE_FAILURES > 0 || MAX_REPEATED_CALLS > 0 )); then
-          echo "Circuit breaker armed, polled every ${POLL_SECONDS}s: SIGTERM after ${MAX_CONSECUTIVE_FAILURES} failures in a row or ${MAX_REPEATED_CALLS} identical calls in a row (0 means that half is off)"
-        else
-          echo "Circuit breaker disabled (both limits are 0)"
-        fi
+        STAMPED_AT_MS: ${{ steps.plugin_ref.outputs.started_at_ms }}
+        MISSED_FILE: ${{ runner.temp }}/ksai-watchdog.missed
+      run: node "${SCRIPTS}/ksai/watchdog-arm.mjs"
 
     - name: Run the tester
       if: >-
@@ -4807,32 +4698,9 @@ runs:
         FIRED_FILE: ${{ steps.watchdog.outputs.fired_file }}
         REASON_FILE: ${{ steps.watchdog.outputs.reason_file }}
         CAUSE_FILE: ${{ steps.watchdog.outputs.cause_file }}
-      run: |
-        set -euo pipefail
-        if [[ -f "$PID_FILE" ]]; then
-          kill "$(cat "$PID_FILE")" 2>/dev/null || echo "Watchdog had already exited"
-          rm -f "$PID_FILE"
-        fi
-        if [[ -n "$FIRED_FILE" && -f "$FIRED_FILE" ]]; then
-          reason=""
-          if [[ -n "$REASON_FILE" && -f "$REASON_FILE" ]]; then
-            reason="$(tr -d '\r' < "$REASON_FILE" | head -n 1)"
-          fi
-          cause="ceiling"
-          if [[ -n "$CAUSE_FILE" && -f "$CAUSE_FILE" ]]; then
-            cause="$(tr -d '\r' < "$CAUSE_FILE" | head -n 1)"
-          fi
-          if [[ "$cause" != "progress" && "$cause" != "halt" ]]; then cause="ceiling"; fi
-          echo "fired=true" >> "$GITHUB_OUTPUT"
-          echo "cause=${cause}" >> "$GITHUB_OUTPUT"
-          echo "reason=${reason}" >> "$GITHUB_OUTPUT"
-          echo "::warning::This run was stopped on purpose: ${reason:-no reason was recorded}. The \"SDK execution error\" and \"exited with code 143\" above are that stop - 143 is SIGTERM - and not a fault in the run. What it had done before it was stopped is under \"What the run did\""
-          echo "The watchdog fired: the CLI was stopped short of the job ceiling"
-        else
-          echo "fired=false" >> "$GITHUB_OUTPUT"
-          echo "cause=" >> "$GITHUB_OUTPUT"
-          echo "reason=" >> "$GITHUB_OUTPUT"
-        fi
+        MISSED_FILE: ${{ steps.watchdog.outputs.missed_file }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      run: node "${SCRIPTS}/ksai/watchdog-disarm.mjs"
 
     - name: Report the tool call timeline
       id: timeline
