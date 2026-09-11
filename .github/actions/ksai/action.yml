@@ -3161,19 +3161,10 @@ runs:
       shell: bash
       env:
         STATE_DIR: ${{ runner.temp }}/ksai-channel
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: |
         set -euo pipefail
-        rm -rf -- "$STATE_DIR"
-        mkdir -p -- "$STATE_DIR/inbox" "$STATE_DIR/run/ticks" "$STATE_DIR/run/consumed"
-        nonce="$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-        if [[ ! "$nonce" =~ ^[0-9a-f]{16}$ ]]; then
-          echo "::warning::The run channel could not draw a nonce, so no notes will reach this run"
-          nonce=""
-        fi
-        {
-          printf 'state_dir=%s\n' "$STATE_DIR"
-          printf 'nonce=%s\n' "$nonce"
-        } >> "$GITHUB_OUTPUT"
+        node "${SCRIPTS}/ksai/channel-open.mjs"
 
     - name: Release the thread this run was asked to unlock
       id: release_thread
@@ -4505,31 +4496,10 @@ runs:
       env:
         PID_FILE: ${{ runner.temp }}/ksai-courier.pid
         CHANNEL_DIR: ${{ steps.channel.outputs.state_dir }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: |
         set -euo pipefail
-        if [[ -f "$PID_FILE" ]]; then
-          pid="$(cat "$PID_FILE")"
-          if kill "$pid" 2>/dev/null; then
-            for _ in {1..90}; do
-              if ! kill -0 "$pid" 2>/dev/null; then
-                break
-              fi
-              sleep 1
-            done
-            if kill -0 "$pid" 2>/dev/null; then
-              echo "::warning::The courier did not drain within 90 seconds, so it will be stopped now"
-              kill -KILL "$pid" 2>/dev/null || true
-            fi
-          else
-            echo "The courier had already exited"
-          fi
-          rm -f "$PID_FILE"
-        fi
-        if [[ -s "${CHANNEL_DIR}/courier.log" ]]; then
-          echo "::group::What the courier read"
-          cat "${CHANNEL_DIR}/courier.log"
-          echo "::endgroup::"
-        fi
+        node "${SCRIPTS}/ksai/courier-stop.mjs"
 
     - name: Disarm the watchdog
       id: disarm_watchdog
