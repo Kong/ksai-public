@@ -1,6 +1,6 @@
 'use strict';
 
-const { COMMANDS, MODEL_CORE, MODEL_SHAPE, canonicalCommand } = require('./select-arm.cjs');
+const { COMMANDS, DIALS_ARM_SHAPE, MODEL_CORE, MODEL_SHAPE, canonicalCommand } = require('./select-arm.cjs');
 const { markerJson } = require('./run-record.cjs');
 const { escapeForRegExp } = require('./text.cjs');
 
@@ -50,6 +50,7 @@ const ATTEMPT_FIELDS = Object.freeze([
   'route_source',
   'at',
   'reason',
+  'dials_arm',
 ]);
 
 function armFields(arm) {
@@ -108,6 +109,7 @@ function validAttempt(attempt) {
   if (attempt.route_source !== '' && !ROUTE_SOURCES.includes(attempt.route_source)) return false;
   if (attempt.at !== null && !(Number.isSafeInteger(attempt.at) && attempt.at > 0)) return false;
   if (attempt.reason !== null && !shaped(attempt.reason, REASON_SHAPE)) return false;
+  if (attempt.dials_arm !== null && !shaped(attempt.dials_arm, DIALS_ARM_SHAPE)) return false;
   return typeof attempt.selection === 'string' && attempt.selection.length <= 80;
 }
 

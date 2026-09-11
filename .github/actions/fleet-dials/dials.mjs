@@ -1,9 +1,11 @@
 const SEGMENT = '[A-Za-z0-9][A-Za-z0-9._-]{0,63}';
 const MODEL = new RegExp(`^${SEGMENT}(/${SEGMENT}){0,2}$`);
 
+const ARM = new RegExp(`^${SEGMENT}(:${SEGMENT})?$`);
+
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 
-const held = (model, effort, why) => ({ model, effort, served: false, why });
+const held = (model, effort, why) => ({ model, effort, arm: '', served: false, why });
 
 /**
  * bare reports whether an endpoint is an https URL with a host and nothing a request would carry
@@ -88,5 +90,7 @@ export async function readDials({
     return keep('the control plane served an effort this workflow will not pass on');
   }
 
-  return { model: servedModel, effort: servedEffort, served: true, why: '' };
+  const arm = typeof served.arm === 'string' && ARM.test(served.arm) ? served.arm : '';
+
+  return { model: servedModel, effort: servedEffort, arm, served: true, why: '' };
 }

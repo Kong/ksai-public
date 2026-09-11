@@ -12,6 +12,7 @@ const FIELDS = Object.freeze([
   'model',
   'effort',
   'selected_by',
+  'dials_arm',
   'triage',
   'engine',
   'review_protocol',

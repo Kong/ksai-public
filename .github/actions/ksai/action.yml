@@ -263,6 +263,14 @@ inputs:
     description: "model id or catalog alias for the run. Exposed as an input so one value feeds both the CLI and any later record; `--model` stays forbidden in extra_claude_args."
     required: false
     default: "flagship"
+  dials_arm:
+    description: >-
+      experiment arm the control plane assigned this run, as `<experiment>:<control|variant>`, or
+      `baseline` where no experiment is running. Empty, the default, means no arm produced this
+      run's dials. It steers nothing: it is recorded beside the result so a later reading can group
+      by the arm that produced it.
+    required: false
+    default: ""
   allowed_models:
     description: >-
       models a triggering comment may request with `--model`, comma- or space-separated. Also bounds the model
@@ -3089,6 +3097,7 @@ runs:
         EFFORT: ${{ steps.write_arm.outputs.effort || steps.select.outputs.effort }}
         MODEL_SOURCE: ${{ steps.write_arm.outputs.model_source || steps.select.outputs.model_source }}
         EFFORT_SOURCE: ${{ steps.write_arm.outputs.effort_source || steps.select.outputs.effort_source }}
+        DIALS_ARM: ${{ inputs.dials_arm }}
         SELECTION: write context collected; final selection pending
         ROUTE_COMMAND: ${{ steps.select.outputs.command }}
         ROUTE_SURFACE: ${{ steps.select.outputs.route_surface }}
@@ -3331,6 +3340,7 @@ runs:
         EFFORT: ${{ steps.write_arm.outputs.effort }}
         MODEL_SOURCE: ${{ steps.write_arm.outputs.model_source }}
         EFFORT_SOURCE: ${{ steps.write_arm.outputs.effort_source }}
+        DIALS_ARM: ${{ inputs.dials_arm }}
         SELECTION: >-
           ${{ format('{0}: {1}', steps.write_arm.outputs.profile, steps.write_arm.outputs.reason) }}
         ROUTE_COMMAND: ${{ steps.select.outputs.command }}
@@ -5154,6 +5164,7 @@ runs:
         EFFORT: ${{ steps.write_arm.outputs.effort || steps.select.outputs.effort }}
         MODEL_SOURCE: ${{ steps.write_arm.outputs.model_source || steps.select.outputs.model_source }}
         EFFORT_SOURCE: ${{ steps.write_arm.outputs.effort_source || steps.select.outputs.effort_source }}
+        DIALS_ARM: ${{ inputs.dials_arm }}
         SELECTION: >-
           ${{ steps.write_arm.outputs.profile != '' &&
           format('{0}: {1}', steps.write_arm.outputs.profile, steps.write_arm.outputs.reason) ||
@@ -5487,6 +5498,7 @@ runs:
         EFFORT: ${{ steps.select_arm.outputs.effort }}
         ENGINE: ${{ steps.engine.outputs.name }}
         SELECTED_BY: ${{ steps.select_arm.outputs.selected_by }}
+        DIALS_ARM: ${{ inputs.dials_arm }}
         SHADOW: ${{ inputs.publish == 'false' && 'true' || 'false' }}
         TRIAGE_MODE: ${{ inputs.triage }}
         TRIAGE_TIER: ${{ steps.triage.outputs.tier }}
@@ -5617,6 +5629,7 @@ runs:
         EFFORT: ${{ steps.select_arm.outputs.effort }}
         ENGINE: ${{ steps.engine.outputs.name }}
         SELECTED_BY: ${{ steps.select_arm.outputs.selected_by }}
+        DIALS_ARM: ${{ inputs.dials_arm }}
         REQUESTER: ${{ steps.context.outputs.commenter }}
         TRIAGE_MODE: ${{ inputs.triage }}
         TRIAGE_FILES: ${{ steps.triage.outputs.files }}

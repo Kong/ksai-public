@@ -41,7 +41,7 @@ const {
   validAttempt,
   writeStateMarker,
 } = require('../lib/write-record.cjs');
-const { armLabel } = require('../lib/select-arm.cjs');
+const { DIALS_ARM_SHAPE, armLabel } = require('../lib/select-arm.cjs');
 const { counted } = require('../lib/text.cjs');
 const { STATUS_TABLE } = require('./publish.cjs');
 
@@ -340,6 +340,11 @@ function reasonToken(value) {
   return REASON_SHAPE.test(said) ? said : UNCLASSIFIED_REASON;
 }
 
+function dialsArm(value) {
+  const named = oneLine(value ?? '').trim();
+  return named !== '' && DIALS_ARM_SHAPE.test(named) ? named : null;
+}
+
 function spendOfEnv(env) {
   const parts = [
     spendFromFields({
@@ -400,6 +405,7 @@ function attemptOf(env = process.env, now = Date.now()) {
     route_source: String(env.ROUTE_SOURCE ?? ''),
     at: Number.isSafeInteger(now) && now > 0 ? Math.floor(now / 1000) : null,
     reason: reasonToken(env.REASON),
+    dials_arm: dialsArm(env.DIALS_ARM),
     ...spendOfEnv(env),
   };
   return validAttempt(attempt) ? { attempt, run_base: runBase } : { error: 'this run attempt is not valid write-report state' };

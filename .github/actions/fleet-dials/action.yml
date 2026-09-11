@@ -49,6 +49,20 @@ outputs:
   effort:
     description: effort this run should use
     value: ${{ steps.dials.outputs.effort }}
+  arm:
+    description: >-
+      the experiment arm the control plane assigned this repository, as
+      `<experiment>:<control|variant>`, or `baseline` where no experiment is
+      running. A result recorded without the arm that produced it cannot be read
+      back against it.
+
+      Empty means no arm produced this run's dials, and deliberately does not
+      say which of three: the pinned values were kept, the control plane named
+      no arm, or it named one this action will not pass on. A consumer reads an
+      empty arm as "not part of an experiment" and is right every time. The
+      shape is the model's plus one colon, so an arm cannot carry a newline into
+      whatever records it.
+    value: ${{ steps.dials.outputs.arm }}
 
 runs:
   using: composite
@@ -80,3 +94,4 @@ runs:
           }
           core.setOutput('model', answer.model);
           core.setOutput('effort', answer.effort);
+          core.setOutput('arm', answer.arm);
