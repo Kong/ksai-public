@@ -4177,21 +4177,8 @@ runs:
         GH_TOKEN: ${{ inputs.source_org_github_token }}
         REPO: ${{ github.repository }}
       run: |
-        set -uo pipefail
-        status=0
-        IFS=$'\t' read -r base_ref base_sha head_sha < <(
-          gh pr view "${PR}" --repo "${REPO}" --json baseRefName,baseRefOid,headRefOid \
-            --jq '[.baseRefName, .baseRefOid, .headRefOid] | @tsv'
-        )
-        node "${SCRIPTS}/ksai/pr-test/publish-cli.mjs" --run-dir "${RUN_DIR}" --pr "${PR}" \
-          --head-sha "${head_sha}" --base-ref "${base_ref}" --base-sha "${base_sha}" \
-          --trigger-phrase "${PHRASE}" || status=$?
-        if [ "${status}" -ne 0 ]; then
-          echo "outcome=rejected" >> "$GITHUB_OUTPUT"
-        else
-          outcome="$(node -e 'const fs=require("node:fs");try{process.stdout.write(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).outcome??"unknown")}catch{process.stdout.write("unknown")}' "${RUN_DIR}/.pr-test-verdict.json")"
-          echo "outcome=${outcome}" >> "$GITHUB_OUTPUT"
-        fi
+        set -euo pipefail
+        node "${SCRIPTS}/ksai/pr-test/review-post.mjs" render
 
     - name: Upload validated hypothesis results
       if: ${{ always() && inputs.flow == 'test-publish' && steps.render_test.outcome == 'success' }}
@@ -4215,47 +4202,10 @@ runs:
         RUN_DIR: ${{ runner.temp }}/pr-test-download
         SOURCE_RUN: ${{ inputs.run_id || github.run_id }}
         RENDERED_OUTCOME: ${{ steps.render_test.outputs.outcome }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: |
         set -euo pipefail
-        body="${RUN_DIR}/review.md"
-        published_outcome="${RENDERED_OUTCOME:-rejected}"
-        tested_head="$(node -e 'const fs=require("node:fs");try{process.stdout.write(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).pull_request?.head_sha??"")}catch{}' "${RUN_DIR}/criteria.json")"
-        tested_base="$(node -e 'const fs=require("node:fs");try{process.stdout.write(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).pull_request?.base??"")}catch{}' "${RUN_DIR}/criteria.json")"
-        tested_base_sha="$(node -e 'const fs=require("node:fs");try{process.stdout.write(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).pull_request?.base_sha??"")}catch{}' "${RUN_DIR}/criteria.json")"
-        tested_head_label="${tested_head:-unknown}"
-        tested_base_label="${tested_base:-unknown}"
-        tested_base_sha_label="${tested_base_sha:-unknown}"
-        if [ ! -s "${body}" ]; then
-          mkdir -p "$(dirname "${body}")"
-          {
-            printf '%s\n' '## Adversarial pull request test' '' \
-              'The run failed before it produced a verdict.' ''
-            printf 'Tested head: `%s`.\n' "${tested_head_label}"
-            printf 'Tested base: `%s` at `%s`.\n' "${tested_base_label}" "${tested_base_sha_label}"
-          } > "${body}"
-          published_outcome="rejected"
-        fi
-        IFS=$'\t' read -r current_base current_base_sha current_head < <(
-          gh pr view "${PR}" --repo "${REPO}" --json baseRefName,baseRefOid,headRefOid \
-            --jq '[.baseRefName, .baseRefOid, .headRefOid] | @tsv'
-        )
-        if [ -z "${tested_head}" ] || [ -z "${tested_base}" ] || [ -z "${tested_base_sha}" ] || \
-          [ "${tested_head}" != "${current_head}" ] || [ "${tested_base}" != "${current_base}" ] || \
-          [ "${tested_base_sha}" != "${current_base_sha}" ]; then
-          {
-            printf '%s\n' '## Adversarial pull request test' '' \
-              'The tested head or base no longer matches the pull request. This result was not published.' ''
-            printf 'Tested head: `%s`.\n' "${tested_head_label}"
-            printf 'Current head: `%s`.\n' "${current_head}"
-            printf 'Tested base: `%s` at `%s`.\n' "${tested_base_label}" "${tested_base_sha_label}"
-            printf 'Current base: `%s` at `%s`.\n' "${current_base}" "${current_base_sha}"
-          } > "${body}"
-          published_outcome="rejected"
-        fi
-        printf '\n<sub>Run: %s/%s/actions/runs/%s</sub>\n' \
-          "${GITHUB_SERVER_URL}" "${REPO}" "${SOURCE_RUN}" >> "${body}"
-        gh pr comment "${PR}" --repo "${REPO}" --body-file "${body}"
-        printf 'outcome=%s\n' "${published_outcome}" >> "$GITHUB_OUTPUT"
+        node "${SCRIPTS}/ksai/pr-test/review-post.mjs" post
 
     - name: Decide whether the courier carries comments naming no command
       id: courier_pull
