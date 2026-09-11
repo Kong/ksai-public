@@ -226,8 +226,12 @@ export function addTally(into, from) {
   return into;
 }
 
-function addUsage(tally, entry) {
-  addTally(tally, tallyOf(entry?.message?.usage));
+export function usageOnce(billed, entry) {
+  const { id, usage } = entry?.message ?? {};
+  if (!id) return usage;
+  if (billed.has(id)) return null;
+  billed.add(id);
+  return usage;
 }
 
 /** live answers what a stream is doing now and what it has spent, in one pass. */
@@ -235,6 +239,7 @@ export function live(source, { trim = '' } = {}) {
   const prefix = plain(trim, 200).replace(/\/+$/, '');
   const open = new Map();
   const tokens = emptyTally();
+  const billed = new Set();
   const narration = [];
   let last = null;
   let calls = 0;
@@ -248,7 +253,7 @@ export function live(source, { trim = '' } = {}) {
       continue;
     }
     if (entry?.type === 'assistant') {
-      addUsage(tokens, entry);
+      addTally(tokens, tallyOf(usageOnce(billed, entry)));
       const content = Array.isArray(entry?.message?.content) ? entry.message.content : [];
       for (const block of content) {
         if (block?.type !== 'text') continue;

@@ -92,6 +92,8 @@ const DOC_FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
 
 const DOC_QUOTE = /^ {0,3}>/;
 
+const QUOTE_RUN = /^(?: {0,3}>[ \t]?)+/;
+
 const opensFence = (fence) => !(fence[1].startsWith('`') && String(fence[2] ?? '').includes('`'));
 
 const THEMATIC_BREAK = /^[ \t]{0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/;
@@ -165,6 +167,8 @@ const RESERVED_COMMENT = /(?:ksai|muthur)-(?:plan|do|phase)|kreview-(?:ids|findi
 
 const CRITERIA_MARKER_PREFIX = '<!-- ksai-criteria:';
 
+const PHASE_MARKER_PREFIX = '<!-- ksai-phase:';
+
 const CRITERIA_REF_SHAPE = /^([A-Za-z0-9._-]{1,100})\/([A-Za-z0-9._-]{1,100})#([1-9][0-9]{0,9})$/;
 
 const JIRA_REF_SHAPE = /^([a-z0-9-]{1,63}(?:\.[a-z0-9-]{1,63}){1,10})\/([A-Z][A-Z0-9]{1,9}-[1-9][0-9]{0,9})$/;
@@ -209,18 +213,25 @@ function retargetPermalinks(text, { repo = null, from = null, to = null } = {}) 
   return said.replace(at, (_, head) => `${head}${landed}`);
 }
 
-const HELD_URL = new RegExp(`${escapeForRegExp(SITE)}[^\\s)]*`, 'g');
+const HELD_URL = new RegExp(`${escapeForRegExp(SITE)}[^\\s)<>]*`, 'g');
 
 const HELD_MARK = '\u0000';
+
+const HELD_BACK = new RegExp(`${HELD_MARK}([0-9]{1,6})${HELD_MARK}`, 'g');
 
 function holdDocsUrls(text) {
   const held = [];
   const masked = String(text ?? '').split(HELD_MARK).join('').replace(HELD_URL, (found) => {
     held.push(found);
-    return HELD_MARK;
+    return `${HELD_MARK}${held.length - 1}${HELD_MARK}`;
   });
-  let at = 0;
-  return { masked, restore: (value) => String(value).replaceAll(HELD_MARK, () => held[at++] ?? '') };
+  return {
+    masked,
+    restore: (value) =>
+      String(value)
+        .replace(HELD_BACK, (_, at) => held[Number(at)] ?? '')
+        .replaceAll(HELD_MARK, ''),
+  };
 }
 
 function scrub(text, { triggerPhrase = null } = {}) {
@@ -770,7 +781,7 @@ function parsePlanDocument(text) {
         listed = false;
         itemAt = -1;
       }
-      if (region === 'ruled' && RULED_ITEM.test(line)) return { error: notAStep(i + 1) };
+      if (region === 'ruled' && RULED_ITEM.test(line.replace(QUOTE_RUN, ''))) return { error: notAStep(i + 1) };
       if (RULED_ITEM.test(line)) listed = true;
       const marker = coded ? null : ITEM_MARKER.exec(line);
       if (marker) itemAt = contentColumn(marker[1], marker[2]);
@@ -1273,6 +1284,16 @@ function carryRecords(from, to) {
       .join('\n');
     body = `${without.replace(/\s+$/, '')}\n\n${marker.trim()}\n`;
   }
+  const carried = new Set(body.split('\n').map((line) => line.trim()));
+  const phases = [
+    ...new Set(
+      was
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.startsWith(PHASE_MARKER_PREFIX) && !carried.has(line)),
+    ),
+  ];
+  if (phases.length > 0) body = `${body.replace(/\s+$/, '')}\n\n${phases.join('\n')}\n`;
   const status = locateStatus(was);
   if (!status.absent && !status.error) {
     const spliced = spliceStatus(body, was.slice(status.start, status.end));
@@ -1487,6 +1508,7 @@ module.exports = {
   shapesIn,
   releaseOf,
   carryRecords,
+  PHASE_MARKER_PREFIX,
   linked,
   readRelease,
   releaseRef,

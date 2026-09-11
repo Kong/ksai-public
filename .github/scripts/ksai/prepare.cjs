@@ -148,6 +148,7 @@ async function selectImplementArm({ github, core, owner, repo, env }) {
     onReview: env.ON_REVIEW,
     reviewState: env.REVIEW_STATE,
     bare: env.ON_OWN_PULL === 'true',
+    commented: String(env.COMMENT_ID ?? '').trim() !== '',
     flow: 'implement',
     trigger: env.TRIGGER,
     continuation: env.IS_CONTINUATION,
@@ -312,6 +313,7 @@ async function selectTesterArm({ github, core, owner, repo, env }) {
     onIssue: env.ON_ISSUE,
     threadRootId: env.THREAD_ROOT_ID,
     classifiedCommand: env.CLASSIFIED_COMMAND,
+    commented: String(env.COMMENT_ID ?? '').trim() !== '',
     flow: 'tester',
     trigger: env.TRIGGER,
     arm: {

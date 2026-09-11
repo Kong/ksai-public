@@ -3,7 +3,7 @@ import { pathToFileURL } from 'node:url';
 
 import { writeOutputs } from '../lib/outputs.mjs';
 import { counted, plural } from '../lib/text.cjs';
-import { elapsed, plain, read } from './progress.mjs';
+import { addTally, elapsed, plain, read, tallyOf, usageOnce } from './progress.mjs';
 
 const DELEGATING = new Set(['Agent', 'Task']);
 const MAX_LABEL = 60;
@@ -11,20 +11,6 @@ const MAX_TOOLS = 16;
 const ORCHESTRATOR = 'orchestrator';
 
 const finite = (value) => (Number.isFinite(value) ? value : null);
-
-function usageOf(entry) {
-  const held = entry?.message?.usage;
-  const take = (key) => {
-    const value = held?.[key];
-    return Number.isFinite(value) && value > 0 ? value : 0;
-  };
-  return {
-    input_tokens: take('input_tokens'),
-    output_tokens: take('output_tokens'),
-    cache_read_tokens: take('cache_read_input_tokens'),
-    cache_creation_tokens: take('cache_creation_input_tokens'),
-  };
-}
 
 function blocks(entry, type) {
   const content = entry?.message?.content;
@@ -46,6 +32,7 @@ export function spanOf(source) {
   let calls = 0;
   let failures = 0;
   const tokens = { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0 };
+  const billed = new Set();
   const tools = new Map();
   const named = new Map();
   const open = new Map();
@@ -65,10 +52,7 @@ export function spanOf(source) {
       end = at;
       last = at;
     }
-    if (entry?.type === 'assistant') {
-      const used = usageOf(entry);
-      for (const key of Object.keys(tokens)) tokens[key] += used[key];
-    }
+    if (entry?.type === 'assistant') addTally(tokens, tallyOf(usageOnce(billed, entry)));
     for (const block of blocks(entry, 'tool_use')) {
       const name = plain(block?.name, 40) || 'unknown';
       calls += 1;

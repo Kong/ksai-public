@@ -56,6 +56,7 @@ const PLAN_IDENTITY_KIND = 'implement';
 const PLAN_PHASE = 'plan';
 const DIRECT_PHASE = 'direct';
 const MAX_ARM_ROWS = 12;
+const WORKING_OUTCOMES = Object.freeze(['initializing', 'running']);
 const PUBLISHED_LIMIT = 65_536;
 const RESERVED_BODY_CHARS = 64;
 
@@ -280,6 +281,29 @@ function attemptId(env) {
   return ATTEMPT_ID_SHAPE.test(id) ? id : '';
 }
 
+function runOfAttempt(id) {
+  const runId = String(id ?? '').split(':')[0];
+  return /^\d{1,20}$/.test(runId) ? runId : '';
+}
+
+async function planHeldBy({ github, owner, repo, state, attempt }) {
+  const mine = runOfAttempt(attempt.id);
+  const working = state.attempts
+    .filter((entry) => WORKING_OUTCOMES.includes(entry.outcome))
+    .map((entry) => runOfAttempt(entry.id))
+    .filter((runId) => runId !== '' && runId !== mine);
+  for (const runId of new Set(working)) {
+    let status;
+    try {
+      status = (await github.rest.actions.getWorkflowRun({ owner, repo, run_id: Number(runId) }))?.data?.status;
+    } catch {
+      continue;
+    }
+    if (typeof status === 'string' && status !== '' && status !== 'completed') return runId;
+  }
+  return '';
+}
+
 function armModel(value) {
   const said = String(value ?? '').trim();
   return ARM_MODEL_SHAPE.test(said) ? said : '';
@@ -410,10 +434,22 @@ function armCostOf(attempt) {
   return { known, missing };
 }
 
-function totalOf(state) {
-  const paid = state.attempts.reduce((sum, attempt) => sum + attempt.paid_runs, 0);
+function tickingAttempt(state, live) {
+  if (live === null) return null;
+  const named = String(live.attempt ?? '');
+  const found = named === '' ? state.attempts.at(-1) : state.attempts.find((entry) => entry.id === named);
+  return WORKING_OUTCOMES.includes(found?.outcome) ? found : null;
+}
+
+function totalOf(state, live = null) {
+  const on = tickingAttempt(state, live);
+  const ticking = on !== null;
+  const estimated = live?.cost;
+  const priced = ticking && typeof estimated === 'number' && Number.isFinite(estimated);
+  const running = priced && estimated > 0 ? estimated : null;
+  const paid = state.attempts.reduce((sum, attempt) => sum + attempt.paid_runs, 0) + (ticking ? 1 : 0);
   let known = 0;
-  let unknown = false;
+  let unknown = ticking && !priced;
   for (const attempt of state.attempts) {
     if (attempt.cost_usd !== null) {
       known += attempt.cost_usd;
@@ -423,12 +459,20 @@ function totalOf(state) {
     known += arms.known;
     if (attempt.paid_runs > 0 && (arms.missing || arms.known === 0)) unknown = true;
   }
-  return { paid, known, unknown };
+  if (running !== null) known += running;
+  return { paid, known, unknown, running, ticking, on: on?.id ?? null };
 }
 
 const REPORT_COLUMNS = Object.freeze(['#', 'Phase', 'Request', 'Result', 'Model', 'Turns', 'Cost']);
 
-function attemptCells(attempt, runBase, at, linkRun = true) {
+const usd = (dollars) => `$${dollars.toFixed(4)}`;
+
+function costCell(attempt, running) {
+  if (running !== null) return `~${usd((attempt.cost_usd ?? 0) + running)}`;
+  return attempt.cost_usd === null ? BLANK_CELL : usd(attempt.cost_usd);
+}
+
+function attemptCells(attempt, runBase, at, linkRun, running) {
   const runId = attempt.id.split(':', 1)[0];
   return [
     linkRun ? `[${at}](${runBase}/${runId})` : String(at),
@@ -437,12 +481,17 @@ function attemptCells(attempt, runBase, at, linkRun = true) {
     `\`${attempt.outcome}\``,
     `\`${armLabel(attempt.model, attempt.effort)}\``,
     attempt.turns === null ? BLANK_CELL : String(attempt.turns),
-    attempt.cost_usd === null ? BLANK_CELL : `$${attempt.cost_usd.toFixed(4)}`,
+    costCell(attempt, running),
   ];
 }
 
-function attemptTable(attempts, runBase, linkRun) {
-  return reportTable(REPORT_COLUMNS, attempts.map((attempt, at) => attemptCells(attempt, runBase, at + 1, linkRun)));
+function attemptTable(attempts, runBase, linkRun, running, on = null) {
+  const ticking = on ?? attempts.at(-1)?.id ?? null;
+  return reportTable(
+    REPORT_COLUMNS,
+    attempts.map((attempt, at) =>
+      attemptCells(attempt, runBase, at + 1, linkRun, attempt.id === ticking ? running : null)),
+  );
 }
 
 function armTotals(state) {
@@ -514,7 +563,7 @@ function spendSplit(state) {
   };
 }
 
-const spentSaid = (part) => `$${part.cost.toFixed(4)}${part.unknown ? ' known' : ''}`;
+const spentSaid = (part) => `${usd(part.cost)}${part.unknown ? ' known' : ''}`;
 
 function spendLine(state) {
   const split = spendSplit(state);
@@ -571,8 +620,11 @@ function renderWriteReport({
   paused = false,
   standing = false,
 }) {
-  const total = totalOf(state);
-  const cost = total.unknown ? `$${total.known.toFixed(4)} known; some cost is unavailable` : `$${total.known.toFixed(4)} total`;
+  const total = totalOf(state, live);
+  const spent = usd(total.known);
+  const cost = total.unknown
+    ? `${spent} known${total.ticking ? ' so far' : ''}; some cost is unavailable`
+    : `${spent} ${total.ticking ? 'so far' : 'total'}`;
   const fields = { kind: paused || standing ? 'run-paused' : 'write-report', flow: 'implement', issue, pr: state.identity.pr, run };
   const doMarker = renderDoMarker(doRequest);
   const headingFor = (said) => reportHeading({ state, command, said, triggerPhrase, fields, paused, standing });
@@ -601,7 +653,7 @@ function renderWriteReport({
       '<details>',
       `<summary>Implementation report · ${counted(total.paid, 'paid run')} · ${cost}</summary>`,
       '',
-      ...attemptTable(held.attempts, held.run_base, linkRuns),
+      ...attemptTable(held.attempts, held.run_base, linkRuns, total.running, total.on),
       ...spendLine(held),
       '',
       '</details>',
@@ -812,6 +864,7 @@ async function updateWriteProgressUnlocked({
   const identified = identityOf({ ...env, COMMENT_ID: env.REQUEST_COMMENT_ID });
   if (identified.error) return { outputs: blank, failure: identified.error };
   const identity = identified.identity;
+  const reading = live === null ? null : { ...live, attempt: attemptId(env) };
   const chosen = await storeFor({
     github,
     owner,
@@ -844,7 +897,7 @@ async function updateWriteProgressUnlocked({
       command: env.COMMAND,
       doRequest,
       budget: store.budget(read.ref),
-      live,
+      live: reading,
       historyMode: env.STATUS_HISTORY,
       standing: standingHold(env),
     });
@@ -890,6 +943,18 @@ async function mutateWriteReportUnlocked({ github, owner, repo, env = process.en
       return { outputs: {}, failure: 'the durable write report names a different workflow run base' };
     }
     const held = read.state ?? { identity, run_base: attempted.run_base, history: [], attempts: [] };
+    const claiming = WORKING_OUTCOMES.includes(attempted.attempt.outcome) &&
+      !held.attempts.some((entry) => entry.id === attempted.attempt.id);
+    if (claiming) {
+      const holder = await planHeldBy({ github, owner, repo, state: held, attempt: attempted.attempt });
+      if (holder !== '') {
+        const where = `${attempted.run_base}/${holder}`;
+        return {
+          outputs: { held_by: where },
+          notices: [`another run is already working this plan (${where}), so this one recorded nothing`],
+        };
+      }
+    }
     const merged = mergeAttempt(held, attempted.attempt);
     if (merged.error) return { outputs: {}, failure: merged.error };
     const before = held.attempts.map((entry) => entry.id);
@@ -991,6 +1056,32 @@ async function updateWriteProgress({
   return { ...result, outputs };
 }
 
+async function planHolder({ github, owner, repo, env = process.env }) {
+  const outputs = {
+    held_by: '',
+  };
+  const identified = identityOf(env);
+  if (identified.error) return { outputs, notices: [identified.error] };
+  const chosen = await storeFor({
+    github,
+    owner,
+    repo,
+    identity: identified.identity,
+    botLogin: env.BOT_LOGIN,
+    phase: env.PHASE,
+    thread: env.ISSUE_NUM,
+  });
+  if (chosen.error) return { outputs, notices: [chosen.error] };
+  const read = await chosen.store.load();
+  if (read.error || read.missing || read.state === null) {
+    return { outputs, notices: read.error ? [read.error] : [] };
+  }
+  const holder = await planHeldBy({ github, owner, repo, state: read.state, attempt: { id: attemptId(env) } });
+  if (holder === '') return { outputs, notices: [] };
+  outputs.held_by = `${read.state.run_base}/${holder}`;
+  return { outputs, notices: [`another run is already working this plan (${outputs.held_by})`] };
+}
+
 async function mutateWriteReport({ github, owner, repo, env = process.env, sleep, now = Date.now }) {
   const result = await lockedMutation({
     github,
@@ -1006,7 +1097,12 @@ async function mutateWriteReport({ github, owner, repo, env = process.env, sleep
   const outputs = {
     recorded: result.outputs?.recorded ?? '',
   };
-  return { ...result, outputs, commentId: result.outputs?.comment_id ?? '' };
+  return {
+    ...result,
+    outputs,
+    commentId: result.outputs?.comment_id ?? '',
+    heldBy: result.outputs?.held_by ?? '',
+  };
 }
 
 module.exports = {
@@ -1026,6 +1122,8 @@ module.exports = {
   mergeAttempt,
   mutateWriteReport,
   parseState,
+  planHeldBy,
+  planHolder,
   renderWriteReport,
   spendFromExecution,
   spendFromFields,

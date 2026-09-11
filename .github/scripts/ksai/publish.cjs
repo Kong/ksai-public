@@ -154,6 +154,7 @@ const NOTICE_ORDER = Object.freeze([
   Object.freeze({ body: 'MERGE_NOTICE', at: 'THREAD_NUM', reason: true, kind: '' }),
   Object.freeze({ body: 'PLAN_NOTICE', at: 'REPORT_NUM', reason: false, kind: '' }),
   Object.freeze({ body: 'JIRA_ERROR', at: 'THREAD_NUM', reason: true, kind: '' }),
+  Object.freeze({ body: 'HELD_NOTICE', at: 'REPORT_NUM', reason: true, kind: '' }),
 ]);
 
 async function publishNotice({ github, owner, repo, env }) {

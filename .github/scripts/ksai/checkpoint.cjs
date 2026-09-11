@@ -8,12 +8,12 @@ const {
   releaserOf,
   JIRA_ACCOUNT_CORE,
 } = require('../lib/select-arm.cjs');
-const { LOGIN_SHAPE, markerValues, scrub, shapesIn } = require('./plan.cjs');
+const { LOGIN_SHAPE, PHASE_MARKER_PREFIX, markerValues, scrub, shapesIn } = require('./plan.cjs');
 const { PAGE_SIZE: RELEASE_PER_PAGE, probeComments } = require('./pages.cjs');
 const { offersPlan, ownState, EDITED, FOREIGN, UNEDITED } = require('./approval.cjs');
 const { counted, plural } = require('../lib/text.cjs');
 
-const RELEASE_MARKER_PREFIX = '<!-- ksai-phase:';
+const RELEASE_MARKER_PREFIX = PHASE_MARKER_PREFIX;
 const COMMENT_SPACES = Object.freeze(['issue', 'thread', 'review', 'dispatch']);
 
 const RELEASE_TOKEN_CORE = `(?:${COMMENT_SPACES.join('|')})\\/[1-9][0-9]{0,17}|[1-9][0-9]{0,17}|jira\\/${JIRA_ACCOUNT_CORE}\\/[0-9a-f]{12}`;

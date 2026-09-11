@@ -116,6 +116,7 @@ async function resolveRequest({
   onReview = null,
   reviewState = null,
   bare = false,
+  commented = true,
   classifiedCommand = '',
   codeowner = null,
   write = null,
@@ -195,7 +196,7 @@ async function resolveRequest({
   const classified = verdict !== '' && commandFitsSurface(verdict, { onIssue, threadRootId }) ? verdict : '';
   const command = classified || result.command;
   const named = result.commandNamed || classified !== '';
-  const routeSource = sourceOf({ classified: classified !== '', named: result.commandNamed });
+  const routeSource = sourceOf({ classified: classified !== '', named: result.commandNamed, commented });
 
   if (command === HELP_COMMAND) return { mine: false, help: true, routeSource };
 

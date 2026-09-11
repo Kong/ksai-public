@@ -1351,6 +1351,7 @@ runs:
         ON_OWN_PULL: ${{ steps.bare_gate.outputs.mine }}
         THREAD_ROOT_ID: ${{ steps.context.outputs.thread_root_id }}
         CLASSIFIED_COMMAND: ${{ steps.verdict.outputs.verdict }}
+        COMMENT_ID: ${{ steps.context.outputs.comment_id }}
         PLAN_MODE: ${{ inputs.plan_mode }}
         FILE_PLAN_MODE: ${{ steps.bare_gate.outputs.plan_mode }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
@@ -1416,6 +1417,7 @@ runs:
         TRIAGE_EFFORT: ${{ steps.triage.outputs.effort }}
         THREAD_ROOT_ID: ${{ steps.context.outputs.thread_root_id }}
         CLASSIFIED_COMMAND: ${{ steps.verdict.outputs.verdict }}
+        COMMENT_ID: ${{ steps.context.outputs.comment_id }}
       with:
         github-token: ${{ inputs.authorization_github_token || github.token }}
         script: |
@@ -1452,6 +1454,7 @@ runs:
         ON_ISSUE: ${{ steps.context.outputs.on_issue }}
         THREAD_ROOT_ID: ${{ steps.context.outputs.thread_root_id }}
         CLASSIFIED_COMMAND: ${{ steps.verdict.outputs.verdict }}
+        COMMENT_ID: ${{ steps.context.outputs.comment_id }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:
         github-token: ${{ inputs.authorization_github_token || inputs.source_org_github_token }}
@@ -2682,6 +2685,39 @@ runs:
         set -euo pipefail
         node "${SCRIPTS}/ksai/jira-step.mjs"
 
+    - name: Read whether another run already holds this plan
+      id: holder
+      if: >-
+        ${{ inputs.flow == 'implement' && inputs.dry_run == 'false' &&
+        steps.validate_args.outcome == 'success' && steps.works.outputs.works == 'true' }}
+      continue-on-error: true
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        COMMAND: ${{ steps.select.outputs.command }}
+        JIRA_KEY: ${{ steps.subject.outputs.jira_key || steps.fetch_jira.outputs.key }}
+        ISSUE_NUM: ${{ steps.subject.outputs.number }}
+        PR_NUMBER: ${{ steps.phase.outputs.pr_number }}
+        COMMENT_ID: ${{ steps.context.outputs.comment_id }}
+        BOT_LOGIN: ${{ inputs.bot_login }}
+        PHASE: ${{ steps.phase.outputs.phase }}
+        RUN_ID: ${{ github.run_id }}
+        RUN_ATTEMPT: ${{ github.run_attempt }}
+        JOB: ${{ github.job }}
+        JOB_INDEX: ${{ strategy.job-index || 0 }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      with:
+        github-token: ${{ inputs.source_org_github_token }}
+        script: |
+          const { planHolder } = require(`${process.env.SCRIPTS}/ksai/write-report.cjs`);
+          const { outputs, notices = [] } = await planHolder({
+            github,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            env: process.env,
+          });
+          for (const [name, value] of Object.entries(outputs)) core.setOutput(name, value);
+          for (const line of notices) core.info(line);
+
     - name: Comment when nothing ran
       id: notice
       if: ${{ always() && !cancelled() && inputs.flow == 'implement' }}
@@ -2700,6 +2736,10 @@ runs:
         PHASE_NOTICE: ${{ steps.phase.outputs.notice }}
         MERGE_NOTICE: ${{ steps.merge_base.outputs.error }}
         JIRA_ERROR: ${{ steps.fetch_jira.outputs.error }}
+        HELD_NOTICE: >-
+          ${{ steps.holder.outputs.held_by != '' &&
+          format('another run is already working this plan ({0}), so this one stopped before writing
+          anything. Ask again once that run has finished.', steps.holder.outputs.held_by) || '' }}
         TRIGGER: ${{ inputs.trigger_phrase }}
         PLAN_NOTICE: ${{ steps.read_plan.outputs.error_notice }}
         COMMAND: ${{ steps.select.outputs.command }}
@@ -2775,6 +2815,7 @@ runs:
       id: dispatch
       if: >-
         ${{ inputs.continuation_workflow != '' && inputs.dry_run == 'false' &&
+        steps.holder.outputs.held_by == '' &&
         steps.approval.outputs.blocked != 'true' && steps.checkpoint.outputs.waiting != 'true' &&
         steps.read_plan.outputs.held != 'true' &&
         (steps.release_checkpoint.outcome != 'success' || steps.release_checkpoint.outputs.remaining != '0') &&
@@ -3079,6 +3120,7 @@ runs:
       id: write_comment
       if: >-
         ${{ inputs.flow == 'implement' && inputs.publish == 'true' && inputs.dry_run == 'false' &&
+        steps.holder.outputs.held_by == '' &&
         steps.validate_args.outcome == 'success' && steps.dispatch.outputs.stops_here != 'true' &&
         steps.fetch_jira.outputs.error == '' && steps.open_draft.outputs.status != 'blocked' &&
         steps.open_branch.outputs.status != 'blocked' && steps.works.outputs.works == 'true' &&
@@ -3126,13 +3168,14 @@ runs:
         github-token: ${{ inputs.source_org_github_token }}
         script: |
           const { mutateWriteReport } = require(`${process.env.SCRIPTS}/ksai/write-report.cjs`);
-          const { outputs, notices = [], failure } = await mutateWriteReport({
+          const { outputs, notices = [], failure, heldBy } = await mutateWriteReport({
             github,
             owner: context.repo.owner,
             repo: context.repo.repo,
             env: process.env,
           });
           for (const [name, value] of Object.entries(outputs)) core.setOutput(name, value);
+          core.setOutput('held_by', heldBy);
           for (const line of notices) core.info(line);
           if (failure) core.setFailed(failure);
 
@@ -3223,7 +3266,7 @@ runs:
       id: build_dispute
       continue-on-error: true
       if: >-
-        ${{ inputs.dry_run == 'false' && steps.write_comment.outcome == 'success' &&
+        ${{ inputs.dry_run == 'false' && steps.write_comment.outputs.recorded == 'true' &&
         steps.write_arm.outcome == 'success' && steps.size.outputs.phase == 'fix' &&
         steps.phase.outputs.disputed != '' && steps.phase.outputs.disputed != '0' }}
       shell: bash
@@ -3242,7 +3285,7 @@ runs:
     - name: Name what the dispute read costs
       id: dispute_headers
       if: >-
-        ${{ inputs.dry_run == 'false' && steps.write_comment.outcome == 'success' &&
+        ${{ inputs.dry_run == 'false' && steps.write_comment.outputs.recorded == 'true' &&
         steps.write_arm.outcome == 'success' && steps.size.outputs.phase == 'fix' &&
         steps.build_dispute.outputs.model != '' }}
       shell: bash
@@ -3279,7 +3322,7 @@ runs:
     - name: Read whether those threads hold a disagreement
       id: dispute_run
       if: >-
-        ${{ inputs.dry_run == 'false' && steps.write_comment.outcome == 'success' &&
+        ${{ inputs.dry_run == 'false' && steps.write_comment.outputs.recorded == 'true' &&
         steps.write_arm.outcome == 'success' && steps.size.outputs.phase == 'fix' &&
         steps.build_dispute.outputs.count != '' && steps.build_dispute.outputs.count != '0' }}
       continue-on-error: true
@@ -3347,7 +3390,7 @@ runs:
       id: write_progress
       continue-on-error: true
       if: >-
-        ${{ inputs.flow == 'implement' && steps.write_comment.outcome == 'success' &&
+        ${{ inputs.flow == 'implement' && steps.write_comment.outputs.recorded == 'true' &&
         steps.write_arm.outcome == 'success' && steps.lock_threads.outputs.held != 'true' }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
@@ -3483,7 +3526,7 @@ runs:
       id: opencode_install
       if: >-
         ${{ inputs.dry_run == 'false' && steps.engine.outputs.name == 'opencode' &&
-        ((inputs.flow == 'implement' && steps.write_comment.outcome == 'success' &&
+        ((inputs.flow == 'implement' && steps.write_comment.outputs.recorded == 'true' &&
         steps.write_arm.outcome == 'success' && steps.write_progress.outputs.recorded == 'true' &&
         steps.lock_threads.outputs.held != 'true' &&
         (steps.select.outputs.plan_given != 'true' || steps.size.outputs.phase != 'plan')) ||
@@ -3542,7 +3585,7 @@ runs:
       id: build_implement
       if: >-
         ${{ steps.validate_args.outcome == 'success' && (inputs.dry_run == 'true' ||
-        (steps.write_comment.outcome == 'success' && steps.write_arm.outcome == 'success' &&
+        (steps.write_comment.outputs.recorded == 'true' && steps.write_arm.outcome == 'success' &&
         steps.write_progress.outputs.recorded == 'true')) &&
         steps.dispatch.outputs.stops_here != 'true' &&
         steps.fetch_jira.outputs.error == '' &&
@@ -4514,7 +4557,7 @@ runs:
       id: claude
       if: >-
         ${{ inputs.dry_run == 'false' && steps.engine.outputs.name == 'claude' &&
-        ((inputs.flow == 'implement' && steps.write_comment.outcome == 'success' &&
+        ((inputs.flow == 'implement' && steps.write_comment.outputs.recorded == 'true' &&
         steps.write_arm.outcome == 'success' && steps.build_implement.outcome == 'success') ||
         (inputs.flow == 'review' && steps.build_review.outcome == 'success')) }}
       uses: anthropics/claude-code-action/base-action@0a8d3c9443bbff909ab973b6a17a340b913f229f # v1.0.221
@@ -5598,6 +5641,7 @@ runs:
         steps.select.outputs.notice != '') &&
         steps.read_plan.outputs.has_step != 'false' &&
         steps.notice.outputs.posted != 'true' &&
+        steps.write_comment.outputs.held_by == '' &&
         (steps.write_report.outcome == 'failure' ||
         (steps.write_comment.outputs.recorded != 'true' &&
         steps.size.outputs.phase != 'replayed' &&

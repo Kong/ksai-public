@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 
 import { writeOutputs } from '../lib/outputs.mjs';
 import { postMessage, textOf } from './messages.mjs';
+import { estimate, money } from './prices.mjs';
 import { addTally, emptyTally, excerpt, live, read, tallyOf } from './progress.mjs';
 
 const require = createRequire(import.meta.url);
@@ -130,7 +131,7 @@ export function moved(before, after) {
   );
 }
 
-export function counters(state) {
+export function counters(state, cost = null) {
   const cells = [];
   if (state.left !== null) {
     cells.push(state.left === 0 ? 'under a minute left' : `${state.left} min left`);
@@ -143,6 +144,7 @@ export function counters(state) {
   if (state.subagents > 0) {
     cells.push(`${state.subagents} subagent${state.subagents === 1 ? '' : 's'}`);
   }
+  if (Number.isFinite(cost) && cost > 0) cells.push(`~${money(cost)}`);
   return cells;
 }
 
@@ -341,6 +343,7 @@ export async function publishStatus({ held, reading, token, apiUrl = DEFAULT_API
     live: {
       arm: armOf(held),
       cells: reading?.cells,
+      cost: reading?.cost ?? null,
       link: runUrl({ serverUrl: held.SERVER_URL, repository: held.REPOSITORY, runId: held.RUN_ID }),
     },
     sleep,
@@ -396,9 +399,10 @@ export async function tick(
     }
   }
 
+  const runningCost = estimate(state.tokens, held.MODEL);
   const posted = await publishStatus({
     held,
-    reading: { stage, history, cells: counters(state) },
+    reading: { stage, history, cells: counters(state, runningCost), cost: runningCost },
     token: env.COURIER_SOURCE_TOKEN,
     apiUrl: env.GITHUB_API_URL,
     fetchImpl,

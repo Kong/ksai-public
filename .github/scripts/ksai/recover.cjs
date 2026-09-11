@@ -53,6 +53,7 @@ const COUNTER_SHAPES = Object.freeze([
   new RegExp(`^${COMPACT} in / ${COMPACT} out$`),
   /^[0-9]{1,7} calls?$/,
   /^[0-9]{1,4} subagents?$/,
+  /^~\$[0-9]{1,7}\.[0-9]{2}(?:[0-9]{2})?$/,
 ]);
 
 const RESULTS = Object.freeze(['failure', 'cancelled']);

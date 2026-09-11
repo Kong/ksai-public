@@ -34,10 +34,13 @@ const WHERE = bare({
 
 const EXPLICIT_SOURCE = 'explicit';
 
+const ASSIGNED_SOURCE = 'assigned';
+
 const READ = bare({
   [EXPLICIT_SOURCE]: (where) => `Read your comment on ${where} as a request to`,
   classifier: (where) => `Read your comment on ${where}, which named no command, as a request to`,
   context: (where) => `Read ${where} as a request to`,
+  assigned: (where) => `Assigned as a reviewer on ${where}, to`,
   continuation: (where) => `Carried on from the run before this one on ${where}, to`,
 });
 
@@ -53,10 +56,17 @@ function receiptOf(command, surface, source = 'context') {
   return `${read(where)} ${receipt}`;
 }
 
-function sourceOf({ continuation = false, classified = false, named = false } = {}) {
+function sourceOf({
+  continuation = false,
+  classified = false,
+  named = false,
+  commented = true,
+  uncommented = 'context',
+} = {}) {
   if (continuation === true || String(continuation) === 'true') return 'continuation';
+  if (String(commented) !== 'true') return SOURCES.includes(uncommented) ? uncommented : 'context';
   if (classified === true) return 'classifier';
   return named === true ? EXPLICIT_SOURCE : 'context';
 }
 
-module.exports = { receiptOf, sourceOf, EXPLICIT_SOURCE, SOURCES };
+module.exports = { receiptOf, sourceOf, EXPLICIT_SOURCE, ASSIGNED_SOURCE, SOURCES };

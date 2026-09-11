@@ -34,7 +34,12 @@ export function retirePlan({
 
   const staged = git(['rm', '--quiet', '--', planPath]);
   if (!staged.ok) {
-    return { removed: false, planPath, absent: true, reason: `\`${planPath}\` is not on the branch` };
+    if (!git(['ls-files', '--error-unmatch', '--', planPath]).ok) {
+      return { removed: false, planPath, absent: true, reason: `\`${planPath}\` is not on the branch` };
+    }
+    if (!git(['rm', '--quiet', '--force', '--', planPath]).ok) {
+      return { removed: false, planPath, reason: `\`${planPath}\` is on the branch and could not be staged for removal` };
+    }
   }
 
   const subject = jiraKey ? String(jiraKey) : `#${String(issueNumber)}`;

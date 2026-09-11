@@ -75,7 +75,8 @@ const MODEL_CORE = '[A-Za-z0-9][A-Za-z0-9._-]{0,63}(?:\\/[A-Za-z0-9][A-Za-z0-9._
 
 const MODEL_SHAPE = new RegExp(`^${MODEL_CORE}$`);
 
-const shortModel = (model) => String(model ?? '').trim().replace(/^claude-/, '');
+const shortModel = (model) =>
+  String(model ?? '').trim().replace(/^zai-org\//, '').replace(/^claude-/, '').toLowerCase();
 
 function armLabel(model, effort) {
   const said = shortModel(model);

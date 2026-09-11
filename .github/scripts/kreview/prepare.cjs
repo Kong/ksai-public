@@ -16,7 +16,7 @@ const {
   surfaceOfEvent,
   MODEL_SHAPE,
 } = require('../lib/select-arm.cjs');
-const { receiptOf, sourceOf } = require('../lib/request-intent.cjs');
+const { ASSIGNED_SOURCE, receiptOf, sourceOf } = require('../lib/request-intent.cjs');
 const { ceilingMinutes } = require('../lib/watchdog.cjs');
 const { skipsAuthor, triage } = require('../triage/policy.cjs');
 const { renderReviewPrompt, renderPipelineContext } = require('./prompt.cjs');
@@ -168,7 +168,12 @@ async function selectReviewArm({ github, core, owner, repo, env }) {
   });
   const reviews = owns && enabled && (!bar.read || bar.authorized);
   const routeSurface = surfaceOfEvent(false, env.THREAD_ROOT_ID);
-  const routeSource = sourceOf({ classified: routed, named: result.commandNamed });
+  const routeSource = sourceOf({
+    classified: routed,
+    named: result.commandNamed,
+    commented: String(env.COMMENT_ID ?? '').trim() !== '',
+    uncommented: ASSIGNED_SOURCE,
+  });
 
   Object.assign(outputs, {
     skipped: reviews ? 'false' : 'true',
