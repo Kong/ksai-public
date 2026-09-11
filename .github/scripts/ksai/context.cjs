@@ -233,10 +233,22 @@ function resolveContext({ eventName = null, payload = null, inputs = null } = {}
 }
 
 const COMMENT_KINDS = Object.freeze(
-  Object.assign(Object.create(null), { issue: COMMENT_EVENT, review: REVIEW_COMMENT_EVENT }),
+  Object.assign(Object.create(null), {
+    issue: COMMENT_EVENT,
+    review: REVIEW_COMMENT_EVENT,
+    submitted_review: REVIEW_EVENT,
+  }),
 );
 
 const KIND_NAMES = Object.freeze(Object.keys(COMMENT_KINDS));
+
+const KIND_SUBJECTS = Object.freeze(
+  Object.assign(Object.create(null), {
+    issue: 'comment',
+    review: 'review comment',
+    submitted_review: 'review',
+  }),
+);
 
 const numberFrom = (url) => {
   const tail = String(url ?? '').trim().split('/').at(-1) ?? '';
@@ -252,6 +264,7 @@ async function resolveDispatchedComment({
   appSlug = null,
   getIssueComment,
   getReviewComment,
+  getSubmittedReview,
 }) {
   if (String(eventName ?? '') !== CONTINUATION_EVENT) return { held: false };
 
@@ -276,14 +289,22 @@ async function resolveDispatchedComment({
     };
   }
 
-  const review = kind === 'review';
+  const submittedReview = kind === 'submitted_review';
+  const review = kind !== 'issue';
+  const subjectName = KIND_SUBJECTS[kind];
+  const subject = readNumber(issueNumber);
+  if (submittedReview && subject === null) {
+    return { error: '`submitted_review` requires the pull request number to read its review.' };
+  }
   let data = null;
   try {
-    data = review ? await getReviewComment(wanted) : await getIssueComment(wanted);
+    data = submittedReview
+      ? await getSubmittedReview(subject, wanted)
+      : review ? await getReviewComment(wanted) : await getIssueComment(wanted);
   } catch (error) {
     return {
       error:
-        `could not read the ${review ? 'review ' : ''}comment #${id} this run was dispatched for ` +
+        `could not read the ${subjectName} #${id} this run was dispatched for ` +
         `(status ${error?.status}): ${error?.message}. A run answers a comment it can read, or it answers none.`,
     };
   }
@@ -291,14 +312,17 @@ async function resolveDispatchedComment({
   if (String(data?.user?.type ?? '') === 'Bot') {
     return {
       error:
-        `the ${review ? 'review ' : ''}comment #${id} this run was dispatched for was written by a Bot ` +
+        `the ${subjectName} #${id} this run was dispatched for was written by a Bot ` +
         `(\`${String(data?.user?.login ?? '')}\`), so nothing ran. Every comment event is gated on the author not ` +
         'being one, and a dispatch carries an id rather than an author, so the same term is applied here - it is ' +
         'what stands between what this flow publishes and a run answering its own output.',
     };
   }
 
-  const refused = editRefusal(data, review ? 'review comment' : 'comment');
+  if (submittedReview && (!data?.submitted_at || !['approved', 'changes_requested', 'commented'].includes(String(data?.state ?? '').toLowerCase()))) {
+    return { error: `review #${id} is not a submitted approval, change request or comment, so nothing ran.` };
+  }
+  const refused = submittedReview ? null : editRefusal(data, subjectName);
   if (refused) return refused;
 
   const wrote = String(data?.user?.login ?? '');
@@ -317,7 +341,7 @@ async function resolveDispatchedComment({
   if (number === null) {
     return {
       error:
-        `the ${review ? 'review ' : ''}comment #${id} named no pull request or issue of its own, so this run has ` +
+        `the ${subjectName} #${id} named no pull request or issue of its own, so this run has ` +
         'nothing to work on.',
     };
   }
@@ -330,7 +354,7 @@ async function resolveDispatchedComment({
     };
   }
 
-  return { held: true, review, id: wanted, number, comment: data };
+  return { held: true, review, submittedReview, id: wanted, number, comment: data };
 }
 
 async function withLastEdit(github, comment) {
@@ -347,11 +371,19 @@ const commentReaders = ({ github, context }) => ({
     withLastEdit(github, (await github.rest.issues.getComment({ ...context.repo, comment_id })).data),
   getReviewComment: async (comment_id) =>
     withLastEdit(github, (await github.rest.pulls.getReviewComment({ ...context.repo, comment_id })).data),
+  getSubmittedReview: async (pull_number, review_id) =>
+    (await github.rest.pulls.getReview({ ...context.repo, pull_number, review_id })).data,
 });
 
 function asCommentEvent({ dispatched, onIssue, payload = null }) {
   const { comment, number, review } = dispatched;
   const carried = { ...payload, comment };
+  if (dispatched.submittedReview) {
+    return {
+      eventName: REVIEW_EVENT,
+      payload: { ...payload, action: 'submitted', review: comment, pull_request: { number } },
+    };
+  }
   if (review) return { eventName: REVIEW_COMMENT_EVENT, payload: { ...carried, pull_request: { number } } };
   return {
     eventName: COMMENT_EVENT,

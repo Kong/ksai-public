@@ -193,6 +193,16 @@ on:
         required: false
         type: string
         default: "high"
+      fleet_dials_endpoint:
+        description: >-
+          base URL of the control plane that serves this fleet's model and effort, with no trailing
+          path. Empty, which is the default, keeps the model and effort pinned above and makes no
+          call at all - so a repository no control plane serves is unaffected by this setting
+          existing. Only the v4 caller template names it: moving a model across the fleet is
+          otherwise a pull request in every repository, because these values live in each caller.
+        required: false
+        type: string
+        default: ""
       clear_request:
         description: >-
           true when this repository asks the review team for a review, from the sidebar or on open.
@@ -605,10 +615,18 @@ on:
         default: ""
       comment_kind:
         description: >-
-          which comment space `comment_id` came from, `issue` or `review`. The two endpoints answer 404 for
+          which comment space `comment_id` came from, `issue`, `review` or `submitted_review`. The endpoints answer 404 for
           each other's ids, so it is named rather than guessed. This is the input that asks for the comment
           to be read back, and every job here reads it rather than the id to decide whether a dispatch is a
           request: an id without it names the identity a run records itself against and nothing more.
+        required: false
+        type: string
+        default: ""
+      record_id:
+        description: >-
+          the record the control plane wrote before it dispatched this run, read back over the run's own
+          OIDC token from `fleet_dials_endpoint`. Empty, which is every standalone dispatch, makes no call
+          and the run goes ahead on its other inputs. Only the v4 caller forwards it.
         required: false
         type: string
         default: ""
@@ -681,6 +699,9 @@ jobs:
       classifier_output_tokens: ${{ steps.gate.outputs.classifier_output_tokens }}
       classifier_turns: ${{ steps.gate.outputs.classifier_turns }}
       classifier_duration: ${{ steps.gate.outputs.classifier_duration }}
+      model: ${{ steps.dials.outputs.model }}
+      effort: ${{ steps.dials.outputs.effort }}
+      record_command: ${{ steps.record.outputs.command }}
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
@@ -753,6 +774,21 @@ jobs:
           if [ -n "${missing}${placeholder}${misshaped}" ]; then
             exit 1
           fi
+
+      - name: Read the fleet dials
+        id: dials
+        uses: $/.github/actions/fleet-dials
+        with:
+          endpoint: ${{ inputs.fleet_dials_endpoint }}
+          model: ${{ inputs.model }}
+          effort: ${{ inputs.effort }}
+
+      - name: Read the dispatch record
+        id: record
+        uses: $/.github/actions/dispatch-record
+        with:
+          endpoint: ${{ inputs.fleet_dials_endpoint }}
+          record_id: ${{ inputs.record_id }}
 
       - name: Validate anthropic_base_url
         env:
@@ -866,7 +902,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-help
           repository: Kong/ksai-public
-          ref: v3.51.0
+          ref: v3.52.0
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1032,8 +1068,8 @@ jobs:
           classifier_turns: ${{ needs.gate.outputs.classifier_turns }}
           classifier_duration: ${{ needs.gate.outputs.classifier_duration }}
           otel_endpoint: ${{ inputs.otel_endpoint }}
-          model: ${{ inputs.model }}
-          effort: ${{ inputs.effort }}
+          model: ${{ needs.gate.outputs.model || inputs.model }}
+          effort: ${{ needs.gate.outputs.effort || inputs.effort }}
           allowed_models: ${{ inputs.allowed_models }}
           max_effort: ${{ inputs.max_effort }}
           min_effort: ${{ inputs.min_effort }}
@@ -1201,8 +1237,8 @@ jobs:
           classifier_turns: ${{ needs.gate.outputs.classifier_turns }}
           classifier_duration: ${{ needs.gate.outputs.classifier_duration }}
           otel_endpoint: ${{ inputs.otel_endpoint }}
-          model: ${{ inputs.model }}
-          effort: ${{ inputs.effort }}
+          model: ${{ needs.gate.outputs.model || inputs.model }}
+          effort: ${{ needs.gate.outputs.effort || inputs.effort }}
           allowed_models: ${{ inputs.allowed_models }}
           max_effort: ${{ inputs.max_effort }}
           min_effort: ${{ inputs.min_effort }}
@@ -1294,7 +1330,7 @@ jobs:
         with:
           token: ${{ github.token }}
           repository: Kong/ksai-public
-          ref: v3.51.0
+          ref: v3.52.0
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1324,7 +1360,7 @@ jobs:
         working-directory: ${{ runner.temp }}
         env:
           SHADOW_ENGINE: ${{ inputs.shadow_engine }}
-          LIVE_MODEL: ${{ inputs.model }}
+          LIVE_MODEL: ${{ needs.gate.outputs.model || inputs.model }}
           SHADOW_MODEL: ${{ inputs.shadow_model }}
           LIVE_STRATEGY: ${{ inputs.review_strategy }}
           SHADOW_STRATEGY: ${{ inputs.shadow_strategy }}
@@ -1381,9 +1417,9 @@ jobs:
           max_repeated_tool_calls: ${{ inputs.max_repeated_tool_calls }}
           verdict: ${{ needs.gate.outputs.verdict }}
           otel_endpoint: ${{ inputs.otel_endpoint }}
-          model: ${{ inputs.model }}
+          model: ${{ needs.gate.outputs.model || inputs.model }}
           shadow_model: ${{ inputs.shadow_model }}
-          effort: ${{ inputs.effort }}
+          effort: ${{ needs.gate.outputs.effort || inputs.effort }}
           allowed_models: ${{ inputs.allowed_models }}
           max_effort: ${{ inputs.max_effort }}
           min_effort: ${{ inputs.min_effort }}
@@ -1646,8 +1682,8 @@ jobs:
           plan_file_path: ${{ inputs.plan_file_path }}
           keep_plan_file: ${{ inputs.keep_plan_file }}
           plan_mode: ${{ inputs.plan_mode }}
-          model: ${{ inputs.model }}
-          effort: ${{ inputs.effort }}
+          model: ${{ needs.gate.outputs.model || inputs.model }}
+          effort: ${{ needs.gate.outputs.effort || inputs.effort }}
           allowed_models: ${{ inputs.allowed_models }}
           max_effort: ${{ inputs.max_effort }}
           min_effort: ${{ inputs.min_effort }}
@@ -1658,7 +1694,7 @@ jobs:
           status_history: ${{ inputs.status_history }}
           status_model: ${{ inputs.status_model }}
           continuation_workflow: ${{ inputs.continuation_workflow }}
-          issue_number: ${{ inputs.issue_number }}
+          issue_number: ${{ needs.gate.outputs.issue_number || inputs.issue_number }}
           work_ref: ${{ inputs.work_ref }}
           comment_id: ${{ inputs.comment_id }}
           comment_kind: ${{ inputs.comment_kind }}
@@ -1754,7 +1790,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-recover
           repository: Kong/ksai-public
-          ref: v3.51.0
+          ref: v3.52.0
           sparse-checkout: |
             .github/scripts
           persist-credentials: false

@@ -1,0 +1,82 @@
+name: Fleet dials
+description: >-
+  Read the model and effort this run should use from the control plane, and hand back the values
+  pinned in this workflow whenever that does not work. Moving a model across the fleet is otherwise a
+  pull request in every repository, because the values live in each caller's pinned workflow.
+
+  Nothing here is a secret. The caller is named by a GitHub Actions OIDC token, whose repository
+  claim is signed by GitHub and cannot be changed from inside the job, so no credential has to reach
+  the repositories being served and none of them can ask for another's dials.
+
+  Every failure is a fallback rather than an error. The dials are a preference; the run is the work.
+  A control plane that is down, slow, unreachable, or serving something this action will not read
+  costs the run nothing but the pinned values it would have used anyway.
+
+  What comes back is matched against the shapes this workflow will pass on. The model shape is the
+  one `.github/scripts/lib/select-arm.cjs` accepts, so a value this action passes on is one the
+  selector downstream will take rather than one it refuses later. Each dial is read as a JSON string
+  and no other type, so a dial of 123 is an answer this action does not understand rather than a
+  model named 123.
+
+  The logic ships beside this action.yml, so every caller already has it wherever it has the action,
+  and it is a module rather than a shell block so the refusals above are unit-testable.
+
+inputs:
+  endpoint:
+    description: >-
+      Base URL of the control plane, with no trailing path. Empty, which is the default, skips the
+      fetch and keeps the pinned values - which is what a repository no control plane serves wants,
+      and what every repository gets until its caller sets this.
+    required: false
+    default: ""
+  audience:
+    description: >-
+      Audience the OIDC token is minted for. Both ends have to name the same string, and the control
+      plane refuses a token minted for anything else.
+    required: false
+    default: ksai-cp
+  model:
+    description: model pinned in this workflow, used whenever the control plane does not answer with one
+    required: true
+  effort:
+    description: effort pinned in this workflow, used whenever the control plane does not answer with one
+    required: true
+
+outputs:
+  model:
+    description: model this run should use
+    value: ${{ steps.dials.outputs.model }}
+  effort:
+    description: effort this run should use
+    value: ${{ steps.dials.outputs.effort }}
+
+runs:
+  using: composite
+  steps:
+    - name: Read the fleet dials
+      id: dials
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        DIALS_ACTION_PATH: ${{ github.action_path }}
+        DIALS_ENDPOINT: ${{ inputs.endpoint }}
+        DIALS_AUDIENCE: ${{ inputs.audience }}
+        DIALS_MODEL: ${{ inputs.model }}
+        DIALS_EFFORT: ${{ inputs.effort }}
+      with:
+        script: |
+          const { readDials } = await import(`file://${process.env.DIALS_ACTION_PATH}/dials.mjs`);
+          const answer = await readDials({
+            endpoint: process.env.DIALS_ENDPOINT,
+            audience: process.env.DIALS_AUDIENCE,
+            model: process.env.DIALS_MODEL,
+            effort: process.env.DIALS_EFFORT,
+            mint: (audience) => core.getIDToken(audience),
+            secret: (token) => core.setSecret(token),
+          });
+          if (answer.served) {
+            core.notice(`ksai is running on the fleet dials: model ${answer.model}, effort ${answer.effort}`);
+          } else if (answer.why) {
+            core.notice(`ksai kept the dials pinned in this workflow: ${answer.why}`);
+          }
+          core.setOutput('model', answer.model);
+          core.setOutput('effort', answer.effort);

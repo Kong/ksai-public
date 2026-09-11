@@ -1,0 +1,80 @@
+name: Dispatch record
+description: >-
+  Read what the control plane decided for this run, and carry on exactly as the dispatch inputs say
+  whenever that does not work. The control plane writes a record before it dispatches and names it in
+  the dispatch, so a decision it makes does not have to fit the ten inputs workflow_dispatch allows.
+
+  Nothing here is a secret. The caller is named by a GitHub Actions OIDC token whose repository and
+  run claims are signed by GitHub and cannot be changed from inside the job. The control plane binds a
+  record to the run that first reads it and answers only that run afterwards, so the gate and the job
+  that does the work can both read it and no other run can.
+
+  Every failure is a fallback rather than an error. The dispatch still carries the inputs every
+  consumer reads, so a record this action cannot read costs the run nothing it has today.
+
+  What comes back is read, never relayed. A command is passed on only when it is one this runner
+  answers, so a record cannot name a flow that does not exist, and a value carrying a newline cannot
+  write a second output. The record names no requester and this action reads none: who asked is still
+  read from GitHub by the gate, never taken from the control plane.
+
+  The logic ships beside this action.yml, so every caller already has it wherever it has the action,
+  and it is a module rather than a shell block so the refusals above are unit-testable.
+
+inputs:
+  endpoint:
+    description: >-
+      Base URL of the control plane, with no trailing path. Empty, which is the default, skips the
+      read - which is what a repository no control plane serves wants.
+    required: false
+    default: ""
+  record_id:
+    description: >-
+      The record the dispatch named. Empty, which is every dispatch from a control plane that writes
+      none, skips the read.
+    required: false
+    default: ""
+  audience:
+    description: >-
+      Audience the OIDC token is minted for. Both ends have to name the same string, and the control
+      plane refuses a token minted for anything else.
+    required: false
+    default: ksai-cp
+
+outputs:
+  read:
+    description: "`true` where the record was read, `false` where the run carries on from its inputs"
+    value: ${{ steps.record.outputs.read }}
+  command:
+    description: >-
+      the command the control plane decided this run is for, or empty where it decided none - which is
+      every run answering a comment, since a comment names its own
+    value: ${{ steps.record.outputs.command }}
+
+runs:
+  using: composite
+  steps:
+    - name: Read the dispatch record
+      id: record
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        RECORD_ACTION_PATH: ${{ github.action_path }}
+        RECORD_ENDPOINT: ${{ inputs.endpoint }}
+        RECORD_ID: ${{ inputs.record_id }}
+        RECORD_AUDIENCE: ${{ inputs.audience }}
+      with:
+        script: |
+          const { readRecord } = await import(`file://${process.env.RECORD_ACTION_PATH}/record.mjs`);
+          const answer = await readRecord({
+            endpoint: process.env.RECORD_ENDPOINT,
+            recordId: process.env.RECORD_ID,
+            audience: process.env.RECORD_AUDIENCE,
+            mint: (audience) => core.getIDToken(audience),
+            secret: (token) => core.setSecret(token),
+          });
+          if (answer.read) {
+            core.notice(`ksai read the dispatch record${answer.command ? `: command ${answer.command}` : ''}`);
+          } else if (answer.why) {
+            core.notice(`ksai carried on from the dispatch inputs: ${answer.why}`);
+          }
+          core.setOutput('read', answer.read ? 'true' : 'false');
+          core.setOutput('command', answer.command);

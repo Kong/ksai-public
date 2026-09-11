@@ -194,7 +194,7 @@ inputs:
     default: ""
   comment_kind:
     description: >-
-      which comment space `comment_id` came from, `issue` or `review`. The two endpoints answer 404 for each
+      which comment space `comment_id` came from, `issue`, `review` or `submitted_review`. The endpoints answer 404 for each
       other's ids, so it is named rather than guessed. This is the input that asks for the comment to be read
       back: an id without it keeps the older meaning, the identity a run records itself against, with the
       words carried in `comment_body`.
