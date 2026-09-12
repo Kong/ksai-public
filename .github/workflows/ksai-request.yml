@@ -129,10 +129,21 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           TEAM: ${{ vars.KSAI_REVIEW_TEAM || 'ksai' }}
         run: |
-          requested=$(gh api --method POST "repos/${REPO}/pulls/${PR}/requested_reviewers" \
+          set -euo pipefail
+          answer="${RUNNER_TEMP}/review-request-answer"
+          if ! requested=$(gh api --method POST "repos/${REPO}/pulls/${PR}/requested_reviewers" \
             -f "reviewers[]" \
             -f "team_reviewers[]=${TEAM}" \
-            --jq '(.requested_teams // [])[].slug')
+            --jq '(.requested_teams // [])[].slug' 2>"${answer}"); then
+            cat "${answer}" >&2
+            if grep -qiF 'not a collaborator' "${answer}" \
+              || grep -qiF 'Reviews may only be requested from collaborators' "${answer}"; then
+              why="The ${TEAM} team has no access to ${REPO}, so GitHub refused to request it as a reviewer and no review was started. Grant the ${TEAM} team Read access to ${REPO}, or set the KSAI_REVIEW_TEAM repository variable to a team that already has it. A repository that wants no automatic reviews removes the request job from its calling workflow instead"
+              echo "::error title=The review team cannot be requested::${why}"
+              echo "${why}" >> "${GITHUB_STEP_SUMMARY}"
+            fi
+            exit 1
+          fi
           if ! printf '%s\n' "${requested}" | grep -qxiF "${TEAM}"; then
             echo "::error::${TEAM} is not a requested reviewer on #${PR} after asking for it"
             exit 1
