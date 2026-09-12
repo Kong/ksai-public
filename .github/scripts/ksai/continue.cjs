@@ -240,12 +240,100 @@ function stopsHere({ handsOff = null, started = null } = {}) {
   return String(handsOff) === 'true' && started === true ? 'true' : '';
 }
 
+const CONTINUE_ATTEMPTS = 3;
+
+const CONTINUE_TIMEOUT = 10000;
+
+const pauseFor = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+
+function bareEndpoint(endpoint) {
+  let url;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    return false;
+  }
+  return url.protocol === 'https:' && url.hostname !== '' && url.search === '' && url.hash === ''
+    && url.username === '' && url.password === '';
+}
+
+async function continueThroughControlPlane({
+  endpoint = '',
+  audience = 'ksai-cp',
+  workRef = '',
+  attempt = '',
+  stall = '',
+  prevRemaining = '',
+  env = process.env,
+  mint = async (_audience = '') => '',
+  secret = (_token = '') => {},
+  fetch: call = globalThis.fetch,
+  pause = pauseFor,
+  timeout = CONTINUE_TIMEOUT,
+} = {}) {
+  const named = String(endpoint ?? '').trim();
+  if (named === '' || String(workRef ?? '') === '') return { outcome: 'unheld', reason: '' };
+  if (!bareEndpoint(named)) {
+    return { outcome: 'failed', reason: 'the control plane endpoint is not a bare https URL' };
+  }
+  if (!env.ACTIONS_ID_TOKEN_REQUEST_URL || !env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) {
+    return {
+      outcome: 'failed',
+      reason: 'this job holds no id-token: write, so it cannot ask the control plane for the next run',
+    };
+  }
+
+  let token = '';
+  try {
+    token = String((await mint(audience)) ?? '');
+  } catch {
+    return { outcome: 'failed', reason: 'a token for the control plane could not be minted' };
+  }
+  if (token === '') return { outcome: 'failed', reason: 'the token endpoint answered with no token' };
+  secret(token);
+
+  const at = `${named.replace(/\/+$/, '')}/run/continue`;
+  const body = JSON.stringify({
+    work_ref: String(workRef),
+    attempt: String(attempt),
+    stall: String(stall),
+    prev_remaining: String(prevRemaining ?? ''),
+  });
+
+  let last = '';
+  for (let tries = 0; tries < CONTINUE_ATTEMPTS; tries += 1) {
+    if (tries > 0) await pause(2 ** tries * 1000);
+
+    let answer;
+    try {
+      answer = await call(at, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body,
+        signal: AbortSignal.timeout(timeout),
+      });
+    } catch {
+      last = 'the control plane could not be reached';
+      continue;
+    }
+
+    if (answer.ok) return { outcome: 'dispatched', reason: '' };
+    if (answer.status === 404 || answer.status === 405) return { outcome: 'unheld', reason: '' };
+    if (answer.status < 500) {
+      return { outcome: 'failed', reason: `the control plane refused to start the next run with ${answer.status}` };
+    }
+    last = `the control plane answered ${answer.status}`;
+  }
+  return { outcome: 'failed', reason: `${last}, on the last of ${CONTINUE_ATTEMPTS} attempts` };
+}
+
 module.exports = {
   MAX_STALL,
   MAX_ATTEMPTS,
   WORKFLOW_FILE_SHAPE,
   MAX_INPUTS,
   MAX_INPUT_CHARS,
+  CONTINUE_ATTEMPTS,
   readCount,
   progress,
   shouldContinue,
@@ -256,4 +344,5 @@ module.exports = {
   resolveRef,
   normalizeInputs,
   dispatchSuccessor,
+  continueThroughControlPlane,
 };

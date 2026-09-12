@@ -11,6 +11,7 @@ const require = createRequire(import.meta.url);
 const { COMMIT_TYPES, safeEcho } = require('./verify-chunk.cjs');
 const { uploadLfsObjects } = require('./trusted-git.cjs');
 const { RELEASED_BY_SHAPE, SUBJECT_SHAPE } = require('./plan.cjs');
+const { JIRA_KEY_SHAPE } = require('../lib/select-arm.cjs');
 
 const defaultBodyFile = () => path.join(process.env.RUNNER_TEMP || tmpdir(), 'ksai-commit.json');
 
@@ -59,6 +60,7 @@ const claimsTheCommit = (line) => {
   return (
     said.startsWith('co-authored-by:') ||
     said.startsWith('released-by:') ||
+    said.startsWith('jira:') ||
     said.includes('noreply@anthropic.com') ||
     /generated (?:with|by) \[?claude/.test(said)
   );
@@ -76,8 +78,15 @@ export function releasedByTrailer(said) {
   return RELEASED_BY_SHAPE.test(one) ? `Released-by: ${one}` : null;
 }
 
-export function withTrailers(message, { coAuthor = null, releasedBy = null } = {}) {
-  const trailers = [coAuthorTrailer(coAuthor), releasedByTrailer(releasedBy)].filter(Boolean);
+export function jiraTrailer(said) {
+  const one = String(said ?? '')
+    .trim()
+    .toUpperCase();
+  return JIRA_KEY_SHAPE.test(one) ? `Jira: ${one}` : null;
+}
+
+export function withTrailers(message, { coAuthor = null, releasedBy = null, jiraKey = null } = {}) {
+  const trailers = [coAuthorTrailer(coAuthor), releasedByTrailer(releasedBy), jiraTrailer(jiraKey)].filter(Boolean);
   if (!trailers.length) return String(message ?? '');
   const body = String(message ?? '').replace(/\s+$/, '');
   const block = trailers.join('\n');
@@ -96,7 +105,7 @@ export function normaliseMessage(raw) {
   return [lines[0], '', ...lines.slice(1)].join('\n');
 }
 
-function rewriteMessage({ git, log, coAuthor, releasedBy, messageFile = defaultMessageFile() }) {
+function rewriteMessage({ git, log, coAuthor, releasedBy, jiraKey, messageFile = defaultMessageFile() }) {
   const read = git(['log', '-1', '--format=%B']);
   if (!read?.ok) return { error: 'the local commit message could not be read, so nothing was published' };
   const raw = String(read.stdout);
@@ -112,7 +121,7 @@ function rewriteMessage({ git, log, coAuthor, releasedBy, messageFile = defaultM
         `read \`<type>(<scope>): <description>\`, with a type from ${COMMIT_TYPES.join(', ')}.`,
     };
   }
-  const cleaned = withTrailers(stripped, { coAuthor, releasedBy });
+  const cleaned = withTrailers(stripped, { coAuthor, releasedBy, jiraKey });
   if (cleaned === raw.replace(/\s+$/, '')) return { changed: false };
 
   const treeBefore = git(['rev-parse', 'HEAD^{tree}']);
@@ -271,9 +280,10 @@ export function publishCommit({
   coAuthor = process.env.CO_AUTHOR,
   releasedBy = process.env.RELEASED_BY,
   remoteLfsRefs = [],
+  jiraKey = process.env.JIRA_KEY,
   log = (message) => process.stdout.write(`${message}\n`),
 }) {
-  const normalised = rewriteMessage({ git, log, coAuthor, releasedBy, messageFile });
+  const normalised = rewriteMessage({ git, log, coAuthor, releasedBy, jiraKey, messageFile });
   if (normalised.error) return { ok: false, reason: normalised.error };
   const localSha = normalised.sha ?? verifiedSha;
   const lfs = uploadLfsObjects({

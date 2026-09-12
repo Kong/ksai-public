@@ -29,6 +29,21 @@ export const DELAYS = Object.freeze([2000, 4000, 8000, 15000, 30000, 30000]);
  */
 export const BUDGET = 150000;
 
+const SEGMENT = '[A-Za-z0-9][A-Za-z0-9._-]{0,63}';
+
+export const MODEL = new RegExp(`^${SEGMENT}(/${SEGMENT}){0,2}$`);
+
+export const EFFORTS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
+
+const REQUESTER = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
+
+export const escapeHtml = (value) =>
+  String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+const GUIDANCE_MAX = 4096;
+
+const WORK_ITEM_MAX = 16384;
+
 const WHY_STATUS = Object.freeze({
   401: 'the control plane could not tell which run this is',
   404: 'the control plane holds no readable record for this run - another run may already have read it, it may have expired, or this repository may not be enrolled',
@@ -150,7 +165,9 @@ function recordFrom(served) {
     throw stopped('the control plane answered something other than a record');
   }
 
-  const { command, label, pr, head_sha: headSha } = /** @type {Record<string, unknown>} */ (served);
+  const {
+    command, label, pr, head_sha: headSha, requester, model, effort, guidance, work_item: workItem,
+  } = /** @type {Record<string, unknown>} */ (served);
   if (command !== undefined && (typeof command !== 'string' || !COMMANDS.includes(command))) {
     throw stopped('the record names a command this runner does not answer');
   }
@@ -163,7 +180,43 @@ function recordFrom(served) {
   if (headSha !== undefined && (typeof headSha !== 'string' || !SHA_SHAPE.test(headSha))) {
     throw stopped('the record names a head that is not a commit');
   }
-  return { read: true, command: text(command), label: text(label), pr: text(pr), head_sha: text(headSha).toLowerCase() };
+  if (requester !== undefined && (typeof requester !== 'string' || !REQUESTER.test(requester))) {
+    throw stopped('the record names a requester that is not a GitHub login');
+  }
+  if (model !== undefined && (typeof model !== 'string' || !MODEL.test(model))) {
+    throw stopped('the record names a model this workflow will not pass on');
+  }
+  if (effort !== undefined && (typeof effort !== 'string' || !EFFORTS.includes(effort))) {
+    throw stopped('the record names an effort this workflow will not pass on');
+  }
+  if (guidance !== undefined && (typeof guidance !== 'string' || !sayable(guidance, GUIDANCE_MAX))) {
+    throw stopped('the record carries guidance this workflow will not pass on');
+  }
+  if (workItem !== undefined && (typeof workItem !== 'string' || !sayable(workItem, WORK_ITEM_MAX))) {
+    throw stopped('the record carries a work item this workflow will not pass on');
+  }
+  return {
+    read: true,
+    command: text(command),
+    label: text(label),
+    pr: text(pr),
+    head_sha: text(headSha).toLowerCase(),
+    requester: text(requester),
+    model: text(model),
+    effort: text(effort),
+    guidance: text(guidance),
+    workItem: text(workItem),
+  };
+}
+
+function sayable(value, limit) {
+  if (value.length > limit) return false;
+  for (const character of value) {
+    const code = character.codePointAt(0) ?? 0;
+    if (code === 0x09 || code === 0x0a) continue;
+    if (code < 0x20 || code === 0x7f) return false;
+  }
+  return true;
 }
 
 /**
@@ -214,7 +267,18 @@ export async function readRecord({
   now = Date.now,
 }) {
   if (recordId === '') {
-    return { read: false, command: '', label: '', pr: '', head_sha: '' };
+    return {
+      read: false,
+      command: '',
+      label: '',
+      pr: '',
+      head_sha: '',
+      requester: '',
+      model: '',
+      effort: '',
+      guidance: '',
+      workItem: '',
+    };
   }
   if (endpoint === '') throw stopped('the dispatch names a record but this workflow names no control plane endpoint');
   if (!bare(endpoint)) throw stopped('the control plane endpoint is not a bare https URL');

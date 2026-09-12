@@ -24,6 +24,14 @@ const PUBLIC_REFUSAL =
   'as a workflow artifact, which anyone can download. Set `jira_allow_public_repo: "true"` if that is ' +
   'acceptable for these projects.';
 
+const MAX_TITLE = 200;
+
+export function titleOf(carried, key) {
+  const first = String(carried).split('\n', 1)[0].trim();
+  const named = first.startsWith(`${key}: `) ? first.slice(key.length + 2) : first;
+  return named.trim().slice(0, MAX_TITLE);
+}
+
 export async function main(env = process.env, { fetchImpl = fetch } = {}) {
   const done = ({ file = '', key = '', site = '', error = '' }) => {
     if (error) process.stderr.write(`${error}\n`);
@@ -50,6 +58,15 @@ export async function main(env = process.env, { fetchImpl = fetch } = {}) {
     return done({ error: PUBLIC_REFUSAL });
   }
 
+  const file = path.join(env.RUNNER_TEMP || '/tmp', 'ksai-jira.json');
+
+  const carried = String(env.WORK_ITEM ?? '').trim();
+  if (carried) {
+    const item = { key: resolved.key, title: titleOf(carried, resolved.key), body: carried };
+    writeFileSync(file, JSON.stringify(item, null, 2));
+    return done({ file, key: resolved.key, site });
+  }
+
   const label = String(env.JIRA_LABEL ?? '').trim();
   if (!LABEL_SHAPE.test(label)) return done({ error: LABEL_REFUSAL });
 
@@ -65,7 +82,6 @@ export async function main(env = process.env, { fetchImpl = fetch } = {}) {
     return done({ error: `${resolved.key} does not carry the \`${label}\` label, so nothing here asked for this work.` });
   }
 
-  const file = path.join(env.RUNNER_TEMP || '/tmp', 'ksai-jira.json');
   writeFileSync(file, JSON.stringify(read.issue, null, 2));
   return done({ file, key: resolved.key, site });
 }

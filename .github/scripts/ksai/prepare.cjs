@@ -523,6 +523,7 @@ async function eventContext({ github, context, env, commented }) {
     inputs: {
       issue_number: env.IN_ISSUE_NUMBER,
       work_ref: env.IN_WORK_REF,
+      work_actor: env.IN_WORK_ACTOR,
       attempt: env.IN_ATTEMPT,
       stall: env.IN_STALL,
       prev_remaining: env.IN_PREV_REMAINING,
@@ -573,6 +574,7 @@ async function resolveRunContext({ github, context, env }) {
     review_association: out.reviewAssociation ?? '',
     review_actor_type: out.reviewActorType ?? '',
     commenter: out.commenter ?? '',
+    work_actor: out.workActor ?? '',
     comment_id: out.commentId == null ? '' : String(out.commentId),
     comment_body: out.commentBody,
     comment_edited: out.commentEdited ?? '',
@@ -598,6 +600,7 @@ function resolveAuth(env) {
     flow: env.FLOW,
     threadless: env.THREADLESS,
     requirePlanApproval: env.REQUIRE_APPROVAL,
+    workActor: env.WORK_ACTOR,
   });
   const outputs = {
     ok: out.ok ? 'true' : 'false',

@@ -1,7 +1,7 @@
 'use strict';
 
 const { readCount, MAX_ATTEMPTS } = require('./continue.cjs');
-const { JIRA_KEY_SHAPE, anyCommandOpen } = require('../lib/select-arm.cjs');
+const { JIRA_KEY_SHAPE, anyCommandOpen, safeEcho } = require('../lib/select-arm.cjs');
 const { editState, isOwnLogin, withLastEdits, UNEDITED } = require('./approval.cjs');
 
 const editRefusal = (comment, where) => {
@@ -42,6 +42,19 @@ function readCommentId(value) {
   return Number.isSafeInteger(held) ? held : null;
 }
 
+function readWorkActor(value) {
+  const login = String(value ?? '').trim();
+  if (login === '') return { login: null };
+  if (!AUTHZ_LOGIN_SHAPE.test(login)) {
+    return {
+      error:
+        `\`work_actor\` carries \`${safeEcho(login)}\`, which is not a GitHub login. A value present but ` +
+        'unusable is refused rather than dropped: dropping it would spend a run nobody was authorized for.',
+    };
+  }
+  return { login };
+}
+
 function commenterOf(comment) {
   const login = String(comment?.user?.login ?? '');
   return AUTHZ_LOGIN_SHAPE.test(login) ? login : null;
@@ -76,6 +89,7 @@ function resolveContext({ eventName = null, payload = null, inputs = null } = {}
   const {
     issue_number: issueNumberInput = null,
     work_ref: workRefInput = null,
+    work_actor: workActorInput = null,
     comment_body: commentBodyInput = null,
     triggering_actor: triggeringActorInput = null,
     on_issue: onIssueInput = null,
@@ -89,6 +103,8 @@ function resolveContext({ eventName = null, payload = null, inputs = null } = {}
   if (event === CONTINUATION_EVENT) {
     const work = readWorkRef(workRefInput);
     if (work.error) return { error: work.error };
+    const consented = readWorkActor(workActorInput);
+    if (consented.error) return { error: consented.error };
     const issueNumber = readNumber(issueNumberInput);
     if (issueNumber === null && work.key === null) {
       return {
@@ -129,6 +145,7 @@ function resolveContext({ eventName = null, payload = null, inputs = null } = {}
       isContinuation: true,
       onIssue: true,
       commenter: null,
+      workActor: consented.login,
       commentId: null,
       commentBody: '',
       threadRootId: null,
@@ -419,6 +436,7 @@ function resolveAuthorization({
   flow = null,
   threadless = null,
   requirePlanApproval = null,
+  workActor = null,
 } = {}) {
   const continued = isContinuation === true || String(isContinuation) === 'true';
   const fromJira = threadless === true || String(threadless) === 'true';
@@ -427,6 +445,10 @@ function resolveAuthorization({
   }
   if (fromJira && String(requirePlanApproval ?? '') !== 'true') {
     return { ok: false, why: 'jira-needs-approval' };
+  }
+  if (fromJira && String(workActor ?? '').trim() !== '') {
+    if (String(ownerCheck ?? '') === '') return { ok: false, why: 'no-answer' };
+    if (String(ownerCheck ?? '') !== 'true') return { ok: false, why: 'jira-actor-not-a-codeowner' };
   }
   if (continued) {
     return { ok: true, why: fromJira ? 'jira-trigger' : 'continuation' };
@@ -457,6 +479,10 @@ const AUTHZ_REASONS = Object.freeze(
     'jira-needs-approval':
       'a run triggered from Jira may only plan behind a human release, so this repository must set ' +
       '`require_plan_approval: "true"` before a Jira ticket can start one. Nothing ran.',
+    'jira-actor-not-a-codeowner':
+      'the Jira account that asked for this has connected a GitHub login, and that login is not a code owner ' +
+      'of this repository with write access, so nothing ran. This check only ever adds a refusal: a ticket ' +
+      'whose requester has connected nothing is answered exactly as it was before.',
   }),
 );
 

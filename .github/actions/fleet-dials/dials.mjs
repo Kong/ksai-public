@@ -1,5 +1,5 @@
 const SEGMENT = '[A-Za-z0-9][A-Za-z0-9._-]{0,63}';
-const MODEL = new RegExp(`^${SEGMENT}(/${SEGMENT}){0,2}$`);
+export const MODEL = new RegExp(`^${SEGMENT}(/${SEGMENT}){0,2}$`);
 
 const ARM = new RegExp(`^${SEGMENT}(:${SEGMENT})?$`);
 

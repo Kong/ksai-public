@@ -5,6 +5,7 @@ const { watchdogDetail } = require('../lib/watchdog.cjs');
 const { plural } = require('../lib/text.cjs');
 const { releaseKind, renderReleased, renderWaiting, withPhaseRelease } = require('./checkpoint.cjs');
 const {
+  continueThroughControlPlane,
   decideContinuation,
   dispatchSuccessor,
   renderStop,
@@ -75,7 +76,7 @@ async function say({ github, owner, repo, target, notice, env, warnings }) {
   }
 }
 
-async function dispatchNext({ github, core, owner, repo, env }) {
+async function dispatchNext({ github, core, owner, repo, env, fetch: call = globalThis.fetch }) {
   const outputs = {
     stops_here: '',
   };
@@ -122,6 +123,26 @@ async function dispatchNext({ github, core, owner, repo, env }) {
   const workRef = workRefFor(asked);
   if (asked !== '' && workRef === '') {
     return undispatched('the ticket this run is about is not a key the successor could be handed');
+  }
+
+  const through = await continueThroughControlPlane({
+    endpoint: env.CONTINUE_ENDPOINT,
+    workRef,
+    attempt: String(verdict.attempt + 1),
+    stall: String(verdict.stall),
+    prevRemaining: verdict.remainingForSuccessor,
+    env,
+    mint: (audience) => core.getIDToken(audience),
+    secret: (token) => core.setSecret(token),
+    fetch: call,
+  });
+  if (through.outcome === 'failed') return undispatched(through.reason);
+  if (through.outcome === 'dispatched') {
+    return {
+      outputs: answer(true),
+      notices: ['the control plane started the next run, with the work this job carries'],
+      warnings: [],
+    };
   }
 
   const out = await dispatchSuccessor({
@@ -474,15 +495,21 @@ async function publishRunFailed({ github, owner, repo, env }) {
   const fired = env.WATCHDOG_FIRED === 'true';
   const notice = fired ? STOPPED_BY[causeOf(env)] ?? STOPPED_BY.ceiling : STOPPED_BY.ceiling;
   const reason = fired ? notice.said(env) : `See the [workflow run](${env.RUN_URL}) for details.`;
+  const said = `${notice.opening} ${reason}`;
+
+  const target = env.REPORT_NUM;
+  if (!target) {
+    return {
+      notices: [],
+      warnings: [`the run stopped and there was nowhere to say so: ${said}`],
+    };
+  }
 
   await github.rest.issues.createComment({
     owner,
     repo,
-    issue_number: Number(env.REPORT_NUM),
-    body: marked(
-      scrub(`${notice.opening} ${reason}`, { triggerPhrase: env.TRIGGER }),
-      payloadFor(env, { kind: notice.kind }),
-    ),
+    issue_number: Number(target),
+    body: marked(scrub(said, { triggerPhrase: env.TRIGGER }), payloadFor(env, { kind: notice.kind })),
   });
   return { notices: [`reported the run as incomplete (watchdog fired: ${fired})`] };
 }

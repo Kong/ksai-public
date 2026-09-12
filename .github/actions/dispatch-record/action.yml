@@ -18,10 +18,19 @@ description: >-
   and a half minutes, however long the control plane asks it to wait. A refusal that would answer the same again,
   and a record named with no endpoint to read it from, fail the run at once.
 
-  What comes back is read, never relayed. A command is passed on only when it is one this runner
-  answers, so a record cannot name a flow that does not exist, and a value carrying a newline cannot
-  write a second output. The record names no requester and this action reads none: who asked is still
-  read from GitHub by the gate, never taken from the control plane.
+  What comes back is read, never relayed. Every field is matched against the shape this workflow will
+  pass on, and one it will not refuses the whole record: a record is one decision, so dropping a model
+  this action does not understand and keeping the command beside it would start the run somebody asked
+  for at a model nobody chose.
+
+  The requester is a name and never a grant. It says who asked, for a run nothing on GitHub started.
+  The implement job hands it to the runner as `work_actor`, which checks that login against
+  CODEOWNERS read from GitHub and refuses the run where it owns nothing, so this value can only ever
+  add a refusal and never lifts one.
+
+  Guidance is whatever that person said beyond naming the work, and the work item is what the work
+  source says the work is. Both reach the run as context and never as instruction, and both are free
+  text, so they go to a step through `env:` and never through an expression a shell would expand.
 
   The logic ships beside this action.yml, so every caller already has it wherever it has the action,
   and it is a module rather than a shell block so the refusals above are unit-testable.
@@ -66,6 +75,32 @@ outputs:
   head_sha:
     description: the head commit the record was decided for, or empty; a run finding the head moved stands down
     value: ${{ steps.record.outputs.head_sha }}
+  requester:
+    description: >-
+      the GitHub login of whoever asked, for a run nothing on GitHub started, or empty. Never a grant:
+      the runner checks it against CODEOWNERS read from GitHub, and it can only add a refusal
+    value: ${{ steps.record.outputs.requester }}
+  model:
+    description: the model this run was asked for, or empty where nobody asked for one
+    value: ${{ steps.record.outputs.model }}
+  effort:
+    description: the effort this run was asked for, or empty where nobody asked for one
+    value: ${{ steps.record.outputs.effort }}
+  guidance:
+    description: >-
+      whatever the requester said beyond naming the work, or empty. Free text that reaches the run as
+      context and never as instruction, so it is passed through `env:` and never through an expression
+    value: ${{ steps.record.outputs.guidance }}
+  guidance_html:
+    description: >-
+      the same words HTML-escaped, which is the shape the plan prompt's guidance slot takes: it refuses
+      a raw `<` or `>` outright, because that slot is where a comment's own words already arrive
+    value: ${{ steps.record.outputs.guidance_html }}
+  work_item:
+    description: >-
+      what the work source says the work is, read by the control plane as the requester, or empty. The
+      same rule as guidance: context, never instruction, and passed through `env:` alone
+    value: ${{ steps.record.outputs.work_item }}
 
 runs:
   using: composite
@@ -80,7 +115,7 @@ runs:
         RECORD_AUDIENCE: ${{ inputs.audience }}
       with:
         script: |
-          const { readRecord } = await import(`file://${process.env.RECORD_ACTION_PATH}/record.mjs`);
+          const { escapeHtml, readRecord } = await import(`file://${process.env.RECORD_ACTION_PATH}/record.mjs`);
           let answer;
           try {
             answer = await readRecord({
@@ -99,7 +134,9 @@ runs:
             core.notice(`ksai read the dispatch record${answer.command ? `: command ${answer.command}` : ''}`);
           }
           core.setOutput('read', answer.read ? 'true' : 'false');
-          core.setOutput('command', answer.command);
-          core.setOutput('label', answer.label);
-          core.setOutput('pr', answer.pr);
-          core.setOutput('head_sha', answer.head_sha);
+          for (const [name, held] of [['command', 'command'], ['label', 'label'], ['pr', 'pr'],
+            ['head_sha', 'head_sha'], ['requester', 'requester'], ['model', 'model'],
+            ['effort', 'effort'], ['guidance', 'guidance'], ['work_item', 'workItem']]) {
+            core.setOutput(name, answer[held]);
+          }
+          core.setOutput('guidance_html', escapeHtml(answer.guidance));
