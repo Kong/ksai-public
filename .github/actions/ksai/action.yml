@@ -1395,6 +1395,7 @@ runs:
         THREAD_ROOT_ID: ${{ steps.context.outputs.thread_root_id }}
         CLASSIFIED_COMMAND: ${{ steps.verdict.outputs.verdict }}
         COMMENT_ID: ${{ steps.context.outputs.comment_id }}
+        REQUEST_LABEL: ${{ steps.context.outputs.label }}
         PLAN_MODE: ${{ inputs.plan_mode }}
         FILE_PLAN_MODE: ${{ steps.bare_gate.outputs.plan_mode }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
@@ -2710,6 +2711,8 @@ runs:
         ISSUE_NUM: ${{ steps.subject.outputs.number }}
         PR_NUMBER: ${{ steps.phase.outputs.pr_number }}
         COMMENT_ID: ${{ steps.context.outputs.comment_id }}
+        REQUEST_LABEL: ${{ steps.context.outputs.label }}
+        REQUEST_HEAD: ${{ steps.context.outputs.label_head }}
         BOT_LOGIN: ${{ inputs.bot_login }}
         PHASE: ${{ steps.phase.outputs.phase }}
         RUN_ID: ${{ github.run_id }}
@@ -3135,6 +3138,8 @@ runs:
         ISSUE_NUM: ${{ steps.subject.outputs.number }}
         PR_NUMBER: ${{ steps.phase.outputs.pr_number || steps.open_draft.outputs.pr_number }}
         COMMENT_ID: ${{ steps.context.outputs.comment_id }}
+        REQUEST_LABEL: ${{ steps.context.outputs.label }}
+        REQUEST_HEAD: ${{ steps.context.outputs.label_head }}
         PLAN_HELD: ${{ steps.phase.outputs.held }}
         BOT_LOGIN: ${{ inputs.bot_login }}
         RUN_ID: ${{ github.run_id }}
@@ -3378,6 +3383,8 @@ runs:
         ISSUE_NUM: ${{ steps.subject.outputs.number }}
         PR_NUMBER: ${{ steps.phase.outputs.pr_number || steps.open_draft.outputs.pr_number }}
         COMMENT_ID: ${{ steps.context.outputs.comment_id }}
+        REQUEST_LABEL: ${{ steps.context.outputs.label }}
+        REQUEST_HEAD: ${{ steps.context.outputs.label_head }}
         PLAN_HELD: ${{ steps.phase.outputs.held }}
         BOT_LOGIN: ${{ inputs.bot_login }}
         RUN_ID: ${{ github.run_id }}
@@ -5195,6 +5202,8 @@ runs:
         ISSUE_NUM: ${{ steps.subject.outputs.number }}
         PR_NUMBER: ${{ steps.phase.outputs.pr_number || steps.open_draft.outputs.pr_number }}
         COMMENT_ID: ${{ steps.context.outputs.comment_id }}
+        REQUEST_LABEL: ${{ steps.context.outputs.label }}
+        REQUEST_HEAD: ${{ steps.context.outputs.label_head }}
         HELD: ${{ steps.hold_plan.outputs.held }}
         PLAN_HELD: ${{ steps.phase.outputs.held }}
         BOT_LOGIN: ${{ inputs.bot_login }}

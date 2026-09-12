@@ -39,6 +39,7 @@ const {
   armFields,
   unpackAttempt,
   validAttempt,
+  validLabelSource,
   writeStateMarker,
 } = require('../lib/write-record.cjs');
 const { DIALS_ARM_SHAPE, armLabel } = require('../lib/select-arm.cjs');
@@ -53,6 +54,7 @@ const PLAN_KINDS = Object.freeze(['implement', 'revise']);
 const REQUEST_KINDS = Object.freeze(['fix', 'do', 'unlock']);
 const PLAN_PHASES = Object.freeze(['plan', 'plan-review', 'step', 'direct', 'revise']);
 const PLAN_IDENTITY_KIND = 'implement';
+const LABEL_KIND = 'fix';
 const PLAN_PHASE = 'plan';
 const DIRECT_PHASE = 'direct';
 const MAX_ARM_ROWS = 12;
@@ -81,8 +83,23 @@ function identityOf(env = process.env) {
   if (pr === null) return { error: 'the write report has no implementation pull request to identify' };
   if (!REQUEST_KINDS.includes(command)) return { error: `\`${command}\` has no durable write-report identity` };
   const request = positive(env.COMMENT_ID);
-  if (request === null) return { error: `the \`${command}\` report has no triggering comment id to identify` };
-  return { identity: { v: VERSION, kind: command, pr, request } };
+  if (request !== null) return { identity: { v: VERSION, kind: command, pr, request } };
+  const labelled = command === LABEL_KIND ? labelSourceOf(env) : '';
+  if (labelled !== '') return { identity: { v: VERSION, kind: command, pr, source: labelled } };
+  return { error: `the \`${command}\` report has no triggering comment id to identify` };
+}
+
+function labelSourceOf(env) {
+  const source = `label/${String(env.REQUEST_LABEL ?? '')}@${String(env.REQUEST_HEAD ?? '').trim().toLowerCase()}`;
+  return validLabelSource(source) ? source : '';
+}
+
+function liveEnv(env) {
+  return { ...env, COMMENT_ID: env.REQUEST_COMMENT_ID };
+}
+
+function liveIdentityOf(env) {
+  return identityOf(liveEnv(env));
 }
 
 function identityMarker(identity) {
@@ -867,7 +884,7 @@ async function updateWriteProgressUnlocked({
   now = Date.now,
 }) {
   const blank = { recorded: '' };
-  const identified = identityOf({ ...env, COMMENT_ID: env.REQUEST_COMMENT_ID });
+  const identified = liveIdentityOf(env);
   if (identified.error) return { outputs: blank, failure: identified.error };
   const identity = identified.identity;
   const reading = live === null ? null : { ...live, attempt: attemptId(env) };
@@ -1049,7 +1066,7 @@ async function updateWriteProgress({
     github,
     owner,
     repo,
-    env: { ...env, COMMENT_ID: env.REQUEST_COMMENT_ID },
+    env: liveEnv(env),
     sleep,
     lockKind: 'live',
     recoverKinds: [],
@@ -1125,6 +1142,7 @@ module.exports = {
   findReport,
   identityMarker,
   identityOf,
+  liveIdentityOf,
   mergeAttempt,
   mutateWriteReport,
   parseState,

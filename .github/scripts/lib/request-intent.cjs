@@ -36,24 +36,32 @@ const EXPLICIT_SOURCE = 'explicit';
 
 const ASSIGNED_SOURCE = 'assigned';
 
+const LABEL_SOURCE = 'label';
+
+const labelNamed = (label) => {
+  const shown = String(label ?? '').replaceAll('`', "'").trim();
+  return shown === '' ? 'a label' : `the \`${shown}\` label`;
+};
+
 const READ = bare({
   [EXPLICIT_SOURCE]: (where) => `Read your comment on ${where} as a request to`,
   classifier: (where) => `Read your comment on ${where}, which named no command, as a request to`,
   context: (where) => `Read ${where} as a request to`,
   assigned: (where) => `Assigned as a reviewer on ${where}, to`,
   continuation: (where) => `Carried on from the run before this one on ${where}, to`,
+  [LABEL_SOURCE]: (where, { label = '' } = {}) => `Asked for by ${labelNamed(label)} on ${where}, to`,
 });
 
 const SOURCES = Object.freeze(Object.keys(READ));
 
-function receiptOf(command, surface, source = 'context') {
+function receiptOf(command, surface, source = 'context', detail = {}) {
   const bySurface = RECEIPTS[String(command ?? '')];
   const namedSurface = String(surface ?? '');
   const receipt = bySurface?.[namedSurface] ?? (namedSurface === 'review' ? bySurface?.pull : undefined);
   if (typeof receipt !== 'string') return '';
   const where = WHERE[namedSurface] ?? WHERE.pull;
   const read = READ[String(source ?? '')] ?? READ.context;
-  return `${read(where)} ${receipt}`;
+  return `${read(where, detail)} ${receipt}`;
 }
 
 function sourceOf({
@@ -69,4 +77,4 @@ function sourceOf({
   return named === true ? EXPLICIT_SOURCE : 'context';
 }
 
-module.exports = { receiptOf, sourceOf, EXPLICIT_SOURCE, ASSIGNED_SOURCE, SOURCES };
+module.exports = { receiptOf, sourceOf, EXPLICIT_SOURCE, ASSIGNED_SOURCE, LABEL_SOURCE, SOURCES };

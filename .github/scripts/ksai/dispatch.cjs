@@ -18,7 +18,7 @@ const {
   THREAD_SURFACE,
   surfaceOfEvent,
 } = require('../lib/select-arm.cjs');
-const { receiptOf, sourceOf } = require('../lib/request-intent.cjs');
+const { LABEL_SOURCE, receiptOf, sourceOf } = require('../lib/request-intent.cjs');
 const loadConfig = require('./config.cjs');
 const {
   verdictOf,
@@ -117,6 +117,7 @@ async function resolveRequest({
   reviewState = null,
   bare = false,
   commented = true,
+  label = '',
   classifiedCommand = '',
   codeowner = null,
   write = null,
@@ -197,7 +198,8 @@ async function resolveRequest({
   if (asked && classified === '') return { mine: false };
   const command = classified || result.command;
   const named = result.commandNamed || classified !== '';
-  const routeSource = sourceOf({ classified: classified !== '', named: result.commandNamed, commented });
+  const labelled = String(label ?? '').trim() !== '';
+  const routeSource = labelled ? LABEL_SOURCE : sourceOf({ classified: classified !== '', named: result.commandNamed, commented });
   if (asked && ownerOf(classified) && ownerOf(classified) !== own) {
     return { mine: false, unaddressed: classified, routeSource };
   }
@@ -251,7 +253,7 @@ async function resolveRequest({
       classified: classified !== '',
       routeSource: source,
       routeSurface: requestSurface,
-      receipt: receiptOf(command, requestSurface, source),
+      receipt: receiptOf(command, requestSurface, source, { label }),
     };
   }
   return { mine: false, foreign: command, routeSource };

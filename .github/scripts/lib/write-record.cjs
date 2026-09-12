@@ -185,11 +185,31 @@ const IDENTITY_KINDS = Object.freeze(['implement', 'fix', 'do', 'unlock']);
 const positiveOrAbsent = (value) =>
   value === undefined || (Number.isSafeInteger(value) && value > 0 && value <= Number.MAX_SAFE_INTEGER);
 
+const LABEL_SOURCE_PREFIX = 'label/';
+
+const LABEL_NAME_MAX = 50;
+
+function validLabelSource(source) {
+  const text = String(source ?? '');
+  if (!text.startsWith(LABEL_SOURCE_PREFIX)) return false;
+  const at = text.lastIndexOf('@');
+  const name = text.slice(LABEL_SOURCE_PREFIX.length, at);
+  if (at <= LABEL_SOURCE_PREFIX.length || !/^[0-9a-f]{40}$/.test(text.slice(at + 1))) return false;
+  const points = [...name];
+  if (name.trim() === '' || points.length > LABEL_NAME_MAX) return false;
+  return !points.some((point) => {
+    const code = point.codePointAt(0) ?? 0;
+    return code < 32 || code === 127;
+  });
+}
+
 function validIdentity(identity) {
   if (!identity || typeof identity !== 'object' || Array.isArray(identity)) return false;
   if (identity.v !== VERSION || !IDENTITY_KINDS.includes(identity.kind)) return false;
-  if (identity.source !== undefined && !/^(?:github|jira)\/[A-Za-z0-9_-]{1,64}$/.test(String(identity.source))) {
-    return false;
+  if (identity.source !== undefined) {
+    const labelled = validLabelSource(identity.source);
+    if (!labelled && !/^(?:github|jira)\/[A-Za-z0-9_-]{1,64}$/.test(String(identity.source))) return false;
+    if (labelled && (identity.kind !== 'fix' || identity.request !== undefined || identity.pr === undefined)) return false;
   }
   return positiveOrAbsent(identity.pr) && positiveOrAbsent(identity.request);
 }
@@ -270,6 +290,7 @@ module.exports = {
   unpackArms,
   unpackAttempt,
   validAttempt,
+  validLabelSource,
   writeIdentityIn,
   writeStateIn,
   writeStateMarker,

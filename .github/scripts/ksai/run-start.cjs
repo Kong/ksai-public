@@ -32,6 +32,8 @@ const CARRIED = Object.freeze([
   'COMMAND',
   'RECEIPT',
   'RECEIPT_AT',
+  'REQUEST_LABEL',
+  'REQUEST_HEAD',
   'JIRA_KEY',
   'REQUEST_COMMENT_ID',
   'PHASE',
