@@ -3605,7 +3605,7 @@ runs:
         MERGED_SHA: ${{ steps.merge_base.outputs.merged_sha }}
         MERGED_REF: ${{ steps.merge_base.outputs.merged_ref }}
         MERGE_CONFLICTED: ${{ steps.merge_base.outputs.conflicted }}
-        GUIDANCE: ${{ steps.select.outputs.guidance_html }}
+        GUIDANCE: ${{ steps.phase.outputs.request }}
         DENIED_PATHS: ${{ inputs.denied_paths }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:

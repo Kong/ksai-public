@@ -169,6 +169,7 @@ const PHASE_FLOWS = Object.freeze(
 
 const PHASE_FIELDS = Object.freeze([
   'phase',
+  'request',
   'ref',
   'isDraft',
   'prNumber',
@@ -346,6 +347,7 @@ async function resolvePhase({
 } = {}) {
   const wanted = canonicalCommand(String(command ?? '').trim());
   const family = familyHere(wanted, onIssue);
+  const said = String(guidance ?? '').trim();
   const onBranch = family === undefined || plansWorkHere(wanted, onIssue) ? '' : 'true';
   const standingHold = (value) => (wanted === 'resume' ? '' : String(value ?? ''));
   if (family === undefined) {
@@ -353,16 +355,17 @@ async function resolvePhase({
   }
 
   if (family === 'work') {
+    const { namesTheReview, resolveFixPhase } = require('./threads.cjs');
     const scoped = String(threadRootId ?? '').trim() !== '';
     if (wanted === 'unlock' && !scoped) {
       return refuse('`unlock` must be written inside the review thread it releases');
     }
-    const asked = String(guidance ?? '').trim() !== '' && String(routeSource ?? '') === EXPLICIT_SOURCE;
+    const request = namesTheReview(said) ? '' : said;
+    const asked = request !== '' && String(routeSource ?? '') === EXPLICIT_SOURCE;
     const answersThreads = scoped || !asked;
     let known = null;
 
     if (answersThreads) {
-      const { resolveFixPhase } = require('./threads.cjs');
       const out = await resolveFixPhase({
         github,
         core,
@@ -370,7 +373,7 @@ async function resolvePhase({
         repo,
         prNumber: number,
         botLogin,
-        guidance,
+        guidance: request,
         threadRootId,
         allowLocked: wanted === 'unlock',
       });
@@ -384,6 +387,7 @@ async function resolvePhase({
         writeFile(threadStateFile, JSON.stringify(threads));
         return normalize({
           phase,
+          request,
           ref,
           prNumber,
           pending: pending.length,
@@ -411,7 +415,7 @@ async function resolvePhase({
       repo,
       prNumber: number,
       botLogin,
-      guidance,
+      guidance: request,
       commentId,
       checksFile,
       threadRootId,
@@ -422,6 +426,7 @@ async function resolvePhase({
     if (out.error) return refuse(out.error);
     return normalize({
       phase: out.phase,
+      request,
       ref: out.ref,
       prNumber: out.prNumber,
       pending: out.pending,
@@ -449,6 +454,7 @@ async function resolvePhase({
     if (wanted !== 'revise') {
       return normalize({
         phase: out.phase,
+        request: said,
         ref: out.ref,
         isDraft: out.isDraft,
         prNumber: out.prNumber,
@@ -482,6 +488,7 @@ async function resolvePhase({
     writeFile(threadStateFile, JSON.stringify(asked.threads));
     return normalize({
       phase: 'revise',
+      request: said,
       ref: out.ref,
       isDraft: out.isDraft,
       prNumber: out.prNumber,

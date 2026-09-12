@@ -681,6 +681,7 @@ async function decidePhase({ github, core, owner, repo, env }) {
     stop_notice: '',
     notice: '',
     phase: '',
+    request: '',
     ref: '',
     is_draft: '',
     pr_number: '',
@@ -715,6 +716,7 @@ async function decidePhase({ github, core, owner, repo, env }) {
 
   Object.assign(outputs, {
     phase: out.phase,
+    request: out.request,
     ref: out.ref,
     is_draft: out.isDraft,
     pr_number: out.prNumber,

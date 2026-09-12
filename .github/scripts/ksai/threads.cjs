@@ -282,6 +282,29 @@ function selectThread(threads, { threadRootId = null, core = null, botLogin = nu
   };
 }
 
+const REVIEW_NOUNS = Object.freeze(
+  new Set(['comment', 'comments', 'feedback', 'review', 'reviews', 'reviewer', 'reviewers', 'thread', 'threads']),
+);
+
+const REVIEW_FILLER = Object.freeze(
+  new Set([
+    'a', 'all', 'an', 'and', 'any', 'every', 'from', 'here', 'in', 'left', 'my', 'of', 'on',
+    'open', 'our', 'outstanding', 'pending', 'please', 'pr', 'remaining', 'still', 'that', 'the',
+    'their', 'these', 'this', 'those', 'unresolved', 'your',
+  ]),
+);
+
+function namesTheReview(guidance) {
+  const words = String(guidance ?? '')
+    .toLowerCase()
+    .replace(/&[a-z0-9]+;/g, ' ')
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  if (words.length === 0) return false;
+  if (!words.every((word) => REVIEW_NOUNS.has(word) || REVIEW_FILLER.has(word))) return false;
+  return words.some((word) => REVIEW_NOUNS.has(word));
+}
+
 function selectThreads(threads, { botLogin = null, guidance = null, core = null, threadRootId = null, allowLocked = false, answerDisputed = false } = {}) {
   const all = threads ?? [];
   const counts = {
@@ -406,5 +429,6 @@ module.exports = {
   threadState,
   workableThreads,
   selectThreads,
+  namesTheReview,
   resolveFixPhase,
 };
