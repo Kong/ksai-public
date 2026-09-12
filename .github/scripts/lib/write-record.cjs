@@ -1,5 +1,7 @@
 'use strict';
 
+const { createHash } = require('node:crypto');
+
 const { COMMANDS, DIALS_ARM_SHAPE, MODEL_CORE, MODEL_SHAPE, canonicalCommand } = require('./select-arm.cjs');
 const { markerJson } = require('./run-record.cjs');
 const { escapeForRegExp } = require('./text.cjs');
@@ -16,6 +18,13 @@ const MAX_PAID_RUNS = 204;
 const MAX_ARM_KINDS = 12;
 
 const ATTEMPT_ID_SHAPE = /^\d{1,20}:\d{1,10}:[A-Za-z0-9_.~-]{1,40}:\d{1,10}$/;
+const JOB_SEGMENT = 40;
+
+function compactJob(job) {
+  const named = String(job ?? '');
+  if (named.length <= JOB_SEGMENT) return named;
+  return `${named.slice(0, 27)}~${createHash('sha256').update(named).digest('hex').slice(0, 12)}`;
+}
 
 const REASON_SHAPE = /^[a-z][a-z0-9-]{0,39}$/;
 
@@ -278,6 +287,7 @@ module.exports = {
   ATTEMPT_FIELDS,
   ATTEMPT_ID_SHAPE,
   REASON_SHAPE,
+  compactJob,
   UNCLASSIFIED_REASON,
   IDENTITY_PREFIX,
   MAX_ATTEMPTS,

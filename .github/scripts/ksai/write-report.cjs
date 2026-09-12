@@ -1,7 +1,6 @@
 'use strict';
 
 const fs = require('node:fs');
-const { createHash } = require('node:crypto');
 const { finalResult } = require('./classify.cjs');
 const { doRequestOf, renderDoMarker } = require('./do.cjs');
 const { KIND_TABLE, href, marker, positive } = require('./marker.cjs');
@@ -37,6 +36,7 @@ const {
   UNCLASSIFIED_REASON,
   VERSION,
   armFields,
+  compactJob,
   unpackAttempt,
   validAttempt,
   validLabelSource,
@@ -291,10 +291,7 @@ function attemptId(env) {
   const jobIndex = String(env.JOB_INDEX ?? '');
   if (!/^\d{1,20}$/.test(runId) || !/^\d{1,10}$/.test(runAttempt) ||
       !/^[A-Za-z0-9_.-]{1,136}$/.test(job) || !/^\d{1,10}$/.test(jobIndex)) return '';
-  const compactJob = job.length <= 40
-    ? job
-    : `${job.slice(0, 27)}~${createHash('sha256').update(job).digest('hex').slice(0, 12)}`;
-  const id = [runId, runAttempt, compactJob, jobIndex].join(':');
+  const id = [runId, runAttempt, compactJob(job), jobIndex].join(':');
   return ATTEMPT_ID_SHAPE.test(id) ? id : '';
 }
 
@@ -1005,7 +1002,10 @@ async function mutateWriteReportUnlocked({ github, owner, repo, env = process.en
     const after = new Set((verified.state?.attempts ?? []).map((entry) => entry.id));
     if (![...before, attempted.attempt.id].every((entryId) => after.has(entryId))) continue;
     return {
-      outputs: { comment_id: store.idOf(verified.ref), recorded: 'true' },
+      outputs: {
+        comment_id: store.idOf(verified.ref),
+        recorded: 'true',
+      },
       notices: [fresh ? 'created and verified the durable write report' : 'merged and verified the durable write report'],
     };
   }
@@ -1117,8 +1117,10 @@ async function mutateWriteReport({ github, owner, repo, env = process.env, sleep
     releaseRequired: true,
     task: () => mutateWriteReportUnlocked({ github, owner, repo, env, now }),
   });
+  const attempted = attemptOf(env, now());
   const outputs = {
     recorded: result.outputs?.recorded ?? '',
+    spend_usd: attempted.error ? '' : String(attempted.attempt.cost_usd ?? ''),
   };
   return {
     ...result,

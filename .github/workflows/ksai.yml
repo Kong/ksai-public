@@ -934,7 +934,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-help
           repository: Kong/ksai-public
-          ref: v3.59.1
+          ref: v3.60.0
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1101,6 +1101,7 @@ jobs:
           otel_endpoint: ${{ inputs.otel_endpoint }}
           model: ${{ needs.gate.outputs.model || inputs.model }}
           dials_arm: ${{ needs.gate.outputs.dials_arm }}
+          fleet_dials_endpoint: ${{ inputs.fleet_dials_endpoint }}
           effort: ${{ needs.gate.outputs.effort || inputs.effort }}
           allowed_models: ${{ inputs.allowed_models }}
           max_effort: ${{ inputs.max_effort }}
@@ -1274,6 +1275,7 @@ jobs:
           otel_endpoint: ${{ inputs.otel_endpoint }}
           model: ${{ needs.gate.outputs.model || inputs.model }}
           dials_arm: ${{ needs.gate.outputs.dials_arm }}
+          fleet_dials_endpoint: ${{ inputs.fleet_dials_endpoint }}
           effort: ${{ needs.gate.outputs.effort || inputs.effort }}
           allowed_models: ${{ inputs.allowed_models }}
           max_effort: ${{ inputs.max_effort }}
@@ -1366,7 +1368,7 @@ jobs:
         with:
           token: ${{ github.token }}
           repository: Kong/ksai-public
-          ref: v3.59.1
+          ref: v3.60.0
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1455,6 +1457,7 @@ jobs:
           otel_endpoint: ${{ inputs.otel_endpoint }}
           model: ${{ needs.gate.outputs.model || inputs.model }}
           dials_arm: ${{ needs.gate.outputs.dials_arm }}
+          fleet_dials_endpoint: ${{ inputs.fleet_dials_endpoint }}
           shadow_model: ${{ inputs.shadow_model }}
           effort: ${{ needs.gate.outputs.effort || inputs.effort }}
           allowed_models: ${{ inputs.allowed_models }}
@@ -1724,6 +1727,7 @@ jobs:
           plan_mode: ${{ inputs.plan_mode }}
           model: ${{ needs.gate.outputs.model || inputs.model }}
           dials_arm: ${{ needs.gate.outputs.dials_arm }}
+          fleet_dials_endpoint: ${{ inputs.fleet_dials_endpoint }}
           effort: ${{ needs.gate.outputs.effort || inputs.effort }}
           allowed_models: ${{ inputs.allowed_models }}
           max_effort: ${{ inputs.max_effort }}
@@ -1739,7 +1743,6 @@ jobs:
           work_ref: ${{ inputs.work_ref }}
           comment_id: ${{ inputs.comment_id }}
           comment_kind: ${{ inputs.comment_kind }}
-          fleet_dials_endpoint: ${{ inputs.fleet_dials_endpoint }}
           record_id: ${{ inputs.record_id }}
           app_slug: ${{ steps.authz-token.outputs.app-slug }}
           jira_cloud_id: ${{ inputs.jira_cloud_id }}
@@ -1833,7 +1836,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-recover
           repository: Kong/ksai-public
-          ref: v3.59.1
+          ref: v3.60.0
           sparse-checkout: |
             .github/scripts
           persist-credentials: false

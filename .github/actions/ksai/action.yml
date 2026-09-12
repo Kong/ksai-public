@@ -204,7 +204,8 @@ inputs:
     description: >-
       Base URL of the control plane that dispatched this run, or empty. The dispatch record is read from it
       with `record_id` over the run's own OIDC token, so the record names only what the control plane
-      decided for this run
+      decided for this run, and this run reports what it cost back to it - a budget can only refuse a
+      run against spend the control plane was told about
     required: false
     default: ""
   record_id:
@@ -4132,7 +4133,12 @@ runs:
           fs.mkdirSync(process.env.SPEND_DIR, { recursive: true });
           fs.writeFileSync(
             path.join(process.env.SPEND_DIR, 'spend.json'),
-            JSON.stringify({ ...spend, model: process.env.MODEL, effort: process.env.EFFORT }),
+            JSON.stringify({
+              ...spend,
+              measured: warning ? 'false' : 'true',
+              model: process.env.MODEL,
+              effort: process.env.EFFORT,
+            }),
           );
 
     - name: Stage the verdict before repository teardown runs
@@ -4142,11 +4148,23 @@ runs:
       env:
         RUN: ${{ steps.test_paths.outputs.dir }}
         SPEND: ${{ runner.temp }}/pr-test-spend/spend.json
+        CLASSIFIER_COST: ${{ steps.verdict.outputs.cost }}
         DEST: ${{ runner.temp }}/pr-test-verdict
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: |
         set -euo pipefail
         node "${SCRIPTS}/ksai/pr-test/stage-verdict.mjs"
+        spent=$(SPEND_FILE="${SPEND}" node -pe '
+          const fs = require("node:fs");
+          let held = {};
+          try { held = JSON.parse(fs.readFileSync(process.env.SPEND_FILE, "utf8")); } catch {}
+          const parts = [
+            held.measured === "true" ? held.total_cost : null,
+            process.env.CLASSIFIER_COST,
+          ].filter((one) => one !== null && one !== undefined && one !== "" && Number.isFinite(Number(one)));
+          parts.length ? String(Number(parts.reduce((total, one) => total + Number(one), 0).toFixed(6))) : "";
+        ')
+        echo "spend_usd=${spent}" >> "$GITHUB_OUTPUT"
 
     - name: Tear the environments down
       if: >-
@@ -5299,6 +5317,7 @@ runs:
             env: process.env,
           });
           for (const [name, value] of Object.entries(outputs)) core.setOutput(name, value);
+          core.setOutput('spend_usd', outputs.spend_usd ?? '');
           for (const line of notices) core.info(line);
           if (failure) core.setFailed(failure);
 
@@ -5639,6 +5658,16 @@ runs:
           fs.writeFileSync(process.env.RECORD_OUT, JSON.stringify(record) + "\n");
           console.log(JSON.stringify(record, null, 2));
         '
+        spent=$(node -pe '
+          const held = require(process.argv[1]);
+          const parts = [
+            held.usage?.measured === true ? held.usage.cost_usd : null,
+            held.classifier?.cost_usd,
+            held.arm?.status_cost_usd,
+          ].filter((one) => one !== null && one !== undefined && Number.isFinite(Number(one)));
+          parts.length ? String(Number(parts.reduce((total, one) => total + Number(one), 0).toFixed(6))) : "";
+        ' "$dir/run.json")
+        echo "spend_usd=${spent}" >> "$GITHUB_OUTPUT"
         echo "dir=$dir" >> "$GITHUB_OUTPUT"
 
     - name: Upload eval run record
@@ -5828,6 +5857,37 @@ runs:
             env: process.env,
           });
           for (const line of notices) core.info(line);
+
+    - name: Report what this run cost
+      if: >-
+        ${{ always() && inputs.fleet_dials_endpoint != '' &&
+        (steps.write_report.outputs.spend_usd != '' || steps.write_progress.outputs.spend_usd != '' ||
+        steps.write_comment.outputs.spend_usd != '' || steps.eval_record.outputs.spend_usd != '' ||
+        steps.test_artifact.outputs.spend_usd != '') }}
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        SPEND_ENDPOINT: ${{ inputs.fleet_dials_endpoint }}
+        SPEND_ATTEMPT: ${{ github.run_id }}:${{ github.run_attempt }}:${{ github.job }}:${{ strategy.job-index || 0 }}
+        SPEND_COST: >-
+          ${{ steps.write_report.outputs.spend_usd || steps.write_progress.outputs.spend_usd ||
+          steps.write_comment.outputs.spend_usd || steps.eval_record.outputs.spend_usd ||
+          steps.test_artifact.outputs.spend_usd }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      with:
+        script: |
+          const { reportSpend } = await import(`file://${process.env.SCRIPTS}/ksai/report-spend.mjs`);
+          const answer = await reportSpend({
+            endpoint: process.env.SPEND_ENDPOINT,
+            attempt: process.env.SPEND_ATTEMPT,
+            cost: process.env.SPEND_COST,
+            mint: (audience) => core.getIDToken(audience),
+            secret: (token) => core.setSecret(token),
+          });
+          if (answer.reported) {
+            core.notice(`ksai reported $${process.env.SPEND_COST} against this repository's budget`);
+          } else if (answer.why) {
+            core.notice(`ksai did not report what this run cost: ${answer.why}`);
+          }
 
     - name: Put this action back for the post phase
       if: ${{ always() && steps.save_self.outputs.at != '' }}
