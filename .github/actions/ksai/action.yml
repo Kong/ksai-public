@@ -2103,6 +2103,7 @@ runs:
         THREADS_FILE: ${{ runner.temp }}/ksai-threads.json
         THREAD_STATE_FILE: ${{ runner.temp }}/ksai-thread-state.json
         THREAD_ROOT_ID: ${{ steps.context.outputs.thread_root_id }}
+        RECORD_SCOPE: ${{ steps.dispatch_record.outputs.scope }}
         COMMENT_ID: ${{ steps.context.outputs.comment_id }}
         AUTHZ_WHY: ${{ steps.authz.outputs.why }}
         CHECKS_FILE: ${{ runner.temp }}/ksai-checks.json

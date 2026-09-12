@@ -75,6 +75,12 @@ outputs:
   head_sha:
     description: the head commit the record was decided for, or empty; a run finding the head moved stands down
     value: ${{ steps.record.outputs.head_sha }}
+  scope:
+    description: >-
+      the work the label behind this run admits, comma-separated, or empty where the record narrows the
+      run to nothing in particular. A record naming work this runner does not do fails the run rather
+      than being read as empty
+    value: ${{ steps.record.outputs.scope }}
   requester:
     description: >-
       the GitHub login of whoever asked, for a run nothing on GitHub started, or empty. Never a grant:
@@ -135,7 +141,7 @@ runs:
           }
           core.setOutput('read', answer.read ? 'true' : 'false');
           for (const [name, held] of [['command', 'command'], ['label', 'label'], ['pr', 'pr'],
-            ['head_sha', 'head_sha'], ['requester', 'requester'], ['model', 'model'],
+            ['head_sha', 'head_sha'], ['scope', 'scope'], ['requester', 'requester'], ['model', 'model'],
             ['effort', 'effort'], ['guidance', 'guidance'], ['work_item', 'workItem']]) {
             core.setOutput(name, answer[held]);
           }

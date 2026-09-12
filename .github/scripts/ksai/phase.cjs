@@ -11,6 +11,34 @@ const { EXPLICIT_SOURCE } = require('../lib/request-intent.cjs');
 const MAX_PAGES = 10;
 const PER_PAGE = 100;
 
+/**
+ * WORK_SCOPES is every kind of work a dispatch record may narrow a run to, and the names a record
+ * spells them with. The control plane writes the work the label that started the run admits, so a
+ * pull request labelled for its build alone does not get its review threads answered, and one
+ * labelled for reviews does not fall through to the build.
+ *
+ * A copy of this list ships in `.github/actions/dispatch-record/record.mjs`, which refuses a record
+ * before this ever sees it; a parity test beside that copy holds the two together.
+ */
+const WORK_SCOPES = Object.freeze(['builds', 'reviews']);
+
+/**
+ * scopeAdmits reads what a record narrowed a run to, and answers null where it names work this
+ * runner does not know.
+ *
+ * An empty scope narrows nothing: that is every run a comment started, and every dispatch from a
+ * control plane old enough to write none. Unknown work is refused rather than read as an empty
+ * scope, because reading it as empty would widen the run to everything rather than narrow it - the
+ * opposite of what whoever wrote it asked for.
+ */
+function scopeAdmits(scope) {
+  const named = String(scope ?? '').trim();
+  if (named === '') return { builds: true, reviews: true };
+  const parts = named.split(',');
+  if (new Set(parts).size !== parts.length || parts.some((one) => !WORK_SCOPES.includes(one))) return null;
+  return { builds: parts.includes('builds'), reviews: parts.includes('reviews') };
+}
+
 const { NUMBER_SHAPE: ISSUE_NUMBER_SHAPE } = require('./context.cjs');
 
 function issueForBranch(branch) {
@@ -255,14 +283,27 @@ const PHASE_NOTICE = Object.freeze(
   }),
 );
 
-function renderPhaseNotice(phase, { pending = null, triggerPhrase = null } = {}) {
+/**
+ * FIX_NOTICE_REVIEWS replaces the last sentence of the `fix` notice for a run the label barred from the
+ * build. The offer to say what you want done instead is true of a run that may look anywhere and false
+ * of this one: the red check it would point at is the work somebody kept for themselves.
+ */
+const FIX_NOTICE_REVIEWS =
+  'No review thread here is waiting on an answer, so nothing ran. Threads I have already replied in count ' +
+  'as answered, and so do the ones a human has resolved - resolve or re-open as needed and ask again. This ' +
+  'run was started by a label admitting review comments alone, so a red check or a conflict is not mine to ' +
+  'work on here';
+
+function renderPhaseNotice(phase, { pending = null, triggerPhrase = null, scope = null } = {}) {
   const key = String(phase ?? '')
     .trim()
     .toLowerCase();
   const body = PHASE_NOTICE[key];
   if (!body) return '';
   if (key !== 'ambiguous' && String(pending ?? '') !== '0') return '';
-  return asAlert('WARNING', scrub(body, { triggerPhrase }));
+  const admits = scopeAdmits(scope);
+  const said = key === 'fix' && admits !== null && !admits.builds ? FIX_NOTICE_REVIEWS : body;
+  return asAlert('WARNING', scrub(said, { triggerPhrase }));
 }
 
 function renderClosed(command, { state = null, triggerPhrase = null, onIssue = null } = {}) {
@@ -342,6 +383,7 @@ async function resolvePhase({
   commentId = null,
   checksFile = null,
   threadRootId = null,
+  scope = null,
   sleep = null,
   writeFile = (at, body) => require('node:fs').writeFileSync(at, body),
 } = {}) {
@@ -360,9 +402,23 @@ async function resolvePhase({
     if (wanted === 'unlock' && !scoped) {
       return refuse('`unlock` must be written inside the review thread it releases');
     }
+    const admits = scopeAdmits(scope);
+    if (admits === null) {
+      return refuse(
+        `this run was decided for \`${safeEcho(String(scope))}\`, which is not work this flow knows how to do, ` +
+          'so nothing ran',
+      );
+    }
     const request = namesTheReview(said) ? '' : said;
     const asked = request !== '' && String(routeSource ?? '') === EXPLICIT_SOURCE;
-    const answersThreads = scoped || !asked;
+    /*
+     * Words after the command name the work, and a run free to look anywhere answers them in the do
+     * phase rather than reading threads it was not pointed at. A run that may not touch the build has
+     * nowhere else to look, so the words scope the thread pass instead of skipping it - otherwise a
+     * reviewer who wrote `fix` with a sentence after it on a review-labelled pull request would get a
+     * run that answers nothing at all.
+     */
+    const answersThreads = admits.reviews && (scoped || !asked || !admits.builds);
     let known = null;
 
     if (answersThreads) {
@@ -402,6 +458,13 @@ async function resolvePhase({
       }
       core?.info?.(
         `#${String(prNumber ?? number)}: this pull request has no review thread at all, so this run looks for other work.`,
+      );
+    }
+
+    if (!admits.builds) {
+      return refuse(
+        'this run was started to answer review comments, and this pull request has no review thread at all, so ' +
+          'there was nothing to answer and nothing ran',
       );
     }
 
@@ -511,6 +574,7 @@ async function resolvePhase({
 
 module.exports = {
   MAX_PAGES,
+  WORK_SCOPES,
   GENERIC_STOP,
   COMMAND_STOP,
   PER_PAGE,

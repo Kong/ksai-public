@@ -10,6 +10,13 @@ export const COMMANDS = Object.freeze([
 ]);
 
 /**
+ * WORK_SCOPES is every kind of work a record may narrow a run to, copied from
+ * `.github/scripts/ksai/phase.cjs` rather than imported, for the reason COMMANDS is copied, and held to
+ * the original by the same kind of parity test.
+ */
+export const WORK_SCOPES = Object.freeze(['builds', 'reviews']);
+
+/**
  * TIMEOUT is how long one read may take, in milliseconds, before it counts as a failure that can pass.
  */
 export const TIMEOUT = 10000;
@@ -55,6 +62,18 @@ const PR_SHAPE = /^[1-9][0-9]{0,9}$/;
 const SHA_SHAPE = /^[0-9a-fA-F]{40}$/;
 
 const LABEL_MAX = 50;
+
+/**
+ * narrows reports whether a scope names work this runner does. A record naming work it does not is
+ * refused rather than passed on empty: an empty scope narrows nothing, so passing it on would widen the
+ * run to everything the control plane meant to keep it away from.
+ *
+ * @param {string} scope
+ */
+function narrows(scope) {
+  const parts = scope.split(',');
+  return new Set(parts).size === parts.length && parts.every((one) => WORK_SCOPES.includes(one));
+}
 
 const hasControl = (text) => [...text].some((character) => {
   const point = character.codePointAt(0) ?? 0;
@@ -166,7 +185,7 @@ function recordFrom(served) {
   }
 
   const {
-    command, label, pr, head_sha: headSha, requester, model, effort, guidance, work_item: workItem,
+    command, label, pr, head_sha: headSha, scope, requester, model, effort, guidance, work_item: workItem,
   } = /** @type {Record<string, unknown>} */ (served);
   if (command !== undefined && (typeof command !== 'string' || !COMMANDS.includes(command))) {
     throw stopped('the record names a command this runner does not answer');
@@ -179,6 +198,9 @@ function recordFrom(served) {
   }
   if (headSha !== undefined && (typeof headSha !== 'string' || !SHA_SHAPE.test(headSha))) {
     throw stopped('the record names a head that is not a commit');
+  }
+  if (scope !== undefined && (typeof scope !== 'string' || scope === '' || !narrows(scope))) {
+    throw stopped('the record narrows this run to work this runner does not do');
   }
   if (requester !== undefined && (typeof requester !== 'string' || !REQUESTER.test(requester))) {
     throw stopped('the record names a requester that is not a GitHub login');
@@ -201,6 +223,7 @@ function recordFrom(served) {
     label: text(label),
     pr: text(pr),
     head_sha: text(headSha).toLowerCase(),
+    scope: text(scope),
     requester: text(requester),
     model: text(model),
     effort: text(effort),
@@ -273,6 +296,7 @@ export async function readRecord({
       label: '',
       pr: '',
       head_sha: '',
+      scope: '',
       requester: '',
       model: '',
       effort: '',

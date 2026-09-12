@@ -684,6 +684,21 @@ function plannedByDispatch(env) {
   );
 }
 
+/**
+ * noticeFor renders what a phase that found nothing posts, told what the record narrowed this run to so
+ * the notice does not offer work the label kept for somebody else.
+ *
+ * Beside `decidePhase` rather than inside it: the wiring test reads that function's object keys as the
+ * outputs the step publishes, so an option named there would read as an output nothing can consume.
+ */
+function noticeFor(out, env) {
+  return renderPhaseNotice(out.phase, {
+    pending: out.pending,
+    triggerPhrase: env.TRIGGER,
+    scope: env.RECORD_SCOPE,
+  });
+}
+
 async function decidePhase({ github, core, owner, repo, env }) {
   const evidenceClient = env.EVIDENCE_TOKEN
     ? new github.constructor({ auth: env.EVIDENCE_TOKEN, baseUrl: env.GITHUB_API_URL })
@@ -708,6 +723,7 @@ async function decidePhase({ github, core, owner, repo, env }) {
     commentId: env.COMMENT_ID,
     checksFile: env.CHECKS_FILE,
     threadRootId: env.THREAD_ROOT_ID,
+    scope: env.RECORD_SCOPE,
   });
 
   const outputs = {
@@ -766,10 +782,7 @@ async function decidePhase({ github, core, owner, repo, env }) {
     plan_file: out.planFile,
     held: out.held,
     conflicting: out.conflicting,
-    notice: renderPhaseNotice(out.phase, {
-      pending: out.pending,
-      triggerPhrase: env.TRIGGER,
-    }),
+    notice: noticeFor(out, env),
   });
   return { notices: [], outputs };
 }
