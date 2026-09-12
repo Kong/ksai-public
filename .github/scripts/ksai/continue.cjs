@@ -242,7 +242,9 @@ function stopsHere({ handsOff = null, started = null } = {}) {
 
 const CONTINUE_ATTEMPTS = 3;
 
-const CONTINUE_TIMEOUT = 10000;
+const CONTINUE_TIMEOUT = 30000;
+
+const CONTINUE_HOLD = 25000;
 
 const pauseFor = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 
@@ -301,8 +303,10 @@ async function continueThroughControlPlane({
   });
 
   let last = '';
+  let busy = false;
   for (let tries = 0; tries < CONTINUE_ATTEMPTS; tries += 1) {
-    if (tries > 0) await pause(2 ** tries * 1000);
+    if (tries > 0) await pause(busy ? CONTINUE_HOLD : 2 ** tries * 1000);
+    busy = false;
 
     let answer;
     try {
@@ -319,7 +323,9 @@ async function continueThroughControlPlane({
 
     if (answer.ok) return { outcome: 'dispatched', reason: '' };
     if (answer.status === 404 || answer.status === 405) return { outcome: 'unheld', reason: '' };
-    if (answer.status < 500) {
+    if (answer.status === 409) {
+      busy = true;
+    } else if (answer.status < 500) {
       return { outcome: 'failed', reason: `the control plane refused to start the next run with ${answer.status}` };
     }
     last = `the control plane answered ${answer.status}`;
@@ -334,6 +340,8 @@ module.exports = {
   MAX_INPUTS,
   MAX_INPUT_CHARS,
   CONTINUE_ATTEMPTS,
+  CONTINUE_TIMEOUT,
+  CONTINUE_HOLD,
   readCount,
   progress,
   shouldContinue,
