@@ -12,6 +12,15 @@ const { counted } = require('../lib/text.cjs');
 
 const MISSING_COST = 'Claude execution output omitted total_cost_usd; defaulting total cost to 0.0000.';
 
+const MAX_ENDED_ON = 300;
+
+const RUN_SUCCESS = 'success';
+
+const endedBadly = (env) => {
+  const conclusion = String(env.CONCLUSION ?? '').trim();
+  return conclusion !== '' && conclusion !== RUN_SUCCESS;
+};
+
 function billedTotals(result) {
   const rows = Object.values(result?.modelUsage ?? {}).filter((row) => row !== null && typeof row === 'object');
   if (rows.length === 0) return null;
@@ -98,6 +107,7 @@ function runSpend(raw, env = process.env) {
     duration: `${Math.round((result.duration_ms ?? 0) / 1000)}s`,
     permission_denials: String(Number.isFinite(denials) ? denials : 0),
     denied: refused === null ? '' : JSON.stringify(refused),
+    ended_on: typeof result.stop_reason === 'string' ? result.stop_reason.replace(/\s+/g, ' ').trim().slice(0, MAX_ENDED_ON) : '',
   };
   return { warning: Number.isFinite(totalCost) ? null : MISSING_COST, ...outputs };
 }
@@ -237,6 +247,7 @@ function evalRunRecord(env, { now = new Date() } = {}) {
       conditioned: alt(published.conditioned),
       report_format: alt(published.report_format),
       stopped_by: env.STOPPED_BY === '' || env.STOPPED_BY === undefined ? null : env.STOPPED_BY,
+      ended_on: String(env.ENDED_ON ?? '').trim() || null,
     },
     posted: { review_id: alt(published.review_id), mode: alt(published.mode) ?? 'published' },
     usage: {
@@ -319,6 +330,11 @@ function reviewRow(env) {
     totals ? `\`${env.NUM_TURNS}\`` : BLANK_CELL,
     totals ? `$${env.COST}` : BLANK_CELL,
   ];
+}
+
+function endedOnLine(env) {
+  const said = String(env.ENDED_ON ?? '').replace(/[`\r\n]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, MAX_ENDED_ON);
+  return said === '' || !endedBadly(env) ? [] : ['', `Ended on: \`${scrub(said, { triggerPhrase: env.TRIGGER })}\``];
 }
 
 function reviewSpendLine(env) {
@@ -445,6 +461,7 @@ function renderRunReport(env) {
     '',
     ...reportTable(REVIEW_COLUMNS, [reviewRow(env)]),
     ...reviewSpendLine(env),
+    ...endedOnLine(env),
     '',
     '</details>',
     '',
@@ -467,7 +484,7 @@ function reviewPointer(env) {
 
 function reviewHeading(env, status, kind) {
   const pointer = reviewPointer(env);
-  if (kind === null) return runHeading('review', status?.stage, true, env.COMMAND, env.TRIGGER, pointer);
+  if (kind === null && !endedBadly(env)) return runHeading('review', status?.stage, true, env.COMMAND, env.TRIGGER, pointer);
   return ksaiHeading({
     command: env.COMMAND,
     flow: 'review',

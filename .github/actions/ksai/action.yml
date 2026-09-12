@@ -5574,6 +5574,7 @@ runs:
         REVIEW_PROTOCOL: ${{ steps.report.outputs.review_protocol }}
         HAS_RESULT: ${{ steps.report.outputs.has_result }}
         STOPPED_BY: ${{ steps.disarm_watchdog.outputs.cause }}
+        ENDED_ON: ${{ steps.report.outputs.ended_on }}
         INPUT_TOKENS: ${{ steps.report.outputs.input_tokens }}
         OUTPUT_TOKENS: ${{ steps.report.outputs.output_tokens }}
         NUM_TURNS: ${{ steps.report.outputs.num_turns }}
@@ -5674,6 +5675,7 @@ runs:
         WATCHDOG_REASON: ${{ steps.disarm_watchdog.outputs.reason }}
         CEILING: ${{ steps.watchdog.outputs.ceiling }}
         STOP_REASON: ${{ steps.report.outputs.stop_reason }}
+        ENDED_ON: ${{ steps.report.outputs.ended_on }}
         RULES_NOTICE: ${{ steps.repo_rules.outputs.rejection }}
         CONCLUSION: ${{ steps.report.outputs.conclusion }}
         COMMIT_ID: ${{ steps.checkout_pr.outputs.commit }}
