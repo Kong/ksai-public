@@ -1,19 +1,22 @@
 name: Dispatch record
 description: >-
-  Read what the control plane decided for this run, and carry on exactly as the dispatch inputs say
-  whenever that does not work. The control plane writes a record before it dispatches and names it in
-  the dispatch, so a decision it makes does not have to fit the ten inputs workflow_dispatch allows.
+  Read what the control plane decided for this run. The control plane writes a record before it
+  dispatches and names it in the dispatch, so a decision it makes does not have to fit the ten inputs
+  workflow_dispatch allows.
 
   Nothing here is a secret. The caller is named by a GitHub Actions OIDC token whose repository and
   run claims are signed by GitHub and cannot be changed from inside the job. The control plane binds a
   record to the run that first reads it and answers only that run afterwards, so the gate and the job
   that does the work can both read it and no other run can.
 
-  Every failure but one is a fallback rather than an error. The dispatch still carries the inputs every
-  consumer reads, so a record this action cannot read costs the run nothing it has today. The one is a
-  404 for a record the dispatch named: the control plane binds a record to the run that first reads it,
-  so a run it refuses is a second run of a dispatch another run may already be working on, and this
-  action fails it rather than letting it do that work again.
+  A dispatch naming no record skips the read. One naming a record is read or the run fails, and nothing
+  falls back to the dispatch inputs. The control plane sends a dispatch whose answer was lost again
+  under the same record, so a run that carried on without reading it could be the second run of that
+  dispatch doing the work twice, or a run answering a different question than the one decided. A
+  failure that can pass - the token mint, the network, a body that does not parse, a 408, a 429 or a
+  5xx - is tried again first, and a run that still cannot read its record fails after at most about two
+  and a half minutes, however long the control plane asks it to wait. A refusal that would answer the same again,
+  and a record named with no endpoint to read it from, fail the run at once.
 
   What comes back is read, never relayed. A command is passed on only when it is one this runner
   answers, so a record cannot name a flow that does not exist, and a value carrying a newline cannot
@@ -26,8 +29,8 @@ description: >-
 inputs:
   endpoint:
     description: >-
-      Base URL of the control plane, with no trailing path. Empty, which is the default, skips the
-      read - which is what a repository no control plane serves wants.
+      Base URL of the control plane, with no trailing path. Empty, which is the default, is right only
+      where no dispatch names a record: a record named with no endpoint fails the run.
     required: false
     default: ""
   record_id:
@@ -45,7 +48,7 @@ inputs:
 
 outputs:
   read:
-    description: "`true` where the record was read, `false` where the run carries on from its inputs"
+    description: "`true` where the record was read, `false` where the dispatch named none"
     value: ${{ steps.record.outputs.read }}
   command:
     description: >-
@@ -86,6 +89,7 @@ runs:
               audience: process.env.RECORD_AUDIENCE,
               mint: (audience) => core.getIDToken(audience),
               secret: (token) => core.setSecret(token),
+              note: (why, wait) => core.info(`ksai could not read the dispatch record yet, trying again in ${Math.round(wait / 1000)}s: ${why}`),
             });
           } catch (refused) {
             core.setFailed(refused.message);
@@ -93,8 +97,6 @@ runs:
           }
           if (answer.read) {
             core.notice(`ksai read the dispatch record${answer.command ? `: command ${answer.command}` : ''}`);
-          } else if (answer.why) {
-            core.notice(`ksai carried on from the dispatch inputs: ${answer.why}`);
           }
           core.setOutput('read', answer.read ? 'true' : 'false');
           core.setOutput('command', answer.command);

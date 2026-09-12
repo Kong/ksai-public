@@ -195,11 +195,13 @@ on:
         default: "high"
       fleet_dials_endpoint:
         description: >-
-          base URL of the control plane that serves this fleet's model and effort, with no trailing
-          path. Empty, which is the default, keeps the model and effort pinned above and makes no
-          call at all - so a repository no control plane serves is unaffected by this setting
-          existing. Only the v4 caller template names it: moving a model across the fleet is
-          otherwise a pull request in every repository, because these values live in each caller.
+          base URL of the control plane that serves this fleet's model and effort, and the record
+          it wrote for this run, with no trailing path. Empty, which is the default, keeps the model
+          and effort pinned above and makes no call - which is right only for a repository no
+          control plane serves. A dispatch that names a record with no endpoint fails the run,
+          because the record is what lets a dispatch sent again run once. Only the v4 caller
+          template names it: moving a model across the fleet is otherwise a pull request in every
+          repository, because these values live in each caller.
         required: false
         type: string
         default: ""
@@ -939,7 +941,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-help
           repository: Kong/ksai-public
-          ref: v3.61.1
+          ref: v3.61.2
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1380,7 +1382,7 @@ jobs:
         with:
           token: ${{ github.token }}
           repository: Kong/ksai-public
-          ref: v3.61.1
+          ref: v3.61.2
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1848,7 +1850,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-recover
           repository: Kong/ksai-public
-          ref: v3.61.1
+          ref: v3.61.2
           sparse-checkout: |
             .github/scripts
           persist-credentials: false
