@@ -4,7 +4,14 @@ import { pathToFileURL } from 'node:url';
 import { writeOutputs } from '../lib/outputs.mjs';
 import { resolveModel } from '../lib/select-arm.cjs';
 
-const ENGINES = new Set(['claude', 'opencode']);
+/**
+ * SHADOWABLE names the engines a shadow may run on, which is fewer than this repository can spell.
+ *
+ * The Claude engine is refused here rather than at the caller, because the sampler is what decides
+ * whether a second paid review starts. `shadow_engine` keeps its published default of `claude`, so
+ * a consumer that never repins names an engine this answers `null` for and pays for nothing.
+ */
+const SHADOWABLE = new Set(['opencode']);
 
 /**
  * shouldShadow answers whether this review is one of the sampled few that runs twice.
@@ -32,19 +39,53 @@ export function shouldShadow({ key, percent } = {}) {
 /**
  * shadowEngine answers the arm to shadow with, or null when there is none to run.
  *
- * A shadow on the arm that already ran would pay twice for one measurement.
+ * A shadow on the arm that already ran would pay twice for one measurement, and an engine outside
+ * `SHADOWABLE` is refused rather than started.
  */
 export function shadowEngine(engine, live) {
   const asked = String(engine ?? '').trim();
-  if (!ENGINES.has(asked)) return null;
+  if (!SHADOWABLE.has(asked)) return null;
   return asked === String(live ?? '').trim() ? null : asked;
 }
 
-/** decide answers the whole question one step asks: whether to run a shadow, and on which engine. */
+/**
+ * whyNone names the reason a run shadows nothing, so a missing row can be traced to a cause.
+ *
+ * **The dials are read before the engine.** A caller who set `shadow_model` and happened to match
+ * the live arm was told "the Claude engine no longer runs here" - naming an input they never set,
+ * on exactly the runs where triage picked their shadow model, and nothing they could act on.
+ *
+ * **The live arm and the engine input get different sentences**, because they need different
+ * answers: one is the caller's `engine`, which they can change, and the other is `shadow_engine`,
+ * where the published default is already the only value most callers will ever have. Sharing one
+ * message printed the same `claude` for both.
+ */
+function whyNone({ engine, live, different, dialled }) {
+  if (different) return `the live arm runs on ${live}, which a shadow may not`;
+  if (dialled) return 'the shadow dials name what the live arm already runs';
+  const asked = String(engine ?? '').trim();
+  if (asked === 'claude') return 'the Claude engine no longer runs here, so it shadows nothing';
+  if (asked === '') return 'no shadow engine was named';
+  if (!SHADOWABLE.has(asked)) return `${asked} names no engine a shadow may run`;
+  return `${asked} is the arm that already ran`;
+}
+
+/**
+ * decide answers the whole question one step asks: whether to run a shadow, and on which engine.
+ *
+ * A dial shadow runs on the **live** engine rather than on `shadow_engine`. The two shadows share
+ * one sampler, and reading the engine for both meant a dial comparison only ran while the engine
+ * input happened to name an arm this could start - so narrowing `SHADOWABLE` would have taken the
+ * model and strategy comparisons down with the Claude arm.
+ */
 export function decide(env) {
+  const live = String(env.LIVE_ENGINE ?? '').trim() || 'opencode';
+  const dialled = Boolean(env.SHADOW_MODEL || env.SHADOW_STRATEGY);
   const different = (env.SHADOW_MODEL && resolveModel(env.SHADOW_MODEL).toLowerCase() !== resolveModel(env.LIVE_MODEL || 'flagship').toLowerCase()) || (env.SHADOW_STRATEGY && env.SHADOW_STRATEGY !== (env.LIVE_STRATEGY || 'baseline'));
-  const engine = different && ENGINES.has(env.SHADOW_ENGINE) ? env.SHADOW_ENGINE : shadowEngine(env.SHADOW_ENGINE, env.LIVE_ENGINE || 'opencode');
-  if (!engine) return { shadow: 'false', engine: '', why: 'no shadow engine, or it is the arm that already ran' };
+  const engine = different ? (SHADOWABLE.has(live) ? live : null) : shadowEngine(env.SHADOW_ENGINE, live);
+  if (!engine) {
+    return { shadow: 'false', engine: '', why: whyNone({ engine: env.SHADOW_ENGINE, live, different, dialled }) };
+  }
   if (!shouldShadow({ key: `${env.REPOSITORY}#${env.PR_NUMBER}@${env.HEAD_SHA}`, percent: env.SHADOW_PERCENT })) {
     return { shadow: 'false', engine: '', why: `not in the sampled ${String(env.SHADOW_PERCENT ?? 0)}%` };
   }

@@ -397,11 +397,16 @@ on:
         default: ""
       shadow_engine:
         description: >-
-          run a second, silent review on this engine for a sampled share of reviews, to keep a
-          paired comparison of the two arms filling on its own. It writes nothing to the pull
-          request - no reaction, no report, no review - and produces the eval record, the artifacts
-          and the stage timings exactly as a published run does. On by default at the rate
-          `shadow_percent` names; set that to `0` to turn it off.
+          run a second, silent review on this engine for a sampled share of reviews. It writes
+          nothing to the pull request - no reaction, no report, no review - and produces the eval
+          record, the artifacts and the stage timings exactly as a published run does.
+
+          **`claude`, the declared default, shadows nothing.** That engine no longer runs here, and
+          the default is kept only because changing one breaks every pinned consumer. So a review is
+          shadowed only when `shadow_model` or `shadow_strategy` names a dial to compare, which runs
+          the second review on the live engine, or when this input names an engine the live arm is
+          not already running. `shadow_percent` still bounds the share, and `0` turns it off
+          outright.
         required: false
         type: string
         default: "claude"
@@ -934,7 +939,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-help
           repository: Kong/ksai-public
-          ref: v3.60.2
+          ref: v3.61.0
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1336,16 +1341,23 @@ jobs:
           run_attempt: >-
             ${{ inputs.run_id == '' && (needs.test.outputs.artifact_attempt || github.run_attempt) || inputs.run_attempt }}
 
-  # The paired half of an engine comparison. It reviews the same diff as the job above on the other
-  # arm and publishes nothing, so the corpus fills with matched rows while the pull request sees one
-  # review. It is a separate job rather than a second step because it needs a lane of its own: the
-  # review job's group is keyed on the pull request with `cancel-in-progress`, so a shadow sharing it
+  # The paired half of a comparison. It reviews the same diff as the job above on a second arm and
+  # publishes nothing, so the corpus fills with matched rows while the pull request sees one review.
+  #
+  # Only a dial comparison reaches it now. `shadow_engine: claude` names an engine this repository
+  # no longer runs, and it is the declared default, so the condition below skips the job outright
+  # rather than starting a runner to mint a token, check this repository out and decide no.
+  #
+  # It is a separate job rather than a second step because it needs a lane of its own: the review
+  # job's group is keyed on the pull request with `cancel-in-progress`, so a shadow sharing it
   # would cancel the review it exists to be compared against.
   shadow:
     needs: [gate, review]
     continue-on-error: true
     if: >-
-      ${{ !cancelled() && inputs.shadow_engine != '' &&
+      ${{ !cancelled() &&
+      (inputs.shadow_model != '' || inputs.shadow_strategy != '' ||
+      (inputs.shadow_engine != '' && inputs.shadow_engine != 'claude')) &&
       (vars.KSAI_SHADOW_PERCENT || inputs.shadow_percent) != '0' &&
       needs.gate.outputs.authorized == 'true' && needs.gate.outputs.review == 'true' }}
     runs-on: ${{ startsWith(inputs.runs_on, '[') && fromJSON(inputs.runs_on) || inputs.runs_on }}
@@ -1368,7 +1380,7 @@ jobs:
         with:
           token: ${{ github.token }}
           repository: Kong/ksai-public
-          ref: v3.60.2
+          ref: v3.61.0
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1836,7 +1848,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-recover
           repository: Kong/ksai-public
-          ref: v3.60.2
+          ref: v3.61.0
           sparse-checkout: |
             .github/scripts
           persist-credentials: false
