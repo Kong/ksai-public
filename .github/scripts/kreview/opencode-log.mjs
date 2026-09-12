@@ -80,6 +80,7 @@ if (process.env.FLOW === 'review') {
   Object.assign(log[0], { review_protocol: {
     ...metadata.identity,
     strategy: process.env.REVIEW_STRATEGY || 'baseline',
+    submission_status: process.env.OPENCODE_REVIEW_SUBMISSION_STATUS || null,
     ...protocol,
     ...coverage,
     candidates_count: held ? candidates.length : null,

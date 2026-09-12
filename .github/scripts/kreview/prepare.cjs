@@ -230,6 +230,7 @@ function buildReviewPrompt({ env }) {
     allowed_tools: '',
     disallowed_tools: '',
     plugin_dir: '',
+    result_transport: '',
     error: '',
   };
   const strategy = env.REVIEW_STRATEGY || 'baseline';
@@ -289,6 +290,7 @@ function buildReviewPrompt({ env }) {
     rules: env.REPO_RULES,
     budgetMinutes: ceilingMinutes(env.JOB_TIMEOUT_MINUTES),
     channelNonce: env.CHANNEL_NONCE,
+    resultTransport: experiment.result_transport,
   };
   const prompt = (strategy === 'baseline' ? renderReviewPrompt : renderPipelineContext)(options);
   const context = renderPipelineContext({ ...options, channelNonce: null });
@@ -309,6 +311,7 @@ function buildReviewPrompt({ env }) {
   fs.writeFileSync(env.PROMPT_FILE, prompt);
   fs.writeFileSync(`${env.PROMPT_FILE}.pipeline.json`, JSON.stringify({
       scoping,
+      resultTransport: experiment.result_transport,
       prior: experiment.prior_findings === 'ignore' ? '' : env.PRIOR_FINDINGS || '',
       identity: { head_sha: env.COMMIT_ID, base_sha: env.BASE_SHA, plugin_sha: env.PLUGIN_SHA, runtime_sha: env.RUNTIME_SHA,
         prompt_sha256: promptDigest(prompt), context_sha256: promptDigest(comparable), ...experiment },
@@ -319,6 +322,7 @@ function buildReviewPrompt({ env }) {
     allowed_tools: policy.allowed,
     disallowed_tools: policy.disallowed,
     plugin_dir: PLUGIN_DIR,
+    result_transport: experiment.result_transport,
   });
   return { outputs, error: '' };
 }

@@ -1,12 +1,15 @@
 import { spawn, spawnSync } from 'node:child_process';
 import {
+  chmodSync,
+  closeSync,
   existsSync,
+  mkdtempSync,
   mkdirSync,
   openSync,
   readFileSync,
-  closeSync,
   realpathSync,
   renameSync,
+  rmSync,
   statSync,
   writeFileSync,
   writeSync,
@@ -15,11 +18,13 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { conclusionOf, exitedOn, stopReason } from '../lib/execution-log.mjs';
-import modelCatalog from '../lib/model-catalog.json' with { type: 'json' };
-import { answer, collectSecrets, executionLog, listed, parsed, sandboxScopes, scrub, spending } from '../lib/opencode.mjs';
+import { DEFAULT_OPENCODE_MODEL, answer, collectSecrets, executionLog, listed, parsed, sandboxScopes, scrub, spending } from '../lib/opencode.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
 import { bearer, heldExpiry } from '../lib/opencode-token.mjs';
 import { completeStage, LIMITS, readExport, recordChildren, recordedCompletion, recoverReview, reviewAnswer, reviewSession, streamFailure } from './opencode-review.mjs';
+import resultProtocol from './review-result.cjs';
+
+const { submitted } = resultProtocol;
 
 export { listed };
 
@@ -133,6 +138,9 @@ export function sandboxArgs(
     if (exists(tools)) args.push('--ro-bind', tools, tools);
   }
 
+  const resultDir = String(env.KSAI_REVIEW_RESULT_DIR ?? '');
+  if (resultDir && exists(resultDir)) args.push('--bind', resultDir, resultDir);
+
   for (const name of MASKED_HOMES) {
     const at = join(home, name);
     if (!exists(at)) continue;
@@ -197,7 +205,7 @@ export function sandboxArgs(
 }
 
 export function runArgs(env = process.env) {
-  const named = String(env.MODEL ?? '').trim() || modelCatalog.aliases[modelCatalog.defaultAlias];
+  const named = String(env.MODEL ?? '').trim() || DEFAULT_OPENCODE_MODEL;
   const args = ['run', '--model', `anthropic/${named}`, '--format', 'json'];
   if (env.FLOW === 'review' && ['evidence', 'dual'].includes(env.REVIEW_STRATEGY)) args.push('--agent', env.OPENCODE_REVIEW_FINALIZE === 'true' ? 'ksai-review-finish' : 'ksai-review-stage');
   const variant = String(env.VARIANT ?? '').trim();
@@ -259,13 +267,27 @@ async function main(env = process.env) {
   const tokenFile = tokenDir ? join(tokenDir, 'token.json') : '';
   if (tokenDir) mkdirSync(tokenDir, { recursive: true });
 
-  const sandbox = sandboxArgs({ ...env, KSAI_TOKEN_DIR: tokenDir, KSAI_TOKEN_FILE: tokenFile });
+  const resultTransport = env.FLOW === 'review' ? String(env.REVIEW_RESULT_TRANSPORT ?? '').trim() || 'tool' : 'text';
+  if (!['text', 'tool'].includes(resultTransport)) {
+    console.log(`::error::unknown review result transport: ${resultTransport}`);
+    return 1;
+  }
+  const runnerTemp = String(env.RUNNER_TEMP ?? '');
+  if (resultTransport === 'tool' && !runnerTemp) {
+    console.log('::error::typed review results require RUNNER_TEMP');
+    return 1;
+  }
+  const resultDir = resultTransport === 'tool' ? mkdtempSync(join(runnerTemp, 'review-results-')) : '';
+  if (resultDir) chmodSync(resultDir, 0o700);
+
+  const sandbox = sandboxArgs({ ...env, KSAI_TOKEN_DIR: tokenDir, KSAI_TOKEN_FILE: tokenFile, KSAI_REVIEW_RESULT_DIR: resultDir });
   const probe = spawnSync('bwrap', [...sandbox, 'opencode', '--version'], { encoding: 'utf8' });
   if (probe.status !== 0) {
     const said = `${probe.stdout ?? ''}${probe.stderr ?? ''}`.trim() || String(probe.error?.message ?? 'no output');
     console.log(
       `::error::opencode cannot start inside the sandbox on runner ${env.RUNNER_NAME ?? 'unknown'}, so no run was attempted: ${said}`,
     );
+    if (resultDir) rmSync(resultDir, { recursive: true, force: true });
     return 1;
   }
   console.log(`sandboxed opencode ${String(probe.stdout ?? '').trim()}`);
@@ -281,10 +303,13 @@ async function main(env = process.env) {
       ticking.unref?.();
     }
     const pipeline = env.FLOW === 'review' && ['evidence', 'dual'].includes(env.REVIEW_STRATEGY);
-    const invoke = async ({ prompt, timeoutMs = 0, resumeSession = '', finalize = false }) => {
+    let resultSequence = 0;
+    const invoke = async ({ prompt, timeoutMs = 0, resumeSession = '', finalize = false, resultKind = 'final', candidateIds = [] }) => {
       const began = Date.now();
       const offset = statSync(events).size;
+      const resultFile = resultDir ? join(resultDir, `${resultSequence += 1}.json`) : '';
       const ran = spawn('bwrap', [...sandbox, 'opencode', ...runArgs(env.FLOW === 'review' ? { ...env, OPENCODE_RESUME_SESSION: resumeSession, OPENCODE_REVIEW_FINALIZE: String(finalize) } : env)], {
+        env: { ...env, KSAI_REVIEW_RESULT_FILE: resultFile, KSAI_REVIEW_RESULT_KIND: resultKind, KSAI_REVIEW_CANDIDATE_IDS: JSON.stringify(candidateIds) },
         stdio: ['pipe', out, 'inherit'],
       });
       let hardStop = null;
@@ -303,10 +328,11 @@ async function main(env = process.env) {
       if (timeout) clearTimeout(timeout);
       if (hardStop) clearTimeout(hardStop);
       const segment = parsed(readFileSync(events).subarray(offset).toString('utf8'));
+      const submission = resultFile ? submitted({ file: resultFile, events: segment, kind: resultKind, candidateIds }) : null;
       const [result] = executionLog({ events: segment, exitCode: status, said: answer(segment) });
       const remaining = timeoutMs - (Date.now() - began);
       const recorded = pipeline && status === 0 && remaining > 0 ? recordedCompletion(segment, (id) => readExport({ env, sandbox, id, timeoutMs: Math.min(15_000, remaining) })) : {};
-      return { code: status, text: recorded.text || (env.FLOW === 'review' && !pipeline ? reviewAnswer(segment) : answer(segment)), completion: recorded.completion, session_id: segment.find((event) => typeof event.sessionID === 'string')?.sessionID,
+      return { code: status, text: submission?.text ?? recorded.text ?? (env.FLOW === 'review' && !pipeline ? reviewAnswer(segment) : answer(segment)), submission, completion: recorded.completion, session_id: segment.find((event) => typeof event.sessionID === 'string')?.sessionID,
         failure: streamFailure(segment), timed_out: timedOut,
         usage: spending(segment).length ? { ...result.usage, cost_usd: result.total_cost_usd, num_turns: result.num_turns } : null };
     };
@@ -316,7 +342,7 @@ async function main(env = process.env) {
       for (const attempt of result.attempts) writeSync(out, `${JSON.stringify({ type: 'ksai_review_attempt', ...attempt })}\n`);
       return result;
     };
-    const run = (options) => pipeline ? completeStage({ ...options, invoke: recovering }) : env.FLOW === 'review' ? recovering(options) : invoke(options);
+    const run = (options) => pipeline ? completeStage({ ...options, resultTransport, invoke: recovering }) : env.FLOW === 'review' ? recovering(options) : invoke(options);
     const prompt = readFileSync(String(env.PROMPT_FILE ?? ''), 'utf8');
     if (pipeline) {
       Object.assign(env, await reviewSession({ env, events, prompt, run }));
@@ -325,9 +351,10 @@ async function main(env = process.env) {
       const killAt = Number(env.KSAI_CHANNEL_KILL_AT);
       const timeoutMs = env.FLOW === 'review' ? killAt > 0 ? Math.max(0, killAt - Date.now()) : LIMITS.totalMs : 0;
       const result = env.FLOW === 'review' && timeoutMs === 0 ? { code: 124, timed_out: true } : await run({ prompt, timeoutMs });
-      code = result.code;
+      code = result.code === 0 && resultTransport === 'tool' && result.submission?.status !== 'accepted' ? 1 : result.code;
+      env.OPENCODE_REVIEW_SUBMISSION_STATUS = result.submission?.status ?? '';
       deadlineExpired = result.timed_out === true;
-      if (result.attempts?.length > 1) {
+      if ((resultTransport === 'tool' && result.submission?.status === 'accepted') || result.attempts?.length > 1) {
         const reviewFile = `${events}.review.json`;
         writeFileSync(reviewFile, scrub(result.text ?? '', collectSecrets(env)));
         env.OPENCODE_REVIEW_FILE = reviewFile;
@@ -363,8 +390,10 @@ async function main(env = process.env) {
   });
   if (reduced.status !== 0) {
     console.log('::error::the opencode event stream could not be reduced to an execution log, so this run reports nothing it spent');
+    if (resultDir) rmSync(resultDir, { recursive: true, force: true });
     return 1;
   }
+  if (resultDir) rmSync(resultDir, { recursive: true, force: true });
   writeOutputs(env.GITHUB_OUTPUT, {
     pipeline_file: env.REVIEW_PIPELINE_FILE || '',
     children_file: env.OPENCODE_CHILDREN_FILE || '',

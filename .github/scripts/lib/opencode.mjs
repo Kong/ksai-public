@@ -11,6 +11,7 @@ import { authHeaders } from './opencode-token.mjs';
 import { DEFAULT_SECRET_VARS, collectSecrets, scrub } from '../kreview/secrets.cjs';
 
 const { MODEL_SHAPE } = selectArm;
+export const DEFAULT_OPENCODE_MODEL = modelCatalog.aliases[modelCatalog.defaultAlias];
 const providerEntry = (model) => {
   const rate = modelCatalog.rates?.[model];
   if (!rate) return Object.freeze({});
@@ -96,6 +97,7 @@ export function sandboxScopes(env, exists) {
     String(env.OPENCODE_HOME ?? ''),
     String(env.KSAI_TOKEN_DIR ?? ''),
     String(env.KSAI_CHANNEL_DIR ?? ''),
+    String(env.KSAI_REVIEW_RESULT_DIR ?? ''),
     join(workspace, '_ksai'),
   ]
     .map((one) => one.trim())
@@ -272,6 +274,8 @@ export const AUTH_PLUGIN = fileURLToPath(new URL('../kreview/opencode-auth.mjs',
 
 export const CHANNEL_PLUGIN = fileURLToPath(new URL('../kreview/opencode-channel.mjs', import.meta.url));
 
+export const REVIEW_RESULT_PLUGIN = fileURLToPath(new URL('../kreview/opencode-review-result.mjs', import.meta.url));
+
 const asFileUrl = (path) => (path.startsWith('file://') ? path : `file://${path}`);
 
 /**
@@ -284,6 +288,7 @@ const asFileUrl = (path) => (path.startsWith('file://') ? path : `file://${path}
  */
 export function runtimeConfig({
   plugin = AUTH_PLUGIN,
+  plugins = [],
   channel = '',
   agents = {},
   skills = [],
@@ -292,7 +297,7 @@ export function runtimeConfig({
   auth = '',
   attribution = {},
 } = {}) {
-  const plugins = [plugin, channel].filter(Boolean).map((one) => asFileUrl(one));
+  const loadedPlugins = [plugin, channel, ...plugins].filter(Boolean).map((one) => asFileUrl(one));
   return {
     ...RUNTIME_CONFIG,
     ...(permission ? { permission } : {}),
@@ -306,7 +311,7 @@ export function runtimeConfig({
         },
       },
     },
-    ...(plugins.length ? { plugin: plugins } : {}),
+    ...(loadedPlugins.length ? { plugin: loadedPlugins } : {}),
     ...(skills.length ? { skills: { paths: skills } } : {}),
     ...(Object.keys(agents).length ? { agent: agents } : {}),
   };

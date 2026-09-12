@@ -948,7 +948,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-help
           repository: Kong/ksai-public
-          ref: v3.63.2
+          ref: v3.64.0
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1389,7 +1389,7 @@ jobs:
         with:
           token: ${{ github.token }}
           repository: Kong/ksai-public
-          ref: v3.63.2
+          ref: v3.64.0
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1862,7 +1862,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-recover
           repository: Kong/ksai-public
-          ref: v3.63.2
+          ref: v3.64.0
           sparse-checkout: |
             .github/scripts
           persist-credentials: false

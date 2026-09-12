@@ -100,6 +100,19 @@ const OUTPUT_CONTRACT = `7. Emit your final message as exactly one fenced \`\`\`
      sentence, 20 words or fewer, active voice, present tense, one term for one thing.
      Identifiers, code and paths are exempt.`;
 
+const constraintsFor = (transport) => transport === 'tool' ? CONSTRAINTS.replace(
+  /You have NO GitHub token[^]*?before or after the block\./,
+  'You have NO GitHub token and cannot post anything; a separate trusted step publishes the validated result you submit. Call `submit_review_result` exactly once at step 7. After it accepts the result, end the turn without repeating it as text.',
+) : CONSTRAINTS;
+
+const outputContractFor = (transport) => transport === 'tool' ? OUTPUT_CONTRACT.replace(
+  '7. Emit your final message as exactly one fenced ```json block matching this contract:',
+  '7. Call `submit_review_result` exactly once. Pass its `submission` argument an object matching this contract:',
+).replace(
+  'Put every concrete issue in `findings`; do not list individual issues inside\n     `summary`. Output nothing outside the single ```json block.',
+  'Put every concrete issue in `findings`; do not list individual issues inside\n     `summary`. After the tool accepts the result, end the turn without repeating it.',
+) : OUTPUT_CONTRACT;
+
 const AUDIT_MINUTES = 5;
 
 const TOLD_THE_TIME = `Read the clock rather than estimating it. Nothing in this conversation
@@ -298,7 +311,7 @@ ${shared}`;
 /**
  * renderReviewPrompt answers the prompt one review reads, with `request` already HTML-escaped by the selector.
  *
- * @param {{baseRef?: string|null, workspace?: string|null, conventionsDir?: string|null, request?: string|null, priorFindings?: string|null, diffPath?: string|null, changedFilesPath?: string|null, shortstat?: string|null, reviewers?: any[], available?: any[], common?: any[], auditorPath?: string|null, rules?: any, budgetMinutes?: number|string|null, channelNonce?: string|null}} [options]
+ * @param {{baseRef?: string|null, workspace?: string|null, conventionsDir?: string|null, request?: string|null, priorFindings?: string|null, diffPath?: string|null, changedFilesPath?: string|null, shortstat?: string|null, reviewers?: any[], available?: any[], common?: any[], auditorPath?: string|null, rules?: any, budgetMinutes?: number|string|null, channelNonce?: string|null, resultTransport?: string|null}} [options]
  */
 function renderReviewPrompt({
   baseRef = null,
@@ -316,6 +329,7 @@ function renderReviewPrompt({
   rules = null,
   budgetMinutes = null,
   channelNonce = null,
+  resultTransport = 'text',
 } = {}) {
   const base = String(baseRef ?? '');
   const patch = String(diffPath ?? '');
@@ -327,7 +341,7 @@ function renderReviewPrompt({
   const told = usableNonce(channelNonce);
   const budget = budgetBlock(budgetMinutes, told);
   const channel = channelBlock(channelNonce);
-  return `${CONSTRAINTS}
+  return `${constraintsFor(resultTransport)}
 
 A trusted step took this review's diff before you started. It is at
 \`${patch}\`, and the files it touches are listed one per line at
@@ -452,12 +466,12 @@ ${budget === '' || !told || !measurable(budgetMinutes) ? '' : `
    already covered. If every finding is a duplicate, return an empty \`findings\` array
    and say so in the summary.
 
-${OUTPUT_CONTRACT}
+${outputContractFor(resultTransport)}
 `;
 }
 
 function renderPipelineContext(options) {
-  const rendered = renderReviewPrompt({ ...options, priorFindings: '', budgetMinutes: null });
+  const rendered = renderReviewPrompt({ ...options, priorFindings: '', budgetMinutes: null, resultTransport: 'text' });
   const start = rendered.indexOf('\n2. Review the diff yourself');
   if (start < 0) throw new Error('review prompt has no discovery boundary');
   const context = rendered.slice(0, start);

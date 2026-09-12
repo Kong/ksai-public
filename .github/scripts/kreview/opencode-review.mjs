@@ -20,25 +20,26 @@ export function reviewAnswer(events) {
 
 const coverageOf = (review) => ['complete', 'incomplete'].includes(review?.coverage) ? review.coverage : undefined;
 
-export async function completeStage({ name, prompt, timeoutMs, candidateIds = null, resumeSession = '', invoke, now = Date.now }) {
+export async function completeStage({ name, prompt, timeoutMs, candidateIds = null, resumeSession = '', resultTransport = 'text', invoke, now = Date.now }) {
   const began = now();
   const calls = [];
+  const resultKind = name.startsWith('audit-') ? 'audit' : 'candidate';
   const answer = (code, text = null) => ({ code, text,
     session_id: calls.at(-1)?.session_id, timed_out: calls.at(-1)?.timed_out === true,
     usage: calls.length && calls.every((call) => call.usage) ? calls.reduce((sum, call) => {
       for (const [key, value] of Object.entries(call.usage)) sum[key] = (sum[key] || 0) + value;
       return sum;
     }, {}) : null,
-    invocations: calls.map(({ phase, code: exit_code, session_id, usage, completion, coverage, attempts }) => ({ phase, exit_code, session_id, usage, completion, coverage, attempts, thinking: phase === 'research' ? 'selected' : 'enabled', effort: phase === 'research' ? 'selected' : 'low', thinking_budget: phase === 'research' ? undefined : LIMITS.finalizeThinkingTokens })),
+    invocations: calls.map(({ phase, code: exit_code, session_id, usage, completion, coverage, attempts, submission, correction }) => ({ phase, exit_code, session_id, usage, completion, coverage, attempts, submission_status: submission?.status ?? null, correction: correction === true, thinking: phase === 'research' ? 'selected' : 'enabled', effort: phase === 'research' ? 'selected' : 'low', thinking_budget: phase === 'research' ? undefined : LIMITS.finalizeThinkingTokens })),
   });
   if (timeoutMs < LIMITS.minStageMs) return answer(124);
   const finalizeMs = Math.min(LIMITS.finalizeMs, Math.floor(timeoutMs / 3));
-  const research = await invoke({ prompt, timeoutMs: timeoutMs - finalizeMs, resumeSession });
+  const research = await invoke({ prompt, timeoutMs: timeoutMs - finalizeMs, resumeSession, resultKind, candidateIds: candidateIds ?? [] });
   const researched = typeof research.text === 'string' ? readReviewOutput(research.text).review : null;
   calls.push({ phase: 'research', ...research, coverage: coverageOf(researched) });
   if (research.code !== 0) return answer(research.code);
   if (typeof research.session_id !== 'string' || !/^ses_[a-zA-Z0-9]+$/.test(research.session_id)) return answer(1);
-  if (name.startsWith('discover-') && coverageOf(researched) && research.completion?.status === 'recorded' && research.completion.text_bytes > 0) return answer(0, research.text);
+  if (coverageOf(researched) && (research.submission?.status === 'accepted' || resultTransport === 'text' && name.startsWith('discover-') && research.completion?.status === 'recorded' && research.completion.text_bytes > 0)) return answer(0, research.text);
   const remaining = timeoutMs - (now() - began);
   if (remaining <= 0) return answer(124);
   const deadline = now() + Math.min(remaining, finalizeMs);
@@ -47,13 +48,18 @@ export async function completeStage({ name, prompt, timeoutMs, candidateIds = nu
   for (let attempt = 0; attempt < 2 && now() < deadline; attempt += 1) {
     const left = deadline - now();
     if (left <= 0) break;
+    const correction = attempt ? `The previous submission was rejected: ${problem}. Correct it now. ` : '';
+    const contract = resultTransport === 'tool'
+      ? 'Call submit_review_result exactly once. After it accepts the result, end the turn without repeating it as text.'
+      : 'Return exactly one JSON object with coverage (complete or incomplete), summary and findings.';
     const final = await invoke({
-      prompt: `${attempt ? `The previous response was not the requested JSON: ${problem}. Correct its format now. ` : ''}Finish the ${name} stage using only the evidence already collected. Return exactly one JSON object with coverage (complete or incomplete), summary and findings. Coverage is incomplete if the assigned investigation was interrupted or not performed; an empty findings array does not make it complete. For discovery: findings carry root_cause and full evidence from the original contract. For audit: summary "audit", findings [], and one decision per original candidate ID with id, verdict (keep, remove or insufficient_evidence), a nonempty reason explaining the evidence, and the corrected full finding for every keep. ${candidateIds ? `Original candidate IDs: ${JSON.stringify(candidateIds)}. ` : ''}No new research or tool calls. An unsupported claim is insufficient evidence.`,
-      timeoutMs: left, resumeSession: session, finalize: true,
+      prompt: `${correction}Finish the ${name} stage using only the evidence already collected. ${contract} Coverage is incomplete if the assigned investigation was interrupted or not performed; an empty findings array does not make it complete. For discovery: findings carry root_cause and full evidence from the original contract. For audit: summary "audit", findings [], and one decision per original candidate ID with id, verdict (keep, remove or insufficient_evidence), a nonempty reason explaining the evidence, and the corrected full finding for every keep. ${candidateIds ? `Original candidate IDs: ${JSON.stringify(candidateIds)}. ` : ''}No new research or other tool calls. An unsupported claim is insufficient evidence.`,
+      timeoutMs: left, resumeSession: session, finalize: true, resultKind, candidateIds: candidateIds ?? [],
     });
     const review = typeof final.text === 'string' ? readReviewOutput(final.text).review : null;
-    calls.push({ phase: attempt ? 'finalize-retry' : 'finalize', ...final, coverage: coverageOf(review) });
-    problem = !coverageOf(review) ? 'coverage and review JSON are required' : candidateIds ? auditProblem(review, candidateIds) : '';
+    const isCorrection = attempt > 0 || resultTransport === 'tool' || name.startsWith('discover-');
+    calls.push({ phase: attempt ? 'finalize-retry' : 'finalize', ...final, correction: isCorrection, coverage: coverageOf(review) });
+    problem = final.submission && final.submission.status !== 'accepted' ? `submission status is ${final.submission.status}` : !coverageOf(review) ? 'coverage and review JSON are required' : candidateIds ? auditProblem(review, candidateIds) : '';
     if (final.code !== 0) return answer(final.code);
     if (!problem) return answer(0, researched?.coverage === 'incomplete' ? JSON.stringify({ ...review, coverage: 'incomplete' }) : final.text);
     if (!/^ses_[a-zA-Z0-9]+$/.test(final.session_id ?? '')) return answer(1);
@@ -117,6 +123,7 @@ export async function recoverReview({ flow, prompt, timeoutMs, invoke, budget = 
   const first = await invoke({ ...options, prompt, timeoutMs });
   const attempt = (result) => ({ exit_code: result.code, session_id: result.session_id, failure: result.failure?.kind ?? null, usage: result.usage ?? null });
   const attempts = [attempt(first)];
+  if (first.submission?.status === 'accepted') return { ...first, code: 0, attempts };
   const remaining = deadline - now();
   if (flow !== 'review' || first.code !== 1 || !RECOVERABLE.includes(first.failure?.kind) || first.session_id !== first.failure.session_id || !/^ses_[a-zA-Z0-9]+$/.test(first.session_id ?? '') || budget.remaining < 1 || !Number.isFinite(remaining) || remaining < 5000) return { ...first, attempts };
   budget.remaining -= 1;

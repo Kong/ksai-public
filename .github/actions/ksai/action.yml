@@ -3945,6 +3945,7 @@ runs:
       shell: bash
       env:
         REVIEW_STRATEGY: ${{ inputs.review_strategy }}
+        REVIEW_RESULT_TRANSPORT: ${{ steps.build_review.outputs.result_transport }}
         OPENCODE_CONFIG: ${{ runner.temp }}/opencode-runtime.json
         KREVIEW_PLUGIN_ROOT: ${{ github.workspace }}/_ksai/plugins/kreview
         OPENCODE_MODEL: ${{ steps.write_arm.outputs.model || steps.select_test.outputs.model || steps.select_arm.outputs.model }}
@@ -4569,6 +4570,7 @@ runs:
       shell: bash
       env:
         REVIEW_STRATEGY: ${{ inputs.review_strategy }}
+        REVIEW_RESULT_TRANSPORT: ${{ steps.build_review.outputs.result_transport }}
         PROMPT_FILE: ${{ steps.build_implement.outputs.file || steps.build_test.outputs.file || steps.build_review.outputs.file }}
         MODEL: ${{ steps.write_arm.outputs.model || steps.select_test.outputs.model || steps.select_arm.outputs.model }}
         VARIANT: ${{ steps.write_arm.outputs.effort || steps.select_test.outputs.effort || steps.select_arm.outputs.effort }}

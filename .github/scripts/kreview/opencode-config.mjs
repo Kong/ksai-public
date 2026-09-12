@@ -7,6 +7,7 @@ import { AUTH_MODES, originProblem } from './federated-token.mjs';
 import { LIMITS } from './review-pipeline.cjs';
 import {
   CHANNEL_PLUGIN,
+  REVIEW_RESULT_PLUGIN,
   agentEntry,
   headerLines,
   mergedDenials,
@@ -119,19 +120,31 @@ const missing = (said) => (stated ? said : `::warning::${said}`);
 
 const agents = agentsUnder(pluginRoot);
 const staged = phase === 'review' && ['evidence', 'dual'].includes(process.env.REVIEW_STRATEGY);
+const resultTransport = String(process.env.REVIEW_RESULT_TRANSPORT ?? '').trim() || (phase === 'review' ? 'tool' : 'text');
+if (!['text', 'tool'].includes(resultTransport) || (resultTransport === 'tool' && phase !== 'review')) {
+  console.log(`::error::review result transport ${resultTransport || '(empty)'} is not valid for ${phase || '(empty)'}`);
+  process.exit(1);
+}
 if (staged) {
-  permission.task = 'deny';
-  agents['ksai-review-stage'] = { mode: 'primary', description: 'Bounded independent review stage', steps: LIMITS.stageSteps, permission,
-    prompt: 'Complete the current independent review stage using its JSON contract. A request for a summary, including a maximum-step reminder, must be answered in that JSON shape. Once the step-limit reminder arrives, stop using tools and return the best supported JSON immediately. Do not delegate.',
+  const stagePermission = { ...permission, task: 'deny', ...(resultTransport === 'tool' ? { submit_review_result: 'allow' } : {}) };
+  agents['ksai-review-stage'] = { mode: 'primary', description: 'Bounded independent review stage', steps: LIMITS.stageSteps, permission: stagePermission,
+    prompt: resultTransport === 'tool' ? 'Complete the current independent review stage. Submit its result exactly once through submit_review_result. Once accepted, end the turn without repeating it. Do not delegate.' : 'Complete the current independent review stage using its JSON contract. A request for a summary, including a maximum-step reminder, must be answered in that JSON shape. Once the step-limit reminder arrives, stop using tools and return the best supported JSON immediately. Do not delegate.',
   };
-  agents['ksai-review-finish'] = { mode: 'primary', description: 'Return the stage JSON from collected evidence', permission: { '*': 'deny' },
+  agents['ksai-review-finish'] = { mode: 'primary', description: 'Return the stage result from collected evidence', permission: { '*': 'deny', ...(resultTransport === 'tool' ? { submit_review_result: 'allow' } : {}) },
     options: { thinking: { type: 'enabled', budgetTokens: LIMITS.finalizeThinkingTokens }, effort: 'low' },
-    prompt: 'Use the evidence already collected in this session. Return exactly the current stage JSON contract, without further investigation or tool calls. Missing evidence remains uncertain. Do not claim to have executed a reproduction.',
+    prompt: resultTransport === 'tool' ? 'Use the evidence already collected in this session. Call submit_review_result exactly once, then end the turn. Every other tool is denied. Missing evidence remains uncertain. Do not claim to have executed a reproduction.' : 'Use the evidence already collected in this session. Return exactly the current stage JSON contract, without further investigation or tool calls. Missing evidence remains uncertain. Do not claim to have executed a reproduction.',
+  };
+} else if (phase === 'review' && resultTransport === 'tool') {
+  agents['ksai-review-submit'] = { mode: 'primary', description: 'Review and submit the final result', permission: { ...permission, submit_review_result: 'allow' },
+    prompt: 'Complete the review under the supplied contract. Submit the final result exactly once through submit_review_result, then end the turn without repeating it.',
   };
 }
 const channel = String(process.env.KSAI_CHANNEL_NONCE ?? '').trim() === '' ? '' : CHANNEL_PLUGIN;
-const config = runtimeConfig({ channel, agents, skills, permission, baseUrl, auth, attribution });
+const config = runtimeConfig({ channel, agents, skills, permission, baseUrl, auth, attribution,
+  plugins: resultTransport === 'tool' ? [REVIEW_RESULT_PLUGIN] : [],
+});
 if (staged) config.default_agent = 'ksai-review-stage';
+else if (phase === 'review' && resultTransport === 'tool') config.default_agent = 'ksai-review-submit';
 
 writeFileSync(destination, JSON.stringify(config, null, 2) + '\n');
 
@@ -151,6 +164,7 @@ console.log(
     : missing('this run drew no channel token, so nothing can be delivered to it and a stop cannot be honoured'),
 );
 console.log(config.plugin ? `the renewing auth plugin is ${config.plugin[0]}` : '::warning::no auth plugin, so this run lasts one token');
+console.log(`review results use the ${resultTransport} transport`);
 console.log(
   Object.keys(agents).length
     ? `delegating to ${counted(Object.keys(agents).length, 'subagent')}: ${Object.entries(agents)
