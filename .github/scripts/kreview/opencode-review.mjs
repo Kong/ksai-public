@@ -66,6 +66,15 @@ const MISSING_TEXT_PART = /^text part [0-9]{1,6} not found$/;
 
 const TRANSPORT_CLOSED = /^Cannot connect to API\b|\bsocket connection was closed unexpectedly\b/;
 
+/*
+ * What the gateway answers when it could not reach what it proxies to. opencode
+ * renders a 5xx carrying no JSON body as an UnknownError with this text and no
+ * statusCode, so it reads as the model having failed when the request never got
+ * as far as a model: nothing was sent, nothing was billed, and the reason is on
+ * the other side of the endpoint.
+ */
+const GATEWAY_UNAVAILABLE = /^Unexpected server error\b/;
+
 export function streamFailure(events) {
   const last = events.at(-1);
   const sessions = new Set(events.map((event) => event.sessionID).filter(Boolean));
@@ -79,10 +88,11 @@ export function streamFailure(events) {
   if (typeof message !== 'string') return null;
   if (named === 'UnknownError' && MISSING_TEXT_PART.test(message)) return { kind: 'missing-text-part', session_id: last.sessionID };
   if (named === 'APIError' && TRANSPORT_CLOSED.test(message)) return { kind: 'transport-closed', session_id: last.sessionID };
+  if (named === 'UnknownError' && GATEWAY_UNAVAILABLE.test(message)) return { kind: 'gateway-unavailable', session_id: last.sessionID };
   return null;
 }
 
-const RECOVERABLE = Object.freeze(['missing-text-part', 'transport-closed']);
+const RECOVERABLE = Object.freeze(['missing-text-part', 'transport-closed', 'gateway-unavailable']);
 
 const QUOTA_HEADERS = new Set(['retry-after', 'retry-after-ms', 'x-ai-ratelimit-reset', 'x-ai-ratelimit-retry-after', 'x-ai-ratelimit-query-cost', 'x-ratelimit-limit-tokens', 'x-ratelimit-remaining-tokens', 'x-ratelimit-reset-tokens', 'x-ratelimit-limit-requests', 'x-ratelimit-remaining-requests', 'x-ratelimit-reset-requests', 'ratelimit-limit', 'ratelimit-remaining', 'ratelimit-reset']);
 

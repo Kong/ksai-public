@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 
 import { answer, collectSecrets, endedOn, everything, executionLog, parsed, scrub, spending } from '../lib/opencode.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
-import { gatewayDiagnostics } from './opencode-review.mjs';
+import { gatewayDiagnostics, streamFailure } from './opencode-review.mjs';
 
 const require = createRequire(import.meta.url);
 const { extractReviewJson } = require('../lib/review-output.cjs');
@@ -100,6 +100,19 @@ const [result] = log;
 const failure = endedOn(events);
 if (failure) {
   console.log(`::warning::the opencode stream recorded ${scrub(failure, secrets)}`);
+}
+/*
+ * Said separately because the line above reads as the model having failed. A
+ * gateway that cannot reach what it proxies to answers a server error carrying
+ * no status and no body, and the run ends with nothing sent and nothing billed -
+ * so whoever reads this is looking for a fault in the wrong place.
+ */
+if (streamFailure(events)?.kind === 'gateway-unavailable') {
+  console.log(
+    '::warning::the endpoint answered a server error before anything was sent, which is the gateway ' +
+      'or what it proxies to rather than the model: no tokens were spent, and the reason is in the ' +
+      "gateway's own logs",
+  );
 }
 if (answer(events) === null) {
   console.log(`::warning::${events.length} opencode events carried no text, so this run posts no review`);
