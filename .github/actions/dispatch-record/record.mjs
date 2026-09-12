@@ -51,6 +51,10 @@ function bare(endpoint) {
  * readRecord reads what the control plane decided for this run, and answers unread - with the reason
  * - for anything it cannot use, so the run carries on from its dispatch inputs.
  *
+ * A 404 is the one answer it throws on. The control plane binds a record to the run that first reads
+ * it, so a run it refuses the record to is a second run of a dispatch another run may already be
+ * working on, and carrying on from the inputs would do that work twice.
+ *
  * Every refusal is decided before the token is minted where it can be, so a malformed endpoint or id
  * spends no mint and sends nothing. The id is refused unless it is the shape the control plane mints,
  * because it goes into a URL path and a composed one would address something else. A command is
@@ -96,18 +100,23 @@ export async function readRecord({
   }
   secret(token);
 
+  let refusal = 0;
   let served = /** @type {unknown} */ (null);
   try {
     const answer = await fetch(`${endpoint.replace(/\/+$/, '')}/run/${recordId}`, {
       headers: { authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(timeout),
     });
-    if (!answer.ok) {
-      return unread(WHY_STATUS[/** @type {401|404|503} */ (answer.status)] ?? `the control plane answered ${answer.status}`);
-    }
-    served = await answer.json();
+    refusal = answer.ok ? 0 : answer.status;
+    if (answer.ok) served = await answer.json();
   } catch {
     return unread('the control plane could not be reached');
+  }
+  if (refusal === 404) {
+    throw new Error('the control plane holds no readable record for this run - another run may already have read it, it may have expired, or this repository may not be enrolled - so this run starts nothing');
+  }
+  if (refusal !== 0) {
+    return unread(WHY_STATUS[/** @type {401|404|503} */ (refusal)] ?? `the control plane answered ${refusal}`);
   }
 
   if (served === null || typeof served !== 'object' || Array.isArray(served)) {

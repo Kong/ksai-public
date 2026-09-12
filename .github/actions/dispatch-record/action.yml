@@ -9,8 +9,11 @@ description: >-
   record to the run that first reads it and answers only that run afterwards, so the gate and the job
   that does the work can both read it and no other run can.
 
-  Every failure is a fallback rather than an error. The dispatch still carries the inputs every
-  consumer reads, so a record this action cannot read costs the run nothing it has today.
+  Every failure but one is a fallback rather than an error. The dispatch still carries the inputs every
+  consumer reads, so a record this action cannot read costs the run nothing it has today. The one is a
+  404 for a record the dispatch named: the control plane binds a record to the run that first reads it,
+  so a run it refuses is a second run of a dispatch another run may already be working on, and this
+  action fails it rather than letting it do that work again.
 
   What comes back is read, never relayed. A command is passed on only when it is one this runner
   answers, so a record cannot name a flow that does not exist, and a value carrying a newline cannot
@@ -75,13 +78,19 @@ runs:
       with:
         script: |
           const { readRecord } = await import(`file://${process.env.RECORD_ACTION_PATH}/record.mjs`);
-          const answer = await readRecord({
-            endpoint: process.env.RECORD_ENDPOINT,
-            recordId: process.env.RECORD_ID,
-            audience: process.env.RECORD_AUDIENCE,
-            mint: (audience) => core.getIDToken(audience),
-            secret: (token) => core.setSecret(token),
-          });
+          let answer;
+          try {
+            answer = await readRecord({
+              endpoint: process.env.RECORD_ENDPOINT,
+              recordId: process.env.RECORD_ID,
+              audience: process.env.RECORD_AUDIENCE,
+              mint: (audience) => core.getIDToken(audience),
+              secret: (token) => core.setSecret(token),
+            });
+          } catch (refused) {
+            core.setFailed(refused.message);
+            return;
+          }
           if (answer.read) {
             core.notice(`ksai read the dispatch record${answer.command ? `: command ${answer.command}` : ''}`);
           } else if (answer.why) {
