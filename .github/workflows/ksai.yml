@@ -431,12 +431,15 @@ on:
         default: "10"
       engine:
         description: >-
-          which reviewer reads the diff: `opencode`, the default on a review, or `claude`. Empty
-          resolves per flow, so a write or test flow never fails at an engine it cannot run. `opencode` runs the
-          open-source CLI against the same origin on the same credential, so nothing about billing or
-          the identifiers changes and no key is added. Review flow only. It uses the prepared diff,
-          review prompt, kreview agents and skills, triage routing, repository rules, and read-only tool
-          policy used by the Claude reviewer.
+          which reviewer reads the diff. `opencode` is the only one, and empty resolves to it on
+          every flow that starts a model. It runs the open-source CLI against the same origin on the
+          same credential, so nothing about billing or the identifiers changes and no key is added.
+          It uses the prepared diff, review prompt, kreview agents and skills, triage routing,
+          repository rules and read-only tool policy.
+
+          **`claude` is refused, not ignored.** That engine no longer runs here, and a value the
+          action read and discarded would leave a caller believing it had chosen something. The name
+          stays declared because removing an input breaks every pinned consumer.
         required: false
         type: string
         default: ""
@@ -941,7 +944,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-help
           repository: Kong/ksai-public
-          ref: v3.61.2
+          ref: v3.62.0
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1382,7 +1385,7 @@ jobs:
         with:
           token: ${{ github.token }}
           repository: Kong/ksai-public
-          ref: v3.61.2
+          ref: v3.62.0
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1850,7 +1853,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-recover
           repository: Kong/ksai-public
-          ref: v3.61.2
+          ref: v3.62.0
           sparse-checkout: |
             .github/scripts
           persist-credentials: false

@@ -228,17 +228,20 @@ inputs:
     default: ""
   engine:
     description: >-
-      which engine runs the model: `opencode` or `claude`. Every flow that starts one accepts either,
-      and both use the same authentication, prompt, tool policy and publisher.
+      which engine runs the model. `opencode` is the only one, and empty resolves to it on every
+      flow that starts a model.
 
-      Empty resolves to `opencode` on `review`, `implement` and `test`. `test-publish` starts no model,
-      so naming an engine there is refused rather than ignored.
+      **`claude` is refused, not ignored.** That engine no longer runs here, and a value this action
+      read and discarded would leave a caller believing it had chosen something. The name stays
+      declared because removing an input breaks every pinned consumer.
 
-      `opencode` runs the open-source CLI against `anthropic_base_url` on the credential `anthropic_auth`
-      names, so the origin, billing boundary and four identifiers below remain the same and no key is added.
-      It receives the prepared diff, review prompt, kreview agents and skills, triage routing, repository rules,
-      and read-only tool policy used by the Claude reviewer. Everything downstream of the model - the publisher,
-      suppression store, run report and eval record - is the same code either way.
+      `opencode` runs the open-source CLI against `anthropic_base_url` on the credential
+      `anthropic_auth` names, so the origin, billing boundary and four identifiers below are
+      unchanged and no key is added. It receives the prepared diff, review prompt,
+      kreview agents and skills, triage routing, repository rules and read-only tool policy, and
+      everything downstream of the model - the publisher, suppression store, run report and eval
+      record - is the same code it always was. `test-publish` starts no model, so naming an engine there is
+      refused rather than ignored.
     required: false
     default: ""
   test_hypotheses:
@@ -405,9 +408,9 @@ inputs:
     default: ""
   extra_claude_args:
     description: >-
-      additional Claude CLI arguments. KSAI rejects `--model`, `--effort`, and flags that change tool access,
-      plugins, MCP configuration, settings, agents, system prompts, or permission handling; those boundaries
-      have dedicated inputs or trusted policy.
+      **Refused on every flow.** These were the Claude CLI's own arguments and no flow starts that
+      CLI, so they reach nothing. Empty is the only value that runs. The name stays declared because
+      removing an input breaks every pinned consumer.
     required: false
     default: ""
   triage:
@@ -561,9 +564,10 @@ inputs:
     default: test
   max_turns:
     description: >-
-      flow: test only, and `engine: claude` only - opencode has no turn cap, so a value here is
-      refused rather than dropped. Empty leaves the tester's own ceiling of 60. The reusable
-      workflow does not expose this input.
+      **Refused on every flow.** It capped the turns of the Claude CLI, which no flow starts now,
+      and opencode has no turn cap - so a value here would bound nothing and the job timeout is the
+      only ceiling. Empty is the only value that runs. The name stays declared because removing an
+      input breaks every pinned consumer, and the reusable workflow never exposed it.
     required: false
     default: ""
   run_dir:
@@ -970,6 +974,7 @@ runs:
         PUBLISH: ${{ inputs.publish }}
         DRY_RUN: ${{ inputs.dry_run }}
         MAX_TURNS: ${{ inputs.max_turns }}
+        EXTRA_ARGS: ${{ inputs.extra_claude_args }}
         REVIEW_STRATEGY: ${{ inputs.review_strategy }}
       run: |
         set -euo pipefail
@@ -977,26 +982,33 @@ runs:
           echo "::error::engine: flow: test-publish starts no model, so it names no engine, and ${ENGINE} would bound nothing"
           exit 1
         fi
-        if [[ -z "${ENGINE}" ]]; then
-          case "${FLOW}" in
-            review|implement|test) ENGINE=opencode ;;
-            *) ENGINE=claude ;;
-          esac
-        fi
+        # Every flow runs opencode. `claude` is refused rather than resolved away, because a value a
+        # caller passed and this action quietly ignored is worse than one it stops on - and the
+        # input keeps its published name, type and empty default, which is the only shape a release
+        # on this line can carry.
         case "${ENGINE}" in
-          claude)
-            pattern='\.local/bin/clau[d]e'
-            ;;
-          opencode)
+          '' | opencode)
+            ENGINE=opencode
             pattern='opencod[e] run'
             ;;
+          claude)
+            echo "::error::engine: the Claude engine no longer runs here - every flow runs opencode. Drop the input, or pass engine: opencode"
+            exit 1
+            ;;
           *)
-            echo "::error::engine: ${ENGINE} names no engine - write claude or opencode"
+            echo "::error::engine: ${ENGINE} names no engine - write opencode, or leave it empty"
             exit 1
             ;;
         esac
-        if [[ "${ENGINE}" == "opencode" && -n "${MAX_TURNS}" ]]; then
-          echo "::error::max_turns: opencode has no turn cap, so ${MAX_TURNS} would bound nothing and the job timeout would be the only ceiling. Drop it, or pass engine: claude"
+        # Both bounded the Claude CLI and nothing starts that CLI now, so they reach nothing. Each
+        # is refused on every flow rather than dropped, or a caller keeps a `with:` line this action
+        # reads and discards.
+        if [[ -n "${MAX_TURNS}" ]]; then
+          echo "::error::max_turns: opencode has no turn cap, so ${MAX_TURNS} would bound nothing and the job timeout would be the only ceiling. Drop it"
+          exit 1
+        fi
+        if [[ -n "${EXTRA_ARGS}" ]]; then
+          echo "::error::extra_claude_args: these were the Claude CLI's own arguments and no flow starts that CLI, so they reach nothing. Drop it"
           exit 1
         fi
         if [[ "${FLOW}" == "implement" && "${DRY_RUN}" == "false" && "${PUBLISH}" != "true" ]]; then
@@ -1006,8 +1018,8 @@ runs:
         case "${REVIEW_STRATEGY}" in
           baseline) ;;
           evidence|dual)
-            if [[ "${FLOW}" != "review" || "${ENGINE}" != "opencode" ]]; then
-              echo "::error::review_strategy: evidence and dual require flow: review and engine: opencode"
+            if [[ "${FLOW}" != "review" ]]; then
+              echo "::error::review_strategy: evidence and dual require flow: review"
               exit 1
             fi
             ;;
