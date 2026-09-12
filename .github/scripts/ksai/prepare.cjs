@@ -25,7 +25,7 @@ const {
 } = require('./classify.cjs');
 const { bareMode, ownPull, ownSurface, renderNudge, renderUnaddressed } = require('./bare.cjs');
 const { DEFAULT_TRIGGER_PHRASE, afterTrigger } = require('../lib/text.cjs');
-const { labelReaders, readLabelBasis, recordBasis } = require('./label-basis.cjs');
+const { labelReaders, readLabelBasis, readReviewBasis, recordBasis } = require('./label-basis.cjs');
 const loadKsaiConfig = require('./config.cjs');
 const {
   AUTHZ_REASONS,
@@ -155,6 +155,7 @@ async function selectImplementArm({ github, core, owner, repo, env }) {
     bare: env.ON_OWN_PULL === 'true',
     commented: String(env.COMMENT_ID ?? '').trim() !== '',
     label: env.REQUEST_LABEL,
+    labelReview: env.REQUEST_REVIEW === 'true',
     flow: 'implement',
     trigger: env.TRIGGER,
     continuation: env.IS_CONTINUATION,
@@ -466,6 +467,27 @@ function labelledContext(labelled) {
   });
 }
 
+const QUIET = Object.freeze({ info() {}, warning() {} });
+
+async function reviewBasisOf({ github, context, env, read }) {
+  if (read.onReview !== true || read.reviewState === 'approved' || read.reviewActorType === 'Bot') return null;
+  const own = await ownPull({
+    github,
+    core: QUIET,
+    owner: context.repo.owner,
+    repo: context.repo.repo,
+    prNumber: read.issueNumber,
+    botLogin: env.IN_BOT_LOGIN,
+  });
+  if (own) return null;
+  return readReviewBasis({
+    pr: read.issueNumber,
+    reviewCommit: read.reviewCommitId,
+    reviewer: read.commenter,
+    ...labelReaders({ github, context }),
+  });
+}
+
 async function eventContext({ github, context, env, commented }) {
   const dispatched = await resolveDispatchedComment({
     eventName: context.eventName,
@@ -526,8 +548,12 @@ async function resolveRunContext({ github, context, env }) {
   const labelled = basis ? await readLabelBasis({ basis, ...labelReaders({ github, context }) }) : null;
   if (labelled?.error) return refuse(labelled.error);
 
-  const out = labelled ? labelledContext(labelled) : await eventContext({ github, context, env, commented });
-  if (out.error) return refuse(out.error);
+  const read = labelled ? labelledContext(labelled) : await eventContext({ github, context, env, commented });
+  if (read.error) return refuse(read.error);
+  const reviewed = labelled ? null : await reviewBasisOf({ github, context, env, read });
+  if (reviewed?.error) return refuse(reviewed.error);
+  const rested = labelled ?? reviewed;
+  const out = reviewed ? labelledContext(reviewed) : read;
 
   const outputs = {
     issue_number: out.issueNumber == null ? '' : String(out.issueNumber),
@@ -550,8 +576,9 @@ async function resolveRunContext({ github, context, env }) {
     comment_id: out.commentId == null ? '' : String(out.commentId),
     comment_body: out.commentBody,
     comment_edited: out.commentEdited ?? '',
-    label: labelled?.label ?? '',
-    label_head: labelled?.headSha ?? '',
+    label: rested?.label ?? '',
+    label_head: rested?.headSha ?? '',
+    label_review: reviewed ? 'true' : '',
     thread_root_id: out.threadRootId == null ? '' : String(out.threadRootId),
     attempt: String(out.attempt),
     stall: String(out.stall),

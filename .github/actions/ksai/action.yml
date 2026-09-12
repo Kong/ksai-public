@@ -1112,6 +1112,7 @@ runs:
       if: ${{ steps.checkout_authz.outcome == 'success' && inputs.flow != 'test-publish' }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
+        IN_BOT_LOGIN: ${{ inputs.bot_login }}
         RECORD_COMMAND: ${{ steps.dispatch_record.outputs.command }}
         RECORD_LABEL: ${{ steps.dispatch_record.outputs.label }}
         RECORD_PR: ${{ steps.dispatch_record.outputs.pr }}
@@ -1396,6 +1397,7 @@ runs:
         CLASSIFIED_COMMAND: ${{ steps.verdict.outputs.verdict }}
         COMMENT_ID: ${{ steps.context.outputs.comment_id }}
         REQUEST_LABEL: ${{ steps.context.outputs.label }}
+        REQUEST_REVIEW: ${{ steps.context.outputs.label_review }}
         PLAN_MODE: ${{ inputs.plan_mode }}
         FILE_PLAN_MODE: ${{ steps.bare_gate.outputs.plan_mode }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts

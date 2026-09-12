@@ -2,6 +2,8 @@ const { AUTHZ_LOGIN_SHAPE } = require('./context.cjs');
 
 const LABEL_COMMANDS = Object.freeze(['fix']);
 
+const AUTOFIX_LABEL = 'ksai-autofix';
+
 const PR_SHAPE = /^[1-9][0-9]{0,9}$/;
 
 const SHA_SHAPE = /^[0-9a-f]{40}$/;
@@ -93,9 +95,42 @@ async function readLabelBasis({ basis, pullsGet, listIssueEvents }) {
   return { login, pr, label, headSha, command };
 }
 
+/**
+ * readReviewBasis answers whether a submitted review on a pull request asks for a fix because the pull
+ * request carries the autofix label, read back from GitHub. It answers null wherever the label rule does
+ * not apply - a pull request that is closed, from a fork, unreadable or unlabelled - so those keep what a
+ * review did before. Where it applies, the run rests on the label at the head the review was left on, and
+ * a review on a commit the pull request has moved past stands down rather than work on a head the
+ * reviewer never saw.
+ */
+async function readReviewBasis({ pr, reviewCommit, reviewer, pullsGet, label = AUTOFIX_LABEL }) {
+  let pull;
+  try {
+    pull = await pullsGet(pr);
+  } catch {
+    return null;
+  }
+  const head = pull?.head?.repo?.full_name;
+  if (pull?.state !== 'open' || !head || !sameName(head, pull?.base?.repo?.full_name)) return null;
+  if (!(pull?.labels ?? []).some((held) => sameName(held?.name, label))) return null;
+
+  const headSha = String(pull?.head?.sha ?? '').toLowerCase();
+  if (!SHA_SHAPE.test(headSha)) {
+    return { error: `pull request #${pr} names no head commit, so the review behind this run could not be pinned to one and nothing ran` };
+  }
+  if (String(reviewCommit ?? '').trim().toLowerCase() !== headSha) {
+    return { error: `the review on pull request #${pr} was left on a commit the pull request has moved past, so it stood down rather than work on a head the reviewer never saw` };
+  }
+  const login = String(reviewer ?? '');
+  if (!AUTHZ_LOGIN_SHAPE.test(login)) {
+    return { error: `the review on pull request #${pr} names no account this gate can authorize, so nothing ran` };
+  }
+  return { login, pr: Number(pr), label, headSha, command: 'fix' };
+}
+
 const labelReaders = ({ github, context }) => ({
   pullsGet: async (pull_number) => (await github.rest.pulls.get({ ...context.repo, pull_number })).data,
   listIssueEvents: (issue_number) => github.paginate(github.rest.issues.listEvents, { ...context.repo, issue_number, per_page: 100 }),
 });
 
-module.exports = { LABEL_COMMANDS, labelReaders, readLabelBasis, recordBasis };
+module.exports = { AUTOFIX_LABEL, LABEL_COMMANDS, labelReaders, readLabelBasis, readReviewBasis, recordBasis };

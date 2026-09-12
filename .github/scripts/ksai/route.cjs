@@ -39,7 +39,7 @@ const {
   resolveOnIssue,
   threadRootOf,
 } = require('./context.cjs');
-const { labelReaders, readLabelBasis, recordBasis } = require('./label-basis.cjs');
+const { labelReaders, readLabelBasis, readReviewBasis, recordBasis } = require('./label-basis.cjs');
 const { classifyTarget } = require('./dispatch.cjs');
 const { bareMode, ownPull, ownSurface } = require('./bare.cjs');
 const loadKsaiConfig = require('./config.cjs');
@@ -195,7 +195,7 @@ async function resolveRequester({ github, context, env }) {
   return { login, failure: null };
 }
 
-async function routeLabelled({ github, core, context, env, basis }) {
+async function routeLabelled({ github, core, context, env, basis, asker = 'A label' }) {
   const decision = decide({ command: basis.command, spelled: basis.command, onIssue: false, disabledCommands: env.DISABLED_COMMANDS });
   let pending;
   const readConfig = () => {
@@ -214,7 +214,7 @@ async function routeLabelled({ github, core, context, env, basis }) {
   core.setOutput('issue_number', String(basis.pr));
   core.setOutput('requested', 'true');
   core.setOutput('write_access_commands', await resolvedWriteCommands({ core, env, readConfig }));
-  core.info(`A label on pull request #${basis.pr} asked for \`${basis.command}\` at ${basis.headSha}.`);
+  core.info(`${asker} on pull request #${basis.pr} asked for \`${basis.command}\` at ${basis.headSha}.`);
   return decision;
 }
 
@@ -277,6 +277,31 @@ async function route({ github, core, context, env }) {
   let openedPending;
   const opened = () => (openedPending ??= resolvedWriteCommands({ core, env, readConfig }));
 
+  const ownReview =
+    onReview &&
+    (await ownPull({
+      github,
+      core,
+      owner: context.repo.owner,
+      repo: context.repo.repo,
+      prNumber: payload?.pull_request?.number,
+      botLogin: env.BOT_LOGIN,
+    }));
+  const reviewed =
+    onReview && !ownReview && reviewState !== 'approved' && payload?.review?.user?.type !== 'Bot'
+      ? await readReviewBasis({
+          pr: payload?.pull_request?.number,
+          reviewCommit: payload?.review?.commit_id,
+          reviewer: payload?.review?.user?.login,
+          ...labelReaders({ github, context }),
+        })
+      : null;
+  if (reviewed?.error) {
+    core.setFailed(reviewed.error);
+    return null;
+  }
+  if (reviewed) return routeLabelled({ github, core, context, env, basis: reviewed, asker: 'A review' });
+
   const decision = await routeCommand({
     eventName,
     onIssue,
@@ -306,16 +331,6 @@ async function route({ github, core, context, env }) {
   const continued = eventName === 'workflow_dispatch';
   const request = continued ? null : afterTrigger(body, env.TRIGGER);
   const asked = continued ? null : afterTrigger(unquoted(body), env.TRIGGER);
-  const ownReview =
-    onReview &&
-    (await ownPull({
-      github,
-      core,
-      owner: context.repo.owner,
-      repo: context.repo.repo,
-      prNumber: payload?.pull_request?.number,
-      botLogin: env.BOT_LOGIN,
-    }));
   const requested = ownReview || continued || asked !== null;
   core.setOutput('requested', requested ? 'true' : 'false');
   const bare =

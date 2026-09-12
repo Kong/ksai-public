@@ -118,6 +118,7 @@ async function resolveRequest({
   bare = false,
   commented = true,
   label = '',
+  labelReview = false,
   classifiedCommand = '',
   codeowner = null,
   write = null,
@@ -253,7 +254,7 @@ async function resolveRequest({
       classified: classified !== '',
       routeSource: source,
       routeSurface: requestSurface,
-      receipt: receiptOf(command, requestSurface, source, { label }),
+      receipt: receiptOf(command, requestSurface, source, { label, review: labelReview }),
     };
   }
   return { mine: false, foreign: command, routeSource };

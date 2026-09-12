@@ -49,7 +49,8 @@ const READ = bare({
   context: (where) => `Read ${where} as a request to`,
   assigned: (where) => `Assigned as a reviewer on ${where}, to`,
   continuation: (where) => `Carried on from the run before this one on ${where}, to`,
-  [LABEL_SOURCE]: (where, { label = '' } = {}) => `Asked for by ${labelNamed(label)} on ${where}, to`,
+  [LABEL_SOURCE]: (where, { label = '', review = false } = {}) =>
+    review ? `Asked for by a review on ${where}, which carries ${labelNamed(label)}, to` : `Asked for by ${labelNamed(label)} on ${where}, to`,
 });
 
 const SOURCES = Object.freeze(Object.keys(READ));
