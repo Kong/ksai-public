@@ -3,6 +3,7 @@ const nodePath = require('node:path');
 const { asAlert, safeEcho, scrubTrigger } = require('../lib/select-arm.cjs');
 const { counted, describe, locate, safeText } = require('../lib/text.cjs');
 const { neutralizeSections } = require('../lib/prompt-text.cjs');
+const { wholeNumber } = require('../lib/watchdog.cjs');
 const { ALLOWED_FLAGS, claimsAny, claimsAnyGlob, toGlobs, toPattern } = require('../lib/path-pattern.cjs');
 
 const RULES_PATH = '.ksai/review-rules.md';
@@ -15,7 +16,7 @@ const MAX_PACKS = 16;
 const MAX_PACKS_CEILING = 64;
 const MAX_SOURCES = 32;
 const MAX_SOURCES_CEILING = 128;
-const DEFAULT_LIMITS = Object.freeze({ rules: MAX_PACKS, sources: MAX_SOURCES });
+const DEFAULT_LIMITS = { rules: MAX_PACKS, sources: MAX_SOURCES, bytes: MAX_BYTES, ceiling: MAX_TOTAL_BYTES };
 const MODES = Object.freeze(['auto', 'off']);
 
 const PACK_SHAPE = /^[A-Za-z0-9][A-Za-z0-9._-]*\.md$/;
@@ -36,16 +37,34 @@ const LIST_ITEM = /^[ \t]*-[ \t]+(.*)$/;
 
 const KEY_LINE = /^[A-Za-z][A-Za-z0-9_-]*[ \t]*:/;
 
+const SPLIT_REMEDY = Object.freeze({
+  [RULES_PATH]: `move its rules into \`${MANIFEST_PATH}\`, which names a file per rule`,
+  [MANIFEST_PATH]: 'move the rules it carries inline into files it names with `source`',
+});
+
+function overFileCap(label, bytes, limits) {
+  const over = `\`${label}\` is ${bytes} bytes, over the limit of ${limits.bytes}`;
+  const remedy = Object.hasOwn(SPLIT_REMEDY, label) ? SPLIT_REMEDY[label] : 'split it across a `source` list';
+  if (bytes <= limits.ceiling) {
+    return `${over}; edit it down, ${remedy}, or raise \`repo_rules_max_file_bytes\` up to ${limits.ceiling}`;
+  }
+  return bytes <= MAX_TOTAL_CEILING
+    ? `${over}, and over the ${limits.ceiling} bytes \`repo_rules_max_bytes\` allows a whole review; edit it down, ` +
+        `${remedy}, or raise \`repo_rules_max_bytes\` to at least ${bytes} and \`repo_rules_max_file_bytes\` with it`
+    : `${over}, and over the ${MAX_TOTAL_CEILING} bytes a review may ever stage, so no input raises it this far; ` +
+        `edit it down, or ${remedy}`;
+}
+
 /**
  * parseRules validates one repository's review-rules document and answers the text a prompt carries.
  *
  * Returns `{ rules }` or `{ error }`, and never both: an error path carrying a usable value is what
  * lets a caller that forgets to check it review with rules nobody validated.
  */
-function parseRules(raw, label = RULES_PATH) {
+function parseRules(raw, label = RULES_PATH, limits = DEFAULT_LIMITS) {
   const bytes = Buffer.byteLength(String(raw ?? ''), 'utf-8');
-  if (bytes > MAX_BYTES) {
-    return { error: `\`${label}\` is ${bytes} bytes, over the limit of ${MAX_BYTES}` };
+  if (bytes > limits.bytes) {
+    return { error: overFileCap(label, bytes, limits) };
   }
   const rules = neutralizeSections(String(raw ?? '').replace(/\r\n/g, '\n')).trimEnd();
   if (rules.trim() === '') {
@@ -185,36 +204,54 @@ const scopeClaims = (scope, paths) =>
   scope?.pattern ? claimsAny(scope.pattern, paths) : claimsAnyGlob(scope?.globs, paths);
 
 
-function resolveRuleCount(value) {
+function resolveDial({ name, value, unit, floor, ceiling, over = null }) {
   const asked = String(value ?? '').trim();
-  if (asked === '') return { rules: MAX_PACKS, sources: MAX_SOURCES };
-  if (!/^[0-9]+$/.test(asked)) {
-    return { error: `\`repo_rules_max_rules\` must be a whole number of rules, got \`${safeEcho(value)}\`` };
+  if (asked === '') return { held: floor };
+  const held = wholeNumber(asked);
+  if (held === null) {
+    return { error: `\`${name}\` must be a whole number of ${unit}, got \`${safeEcho(value)}\`` };
   }
-  const rules = Number(asked);
-  if (rules < MAX_PACKS) {
-    return { error: `\`repo_rules_max_rules\` is ${rules}, below the ${MAX_PACKS} every review already gets` };
+  if (held < floor) return { error: `\`${name}\` is ${held}, below the ${floor} every review already gets` };
+  if (held > ceiling) {
+    return { error: over ? over(held) : `\`${name}\` is ${held}, over the ceiling of ${ceiling}` };
   }
-  if (rules > MAX_PACKS_CEILING) {
-    return { error: `\`repo_rules_max_rules\` is ${rules}, over the ceiling of ${MAX_PACKS_CEILING}` };
-  }
-  return { rules, sources: Math.min(MAX_SOURCES_CEILING, Math.max(MAX_SOURCES, rules * 2)) };
+  return { held };
+}
+
+function resolveRuleCount(value) {
+  const read = resolveDial({
+    name: 'repo_rules_max_rules',
+    value,
+    unit: 'rules',
+    floor: MAX_PACKS,
+    ceiling: MAX_PACKS_CEILING,
+  });
+  if (read.error) return { error: read.error };
+  return { rules: read.held, sources: Math.min(MAX_SOURCES_CEILING, Math.max(MAX_SOURCES, read.held * 2)) };
 }
 
 function resolveBudget(value) {
-  const asked = String(value ?? '').trim();
-  if (asked === '') return { bytes: MAX_TOTAL_BYTES };
-  if (!/^[0-9]+$/.test(asked)) {
-    return { error: `\`repo_rules_max_bytes\` must be a whole number of bytes, got \`${safeEcho(value)}\`` };
-  }
-  const bytes = Number(asked);
-  if (bytes < MAX_TOTAL_BYTES) {
-    return { error: `\`repo_rules_max_bytes\` is ${bytes}, below the ${MAX_TOTAL_BYTES} every review already gets` };
-  }
-  if (bytes > MAX_TOTAL_CEILING) {
-    return { error: `\`repo_rules_max_bytes\` is ${bytes}, over the ceiling of ${MAX_TOTAL_CEILING}` };
-  }
-  return { bytes };
+  const read = resolveDial({
+    name: 'repo_rules_max_bytes',
+    value,
+    unit: 'bytes',
+    floor: MAX_TOTAL_BYTES,
+    ceiling: MAX_TOTAL_CEILING,
+  });
+  return read.error ? { error: read.error } : { bytes: read.held };
+}
+
+function resolveFileCap(value, ceiling) {
+  const read = resolveDial({
+    name: 'repo_rules_max_file_bytes',
+    value,
+    unit: 'bytes',
+    floor: MAX_BYTES,
+    ceiling,
+    over: (held) =>
+      `\`repo_rules_max_file_bytes\` is ${held}, over the ${ceiling} bytes \`repo_rules_max_bytes\` allows a whole review`,
+  });
+  return read.error ? { error: read.error } : { bytes: read.held };
 }
 
 const RULES_REMEDY = [
@@ -257,21 +294,21 @@ function resolveFrom(base, target) {
 
 const resolveBeside = (from, target) => resolveFrom(nodePath.posix.dirname(from), target);
 
-const inlineOf = (data, label, where) => {
+const inlineOf = (data, label, where, limits = DEFAULT_LIMITS) => {
   if (Array.isArray(data) || data?.encoding !== 'base64' || typeof data.content !== 'string') {
     return { error: `\`${label}\` in ${where} is not an inline file, so its rules cannot be read` };
   }
-  if (typeof data.size === 'number' && data.size > MAX_BYTES) {
-    return { error: `\`${label}\` is ${data.size} bytes, over the limit of ${MAX_BYTES}` };
+  if (typeof data.size === 'number' && data.size > limits.bytes) {
+    return { error: overFileCap(label, data.size, limits) };
   }
   const decoded = Buffer.from(data.content, 'base64');
-  if (decoded.length > MAX_BYTES) {
-    return { error: `\`${label}\` is ${decoded.length} bytes, over the limit of ${MAX_BYTES}` };
+  if (decoded.length > limits.bytes) {
+    return { error: overFileCap(label, decoded.length, limits) };
   }
   return { text: decoded.toString('utf-8') };
 };
 
-async function readPack({ github, owner, repo, entry, budget }) {
+async function readPack({ github, owner, repo, entry, budget, limits }) {
   const where = `${owner}/${repo}`;
   const label = entry.path;
 
@@ -299,7 +336,7 @@ async function readPack({ github, owner, repo, entry, budget }) {
     data = linked.data;
   }
 
-  const inline = inlineOf(data, label, where);
+  const inline = inlineOf(data, label, where, limits);
   if (inline.error) return { error: inline.error };
 
   const split = parseHeader(inline.text, label);
@@ -315,6 +352,7 @@ async function readPack({ github, owner, repo, entry, budget }) {
       repo,
       label: `\`${label}\``,
       budget,
+      limits,
       source: split.header.source,
       resolve: (target) => resolveBeside(entry.path, target),
     });
@@ -322,7 +360,7 @@ async function readPack({ github, owner, repo, entry, budget }) {
     return { pack: { name: entry.name, scope: compiled.scope, units: read.units } };
   }
 
-  const parsed = parseRules(split.body, label);
+  const parsed = parseRules(split.body, label, limits);
   if (parsed.error) return { error: parsed.error };
 
   return {
@@ -334,7 +372,7 @@ async function readPack({ github, owner, repo, entry, budget }) {
   };
 }
 
-async function readSources({ github, owner, repo, label, source, resolve, budget }) {
+async function readSources({ github, owner, repo, label, source, resolve, budget, limits = DEFAULT_LIMITS }) {
   const where = `${owner}/${repo}`;
   const wanted = (Array.isArray(source) ? source : [source]).filter((one) => String(one ?? '').trim() !== '');
   if (wanted.length === 0) {
@@ -378,14 +416,14 @@ async function readSources({ github, owner, repo, label, source, resolve, budget
     if (sourced.missing) {
       return { error: `${label} names a \`source\` of \`${target}\`, which is not on ${where}'s default branch` };
     }
-    const read = inlineOf(sourced.data, target, where);
+    const read = inlineOf(sourced.data, target, where, limits);
     if (read.error) return { error: read.error };
     const inner = parseHeader(read.text, target);
     if (inner.error) return { error: inner.error };
     if ('source' in inner.header) {
       return { error: `\`${target}\` names a \`source\` of its own; one hop is all a pack follows` };
     }
-    const parsed = parseRules(inner.body, target);
+    const parsed = parseRules(inner.body, target, limits);
     if (parsed.error) return { error: parsed.error };
     const unit = { key: `path:${target}`, path: target, sha: String(sourced.data.sha ?? ''), rules: parsed.rules, bytes: parsed.bytes };
     budget?.read?.set(target, unit);
@@ -483,7 +521,7 @@ async function readManifest({ github, owner, repo, budget, limits }) {
   if (found.error) return { error: found.error };
   if (found.missing) return { packs: [], present: false };
 
-  const inline = inlineOf(found.data, MANIFEST_PATH, `${owner}/${repo}`);
+  const inline = inlineOf(found.data, MANIFEST_PATH, `${owner}/${repo}`, limits);
   if (inline.error) return { error: inline.error };
 
   const read = parseManifest(inline.text, limits);
@@ -513,7 +551,7 @@ async function readManifest({ github, owner, repo, budget, limits }) {
     if (compiled.error) return { error: compiled.error };
 
     if ('rules' in entry) {
-      const parsed = parseRules(entry.rules, label);
+      const parsed = parseRules(entry.rules, label, limits);
       if (parsed.error) return { error: parsed.error };
       packs.push({
         name,
@@ -529,6 +567,7 @@ async function readManifest({ github, owner, repo, budget, limits }) {
       repo,
       label,
       budget,
+      limits,
       source: entry.source,
       resolve: (target) => resolveFrom('.', target),
     });
@@ -565,7 +604,7 @@ async function readPacks({ github, owner, repo, budget, limits }) {
         error: `\`${PACKS_PATH}/${safeText(name)}\` is not a rule pack; every entry is a \`.md\` file named in letters, digits, \`.\`, \`-\` and \`_\``,
       };
     }
-    const read = await readPack({ github, owner, repo, budget, entry: { name, path: `${PACKS_PATH}/${name}` } });
+    const read = await readPack({ github, owner, repo, budget, limits, entry: { name, path: `${PACKS_PATH}/${name}` } });
     if (read.error) return { error: read.error };
     packs.push(read.pack);
   }
@@ -578,10 +617,10 @@ async function readPacks({ github, owner, repo, budget, limits }) {
  *
  * Answers the step outputs, plus `failure` when the run must stop before a model is called.
  */
-async function loadRepoRules({ github, core, owner, repo, mode, trigger, changedFiles, maxBytes, maxRules }) {
+async function loadRepoRules({ github, core, owner, repo, mode, trigger, changedFiles, maxBytes, maxRules, maxFileBytes }) {
   const outputs = {
     rules: '',
-    path: RULES_PATH,
+    path: '',
     sha: '',
     bytes: '',
     packs: '',
@@ -602,8 +641,13 @@ async function loadRepoRules({ github, core, owner, repo, mode, trigger, changed
   if (budgetRead.error) return refuseInput(budgetRead.error);
   const ceiling = budgetRead.bytes;
 
-  const limits = resolveRuleCount(maxRules);
-  if (limits.error) return refuseInput(limits.error);
+  const counts = resolveRuleCount(maxRules);
+  if (counts.error) return refuseInput(counts.error);
+
+  const capRead = resolveFileCap(maxFileBytes, ceiling);
+  if (capRead.error) return refuseInput(capRead.error);
+
+  const limits = { rules: counts.rules, sources: counts.sources, bytes: capRead.bytes, ceiling };
 
   const wanted = String(mode ?? '').trim().toLowerCase();
   if (!MODES.includes(wanted)) {
@@ -620,9 +664,16 @@ async function loadRepoRules({ github, core, owner, repo, mode, trigger, changed
   const found = await fetchOne({ github, owner, repo, path: RULES_PATH });
   if (found.error) return stop(found.error);
   if (!found.missing) {
-    const inline = inlineOf(found.data, RULES_PATH, `${owner}/${repo}`);
+    const inline = inlineOf(found.data, RULES_PATH, `${owner}/${repo}`, limits);
     if (inline.error) return stop(inline.error);
-    const parsed = parseRules(inline.text);
+    const scoping = Object.keys(parseHeader(inline.text, RULES_PATH).header ?? {}).filter((key) => HEADER_KEYS.includes(key));
+    if (scoping.length > 0) {
+      return stop(
+        `\`${RULES_PATH}\` writes \`${scoping.join('` and `')}\` in its frontmatter, and this file is read whole: ` +
+          `its header is staged as rules and scopes nothing. Move the rule to \`${PACKS_PATH}/\` or to \`${MANIFEST_PATH}\`, which scope`,
+      );
+    }
+    const parsed = parseRules(inline.text, RULES_PATH, limits);
     if (parsed.error) return stop(parsed.error);
     staged.push({
       name: RULES_PATH,
@@ -713,6 +764,7 @@ Object.assign(module.exports, {
   MAX_SOURCES_CEILING,
   resolveBudget,
   resolveRuleCount,
+  resolveFileCap,
   MAX_PACKS,
   MODES,
   parseRules,

@@ -432,7 +432,8 @@ inputs:
       The default branch is the whole trust argument, and there is no input for another ref: a pull request
       cannot change the rules its own review reads. The rules may only ADD checks - the prompt says so - because
       a rule that silenced a finding would buy a clean review, which is what `docs/decisions/reviewer-trust-boundary.md`
-      exists to refuse. A file that cannot be read, or one over 16 KiB, stops the run before a model is called.
+      exists to refuse. A file that cannot be read, or one over the per-file cap `repo_rules_max_file_bytes`
+      sets, stops the run before a model is called.
 
       Those two words and nothing else. A third value stops the run and says so, rather than falling to either
       side of the switch: `off` misspelled as `false` would review under rules the caller believes are off, and
@@ -457,6 +458,16 @@ inputs:
 
       Both are checked before anything is fetched, so a directory somebody filled costs one API call
       rather than a hundred. Raising them raises that exposure, which is why the ceiling exists.
+    required: false
+    default: ""
+  repo_rules_max_file_bytes:
+    description: >-
+      bytes any one rules file may hold. Empty is 16384, the default every repository gets; a number
+      raises it, up to the bytes `repo_rules_max_bytes` allows a whole review.
+
+      Every file a rule names is measured before the diff is matched, so one oversized file refuses
+      every review on the repository rather than the ones its rule claims. A `source` list splits a
+      file that grew across several, which costs nothing; this is for the file that is one document.
     required: false
     default: ""
   reviewer_id:
@@ -2626,6 +2637,7 @@ runs:
         MODE: ${{ inputs.repo_rules }}
         MAX_BYTES: ${{ inputs.repo_rules_max_bytes }}
         MAX_RULES: ${{ inputs.repo_rules_max_rules }}
+        MAX_FILE_BYTES: ${{ inputs.repo_rules_max_file_bytes }}
         TRIGGER: ${{ inputs.trigger_phrase }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
         DIFF_PATHS: ${{ steps.diff.outputs.paths_file }}
@@ -2649,6 +2661,7 @@ runs:
             mode: process.env.MODE,
             maxBytes: process.env.MAX_BYTES,
             maxRules: process.env.MAX_RULES,
+            maxFileBytes: process.env.MAX_FILE_BYTES,
             trigger: process.env.TRIGGER,
             changedFiles,
           });
