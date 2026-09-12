@@ -25,14 +25,41 @@ export { listed };
 
 const MASKED_HOMES = ['.config', '.claude'];
 
-const UNSET = [
+/**
+ * DENIED_CREDENTIALS names what a tool call may not read, and it is a declaration rather than a copy.
+ *
+ * These three were only ever written down in the Claude arm's `settings.sandbox.credentials.envVars`
+ * block, and the sandbox proved itself by deriving them from it. That block is being deleted with
+ * the arm, so the fact is declared here and specified in `opencode-wiring.test.mjs`, which names
+ * what each one costs. **Restating them inside the loop that consumes them would not do**: the
+ * derivation existed because a name dropped from a list nothing checks is a credential silently
+ * handed back to a write phase's shell.
+ *
+ * `ANTHROPIC_FEDERATED_TOKEN` is deliberately absent and cannot join them - opencode expands it
+ * in-process, so hiding the bearer from a tool call hides it from the run.
+ */
+export const DENIED_CREDENTIALS = Object.freeze([
+  // The OTLP auth header, which is a write credential for the fleet's telemetry
   'OTEL_EXPORTER_OTLP_HEADERS',
+  // The request pair this action's own steps mint the gateway bearer from
   'KSAI_OIDC_REQUEST_URL',
   'KSAI_OIDC_REQUEST_TOKEN',
+]);
+
+/**
+ * DENIED_MINTS names the runner credentials that mint an identity for **any** audience.
+ *
+ * That is escalation rather than spend, which is why these are unset whatever the subprocess scrub
+ * says. The Claude arm does not deny them through its settings - it does not have to, because that
+ * CLI scrubs a tool subprocess itself and bwrap refuses nothing it is not told to.
+ */
+export const DENIED_MINTS = Object.freeze([
   'ACTIONS_ID_TOKEN_REQUEST_URL',
   'ACTIONS_ID_TOKEN_REQUEST_TOKEN',
   'ACTIONS_RUNTIME_TOKEN',
-];
+]);
+
+const UNSET = [...DENIED_CREDENTIALS, ...DENIED_MINTS];
 
 const SCRUBBED = ['GITHUB_TOKEN', 'GH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'];
 
