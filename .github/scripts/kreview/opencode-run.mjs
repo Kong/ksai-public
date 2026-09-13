@@ -21,11 +21,11 @@ import { conclusionOf, exitedOn, stopReason } from '../lib/execution-log.mjs';
 import { DEFAULT_OPENCODE_MODEL, answer, collectSecrets, executionLog, listed, parsed, sandboxScopes, scrub, spending } from '../lib/opencode.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
 import { bearer, heldExpiry } from '../lib/opencode-token.mjs';
-import { completeStage, LIMITS, readExport, recordChildren, recordedCompletion, recoverReview, reviewAnswer, reviewSession, streamFailure } from './opencode-review.mjs';
+import { completeFinal, completeStage, LIMITS, readExport, recordChildren, recordedCompletion, recoverReview, reviewAnswer, reviewSession, streamFailure } from './opencode-review.mjs';
 import { startRelay } from './otel-relay.mjs';
 import resultProtocol from './review-result.cjs';
 
-const { submitted } = resultProtocol;
+const { structuredSubmission, submitted } = resultProtocol;
 
 export { listed };
 
@@ -141,6 +141,8 @@ export function sandboxArgs(
     args.push('--tmpfs', temp);
     const tools = join(temp, 'ksai-opencode', 'bin');
     if (exists(tools)) args.push('--ro-bind', tools, tools);
+    const sdk = String(env.OPENCODE_SDK_ROOT ?? '');
+    if (sdk && exists(sdk)) args.push('--ro-bind', sdk, sdk);
   }
 
   const resultDir = String(env.KSAI_REVIEW_RESULT_DIR ?? '');
@@ -236,7 +238,10 @@ export function withoutExporter(args) {
 export function runArgs(env = process.env) {
   const named = String(env.MODEL ?? '').trim() || DEFAULT_OPENCODE_MODEL;
   const args = ['run', '--model', `anthropic/${named}`, '--format', 'json'];
-  if (env.FLOW === 'review' && ['evidence', 'dual'].includes(env.REVIEW_STRATEGY)) args.push('--agent', env.OPENCODE_REVIEW_FINALIZE === 'true' ? 'ksai-review-finish' : 'ksai-review-stage');
+  const staged = env.FLOW === 'review' && ['evidence', 'dual'].includes(env.REVIEW_STRATEGY);
+  const structuredFinal = env.FLOW === 'review' && env.REVIEW_RESULT_TRANSPORT === 'structured' && env.OPENCODE_REVIEW_FINALIZE === 'true';
+  if (staged) args.push('--agent', env.OPENCODE_REVIEW_FINALIZE === 'true' ? 'ksai-review-finish' : 'ksai-review-stage');
+  else if (structuredFinal) args.push('--agent', 'ksai-review-structured-finish');
   const variant = String(env.VARIANT ?? '').trim();
   if (variant && !(env.FLOW === 'review' && ['evidence', 'dual'].includes(env.REVIEW_STRATEGY) && env.OPENCODE_REVIEW_FINALIZE === 'true')) args.push('--variant', variant);
   const session = String(env.OPENCODE_RESUME_SESSION ?? '').trim();
@@ -297,13 +302,17 @@ async function main(env = process.env) {
   if (tokenDir) mkdirSync(tokenDir, { recursive: true });
 
   const resultTransport = env.FLOW === 'review' ? String(env.REVIEW_RESULT_TRANSPORT ?? '').trim() || 'tool' : 'text';
-  if (!['text', 'tool'].includes(resultTransport)) {
+  if (!['text', 'tool', 'structured'].includes(resultTransport)) {
     console.log(`::error::unknown review result transport: ${resultTransport}`);
     return 1;
   }
   const runnerTemp = String(env.RUNNER_TEMP ?? '');
   if (resultTransport === 'tool' && !runnerTemp) {
     console.log('::error::typed review results require RUNNER_TEMP');
+    return 1;
+  }
+  if (resultTransport === 'structured' && (!runnerTemp || !existsSync(String(env.OPENCODE_SDK_ROOT ?? '')))) {
+    console.log('::error::structured review results require the pinned SDK under RUNNER_TEMP');
     return 1;
   }
   const resultDir = resultTransport === 'tool' ? mkdtempSync(join(runnerTemp, 'review-results-')) : '';
@@ -346,8 +355,11 @@ async function main(env = process.env) {
       const began = Date.now();
       const offset = statSync(events).size;
       const resultFile = resultDir ? join(resultDir, `${resultSequence += 1}.json`) : '';
-      const ran = spawn('bwrap', [...sandbox, 'opencode', ...runArgs(env.FLOW === 'review' ? { ...env, OPENCODE_RESUME_SESSION: resumeSession, OPENCODE_REVIEW_FINALIZE: String(finalize) } : env)], {
-        env: { ...env, KSAI_REVIEW_RESULT_FILE: resultFile, KSAI_REVIEW_RESULT_KIND: resultKind, KSAI_REVIEW_CANDIDATE_IDS: JSON.stringify(candidateIds) },
+      const runEnv = env.FLOW === 'review' ? { ...env, OPENCODE_RESUME_SESSION: resumeSession, OPENCODE_REVIEW_FINALIZE: String(finalize) } : env;
+      const command = resultTransport === 'structured' ? process.execPath : 'opencode';
+      const args = resultTransport === 'structured' ? [join(String(env.SCRIPTS ?? ''), 'kreview/opencode-structured.mjs')] : runArgs(runEnv);
+      const ran = spawn('bwrap', [...sandbox, command, ...args], {
+        env: { ...runEnv, KSAI_REVIEW_RESULT_FILE: resultFile, KSAI_REVIEW_RESULT_KIND: resultKind, KSAI_REVIEW_CANDIDATE_IDS: JSON.stringify(candidateIds) },
         stdio: ['pipe', out, 'inherit'],
       });
       let hardStop = null;
@@ -366,7 +378,11 @@ async function main(env = process.env) {
       if (timeout) clearTimeout(timeout);
       if (hardStop) clearTimeout(hardStop);
       const segment = parsed(readFileSync(events).subarray(offset).toString('utf8'));
-      const submission = resultFile ? submitted({ file: resultFile, events: segment, kind: resultKind, candidateIds }) : null;
+      const submission = resultTransport === 'tool'
+        ? submitted({ file: resultFile, events: segment, kind: resultKind, candidateIds })
+        : resultTransport === 'structured'
+          ? structuredSubmission({ events: segment, kind: resultKind, candidateIds })
+          : null;
       const [result] = executionLog({ events: segment, exitCode: status, said: answer(segment) });
       const remaining = timeoutMs - (Date.now() - began);
       const recorded = pipeline && status === 0 && remaining > 0 ? recordedCompletion(segment, (id) => readExport({ env, sandbox: quiet, id, timeoutMs: Math.min(15_000, remaining) })) : {};
@@ -380,7 +396,11 @@ async function main(env = process.env) {
       for (const attempt of result.attempts) writeSync(out, `${JSON.stringify({ type: 'ksai_review_attempt', ...attempt })}\n`);
       return result;
     };
-    const run = (options) => pipeline ? completeStage({ ...options, resultTransport, invoke: recovering }) : env.FLOW === 'review' ? recovering(options) : invoke(options);
+    const run = (options) => pipeline
+      ? completeStage({ ...options, resultTransport, invoke: recovering })
+      : env.FLOW === 'review' && resultTransport === 'structured'
+        ? completeFinal({ ...options, invoke: recovering })
+        : env.FLOW === 'review' ? recovering(options) : invoke(options);
     const prompt = readFileSync(String(env.PROMPT_FILE ?? ''), 'utf8');
     if (pipeline) {
       Object.assign(env, await reviewSession({ env, events, prompt, run }));
@@ -389,10 +409,11 @@ async function main(env = process.env) {
       const killAt = Number(env.KSAI_CHANNEL_KILL_AT);
       const timeoutMs = env.FLOW === 'review' ? killAt > 0 ? Math.max(0, killAt - Date.now()) : LIMITS.totalMs : 0;
       const result = env.FLOW === 'review' && timeoutMs === 0 ? { code: 124, timed_out: true } : await run({ prompt, timeoutMs });
-      code = result.code === 0 && resultTransport === 'tool' && result.submission?.status !== 'accepted' ? 1 : result.code;
+      code = result.code === 0 && resultTransport !== 'text' && result.submission?.status !== 'accepted' ? 1 : result.code;
       env.OPENCODE_REVIEW_SUBMISSION_STATUS = result.submission?.status ?? '';
+      env.OPENCODE_REVIEW_CORRECTIONS = String(result.corrections ?? 0);
       deadlineExpired = result.timed_out === true;
-      if ((resultTransport === 'tool' && result.submission?.status === 'accepted') || result.attempts?.length > 1) {
+      if ((resultTransport !== 'text' && result.submission?.status === 'accepted') || result.attempts?.length > 1) {
         const reviewFile = `${events}.review.json`;
         writeFileSync(reviewFile, scrub(result.text ?? '', collectSecrets(env)));
         env.OPENCODE_REVIEW_FILE = reviewFile;

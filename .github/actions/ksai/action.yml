@@ -272,7 +272,7 @@ inputs:
     required: false
     default: "baseline"
   review_experiment:
-    description: 'JSON replay controls: expected_head, trial_index (0-99), prior_findings (current or ignore). Ignore requires an unpublished exact-head replay.'
+    description: 'JSON replay controls: expected revisions, trial_index, prior_findings and result_transport. Text/structured require an unpublished exact-head/plugin replay.'
     required: false
     default: ""
   publish:
@@ -3643,6 +3643,20 @@ runs:
           for (const [name, value] of Object.entries(outputs)) core.setOutput(name, value);
           if (error) core.setFailed(error);
 
+    - name: Install the opencode SDK
+      id: opencode_sdk_install
+      if: >-
+        ${{ steps.opencode_install.outcome == 'success' &&
+        steps.build_review.outputs.result_transport == 'structured' }}
+      shell: bash
+      working-directory: ${{ runner.temp }}
+      env:
+        VERSION: ${{ inputs.opencode_version }}
+        REVIEW_RESULT_TRANSPORT: ${{ steps.build_review.outputs.result_transport }}
+      run: |
+        set -euo pipefail
+        npm install --prefix "${RUNNER_TEMP}/ksai-opencode-sdk" --no-package-lock --no-save "@opencode-ai/sdk@${VERSION}"
+
     - name: Say the run has started
       id: notice_started
       if: >-
@@ -4472,6 +4486,7 @@ runs:
         VARIANT: ${{ steps.write_arm.outputs.effort || steps.select_test.outputs.effort || steps.select_arm.outputs.effort }}
         OPENCODE_CONFIG: ${{ steps.opencode_config.outputs.file }}
         OPENCODE_HOME: ${{ runner.temp }}/opencode-home
+        OPENCODE_SDK_ROOT: ${{ runner.temp }}/ksai-opencode-sdk
         ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
         ANTHROPIC_AUTH: ${{ inputs.anthropic_auth }}
         ANTHROPIC_FEDERATION_RULE_ID: ${{ inputs.federation_rule_id }}

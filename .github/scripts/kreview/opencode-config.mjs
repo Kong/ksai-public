@@ -121,30 +121,45 @@ const missing = (said) => (stated ? said : `::warning::${said}`);
 const agents = agentsUnder(pluginRoot);
 const staged = phase === 'review' && ['evidence', 'dual'].includes(process.env.REVIEW_STRATEGY);
 const resultTransport = String(process.env.REVIEW_RESULT_TRANSPORT ?? '').trim() || (phase === 'review' ? 'tool' : 'text');
-if (!['text', 'tool'].includes(resultTransport) || (resultTransport === 'tool' && phase !== 'review')) {
+if (!['text', 'tool', 'structured'].includes(resultTransport) || (resultTransport !== 'text' && phase !== 'review')) {
   console.log(`::error::review result transport ${resultTransport || '(empty)'} is not valid for ${phase || '(empty)'}`);
   process.exit(1);
 }
+const resultPermission = resultTransport === 'tool' ? { submit_review_result: 'allow' } : resultTransport === 'structured' ? { StructuredOutput: 'allow' } : {};
+const stagePrompt = resultTransport === 'tool'
+  ? 'Complete the current independent review stage. Submit its result through submit_review_result, correcting and calling again while attempts remain if it refuses. Once accepted, end the turn without repeating it. Do not delegate.'
+  : resultTransport === 'structured'
+    ? 'Complete the current independent review stage. Return its result exactly once through the required StructuredOutput tool after research. Do not delegate.'
+    : 'Complete the current independent review stage using its JSON contract. A request for a summary, including a maximum-step reminder, must be answered in that JSON shape. Once the step-limit reminder arrives, stop using tools and return the best supported JSON immediately. Do not delegate.';
+const finishPrompt = resultTransport === 'tool'
+  ? 'Use the evidence already collected in this session. Call submit_review_result, correcting and calling again while attempts remain if it refuses, then end the turn once it accepts. Every other tool is denied. Missing evidence remains uncertain. Do not claim to have executed a reproduction.'
+  : resultTransport === 'structured'
+    ? 'Use the evidence already collected in this session. Return the result exactly once through the required StructuredOutput tool. Every other tool is denied. Missing evidence remains uncertain. Do not claim to have executed a reproduction.'
+    : 'Use the evidence already collected in this session. Return exactly the current stage JSON contract, without further investigation or tool calls. Missing evidence remains uncertain. Do not claim to have executed a reproduction.';
 if (staged) {
-  const stagePermission = { ...permission, task: 'deny', ...(resultTransport === 'tool' ? { submit_review_result: 'allow' } : {}) };
+  const stagePermission = { ...permission, task: 'deny', ...resultPermission };
   agents['ksai-review-stage'] = { mode: 'primary', description: 'Bounded independent review stage', steps: LIMITS.stageSteps, permission: stagePermission,
-    prompt: resultTransport === 'tool' ? 'Complete the current independent review stage. Submit its result through submit_review_result, correcting and calling again while attempts remain if it refuses. Once accepted, end the turn without repeating it. Do not delegate.' : 'Complete the current independent review stage using its JSON contract. A request for a summary, including a maximum-step reminder, must be answered in that JSON shape. Once the step-limit reminder arrives, stop using tools and return the best supported JSON immediately. Do not delegate.',
+    prompt: stagePrompt,
   };
-  agents['ksai-review-finish'] = { mode: 'primary', description: 'Return the stage result from collected evidence', permission: { '*': 'deny', ...(resultTransport === 'tool' ? { submit_review_result: 'allow' } : {}) },
+  agents['ksai-review-finish'] = { mode: 'primary', description: 'Return the stage result from collected evidence', permission: { '*': 'deny', ...resultPermission },
     options: { thinking: { type: 'enabled', budgetTokens: LIMITS.finalizeThinkingTokens }, effort: 'low' },
-    prompt: resultTransport === 'tool' ? 'Use the evidence already collected in this session. Call submit_review_result, correcting and calling again while attempts remain if it refuses, then end the turn once it accepts. Every other tool is denied. Missing evidence remains uncertain. Do not claim to have executed a reproduction.' : 'Use the evidence already collected in this session. Return exactly the current stage JSON contract, without further investigation or tool calls. Missing evidence remains uncertain. Do not claim to have executed a reproduction.',
+    prompt: finishPrompt,
   };
-} else if (phase === 'review' && resultTransport === 'tool') {
-  agents['ksai-review-submit'] = { mode: 'primary', description: 'Review and submit the final result', permission: { ...permission, submit_review_result: 'allow' },
-    prompt: 'Complete the review under the supplied contract. Submit the final result through submit_review_result, correcting and calling again while attempts remain if it refuses, then end the turn once it accepts, without repeating it.',
+} else if (phase === 'review' && resultTransport !== 'text') {
+  agents['ksai-review-submit'] = { mode: 'primary', description: 'Review and submit the final result', permission: { ...permission, ...resultPermission },
+    prompt: resultTransport === 'tool'
+      ? 'Complete the review under the supplied contract. Submit the final result through submit_review_result, correcting and calling again while attempts remain if it refuses, then end the turn once it accepts, without repeating it.'
+      : 'Complete the review under the supplied contract. Return the final result exactly once through the required StructuredOutput tool.',
   };
+  if (resultTransport === 'structured') agents['ksai-review-structured-finish'] = { mode: 'primary', description: 'Return the final result from collected evidence', permission: { '*': 'deny', StructuredOutput: 'allow' },
+    options: { thinking: { type: 'enabled', budgetTokens: LIMITS.finalizeThinkingTokens }, effort: 'low' }, prompt: finishPrompt };
 }
 const channel = String(process.env.KSAI_CHANNEL_NONCE ?? '').trim() === '' ? '' : CHANNEL_PLUGIN;
 const config = runtimeConfig({ channel, agents, skills, permission, baseUrl, auth, attribution,
   plugins: resultTransport === 'tool' ? [REVIEW_RESULT_PLUGIN] : [],
 });
 if (staged) config.default_agent = 'ksai-review-stage';
-else if (phase === 'review' && resultTransport === 'tool') config.default_agent = 'ksai-review-submit';
+else if (phase === 'review' && resultTransport !== 'text') config.default_agent = 'ksai-review-submit';
 
 writeFileSync(destination, JSON.stringify(config, null, 2) + '\n');
 

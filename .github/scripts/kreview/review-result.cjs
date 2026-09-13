@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const { LIMITS, auditProblem, findingProblem } = require('./review-pipeline.cjs');
 
 const TOOL_NAME = 'submit_review_result';
+const STRUCTURED_EVENT = 'ksai_structured_result';
 const ATTEMPTS = 3;
 const KINDS = Object.freeze(['candidate', 'audit', 'final']);
 const AGENTS = new Set(['ksai-review-stage', 'ksai-review-finish', 'ksai-review-submit']);
@@ -304,4 +305,17 @@ function submitted({ file, events, kind, candidateIds = [] }) {
   return { status: 'accepted', text: encoded };
 }
 
-module.exports = { TOOL_NAME, KINDS, ENV_KEYS, schemaFor, submissionProblem, finalFindingProblem, plugin, submitted };
+function structuredSubmission({ events, kind, candidateIds = [] }) {
+  const marked = events.filter((event) => event?.type === STRUCTURED_EVENT);
+  if (marked.length === 0) return { status: 'missing', text: null };
+  if (marked.length !== 1) return { status: 'duplicate', text: null };
+  const event = marked[0];
+  if (event.result === undefined) return { status: event.failure || 'missing', text: null };
+  const encoded = canonical(event.result);
+  if (!encoded) return { status: 'invalid', text: null };
+  if (Buffer.byteLength(encoded) > LIMITS.outputBytes) return { status: 'oversized', text: null };
+  if (submissionProblem(kind, event.result, candidateIds)) return { status: 'invalid', text: null };
+  return { status: 'accepted', text: encoded };
+}
+
+module.exports = { TOOL_NAME, STRUCTURED_EVENT, KINDS, ENV_KEYS, schemaFor, submissionProblem, finalFindingProblem, plugin, submitted, structuredSubmission };
