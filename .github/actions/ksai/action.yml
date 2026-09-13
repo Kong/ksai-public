@@ -272,7 +272,7 @@ inputs:
     required: false
     default: "baseline"
   review_experiment:
-    description: 'JSON replay controls: expected revisions, trial_index, prior_findings and result_transport. Text/structured require an unpublished exact-head/plugin replay.'
+    description: 'JSON replay controls: immutable revisions, trial, history, result transport and lsp_tool (off or native). Text/structured and native LSP require an unpublished exact-revision replay.'
     required: false
     default: ""
   publish:
@@ -3821,13 +3821,43 @@ runs:
         set -euo pipefail
         node "${SCRIPTS}/ksai/attribution.mjs"
 
+    - name: Stage the native LSP canary servers
+      id: opencode_lsp
+      if: >-
+        ${{ steps.opencode_install.outcome == 'success' &&
+        steps.build_review.outputs.lsp_tool == 'native' }}
+      shell: bash
+      env:
+        OPENCODE_LSP_ROOT: ${{ runner.temp }}/ksai-lsp
+        OPENCODE_VERSION: ${{ inputs.opencode_version }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      working-directory: ${{ runner.temp }}
+      run: node "${SCRIPTS}/kreview/opencode-lsp.mjs"
+
+    - name: Verify the native LSP resource boundary
+      id: opencode_cgroup
+      if: >-
+        ${{ steps.opencode_install.outcome == 'success' &&
+        steps.build_review.outputs.lsp_tool == 'native' &&
+        steps.opencode_lsp.outcome == 'success' }}
+      shell: bash
+      env:
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      working-directory: ${{ runner.temp }}
+      run: node "${SCRIPTS}/kreview/opencode-cgroup.mjs" --preflight
+
     - name: Write the opencode runtime config
       id: opencode_config
-      if: ${{ steps.opencode_install.outcome == 'success' }}
+      if: >-
+        ${{ steps.opencode_install.outcome == 'success' &&
+        (steps.build_review.outputs.lsp_tool != 'native' ||
+        steps.opencode_cgroup.outcome == 'success') }}
       shell: bash
       env:
         REVIEW_STRATEGY: ${{ inputs.review_strategy }}
         REVIEW_RESULT_TRANSPORT: ${{ steps.build_review.outputs.result_transport }}
+        OPENCODE_LSP_TOOL: ${{ steps.build_review.outputs.lsp_tool }}
+        OPENCODE_LSP_ROOT: ${{ steps.opencode_lsp.outputs.root }}
         OPENCODE_CONFIG: ${{ runner.temp }}/opencode-runtime.json
         OPENCODE_HOME: ${{ runner.temp }}/opencode-home
         OPENCODE_VERSION: ${{ steps.opencode_install.outputs.version }}
@@ -3855,7 +3885,10 @@ runs:
 
     - name: Mint the bearer this review starts on
       id: mint
-      if: ${{ steps.opencode_config.outcome == 'success' }}
+      if: >-
+        ${{ steps.opencode_config.outcome == 'success' &&
+        (steps.build_review.outputs.lsp_tool != 'native' ||
+        steps.opencode_cgroup.outcome == 'success') }}
       shell: bash
       env:
         ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
@@ -4256,6 +4289,9 @@ runs:
           team=${{ steps.telemetry.outputs.team }},repo=${{ github.repository }},workflow=${{
           steps.telemetry.outputs.workflow }}${{ inputs.otel_extra_attributes != '' &&
           format(',{0}', inputs.otel_extra_attributes) || '' }}
+        OPENCODE_LSP_TOOL: ${{ steps.build_review.outputs.lsp_tool }}
+        OPENCODE_LSP_MEASURE: ${{ steps.build_review.outputs.lsp_measure }}
+        OPENCODE_LSP_ROOT: ${{ steps.opencode_lsp.outputs.root }}
       working-directory: ${{ runner.temp }}
       run: node "${SCRIPTS}/kreview/opencode-run.mjs"
 

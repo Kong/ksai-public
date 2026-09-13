@@ -5,8 +5,10 @@ import modelCatalog from '../lib/model-catalog.json' with { type: 'json' };
 import { counted } from '../lib/text.cjs';
 import { AUTH_MODES, originProblem } from './federated-token.mjs';
 import { LIMITS } from './review-pipeline.cjs';
+import { LSP_ARM, lspConfig } from './opencode-lsp.mjs';
 import {
   CHANNEL_PLUGIN,
+  COMPACTION_PLUGIN,
   PROVIDER_POLICY_CONFIG,
   PROVIDER_POLICY_GITIGNORE,
   REVIEW_RESULT_PLUGIN,
@@ -88,6 +90,22 @@ const skills = String(process.env.OPENCODE_SKILLS ?? '')
   .split('\n')
   .map((one) => underWorkspace(one))
   .filter(Boolean);
+
+const lspTool = String(process.env.OPENCODE_LSP_TOOL ?? '').trim() || LSP_ARM.off;
+if (lspTool !== LSP_ARM.off && lspTool !== LSP_ARM.native) {
+  console.log(`::error::opencode lsp_tool arm must be ${Object.values(LSP_ARM).join(' or ')}, got: ${lspTool || '(empty)'}`);
+  process.exit(1);
+}
+let lsp;
+if (lspTool === LSP_ARM.native) {
+  try {
+    lsp = lspConfig(String(process.env.OPENCODE_LSP_ROOT ?? '').trim());
+  } catch (error) {
+    console.log(`::error::${error.message}`);
+    process.exit(1);
+  }
+  permission.lsp = 'allow';
+}
 
 /**
  * agentsUnder answers the kreview agents beside a plugin root, as opencode subagent entries.
@@ -172,8 +190,9 @@ if (staged) {
 }
 const channel = String(process.env.KSAI_CHANNEL_NONCE ?? '').trim() === '' ? '' : CHANNEL_PLUGIN;
 const config = runtimeConfig({ channel, agents, skills, permission, baseUrl, auth, attribution,
-  plugins: resultTransport === 'tool' ? [REVIEW_RESULT_PLUGIN] : [],
+  plugins: [COMPACTION_PLUGIN, ...(resultTransport === 'tool' ? [REVIEW_RESULT_PLUGIN] : [])],
 });
+if (lsp) config.lsp = lsp;
 if (staged) config.default_agent = 'ksai-review-stage';
 else if (phase === 'review' && resultTransport !== 'text') config.default_agent = 'ksai-review-submit';
 
@@ -197,6 +216,9 @@ console.log(
 );
 console.log(config.plugin ? `the renewing auth plugin is ${config.plugin[0]}` : '::warning::no auth plugin, so this run lasts one token');
 console.log(`review results use the ${resultTransport} transport`);
+console.log(lsp
+  ? `native LSP canary uses ${Object.entries(lsp).filter(([, server]) => server.disabled !== true).map(([name]) => name).join(' and ')}`
+  : 'native LSP canary is off');
 console.log(
   Object.keys(agents).length
     ? `delegating to ${counted(Object.keys(agents).length, 'subagent')}: ${Object.entries(agents)

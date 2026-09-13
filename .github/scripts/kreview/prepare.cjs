@@ -230,6 +230,8 @@ function buildReviewPrompt({ env }) {
     allowed_tools: '',
     disallowed_tools: '',
     result_transport: '',
+    lsp_tool: '',
+    lsp_measure: '',
     error: '',
   };
   const strategy = env.REVIEW_STRATEGY || 'baseline';
@@ -321,6 +323,8 @@ function buildReviewPrompt({ env }) {
     allowed_tools: policy.allowed,
     disallowed_tools: policy.disallowed,
     result_transport: experiment.result_transport,
+    lsp_tool: experiment.lsp_tool,
+    lsp_measure: String(experiment.lsp_measure),
   });
   return { outputs, error: '' };
 }

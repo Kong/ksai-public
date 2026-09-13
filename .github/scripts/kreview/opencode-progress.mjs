@@ -96,9 +96,10 @@ export function delegationsIn(events) {
 
 function source(env = process.env) {
   const path = env.OPENCODE_EVENTS_FILE;
-  if (!path) return { text: '', why: 'No opencode event stream was named', delegations: 0, children: [] };
+  if (!path) return { text: '', why: 'No opencode event stream was named', delegations: 0, children: [], runtime: null };
   try {
     const events = parsed(readFileSync(path, 'utf8'));
+    const runtime = events.findLast((event) => event?.type === 'ksai_runtime')?.runtime;
     let children = [];
     let missing = delegationsIn(events);
     try {
@@ -108,9 +109,15 @@ function source(env = process.env) {
     } catch {
       children = [];
     }
-    return { text: transcript(events), why: '', delegations: missing, children };
+    return {
+      text: transcript(events),
+      why: '',
+      delegations: missing,
+      children,
+      runtime: runtime && typeof runtime === 'object' && !Array.isArray(runtime) ? runtime : null,
+    };
   } catch (error) {
-    return { text: '', why: `The opencode event stream could not be read: ${plain(error?.message)}`, delegations: 0, children: [] };
+    return { text: '', why: `The opencode event stream could not be read: ${plain(error?.message)}`, delegations: 0, children: [], runtime: null };
   }
 }
 
@@ -145,13 +152,13 @@ export function streams(env = process.env) {
 export function main(argv) {
   const checking = argv.includes('--check');
   const measuring = argv.includes('--stages');
-  const { text, why, delegations, children } = source();
+  const { text, why, delegations, children, runtime } = source();
   if (why) {
     if (!checking) process.stdout.write(`${why}, so this run recorded no ${measuring ? 'stage timings' : 'timeline'}.\n`);
     return 0;
   }
   if (measuring)
-    return stagesMain(process.env, { streams: [{ name: '', source: text }, ...children], why: '', dropped: delegations });
+    return stagesMain(process.env, { streams: [{ name: '', source: text }, ...children], why: '', dropped: delegations, runtime });
   const view = timeline(text, { trim: process.env.TRIM_PREFIX });
   if (checking) {
     const verdict = breaker(view, {

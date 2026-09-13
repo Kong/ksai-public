@@ -98,6 +98,7 @@ export function sandboxScopes(env, exists) {
     String(env.KSAI_TOKEN_DIR ?? ''),
     String(env.KSAI_CHANNEL_DIR ?? ''),
     String(env.KSAI_REVIEW_RESULT_DIR ?? ''),
+    String(env.KSAI_COMPACTION_FILE ?? ''),
     join(workspace, '_ksai'),
   ]
     .map((one) => one.trim())
@@ -196,6 +197,7 @@ export const RUNTIME_CONFIG = Object.freeze({
   snapshot: false,
   share: 'disabled',
   compaction: Object.freeze({ auto: true, prune: true }),
+  experimental: Object.freeze({ openTelemetry: true }),
   subagent_depth: 1,
   permission: opencodePermissions(claudeArgs.TOOL_POLICY.review),
 });
@@ -315,6 +317,8 @@ export function headerLines(text) {
 export const AUTH_PLUGIN = fileURLToPath(new URL('../kreview/opencode-auth.mjs', import.meta.url));
 
 export const CHANNEL_PLUGIN = fileURLToPath(new URL('../kreview/opencode-channel.mjs', import.meta.url));
+
+export const COMPACTION_PLUGIN = fileURLToPath(new URL('../kreview/opencode-compaction.mjs', import.meta.url));
 
 export const REVIEW_RESULT_PLUGIN = fileURLToPath(new URL('../kreview/opencode-review-result.mjs', import.meta.url));
 

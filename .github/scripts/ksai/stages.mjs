@@ -201,6 +201,8 @@ const thousands = (value) => {
   return value >= 1000 ? `${Math.round(value / 1000)}k` : String(value);
 };
 
+const runtimeElapsed = (ms) => Number.isFinite(ms) && ms < 1000 ? `${Math.round(ms)}ms` : elapsed(ms);
+
 /*
  * Two spaces between every cell, because a value wider than its column would otherwise run into its
  * neighbour and read as one number. `new in` excludes cache reads on purpose: usage is reported per
@@ -214,28 +216,50 @@ const row = (...cells) => cells.map((cell, index) => cell.padStart(WIDTHS[index]
 /** format renders a measurement as the block the job log carries. */
 export function format(record) {
   if (!record) return 'No session transcript was found, so this run recorded no stage timings.';
-  const lines = [
-    `  wall ${elapsed(record.wall_ms)}, orchestrator ${elapsed(record.own_ms)} (${share(record.own_ms, record.wall_ms)}), delegated ${elapsed(record.delegated_ms)} (${share(record.delegated_ms, record.wall_ms)})`,
-  ];
-  if (record.setup_ms !== null) lines.push(`  ${elapsed(record.setup_ms)} passed before the model started`);
-  if (record.subagents > 1) {
+  const hasStages = Number.isFinite(record.wall_ms);
+  const lines = hasStages
+    ? [`  wall ${elapsed(record.wall_ms)}, orchestrator ${elapsed(record.own_ms)} (${share(record.own_ms, record.wall_ms)}), delegated ${elapsed(record.delegated_ms)} (${share(record.delegated_ms, record.wall_ms)})`]
+    : ['  stage timings unavailable; no model transcript was recorded'];
+  if (hasStages && record.setup_ms !== null) lines.push(`  ${elapsed(record.setup_ms)} passed before the model started`);
+  if (hasStages && record.subagents > 1) {
     lines.push(`  ${record.subagents} subagents, ${elapsed(record.overlap_ms)} of their time ran concurrently`);
   }
-  if (record.unmeasured_subagents) {
+  if (hasStages && record.unmeasured_subagents) {
     lines.push(
       `  ${counted(record.unmeasured_subagents, 'further subagent')} ` +
         `${plural(record.unmeasured_subagents, 'was', 'were')} not measured, so this run is a partial view`,
     );
   }
-  lines.push('', `  ${row('start', 'elapsed', 'calls', 'fail', 'new in', 'out')}  stage`);
-  for (const stage of record.stages) {
-    const fresh = thousands(stage.input_tokens + stage.cache_creation_tokens);
-    const written = thousands(stage.output_tokens);
-    const at = stage.offset_ms === null ? '-' : elapsed(stage.offset_ms);
-    const took = elapsed(stage.duration_ms);
-    lines.push(
-      `  ${row(at, took, String(stage.calls), String(stage.failures), fresh, written)}  ${stage.label}`,
-    );
+  const runtime = record.runtime;
+  if (runtime && Number.isInteger(runtime.invocation_count)) {
+    const measured = [
+      `${counted(runtime.invocation_count, 'one-shot invocation')}`,
+      `${runtime.failed_invocations ?? 0} failed`,
+      `wall ${runtime.total_ms === null ? '-' : runtimeElapsed(runtime.total_ms)}`,
+      `startup ${runtime.startup_ms === null ? '-' : runtimeElapsed(runtime.startup_ms)}`,
+      `model ${runtime.model_ms === null ? '-' : runtimeElapsed(runtime.model_ms)}`,
+    ];
+    lines.push('', `  runtime: ${measured.join(', ')}`);
+    const details = [];
+    if (runtime.first_mcp_ms !== null) details.push(`first MCP ${runtimeElapsed(runtime.first_mcp_ms)}`);
+    if (runtime.mcp_connect_ms !== null) details.push(`MCP connect ${runtimeElapsed(runtime.mcp_connect_ms)}`);
+    if (runtime.peak_rss_kb !== null) details.push(`peak RSS ${Math.ceil(runtime.peak_rss_kb / 1024)} MiB`);
+    if (runtime.lingering_processes !== null) details.push(`${runtime.lingering_processes} lingering`);
+    if (Number.isInteger(runtime.compaction_count)) details.push(counted(runtime.compaction_count, 'compaction'));
+    else details.push(`compaction unavailable in ${runtime.compaction_unavailable_invocations ?? runtime.invocation_count}`);
+    if (details.length) lines.push(`  ${details.join(', ')}`);
+  }
+  if (record.stages.length) {
+    lines.push('', `  ${row('start', 'elapsed', 'calls', 'fail', 'new in', 'out')}  stage`);
+    for (const stage of record.stages) {
+      const fresh = thousands(stage.input_tokens + stage.cache_creation_tokens);
+      const written = thousands(stage.output_tokens);
+      const at = stage.offset_ms === null ? '-' : elapsed(stage.offset_ms);
+      const took = elapsed(stage.duration_ms);
+      lines.push(
+        `  ${row(at, took, String(stage.calls), String(stage.failures), fresh, written)}  ${stage.label}`,
+      );
+    }
   }
   if (record.tools.length) {
     const named = record.tools.map((t) => `${t.name} ${t.calls}${t.failures ? `/${t.failures} failed` : ''}`);
@@ -247,7 +271,9 @@ export function format(record) {
 /** summary renders a measurement as the markdown the job summary carries. */
 export function summary(record) {
   if (!record) return '';
-  const headline = `wall ${elapsed(record.wall_ms)}, ${share(record.own_ms, record.wall_ms)} of it orchestrator`;
+  const headline = Number.isFinite(record.wall_ms)
+    ? `wall ${elapsed(record.wall_ms)}, ${share(record.own_ms, record.wall_ms)} of it orchestrator`
+    : 'one-shot runtime recorded; stage timings unavailable';
   return [
     '## Where the run spent its time',
     '',
@@ -282,15 +308,27 @@ function publish(env, record) {
  * it in, so the measurement is one implementation rather than two.
  *
  * @param {Record<string, string | undefined>} [env]
- * @param {{streams: Array<{name: string, source: string}>, why?: string, dropped?: number} | null} [source]
+ * @param {{streams: Array<{name: string, source: string}>, why?: string, dropped?: number, runtime?: Record<string, unknown> | null} | null} [source]
  */
 export function main(env = process.env, source = null) {
-  const { streams, why, dropped } = source ?? read();
+  const observed = source ?? read();
+  const { streams, why, dropped } = observed;
+  const runtime = 'runtime' in observed ? observed.runtime : null;
   if (why) {
     process.stdout.write(`${why}, so this run recorded no stage timings.\n`);
     return 0;
   }
-  const record = measure(streams, { stampedAt: Number(env.STARTED_AT_MS), dropped });
+  const measured = measure(streams, { stampedAt: Number(env.STARTED_AT_MS), dropped });
+  const heldRuntime = runtime && typeof runtime === 'object' && !Array.isArray(runtime) ? runtime : null;
+  const record = heldRuntime
+    ? {
+        ...(measured ?? {
+          wall_ms: null, setup_ms: null, own_ms: null, delegated_ms: null, overlap_ms: 0,
+          subagents: 0, unmeasured_subagents: dropped ?? 0, stages: [], tools: [],
+        }),
+        runtime: heldRuntime,
+      }
+    : measured;
   process.stdout.write(`${format(record)}\n`);
   try {
     publish(env, record);

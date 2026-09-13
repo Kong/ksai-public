@@ -202,16 +202,21 @@ export function read(chunks, encoding, ceiling = MAX_BODY_BYTES) {
   return '';
 }
 
-export function prepared({ signal, body, named, secrets }) {
+export function preparedPayload({ body, named, secrets }) {
   try {
     const stampedPayload = stamped(body, named);
     if (!stampedPayload) return null;
     const payload = bounded(stampedPayload);
     if (!payload) return null;
-    return encoded(signal, JSON.parse(scrub(JSON.stringify(payload), secrets)), MAX_VALUE_BYTES);
+    return JSON.parse(scrub(JSON.stringify(payload), secrets));
   } catch {
     return null;
   }
+}
+
+export function prepared({ signal, body, named, secrets }) {
+  const payload = preparedPayload({ body, named, secrets });
+  return payload ? encoded(signal, payload, MAX_VALUE_BYTES) : null;
 }
 
 /**
@@ -224,9 +229,9 @@ export function prepared({ signal, body, named, secrets }) {
  * `flow: test` the reviewed pull request's own code reaches this port, Datadog bills what arrives,
  * and a small body can name a large export. What arrived is counted too, but only as a rate.
  */
-export async function startRelay({ env = process.env, fetchImpl = fetch, say = console.log } = {}) {
+export async function startRelay({ env = process.env, fetchImpl = fetch, observe = null, say = console.log, serverFactory = createServer } = {}) {
   const where = target(env);
-  if (!where) return null;
+  if (!where && typeof observe !== 'function') return null;
   const secrets = collectSecrets(env);
   const named = runAttributes(env);
   const counts = { forwarded: 0, dropped: 0, refused: 0, bytes: 0, sent: 0, posts: 0 };
@@ -250,7 +255,7 @@ export async function startRelay({ env = process.env, fetchImpl = fetch, say = c
     }
   };
 
-  const server = createServer((request, response) => {
+  const server = serverFactory((request, response) => {
     const signal = SIGNALS[String(request.url ?? '').split('?')[0]];
     if (request.method !== 'POST' || !signal) {
       response.writeHead(404).end();
@@ -297,7 +302,14 @@ export async function startRelay({ env = process.env, fetchImpl = fetch, say = c
           counts.dropped += 1;
           return;
         }
-        const body = prepared({ signal, body: text, named, secrets });
+        const payload = preparedPayload({ body: text, named, secrets });
+        if (!payload) {
+          counts.dropped += 1;
+          return;
+        }
+        try { observe?.(signal, payload); } catch {}
+        if (!where) return;
+        const body = encoded(signal, payload, MAX_VALUE_BYTES);
         if (!body || body.length > MAX_BODY_BYTES || counts.sent + body.length > MAX_TOTAL_BYTES) {
           counts.dropped += 1;
           return;
@@ -316,8 +328,18 @@ export async function startRelay({ env = process.env, fetchImpl = fetch, say = c
     });
   });
 
-  await new Promise((ready) => {
-    server.listen(0, '127.0.0.1', () => ready(null));
+  await new Promise((ready, reject) => {
+    const failed = (error) => reject(error);
+    server.once('error', failed);
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', failed);
+      ready(null);
+    });
+  });
+  server.on('error', (error) => {
+    say(`::warning::the telemetry relay stopped (${error?.message}), so later records are unavailable`);
+    server.close();
+    server.closeAllConnections?.();
   });
   server.unref();
   const bound = server.address();
@@ -328,7 +350,7 @@ export async function startRelay({ env = process.env, fetchImpl = fetch, say = c
     return null;
   }
   const url = `http://127.0.0.1:${port}`;
-  say(`telemetry relayed from ${url} to ${where.endpoint}`);
+  say(where ? `telemetry relayed from ${url} to ${where.endpoint}` : `runtime telemetry observed at ${url}`);
 
   const close = async () => {
     const deadline = Date.now() + DRAIN_MS;
@@ -345,14 +367,16 @@ export async function startRelay({ env = process.env, fetchImpl = fetch, say = c
     server.close();
     server.closeAllConnections?.();
     const lost = counts.dropped + counts.refused + flight.size;
-    if (lost > 0) {
+    if (where && lost > 0) {
       say(
         `::warning::${lost} of this run's telemetry exports did not reach ${where.endpoint}, which changes nothing about the review or what it reports spending`,
       );
     }
-    say(
-      `telemetry: forwarded=${counts.forwarded} dropped=${counts.dropped} refused=${counts.refused} in-flight=${flight.size}`,
-    );
+    if (where) {
+      say(
+        `telemetry: forwarded=${counts.forwarded} dropped=${counts.dropped} refused=${counts.refused} in-flight=${flight.size}`,
+      );
+    }
     return { ...counts, in_flight: flight.size };
   };
 

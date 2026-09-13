@@ -3,6 +3,8 @@ import { createRequire } from 'node:module';
 
 import { answer, collectSecrets, endedOn, everything, executionLog, parsed, scrub, spending } from '../lib/opencode.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
+import { sessionEvents } from './opencode-children.mjs';
+import { lspToolMetrics } from './opencode-lsp.mjs';
 import { gatewayDiagnostics, streamFailure } from './opencode-review.mjs';
 
 const require = createRequire(import.meta.url);
@@ -36,6 +38,8 @@ if (eventsFile) {
 }
 
 const events = parsed(raw);
+const eventLines = raw.split('\n').filter((line) => line.trim());
+const completeEventStream = eventLines.length > 0 && eventLines.length === events.length;
 
 /*
  * A review's structured output is a contract, and the turn it lands in is the model's choice. `answer`
@@ -53,12 +57,24 @@ if (carries) {
 }
 const children = process.env.OPENCODE_CHILDREN_FILE ? JSON.parse(readFileSync(process.env.OPENCODE_CHILDREN_FILE, 'utf8')) : null;
 const staged = ['evidence', 'dual'].includes(process.env.REVIEW_STRATEGY);
+const allEvents = [...events, ...(children?.events ?? [])];
+const childToolEvents = (children?.sessions ?? []).flatMap((session) => sessionEvents(session)).filter((event) => event.type === 'tool_use');
+const completeToolTelemetry = completeEventStream && children !== null && children.missing === 0;
+const runtime = (() => {
+  try {
+    const value = JSON.parse(process.env.OPENCODE_RUNTIME_METRICS || 'null');
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+  } catch {
+    return null;
+  }
+})();
 const log = executionLog({
-  events: [...events, ...(children?.events ?? [])],
+  events: allEvents,
   exitCode: Number(process.env.OPENCODE_EXIT ?? 1),
   secrets,
   said: process.env.OPENCODE_REVIEW_FILE ? readFileSync(process.env.OPENCODE_REVIEW_FILE, 'utf8') : staged || recovered ? null : carries ? whole : said,
 });
+Object.assign(log[0], { opencode_runtime: runtime });
 if (process.env.FLOW === 'review') {
   const held = process.env.REVIEW_PIPELINE_FILE ? JSON.parse(readFileSync(process.env.REVIEW_PIPELINE_FILE, 'utf8')) : null;
   const completedCalls = held?.stages?.length > 0 && held.stages.every((stage) => stage.invocations?.length > 0 && stage.invocations.every((call) => call.exit_code === 0 && call.usage));
@@ -88,11 +104,18 @@ if (process.env.FLOW === 'review') {
     rejected_count: held ? decisions.filter((d) => d.verdict !== 'keep').length : null,
     measured_children: children?.sessions.length ?? null,
     unmeasured_children: children?.missing ?? null,
-    cost_complete: measuredExit && spending(events).length > 0 && !events.some((event) => event.type === 'error' || (event.type === 'ksai_review_attempt' && event.exit_code !== 0)) && children !== null && children.missing === 0 && (held?.missing_usage ?? 0) === 0,
+    cost_complete: completeEventStream && measuredExit && spending(events).length > 0 && !events.some((event) => event.type === 'error' || (event.type === 'ksai_review_attempt' && event.exit_code !== 0)) && children !== null && children.missing === 0 && (held?.missing_usage ?? 0) === 0,
     stream_attempts: events.filter((event) => event.type === 'ksai_review_attempt').map(({ exit_code, session_id, failure }) => ({ exit_code, session_id, failure })),
     gateway_failures: gatewayDiagnostics(events),
     configured_effort: process.env.VARIANT || null,
     thinking_wire_verified: false,
+    runtime,
+    lsp: completeToolTelemetry ? {
+      ...lspToolMetrics([...allEvents, ...childToolEvents]),
+      peak_rss_kb: runtime?.peak_rss_kb ?? null,
+      lingering_processes: runtime?.lingering_processes ?? null,
+      invocations: runtime?.invocations ?? [],
+    } : null,
   } });
 }
 

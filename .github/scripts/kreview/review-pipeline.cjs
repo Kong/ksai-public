@@ -13,11 +13,12 @@ const digest = (value) => createHash('sha256').update(value).digest('hex');
 function experimentOf(raw = '', { head = '', base = '', plugin = '', publish = true } = {}) {
   const parsed = raw === '' ? {} : JSON.parse(raw);
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('review_experiment must be an object');
-  if (Object.keys(parsed).some((key) => !['expected_head', 'expected_base', 'expected_plugin', 'trial_index', 'prior_findings', 'result_transport'].includes(key))) throw new Error('unknown review_experiment field');
+  if (Object.keys(parsed).some((key) => !['expected_head', 'expected_base', 'expected_plugin', 'trial_index', 'prior_findings', 'result_transport', 'lsp_tool'].includes(key))) throw new Error('unknown review_experiment field');
   const expected = parsed.expected_head ?? '';
   const trial = parsed.trial_index ?? 0;
   const prior = parsed.prior_findings ?? 'current';
   const resultTransport = parsed.result_transport ?? 'tool';
+  const lspTool = Object.hasOwn(parsed, 'lsp_tool') ? parsed.lsp_tool : 'off';
   if (expected !== '' && (!SHA.test(expected) || expected !== head)) throw new Error('review_experiment expected_head does not match the checked-out PR');
   for (const [key, actual] of [['expected_base', base], ['expected_plugin', plugin]]) {
     if (parsed[key] !== undefined && (!SHA.test(parsed[key]) || parsed[key] !== actual)) throw new Error(`review_experiment ${key} does not match the checkout`);
@@ -27,7 +28,9 @@ function experimentOf(raw = '', { head = '', base = '', plugin = '', publish = t
   if (prior === 'ignore' && (publish || !expected)) throw new Error('ignoring prior findings requires publish:false and expected_head');
   if (!['text', 'tool', 'structured'].includes(resultTransport)) throw new Error('result_transport must be text, tool or structured');
   if (['text', 'structured'].includes(resultTransport) && (publish || !expected || parsed.expected_plugin === undefined)) throw new Error(`${resultTransport} result transport requires publish:false, expected_head and expected_plugin`);
-  return { expected_head: expected, expected_base: parsed.expected_base ?? '', expected_plugin: parsed.expected_plugin ?? '', trial_index: trial, prior_findings: prior, result_transport: resultTransport };
+  if (!['off', 'native'].includes(lspTool)) throw new Error('lsp_tool must be off or native');
+  if (lspTool === 'native' && (publish || !expected || parsed.expected_base === undefined || parsed.expected_plugin === undefined)) throw new Error('native lsp_tool requires publish:false, expected_head, expected_base and expected_plugin');
+  return { expected_head: expected, expected_base: parsed.expected_base ?? '', expected_plugin: parsed.expected_plugin ?? '', trial_index: trial, prior_findings: prior, result_transport: resultTransport, lsp_tool: lspTool, lsp_measure: parsed.lsp_tool !== undefined };
 }
 
 function findingProblem(finding, verified = true) {
