@@ -14,7 +14,7 @@ export const COMMANDS = Object.freeze([
  * `.github/scripts/ksai/phase.cjs` rather than imported, for the reason COMMANDS is copied, and held to
  * the original by the same kind of parity test.
  */
-export const WORK_SCOPES = Object.freeze(['builds', 'reviews']);
+export const WORK_SCOPES = Object.freeze(['builds', 'merges', 'reviews']);
 
 /**
  * TIMEOUT is how long one read may take, in milliseconds, before it counts as a failure that can pass.

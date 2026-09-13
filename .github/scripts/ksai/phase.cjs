@@ -20,7 +20,7 @@ const PER_PAGE = 100;
  * A copy of this list ships in `.github/actions/dispatch-record/record.mjs`, which refuses a record
  * before this ever sees it; a parity test beside that copy holds the two together.
  */
-const WORK_SCOPES = Object.freeze(['builds', 'reviews']);
+const WORK_SCOPES = Object.freeze(['builds', 'merges', 'reviews']);
 
 /**
  * scopeAdmits reads what a record narrowed a run to, and answers null where it names work this
@@ -33,10 +33,20 @@ const WORK_SCOPES = Object.freeze(['builds', 'reviews']);
  */
 function scopeAdmits(scope) {
   const named = String(scope ?? '').trim();
-  if (named === '') return { builds: true, reviews: true };
+  if (named === '') return { builds: true, merges: true, reviews: true };
   const parts = named.split(',');
   if (new Set(parts).size !== parts.length || parts.some((one) => !WORK_SCOPES.includes(one))) return null;
-  return { builds: parts.includes('builds'), reviews: parts.includes('reviews') };
+  return {
+    builds: parts.includes('builds'),
+    /*
+     * The build admits the merge. A pull request that will not merge is one whose build cannot be
+     * trusted, and resolving that has always been part of how a run started for a failing build reaches
+     * a green one - so a record naming the build alone keeps it, and no release that predates the
+     * `merges` name loses the behaviour it already had.
+     */
+    merges: parts.includes('merges') || parts.includes('builds'),
+    reviews: parts.includes('reviews'),
+  };
 }
 
 const { NUMBER_SHAPE: ISSUE_NUMBER_SHAPE } = require('./context.cjs');
@@ -265,16 +275,62 @@ function renderSubjectStop(error, { triggerPhrase = null } = {}) {
   return asAlert('WARNING', scrub(`I could not work out which issue this is about, so nothing ran: ${said}`, { triggerPhrase }));
 }
 
+/**
+ * FIX_NOTICE_BODY is what the `fix` notice says about the threads it read, which is true whatever a label
+ * kept back from the run. The sentence after it offers to work on something other than a thread, and that
+ * offer is only true of a run allowed to.
+ */
+const FIX_NOTICE_BODY =
+  'No review thread here is waiting on an answer, so nothing ran. Threads I have already replied in count ' +
+  'as answered, and so do the ones a human has resolved - resolve or re-open as needed and ask again.';
+
+/**
+ * KEPT_BACK names each kind of work the way a notice refers to it, and READ_NOTHING says what a run that
+ * looked and found nothing may state about it. A run reports only on what it read: a notice claiming a
+ * pull request is clean on the strength of never having looked is worse than no notice at all, and
+ * `GitHub reports nothing to merge` covers a merge state GitHub never computed as well as a clean one.
+ */
+const KEPT_BACK = Object.freeze({
+  builds: 'a red check',
+  merges: 'a conflict',
+  reviews: 'an unanswered review thread',
+});
+
+const READ_NOTHING = Object.freeze({
+  builds: 'nothing I could read is failing',
+  merges: 'GitHub reports nothing to merge',
+  reviews: 'no review thread here is unanswered',
+});
+
+/** joined lists the parts the way a sentence does, with the last two joined by `word`. */
+function joined(parts, word) {
+  if (parts.length < 2) return parts.join('');
+  return `${parts.slice(0, -1).join(', ')} ${word} ${parts.at(-1)}`;
+}
+
+/**
+ * narrowedNotice is what a run some label kept work back from says when it found nothing, or null where
+ * the run was free to look anywhere and the stock notice is already true.
+ */
+function narrowedNotice(key, admits) {
+  const kept = WORK_SCOPES.filter((work) => !admits[work]);
+  if (kept.length === 0) return null;
+  const barred =
+    `This run was started by a label that does not admit ${joined(kept.map((work) => KEPT_BACK[work]), 'or')}, ` +
+    'so that is not mine to work on here';
+  if (key === 'fix') return `${FIX_NOTICE_BODY} ${barred}`;
+  if (key !== 'do') return null;
+  const read = WORK_SCOPES.filter((work) => admits[work]).map((work) => READ_NOTHING[work]);
+  return `Nothing I was asked to look at is waiting on me, so nothing ran: ${joined(read, 'and')}. ${barred}, and I did not look`;
+}
+
 const PHASE_NOTICE = Object.freeze(
   Object.assign(Object.create(null), {
     ambiguous:
       'More than one open branch claims this issue, so I stopped rather than guess which one to continue. ' +
       'Close or rename all but one and comment again',
-    fix:
-      'No review thread here is waiting on an answer, so nothing ran. Threads I have already replied in count ' +
-      'as answered, and so do the ones a human has resolved - resolve or re-open as needed and ask again. If ' +
-      'the work you want was never raised in a thread - a red check, a conflict, a missing test - say what you ' +
-      'want done after the command and it will do that instead',
+    fix: `${FIX_NOTICE_BODY} If the work you want was never raised in a thread - a red check, a conflict, a ` +
+      'missing test - say what you want done after the command and it will do that instead',
     do:
       'Nothing I can see here is waiting on me, so nothing ran: no review thread is unanswered, and nothing ' +
       'I could read is failing or conflicting. Say what you want done after the command - "fix the failing ' +
@@ -282,17 +338,6 @@ const PHASE_NOTICE = Object.freeze(
       'work from that',
   }),
 );
-
-/**
- * FIX_NOTICE_REVIEWS replaces the last sentence of the `fix` notice for a run the label barred from the
- * build. The offer to say what you want done instead is true of a run that may look anywhere and false
- * of this one: the red check it would point at is the work somebody kept for themselves.
- */
-const FIX_NOTICE_REVIEWS =
-  'No review thread here is waiting on an answer, so nothing ran. Threads I have already replied in count ' +
-  'as answered, and so do the ones a human has resolved - resolve or re-open as needed and ask again. This ' +
-  'run was started by a label admitting review comments alone, so a red check or a conflict is not mine to ' +
-  'work on here';
 
 function renderPhaseNotice(phase, { pending = null, triggerPhrase = null, scope = null } = {}) {
   const key = String(phase ?? '')
@@ -302,8 +347,8 @@ function renderPhaseNotice(phase, { pending = null, triggerPhrase = null, scope 
   if (!body) return '';
   if (key !== 'ambiguous' && String(pending ?? '') !== '0') return '';
   const admits = scopeAdmits(scope);
-  const said = key === 'fix' && admits !== null && !admits.builds ? FIX_NOTICE_REVIEWS : body;
-  return asAlert('WARNING', scrub(said, { triggerPhrase }));
+  const narrowed = admits === null ? null : narrowedNotice(key, admits);
+  return asAlert('WARNING', scrub(narrowed ?? body, { triggerPhrase }));
 }
 
 function renderClosed(command, { state = null, triggerPhrase = null, onIssue = null } = {}) {
@@ -418,7 +463,8 @@ async function resolvePhase({
      * reviewer who wrote `fix` with a sentence after it on a review-labelled pull request would get a
      * run that answers nothing at all.
      */
-    const answersThreads = admits.reviews && (scoped || !asked || !admits.builds);
+    const elsewhere = admits.builds || admits.merges;
+    const answersThreads = admits.reviews && (scoped || !asked || !elsewhere);
     let known = null;
 
     if (answersThreads) {
@@ -461,7 +507,7 @@ async function resolvePhase({
       );
     }
 
-    if (!admits.builds) {
+    if (!elsewhere) {
       return refuse(
         'this run was started to answer review comments, and this pull request has no review thread at all, so ' +
           'there was nothing to answer and nothing ran',
@@ -483,6 +529,7 @@ async function resolvePhase({
       checksFile,
       threadRootId,
       threadsFile,
+      admits,
       sleep,
       writeFile,
     });

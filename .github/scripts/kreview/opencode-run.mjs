@@ -22,6 +22,7 @@ import { DEFAULT_OPENCODE_MODEL, answer, collectSecrets, executionLog, listed, p
 import { writeOutputs } from '../lib/outputs.mjs';
 import { bearer, heldExpiry } from '../lib/opencode-token.mjs';
 import { completeStage, LIMITS, readExport, recordChildren, recordedCompletion, recoverReview, reviewAnswer, reviewSession, streamFailure } from './opencode-review.mjs';
+import { startRelay } from './otel-relay.mjs';
 import resultProtocol from './review-result.cjs';
 
 const { submitted } = resultProtocol;
@@ -65,6 +66,10 @@ export const DENIED_MINTS = Object.freeze([
 ]);
 
 const UNSET = [...DENIED_CREDENTIALS, ...DENIED_MINTS];
+
+const EXPORTER_ENDPOINT = 'OTEL_EXPORTER_OTLP_ENDPOINT';
+
+const PROBE_TIMEOUT_MS = 60_000;
 
 const SCRUBBED = ['GITHUB_TOKEN', 'GH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'];
 
@@ -196,12 +201,36 @@ export function sandboxArgs(
     'TAR_OPTIONS',
     '--no-same-owner',
   );
+  const relay = String(env.KSAI_OTEL_RELAY ?? '').trim();
+  if (relay) args.push('--setenv', EXPORTER_ENDPOINT, relay);
   const scrubbed = scrubbing(env) ? SCRUBBED : [];
-  for (const name of new Set([...UNSET, ...scrubbed, ...listed(env.SANDBOX_DENY_ENV)])) {
+  const denied = listed(env.SANDBOX_DENY_ENV);
+  if (relay && denied.includes(EXPORTER_ENDPOINT)) {
+    console.log(
+      `::warning::this caller denies ${EXPORTER_ENDPOINT} to the sandbox, which is the relay's own address, so this run exports no trace and no log line`,
+    );
+  }
+  const exporter = relay ? [] : [EXPORTER_ENDPOINT];
+  for (const name of new Set([...UNSET, ...exporter, ...scrubbed, ...denied])) {
     args.push('--unsetenv', name);
   }
   args.push('--unshare-user', '--unshare-pid', '--new-session', '--die-with-parent', '--chdir', workspace, '--');
   return args;
+}
+
+/**
+ * withoutExporter answers the same sandbox with its exporter endpoint unset.
+ *
+ * The relay serves from this process's event loop, and `spawnSync` stops that loop for as long as
+ * the child runs - so a child that exported would block on a response nothing can write until its
+ * own exporter gives up. The version probe and every `opencode export` are spawned that way and
+ * have no telemetry worth keeping, so they are handed a sandbox that exports nothing. The list is
+ * still built once, because a probe that proved a different sandbox proves nothing.
+ */
+export function withoutExporter(args) {
+  const at = args.findIndex((entry, index) => entry === EXPORTER_ENDPOINT && args[index - 1] === '--setenv');
+  if (at < 1) return args;
+  return [...args.slice(0, at - 1), '--unsetenv', EXPORTER_ENDPOINT, ...args.slice(at + 2)];
 }
 
 export function runArgs(env = process.env) {
@@ -280,13 +309,22 @@ async function main(env = process.env) {
   const resultDir = resultTransport === 'tool' ? mkdtempSync(join(runnerTemp, 'review-results-')) : '';
   if (resultDir) chmodSync(resultDir, 0o700);
 
-  const sandbox = sandboxArgs({ ...env, KSAI_TOKEN_DIR: tokenDir, KSAI_TOKEN_FILE: tokenFile, KSAI_REVIEW_RESULT_DIR: resultDir });
-  const probe = spawnSync('bwrap', [...sandbox, 'opencode', '--version'], { encoding: 'utf8' });
+  const relay = await startRelay({ env });
+  const sandbox = sandboxArgs({
+    ...env,
+    KSAI_TOKEN_DIR: tokenDir,
+    KSAI_TOKEN_FILE: tokenFile,
+    KSAI_REVIEW_RESULT_DIR: resultDir,
+    KSAI_OTEL_RELAY: relay?.url ?? '',
+  });
+  const quiet = withoutExporter(sandbox);
+  const probe = spawnSync('bwrap', [...quiet, 'opencode', '--version'], { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
   if (probe.status !== 0) {
     const said = `${probe.stdout ?? ''}${probe.stderr ?? ''}`.trim() || String(probe.error?.message ?? 'no output');
     console.log(
       `::error::opencode cannot start inside the sandbox on runner ${env.RUNNER_NAME ?? 'unknown'}, so no run was attempted: ${said}`,
     );
+    await relay?.close();
     if (resultDir) rmSync(resultDir, { recursive: true, force: true });
     return 1;
   }
@@ -331,7 +369,7 @@ async function main(env = process.env) {
       const submission = resultFile ? submitted({ file: resultFile, events: segment, kind: resultKind, candidateIds }) : null;
       const [result] = executionLog({ events: segment, exitCode: status, said: answer(segment) });
       const remaining = timeoutMs - (Date.now() - began);
-      const recorded = pipeline && status === 0 && remaining > 0 ? recordedCompletion(segment, (id) => readExport({ env, sandbox, id, timeoutMs: Math.min(15_000, remaining) })) : {};
+      const recorded = pipeline && status === 0 && remaining > 0 ? recordedCompletion(segment, (id) => readExport({ env, sandbox: quiet, id, timeoutMs: Math.min(15_000, remaining) })) : {};
       return { code: status, text: submission?.text ?? recorded.text ?? (env.FLOW === 'review' && !pipeline ? reviewAnswer(segment) : answer(segment)), submission, completion: recorded.completion, session_id: segment.find((event) => typeof event.sessionID === 'string')?.sessionID,
         failure: streamFailure(segment), timed_out: timedOut,
         usage: spending(segment).length ? { ...result.usage, cost_usd: result.total_cost_usd, num_turns: result.num_turns } : null };
@@ -379,11 +417,12 @@ async function main(env = process.env) {
 
   if (env.FLOW === 'review') {
     try {
-      Object.assign(env, recordChildren({ env, events, sandbox }));
+      Object.assign(env, recordChildren({ env, events, sandbox: quiet }));
     } catch {
       console.log('::warning::child sessions could not be recorded; their usage remains unmeasured');
     }
   }
+  await relay?.close();
   const reduced = spawnSync(process.execPath, [join(String(env.SCRIPTS ?? ''), 'kreview/opencode-log.mjs')], {
     env: { ...env, OPENCODE_EXIT: String(code), OPENCODE_EVENTS_FILE: events, OPENCODE_EXECUTION_FILE: execution },
     stdio: 'inherit',

@@ -1,4 +1,4 @@
-const EXPORT_TIMEOUT_MS = 10_000;
+import { attributes, pairs, post } from '../lib/otlp.mjs';
 
 const DELTA = 1;
 
@@ -16,17 +16,6 @@ const TOKEN_TYPES = Object.freeze([
   ['cacheRead', 'cache_read_tokens'],
   ['cacheCreation', 'cache_creation_tokens'],
 ]);
-
-export function pairs(text) {
-  const out = [];
-  for (const entry of String(text ?? '').split(',')) {
-    const at = entry.indexOf('=');
-    if (at <= 0) continue;
-    const key = entry.slice(0, at).trim();
-    if (key !== '') out.push([key, entry.slice(at + 1).trim()]);
-  }
-  return out;
-}
 
 function sum(name, points) {
   return { name, sum: { aggregationTemporality: DELTA, isMonotonic: true, dataPoints: points } };
@@ -58,7 +47,7 @@ export function payload({ tally = {}, cost = null, model = '', resource = '', at
   return {
     resourceMetrics: [
       {
-        resource: { attributes: withService.map(([key, value]) => ({ key, value: { stringValue: value } })) },
+        resource: { attributes: attributes(withService) },
         scopeMetrics: [{ scope: { name: SCOPE }, metrics }],
       },
     ],
@@ -80,24 +69,16 @@ export async function report({
   if (!auth || !endpoint) return null;
   const body = payload({ tally, cost, model, resource: env.OTEL_RESOURCE_ATTRIBUTES, at });
   if (!body) return null;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), EXPORT_TIMEOUT_MS);
-  try {
-    const response = await fetchImpl(`${endpoint}/v1/metrics`, {
-      method: 'POST',
-      signal: controller.signal,
-      headers: { 'content-type': 'application/json', ...Object.fromEntries(pairs(auth)) },
-      body: JSON.stringify(body),
-    });
-    if (!response.ok) {
-      console.log(`::warning::the metrics for this call were refused: HTTP ${response.status}`);
-      return false;
-    }
-    return true;
-  } catch (error) {
-    console.log(`::warning::the metrics for this call could not be exported: ${error?.message ?? error}`);
+  const outcome = await post({
+    endpoint,
+    signal: 'metrics',
+    headers: Object.fromEntries(pairs(auth)),
+    body: JSON.stringify(body),
+    fetchImpl,
+  });
+  if (!outcome.ok) {
+    console.log(`::warning::the metrics for this call could not be exported: ${outcome.said}`);
     return false;
-  } finally {
-    clearTimeout(timer);
   }
+  return true;
 }

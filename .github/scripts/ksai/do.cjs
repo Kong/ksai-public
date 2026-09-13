@@ -272,6 +272,7 @@ async function resolveDoPhase({
   checksFile = null,
   threadRootId = null,
   threadsFile = null,
+  admits = null,
   sleep = null,
   writeFile = (at, body) => require('node:fs').writeFileSync(at, body),
 } = {}) {
@@ -290,7 +291,13 @@ async function resolveDoPhase({
   if (target.error) return { error: target.error };
   const { ref, baseRef, reportedHeadSha } = target;
   const number = String(target.prNumber);
-  const conflicting = target.mergeable === false;
+  /*
+   * What the label behind this run admits, where one decided. A run admitted to the merge alone does not
+   * read the checks at all, nor the review thread a request was written in: either would put work in
+   * front of a model that whoever chose that label kept for themselves.
+   */
+  const does = admits ?? { builds: true, merges: true, reviews: true };
+  const conflicting = does.merges && target.mergeable === false;
 
   /*
    * The already-answered check runs BEFORE the evidence is read, and before anything is written.
@@ -315,7 +322,7 @@ async function resolveDoPhase({
   }
 
   const asked = String(guidance ?? '').trim();
-  const wantsThread = String(threadRootId ?? '').trim() !== '';
+  const wantsThread = does.reviews && String(threadRootId ?? '').trim() !== '';
   let thread = null;
   if (wantsThread) {
     if (!threadsFile) return { error: 'no path was given to write the review thread to' };
@@ -345,15 +352,18 @@ async function resolveDoPhase({
   /*
    * Required late rather than at module load, which is `resolvePhase`'s own reason for requiring this module
    * late: a caller that only ever plans should not pull in the checks reader, and every edge here is one-way.
+   * A run not admitted to the build does not load it either, and answers `null` - which the prompt renders
+   * as nothing having been read, rather than as nothing being red.
    */
-  const { readFailingChecks } = require('./checks.cjs');
-  const evidence = await readFailingChecks({
-    github: checksGithub ?? github,
-    core,
-    owner,
-    repo,
-    sha: reportedHeadSha,
-  });
+  const evidence = does.builds
+    ? await require('./checks.cjs').readFailingChecks({
+      github: checksGithub ?? github,
+      core,
+      owner,
+      repo,
+      sha: reportedHeadSha,
+    })
+    : null;
 
   /*
    * What counts as work: the requester's own words, or something red to fix.
@@ -365,19 +375,19 @@ async function resolveDoPhase({
    * An unreadable check list contributes nothing here, which is the honest reading: it is not evidence of a
    * failure, it is the absence of an answer. With no request text either, the caller's notice says so.
    */
-  const failing = evidence.failingTotal + evidence.statusesTotal;
+  const failing = evidence === null ? 0 : evidence.failingTotal + evidence.statusesTotal;
   if (!asked && failing === 0 && !thread && !conflicting) {
     core?.info?.(`#${number}: the request named no work and nothing is failing on ${reportedHeadSha}, so nothing runs.`);
     return { phase: 'do', ref, baseRef, prNumber: target.prNumber, pending: 0, conflicting: false };
   }
 
-  if (!checksFile) return { error: 'no path was given to write the CI evidence to' };
+  if (evidence !== null && !checksFile) return { error: 'no path was given to write the CI evidence to' };
   /*
    * Written whole, including the counts and the flags, because the prompt renderer states every bound it hit. A
    * caller handed only the failing list would have to re-derive what was withheld, and the renderer is the one
    * place that turns those numbers into sentences.
    */
-  writeFile(checksFile, JSON.stringify(evidence));
+  if (evidence !== null) writeFile(checksFile, JSON.stringify(evidence));
   if (thread) writeFile(threadsFile, JSON.stringify([thread]));
 
   core?.info?.(
@@ -393,7 +403,7 @@ async function resolveDoPhase({
     held: target.held,
     prNumber: target.prNumber,
     pending: 1,
-    checksFile,
+    checksFile: evidence === null ? '' : checksFile,
     threadsFile: thread ? threadsFile : '',
     conflicting,
   };

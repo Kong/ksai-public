@@ -720,7 +720,7 @@ inputs:
     required: false
     default: ""
   otel_endpoint:
-    description: "OTLP HTTP endpoint for cost/token metrics export; defaults to Datadog's direct OTLP intake, org-wide"
+    description: "OTLP HTTP endpoint for the metrics, and on the opencode engine the traces and log lines, this run exports; defaults to Datadog's direct OTLP intake, org-wide"
     required: false
     default: "https://otlp.datadoghq.com"
   otel_headers:
@@ -4146,6 +4146,12 @@ runs:
         KSAI_CHANNEL_WARN: ${{ steps.halt.outputs.warn || '0' }}
         OPENCODE_RESUME_SESSION: ${{ steps.plan_session.outputs.session_id }}
         SUBPROCESS_ENV_SCRUB: "1"
+        OTEL_EXPORTER_OTLP_ENDPOINT: ${{ inputs.otel_endpoint }}
+        OTEL_EXPORTER_OTLP_HEADERS: ${{ inputs.otel_headers }}
+        OTEL_RESOURCE_ATTRIBUTES: >-
+          team=${{ steps.telemetry.outputs.team }},repo=${{ github.repository }},workflow=${{
+          steps.telemetry.outputs.workflow }}${{ inputs.otel_extra_attributes != '' &&
+          format(',{0}', inputs.otel_extra_attributes) || '' }}
       working-directory: ${{ runner.temp }}
       run: node "${SCRIPTS}/kreview/opencode-run.mjs"
 
@@ -4595,6 +4601,12 @@ runs:
         KSAI_CHANNEL_WARN: ${{ steps.halt.outputs.warn || '0' }}
         OPENCODE_RESUME_SESSION: ${{ steps.plan_session.outputs.session_id }}
         SUBPROCESS_ENV_SCRUB: "1"
+        OTEL_EXPORTER_OTLP_ENDPOINT: ${{ inputs.otel_endpoint }}
+        OTEL_EXPORTER_OTLP_HEADERS: ${{ inputs.otel_headers }}
+        OTEL_RESOURCE_ATTRIBUTES: >-
+          team=${{ steps.telemetry.outputs.team }},repo=${{ github.repository }},workflow=${{
+          steps.telemetry.outputs.workflow }}${{ inputs.otel_extra_attributes != '' &&
+          format(',{0}', inputs.otel_extra_attributes) || '' }}
       working-directory: ${{ runner.temp }}
       run: node "${SCRIPTS}/kreview/opencode-run.mjs"
 

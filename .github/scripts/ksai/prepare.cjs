@@ -1338,7 +1338,7 @@ const PHASES = Object.freeze(
           branch: env.BRANCH,
           baseSha: env.BASE_SHA,
           request: env.GUIDANCE,
-          checks: readJson(env.CHECKS_FILE),
+          checks: String(env.CHECKS_FILE ?? '') === '' ? null : readJson(env.CHECKS_FILE),
           threads: String(env.THREADS_FILE ?? '') === '' ? null : readJson(env.THREADS_FILE),
           baseDiffRef: env.BASE_DIFF_REF,
           mergedRef: env.MERGED_REF,
