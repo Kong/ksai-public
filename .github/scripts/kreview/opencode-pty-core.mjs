@@ -1,6 +1,7 @@
 import { accessSync, constants, existsSync, lstatSync, realpathSync, statSync } from 'node:fs';
 import { basename, delimiter, dirname, isAbsolute, resolve } from 'node:path';
 import { Buffer } from 'node:buffer';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 export const PTY_BUFFER_BYTES = 65_536;
@@ -42,7 +43,30 @@ export const PTY_DENIED_ENV = Object.freeze([
   'KSAI_REVIEW_RESULT_KIND',
   'KSAI_TOKEN_DIR',
   'KSAI_TOKEN_FILE',
+  'BASH_ENV',
+  'BUN_OPTIONS',
+  'CLASSPATH',
+  'DYLD_INSERT_LIBRARIES',
+  'DYLD_LIBRARY_PATH',
+  'ENV',
+  'JAVA_TOOL_OPTIONS',
+  'JDK_JAVA_OPTIONS',
+  'LD_AUDIT',
+  'LD_LIBRARY_PATH',
+  'LD_PRELOAD',
+  'NODE_OPTIONS',
+  'NODE_PATH',
   'OTEL_EXPORTER_OTLP_HEADERS',
+  'PERL5LIB',
+  'PERL5OPT',
+  'PHPRC',
+  'PHP_INI_SCAN_DIR',
+  'PYTHONHOME',
+  'PYTHONPATH',
+  'PYTHONSTARTUP',
+  'RUBYLIB',
+  'RUBYOPT',
+  'ZDOTDIR',
 ]);
 
 const PHASES = new Set(['test', 'direct', 'step', 'fix', 'do']);
@@ -64,11 +88,32 @@ const EVAL_SHORT_FLAGS = Object.freeze({
   ruby: 'e',
 });
 const EVAL_LONG_FLAGS = Object.freeze({ bun: ['--eval', '--print'], node: ['--eval', '--print'] });
+const LOAD_SHORT_FLAGS = Object.freeze({ node: 'r', perl: 'mM', php: 'BEFRz', ruby: 'r' });
+const LOAD_LONG_FLAGS = Object.freeze({
+  bun: ['--preload'],
+  node: ['--experimental-loader', '--import', '--loader', '--require'],
+  php: ['--process-begin', '--process-code', '--process-end', '--process-file', '--zend-extension'],
+  ruby: ['--require'],
+});
+const CODE_SUBCOMMANDS = Object.freeze({
+  bun: new Set(['build', 'run', 'test', 'x']),
+  deno: new Set(['bench', 'compile', 'eval', 'jupyter', 'repl', 'run', 'serve', 'task', 'test']),
+});
+const PTY_RUNTIME_LOCK_SHA256 = 'a444206b053bd955482432dc5d275fa3acf567bd4c53234e8a66c5e71dd053bc';
 
 const executableName = (command) => command.replace(/\/+$/, '').split('/').at(-1).toLowerCase();
 const carriesEval = (args, short, long = []) => args.some((arg) =>
   long.some((flag) => arg === flag || arg.startsWith(`${flag}=`))
   || /^-[^-]/.test(arg) && short.split('').some((flag) => arg.slice(1).includes(flag)));
+
+const canonicalRuntimeLock = (value) => {
+  if (Array.isArray(value)) return value.map((one) => canonicalRuntimeLock(one));
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.keys(value)
+    .filter((key) => key !== 'funding' && key !== 'license')
+    .sort()
+    .map((key) => [key, canonicalRuntimeLock(value[key])]));
+};
 
 const simpleArgv = (line) => {
   const args = [];
@@ -112,12 +157,17 @@ export function canonicalCommand(command, args = []) {
   }
   const executable = executableName(command);
   const evalShort = EVAL_SHORT_FLAGS[executable] ?? (/^python(?:\d+(?:\.\d+)*)?$/.test(executable) ? 'cm' : '');
-  const subcommandWrapper = executable === 'deno' && args.includes('eval')
+  const loaderShort = LOAD_SHORT_FLAGS[executable] ?? '';
+  const codeSubcommands = Object.hasOwn(CODE_SUBCOMMANDS, executable) ? CODE_SUBCOMMANDS[executable] : null;
+  const subcommandWrapper = args.some((arg) => codeSubcommands?.has(arg))
     || ['npm', 'pnpm', 'yarn'].includes(executable) && args.some((arg) => ['exec', 'x', 'dlx'].includes(arg))
     || executable === 'mise' && args.some((arg) => ['exec', 'x'].includes(arg));
   if (COMMAND_WRAPPERS.has(executable) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(command)
     || executable === 'git' && args[0]?.startsWith('-')
-    || carriesEval(args, evalShort, EVAL_LONG_FLAGS[executable]) || subcommandWrapper) {
+    || carriesEval(args, evalShort, EVAL_LONG_FLAGS[executable])
+    || carriesEval(args, loaderShort, LOAD_LONG_FLAGS[executable])
+    || executable === 'node' && args.some((arg) => arg === '--run' || arg.startsWith('--run='))
+    || subcommandWrapper) {
     throw new Error('PTY commands must execute a direct non-wrapper program');
   }
   return values.map((value) => SAFE_WORD.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`).join(' ');
@@ -416,11 +466,14 @@ export function isolatedPtyCommand(command, args, workdir, linux = process.platf
   };
 }
 
-/** pinnedRuntime refuses a lockfile that no longer contains the dependency versions this adapter audited. */
+/** pinnedRuntime refuses a dependency graph that differs from the exact audited lock. */
 export function pinnedRuntime(manifest, lock) {
   const root = lock?.packages?.['']?.dependencies ?? {};
   const packages = lock?.packages ?? {};
-  return manifest?.dependencies?.['opencode-pty'] === '0.3.6' && root['opencode-pty'] === '0.3.6' &&
+  const serialized = JSON.stringify(canonicalRuntimeLock(lock));
+  const digest = typeof serialized === 'string' ? createHash('sha256').update(serialized).digest('hex') : '';
+  return digest === PTY_RUNTIME_LOCK_SHA256 &&
+    manifest?.dependencies?.['opencode-pty'] === '0.3.6' && root['opencode-pty'] === '0.3.6' &&
     packages['node_modules/opencode-pty']?.version === '0.3.6' &&
     packages['node_modules/bun-pty']?.version === '0.4.10' &&
     packages['node_modules/@opencode-ai/plugin']?.version === '1.18.30' &&
