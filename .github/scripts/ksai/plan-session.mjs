@@ -81,7 +81,7 @@ export function saveOpencode(env = process.env, run = spawnSync) {
  * it: a session already present is not imported twice and the id in the file may name another run's.
  */
 export function restoreOpencode(env = process.env, run = spawnSync) {
-  const outputs = { session_id: '', resumed: 'false', resume_args: '' };
+  const outputs = { session_id: '', resumed: 'false' };
   const from = String(env.DOWNLOAD_DIR ?? '').trim();
   const at = from ? opencodeAt(from) : '';
   if (!at || !existsSync(at)) return outputs;
@@ -96,7 +96,7 @@ export function restoreOpencode(env = process.env, run = spawnSync) {
     return outputs;
   }
   process.stdout.write(`note: resuming the planning session ${id}.\n`);
-  return { session_id: id, resumed: 'true', resume_args: '' };
+  return { session_id: id, resumed: 'true' };
 }
 
 export function save(env = process.env) {
@@ -132,7 +132,7 @@ export function save(env = process.env) {
 
 export function restore(env = process.env) {
   if (String(env.ENGINE ?? '') === 'opencode') return restoreOpencode(env);
-  const outputs = { session_id: '', resumed: 'false', resume_args: '' };
+  const outputs = { session_id: '', resumed: 'false' };
   const from = String(env.DOWNLOAD_DIR ?? '').trim();
   if (!from || !existsSync(from)) return outputs;
 
@@ -170,6 +170,6 @@ export function restore(env = process.env) {
   }
 
   process.stdout.write(`note: resuming the planning session ${id}.\n`);
-  return { session_id: id, resumed: 'true', resume_args: `--resume ${id} --fork-session` };
+  return { session_id: id, resumed: 'true' };
 }
 

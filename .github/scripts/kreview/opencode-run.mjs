@@ -41,7 +41,7 @@ import resultProtocol from './review-result.cjs';
 
 const { structuredSubmission, submitted } = resultProtocol;
 
-export { listed };
+export { listed, main };
 
 const MASKED_HOMES = ['.config', '.claude', '.opencode'];
 
@@ -342,7 +342,15 @@ export async function broker(at, env, write = writeToken) {
   }
 }
 
-async function main(env = process.env) {
+/**
+ * main runs the review. `probe` is injectable for one reason: the abort below has to be executable.
+ *
+ * It was asserted by reading this file for the error string, which survives disabling the branch -
+ * `if (false && probe.status !== 0)` left the whole suite green while a run proceeded past a
+ * sandbox that never started, every tool call died at exec, and the empty event stream was
+ * published as a reviewer that wrote nothing.
+ */
+async function main(env = process.env, { probe: probeWith = spawnSync } = {}) {
   const home = String(env.OPENCODE_HOME ?? '');
   for (const name of ['config', 'cache', 'state']) mkdirSync(join(home, name), { recursive: true });
   const events = String(env.EVENTS_FILE ?? '');
@@ -389,7 +397,7 @@ async function main(env = process.env) {
     KSAI_OTEL_RELAY: relay?.url ?? '',
   });
   const quiet = withoutExporter(sandbox);
-  const probe = spawnSync('bwrap', [...quiet, 'opencode', '--version'], { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
+  const probe = probeWith('bwrap', [...quiet, 'opencode', '--version'], { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
   if (probe.status !== 0) {
     const said = `${probe.stdout ?? ''}${probe.stderr ?? ''}`.trim() || String(probe.error?.message ?? 'no output');
     console.log(

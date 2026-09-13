@@ -7,7 +7,6 @@ export function main(env = process.env) {
   const out = restore(env);
   writeOutputs(env.GITHUB_OUTPUT, {
     resumed: out.resumed,
-    resume_args: out.resume_args,
     session_id: out.session_id,
   });
   return 0;

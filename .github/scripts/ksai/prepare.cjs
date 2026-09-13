@@ -390,15 +390,15 @@ async function selectTesterArm({ github, core, owner, repo, env }) {
         })
       : '');
 
+  // `command` and `route_surface` were read by the Claude tester alone and are published nowhere
+  // else, so they go with it rather than becoming outputs nothing can read
   const outputs = {
-    command: '',
     model: '',
     effort: '',
     mine: out.mine ? 'true' : 'false',
     notice,
     notice_kind: out.help ? 'guide' : '',
     route_source: out.routeSource ?? '',
-    route_surface: '',
     receipt: '',
     test_mode: testModeFor(out.dryRun, env.TEST_MODE),
   };
@@ -435,10 +435,8 @@ async function selectTesterArm({ github, core, owner, repo, env }) {
     const mode = out.dryRun ? ' as a dry run, starting no tester,' : '';
     notices.push(`Answering the \`${out.command}\` command${mode} at ${out.model} / ${out.effort}.`);
     Object.assign(outputs, {
-      command: out.command,
       model: out.model,
       effort: out.effort,
-      route_surface: out.routeSurface,
       receipt: out.receipt,
       test_mode: testModeFor(out.dryRun, env.TEST_MODE),
     });
@@ -1349,7 +1347,6 @@ function buildPrompt({ env }) {
     file: '',
     allowed_tools: '',
     disallowed_tools: '',
-    plugin_dir: '',
   };
 
   const phase = String(env.PHASE ?? '');
@@ -1426,7 +1423,6 @@ function buildPrompt({ env }) {
     file: at,
     allowed_tools: policy.allowed,
     disallowed_tools: policy.disallowed,
-    plugin_dir: '_ksai/plugins/ksai-implement',
   });
   return { outputs, failure: null };
 }

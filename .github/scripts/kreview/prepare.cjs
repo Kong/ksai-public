@@ -229,7 +229,6 @@ function buildReviewPrompt({ env }) {
     file: '',
     allowed_tools: '',
     disallowed_tools: '',
-    plugin_dir: '',
     result_transport: '',
     error: '',
   };
@@ -321,7 +320,6 @@ function buildReviewPrompt({ env }) {
     file: env.PROMPT_FILE,
     allowed_tools: policy.allowed,
     disallowed_tools: policy.disallowed,
-    plugin_dir: PLUGIN_DIR,
     result_transport: experiment.result_transport,
   });
   return { outputs, error: '' };

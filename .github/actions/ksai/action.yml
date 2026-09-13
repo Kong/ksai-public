@@ -1077,11 +1077,23 @@ runs:
           *) echo "::error::anthropic_auth must be one of federation, oidc-bearer, got: ${ANTHROPIC_AUTH}"; exit 1 ;;
         esac
 
+    # The live status summariser is the only reader now that no step here starts the Claude CLI, so
+    # the gate narrows to what that reader needs. Left as it was, a `publish: false` run - a shadow
+    # review - asked for an identity token nothing consumed.
+    #
+    # `continue-on-error` for the same reason. This mint fed the Claude CLI's own `apiKeyHelper`,
+    # where failing the job was right: no credential, no run. Its only reader now is a progress
+    # sentence, and `status-ask.mjs` answers null for an empty helper - so one 5xx from the token
+    # exchange took down step 15 of some 200 and the review never happened, to authenticate a
+    # narrator that treats absence as "say nothing". The deletion removed the reason and left the
+    # consequence.
     - name: Mint a gateway bearer token from the job's OIDC token
       id: gateway_token
+      continue-on-error: true
       if: >-
         ${{ steps.checkout_authz.outcome == 'success' && inputs.anthropic_auth == 'oidc-bearer' &&
-        inputs.dry_run == 'false' && inputs.flow != 'test' && inputs.flow != 'test-publish' }}
+        inputs.dry_run == 'false' && inputs.publish == 'true' &&
+        inputs.flow != 'test' && inputs.flow != 'test-publish' }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         BASE_URL: ${{ inputs.anthropic_base_url }}
@@ -1912,21 +1924,6 @@ runs:
         if-no-files-found: error
         overwrite: true
 
-    - name: Mint the tester's gateway bearer after environment setup
-      id: test_gateway_token
-      if: >-
-        ${{ steps.start_test_environments.outcome == 'success' &&
-        steps.select_test.outputs.test_mode == 'test' &&
-        inputs.dry_run == 'false' && steps.engine.outputs.name == 'claude' &&
-        inputs.anthropic_auth == 'oidc-bearer' }}
-      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
-      env:
-        BASE_URL: ${{ inputs.anthropic_base_url }}
-        SCRIPTS: ${{ runner.temp }}/ksai-scripts
-      with:
-        script: |
-          const { writeGatewayTokenHelper } = require(`${process.env.SCRIPTS}/ksai/gateway-token.cjs`);
-          core.setOutput('helper', writeGatewayTokenHelper({ core, audience: process.env.BASE_URL }));
 
     - name: Assemble the tester prompt
       if: >-
@@ -1967,7 +1964,6 @@ runs:
           const policy = toolPolicy('test');
           core.setOutput('allowed_tools', policy.allowed);
           core.setOutput('disallowed_tools', policy.disallowed);
-          core.setOutput('plugin_dir', '');
 
     - name: Resolve the issue this run is about
       id: subject
@@ -3897,125 +3893,6 @@ runs:
         MISSED_FILE: ${{ runner.temp }}/ksai-watchdog.missed
       run: node "${SCRIPTS}/ksai/watchdog-arm.mjs"
 
-    - name: Run the tester
-      if: >-
-        ${{ inputs.dry_run == 'false' && steps.test_tools.outcome == 'success' &&
-        steps.engine.outputs.name == 'claude' }}
-      id: tester
-      continue-on-error: true
-      uses: anthropics/claude-code-action/base-action@9cdae7f0d995e3ba7c33f226087fdf82a59cd520 # v1.0.223
-      env:
-        CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
-        CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
-        ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
-        ANTHROPIC_CUSTOM_HEADERS: ${{ steps.model_headers.outputs.value }}
-        CLAUDE_CODE_API_KEY_HELPER_TTL_MS: ${{ steps.test_gateway_token.outputs.helper != '' && '240000' || '' }}
-        CLAUDE_CODE_ENABLE_TELEMETRY: ${{ inputs.otel_headers != '' && '1' || '' }}
-        OTEL_METRICS_EXPORTER: ${{ inputs.otel_headers != '' && 'otlp' || '' }}
-        OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
-        OTEL_EXPORTER_OTLP_ENDPOINT: ${{ inputs.otel_endpoint }}
-        OTEL_EXPORTER_OTLP_HEADERS: ${{ inputs.otel_headers }}
-        OTEL_METRIC_EXPORT_INTERVAL: "5000"
-        OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: delta
-        OTEL_METRICS_INCLUDE_SESSION_ID: "false"
-        OTEL_METRICS_INCLUDE_ACCOUNT_UUID: "false"
-        OTEL_RESOURCE_ATTRIBUTES: >-
-          team=${{ steps.telemetry.outputs.team }},repo=${{ github.repository }},workflow=${{
-          steps.telemetry.outputs.workflow }},intent_command=${{ steps.select_test.outputs.command
-          }},intent_surface=${{ steps.select_test.outputs.route_surface }},intent_source=${{
-          steps.select_test.outputs.route_source }}${{ inputs.otel_extra_attributes != '' &&
-          format(',{0}', inputs.otel_extra_attributes) || '' }}
-      with:
-        prompt_file: ${{ steps.build_test.outputs.file }}
-        settings: |
-          {
-            ${{ steps.test_gateway_token.outputs.helper != '' && format('"apiKeyHelper": "{0}",', steps.test_gateway_token.outputs.helper) || '' }}
-            "hooks": {
-              "PreToolUse": [
-                {
-                  "matcher": "*",
-                  "hooks": [
-                    {
-                      "type": "command",
-                      "timeout": 5,
-                      "command": "node ${{ runner.temp }}/ksai-scripts/lib/channel-hook.mjs ${{ steps.channel.outputs.state_dir }} ${{ steps.watchdog.outputs.kill_at_ms || '0' }} ${{ steps.watchdog.outputs.armed_at_ms || '0' }} ${{ inputs.flow || 'unknown' }} ${{ steps.channel.outputs.nonce || 'none' }} ${{ steps.halt.outputs.warn || '0' }}"
-                    }
-                  ]
-                }
-              ],
-              "PostToolUse": [
-                {
-                  "matcher": "*",
-                  "hooks": [
-                    {
-                      "type": "command",
-                      "timeout": 5,
-                      "command": "node ${{ runner.temp }}/ksai-scripts/lib/channel-hook.mjs ${{ steps.channel.outputs.state_dir }} ${{ steps.watchdog.outputs.kill_at_ms || '0' }} ${{ steps.watchdog.outputs.armed_at_ms || '0' }} ${{ inputs.flow || 'unknown' }} ${{ steps.channel.outputs.nonce || 'none' }} ${{ steps.halt.outputs.warn || '0' }}"
-                    }
-                  ]
-                }
-              ],
-              "PostToolBatch": [
-                {
-                  "hooks": [
-                    {
-                      "type": "command",
-                      "timeout": 5,
-                      "command": "node ${{ runner.temp }}/ksai-scripts/lib/channel-hook.mjs ${{ steps.channel.outputs.state_dir }} ${{ steps.watchdog.outputs.kill_at_ms || '0' }} ${{ steps.watchdog.outputs.armed_at_ms || '0' }} ${{ inputs.flow || 'unknown' }} ${{ steps.channel.outputs.nonce || 'none' }} ${{ steps.halt.outputs.warn || '0' }}"
-                    }
-                  ]
-                }
-              ],
-              "SubagentStart": [
-                {
-                  "hooks": [
-                    {
-                      "type": "command",
-                      "timeout": 5,
-                      "command": "node ${{ runner.temp }}/ksai-scripts/lib/channel-hook.mjs ${{ steps.channel.outputs.state_dir }} ${{ steps.watchdog.outputs.kill_at_ms || '0' }} ${{ steps.watchdog.outputs.armed_at_ms || '0' }} ${{ inputs.flow || 'unknown' }} ${{ steps.channel.outputs.nonce || 'none' }} ${{ steps.halt.outputs.warn || '0' }}"
-                    }
-                  ]
-                }
-              ]
-            },
-            "permissions": {
-              "deny": [
-                "Read(//proc/**)",
-                "Read(/${{ runner.temp }}/**)",
-                "Read(~/.config/gh/**)",
-                "Read(~/.claude/**)"
-              ]
-            },
-            "sandbox": {
-              "enabled": true,
-              "failIfUnavailable": true,
-              "allowUnsandboxedCommands": false,
-              "filesystem": {
-                "denyRead": ["/proc", "${{ runner.temp }}", "~/.config/gh", "~/.claude"],
-                "denyWrite": [".git", ".ksai", "_ksai", "${{ runner.temp }}"]
-              },
-              "credentials": {
-                "envVars": [
-                  { "name": "OTEL_EXPORTER_OTLP_HEADERS", "mode": "deny" },
-                  { "name": "KSAI_OIDC_REQUEST_URL", "mode": "deny" },
-                  { "name": "KSAI_OIDC_REQUEST_TOKEN", "mode": "deny" }
-                ]
-              }
-            }
-          }
-        claude_args: >-
-          --max-turns ${{ inputs.max_turns || '60' }}
-          --effort ${{ steps.select_test.outputs.effort }}
-          --plugin-dir ${{ steps.test_tools.outputs.plugin_dir }}
-          --allowedTools "${{ steps.test_tools.outputs.allowed_tools }}"
-          --disallowedTools "${{ steps.test_tools.outputs.disallowed_tools }}"
-          ${{ steps.select_test.outputs.model != '' && format('--model {0}', steps.select_test.outputs.model) || '' }}
-        claude_code_oauth_token: ${{ steps.test_gateway_token.outputs.helper != '' && 'unused-the-apikeyhelper-answers-every-request' || '' }}
-        anthropic_federation_rule_id: ${{ steps.test_gateway_token.outputs.helper == '' && inputs.federation_rule_id || '' }}
-        anthropic_organization_id: ${{ steps.test_gateway_token.outputs.helper == '' && inputs.organization_id || '' }}
-        anthropic_service_account_id: ${{ steps.test_gateway_token.outputs.helper == '' && inputs.service_account_id || '' }}
-        anthropic_workspace_id: ${{ steps.test_gateway_token.outputs.helper == '' && inputs.workspace_id || '' }}
-        anthropic_oidc_audience: ${{ inputs.anthropic_base_url }}
 
     - name: Run the tester on opencode
       id: opencode_test
@@ -4063,11 +3940,11 @@ runs:
       if: >-
         ${{ always() && inputs.flow == 'test' &&
         steps.test_paths.outcome == 'success' &&
-        (steps.tester.outputs.execution_file || steps.opencode_test.outputs.execution_file) != '' }}
+        steps.opencode_test.outputs.execution_file != '' }}
       continue-on-error: true
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
-        EXECUTION_FILE: ${{ steps.tester.outputs.execution_file || steps.opencode_test.outputs.execution_file }}
+        EXECUTION_FILE: ${{ steps.opencode_test.outputs.execution_file }}
         SPEND_DIR: ${{ runner.temp }}/pr-test-spend
         MODEL: ${{ steps.select_test.outputs.model }}
         EFFORT: ${{ steps.select_test.outputs.effort }}
@@ -4162,11 +4039,11 @@ runs:
     - name: Upload the tester's execution log
       if: >-
         ${{ always() && inputs.flow == 'test' &&
-        (steps.tester.outputs.execution_file || steps.opencode_test.outputs.execution_file) != '' }}
+        steps.opencode_test.outputs.execution_file != '' }}
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: pr-test-execution-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index || 0 }}
-        path: ${{ steps.tester.outputs.execution_file || steps.opencode_test.outputs.execution_file }}
+        path: ${{ steps.opencode_test.outputs.execution_file }}
         retention-days: ${{ inputs.artifact_retention_days }}
         if-no-files-found: ignore
 
@@ -4336,141 +4213,6 @@ runs:
         echo "$!" > "$PID_FILE"
         echo "Courier watching ${REPO}#${THREAD_NUM} for what is written while this run works"
 
-    - name: Run Claude
-      id: claude
-      if: >-
-        ${{ inputs.dry_run == 'false' && steps.engine.outputs.name == 'claude' &&
-        ((inputs.flow == 'implement' && steps.write_comment.outputs.recorded == 'true' &&
-        steps.write_arm.outcome == 'success' && steps.build_implement.outcome == 'success') ||
-        (inputs.flow == 'review' && steps.build_review.outcome == 'success')) }}
-      uses: anthropics/claude-code-action/base-action@9cdae7f0d995e3ba7c33f226087fdf82a59cd520 # v1.0.223
-      env:
-        CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
-        CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
-        ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
-        ANTHROPIC_CUSTOM_HEADERS: ${{ steps.model_headers.outputs.value }}
-        CLAUDE_CODE_API_KEY_HELPER_TTL_MS: ${{ steps.gateway_token.outputs.helper != '' && '240000' || '' }}
-        CLAUDE_CODE_ENABLE_TELEMETRY: ${{ inputs.otel_headers != '' && '1' || '' }}
-        OTEL_METRICS_EXPORTER: ${{ inputs.otel_headers != '' && 'otlp' || '' }}
-        OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
-        OTEL_EXPORTER_OTLP_ENDPOINT: ${{ inputs.otel_endpoint }}
-        OTEL_EXPORTER_OTLP_HEADERS: ${{ inputs.otel_headers }}
-        OTEL_METRIC_EXPORT_INTERVAL: "5000"
-        OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: delta
-        OTEL_METRICS_INCLUDE_SESSION_ID: "false"
-        OTEL_METRICS_INCLUDE_ACCOUNT_UUID: "false"
-        OTEL_RESOURCE_ATTRIBUTES: >-
-          team=${{ steps.telemetry.outputs.team }},repo=${{ github.repository }},workflow=${{
-          steps.telemetry.outputs.workflow }},intent_command=${{ steps.select.outputs.command ||
-          steps.select_arm.outputs.command }},intent_surface=${{ steps.select.outputs.route_surface ||
-          steps.select_arm.outputs.route_surface }},intent_source=${{ steps.select.outputs.route_source ||
-          steps.select_arm.outputs.route_source }}${{ inputs.otel_extra_attributes != '' &&
-          format(',{0}', inputs.otel_extra_attributes) || '' }}
-      with:
-        prompt_file: ${{ steps.build_implement.outputs.file || steps.build_review.outputs.file }}
-        settings: |
-          {
-            ${{ steps.gateway_token.outputs.helper != '' && format('"apiKeyHelper": "{0}",', steps.gateway_token.outputs.helper) || '' }}
-            "hooks": {
-              "PreToolUse": [
-                {
-                  "matcher": "*",
-                  "hooks": [
-                    {
-                      "type": "command",
-                      "timeout": 5,
-                      "command": "node ${{ runner.temp }}/ksai-scripts/lib/channel-hook.mjs ${{ steps.channel.outputs.state_dir }} ${{ steps.watchdog.outputs.kill_at_ms || '0' }} ${{ steps.watchdog.outputs.armed_at_ms || '0' }} ${{ inputs.flow || 'unknown' }} ${{ steps.channel.outputs.nonce || 'none' }} ${{ steps.halt.outputs.warn || '0' }}"
-                    }
-                  ]
-                }
-              ],
-              "PostToolUse": [
-                {
-                  "matcher": "*",
-                  "hooks": [
-                    {
-                      "type": "command",
-                      "timeout": 5,
-                      "command": "node ${{ runner.temp }}/ksai-scripts/lib/channel-hook.mjs ${{ steps.channel.outputs.state_dir }} ${{ steps.watchdog.outputs.kill_at_ms || '0' }} ${{ steps.watchdog.outputs.armed_at_ms || '0' }} ${{ inputs.flow || 'unknown' }} ${{ steps.channel.outputs.nonce || 'none' }} ${{ steps.halt.outputs.warn || '0' }}"
-                    }
-                  ]
-                }
-              ],
-              "PostToolBatch": [
-                {
-                  "hooks": [
-                    {
-                      "type": "command",
-                      "timeout": 5,
-                      "command": "node ${{ runner.temp }}/ksai-scripts/lib/channel-hook.mjs ${{ steps.channel.outputs.state_dir }} ${{ steps.watchdog.outputs.kill_at_ms || '0' }} ${{ steps.watchdog.outputs.armed_at_ms || '0' }} ${{ inputs.flow || 'unknown' }} ${{ steps.channel.outputs.nonce || 'none' }} ${{ steps.halt.outputs.warn || '0' }}"
-                    }
-                  ]
-                }
-              ],
-              "SubagentStart": [
-                {
-                  "hooks": [
-                    {
-                      "type": "command",
-                      "timeout": 5,
-                      "command": "node ${{ runner.temp }}/ksai-scripts/lib/channel-hook.mjs ${{ steps.channel.outputs.state_dir }} ${{ steps.watchdog.outputs.kill_at_ms || '0' }} ${{ steps.watchdog.outputs.armed_at_ms || '0' }} ${{ inputs.flow || 'unknown' }} ${{ steps.channel.outputs.nonce || 'none' }} ${{ steps.halt.outputs.warn || '0' }}"
-                    }
-                  ]
-                }
-              ]
-            },
-            "permissions": {
-              "deny": [
-                "Read(//proc/**)",
-                "Read(/${{ runner.temp }}/**)",
-                "Read(//tmp/**)",
-                "Read(//run/**)",
-                "Read(~/.config/gh/**)",
-                "Read(~/.claude/**)"
-              ]
-            },
-            "sandbox": {
-              "enabled": true,
-              "network": { "allowAllUnixSockets": true },
-              "failIfUnavailable": true,
-              "allowUnsandboxedCommands": false,
-              "filesystem": {
-                "denyRead": [
-                  "/proc",
-                  "${{ runner.temp }}",
-                  "/tmp",
-                  "/run",
-                  "~/.config/gh",
-                  "~/.claude"
-                ],
-                "denyWrite": [
-                  "_ksai",
-                  "${{ runner.temp }}"
-                ]
-              },
-              "credentials": {
-                "envVars": [
-                  { "name": "OTEL_EXPORTER_OTLP_HEADERS", "mode": "deny" },
-                  { "name": "KSAI_OIDC_REQUEST_URL", "mode": "deny" },
-                  { "name": "KSAI_OIDC_REQUEST_TOKEN", "mode": "deny" }
-                ]
-              }
-            }
-          }
-        claude_args: >-
-          --model ${{ steps.write_arm.outputs.model || steps.select_arm.outputs.model }}
-          --effort ${{ steps.write_arm.outputs.effort || steps.select_arm.outputs.effort }}
-          --plugin-dir ${{ steps.build_implement.outputs.plugin_dir || steps.build_review.outputs.plugin_dir }}
-          --allowedTools "${{ steps.build_implement.outputs.allowed_tools || steps.build_review.outputs.allowed_tools }}"
-          --disallowedTools "${{ steps.build_implement.outputs.disallowed_tools || steps.build_review.outputs.disallowed_tools }}"
-          ${{ steps.plan_session.outputs.resume_args }}
-          ${{ inputs.extra_claude_args }}
-        claude_code_oauth_token: ${{ steps.gateway_token.outputs.helper != '' && 'unused-the-apikeyhelper-answers-every-request' || '' }}
-        anthropic_federation_rule_id: ${{ steps.gateway_token.outputs.helper == '' && inputs.federation_rule_id || '' }}
-        anthropic_organization_id: ${{ steps.gateway_token.outputs.helper == '' && inputs.organization_id || '' }}
-        anthropic_service_account_id: ${{ steps.gateway_token.outputs.helper == '' && inputs.service_account_id || '' }}
-        anthropic_workspace_id: ${{ steps.gateway_token.outputs.helper == '' && inputs.workspace_id || '' }}
-        anthropic_oidc_audience: ${{ inputs.anthropic_base_url }}
 
     - name: Run opencode
       id: opencode
@@ -4520,21 +4262,15 @@ runs:
     - name: Say how the model run ended, whichever engine ran it
       id: model_run
       if: >-
-        ${{ always() && (steps.claude.outcome != 'skipped' || steps.opencode.outcome != 'skipped' ||
-        steps.tester.outcome != 'skipped' || steps.opencode_test.outcome != 'skipped') }}
+        ${{ always() && (steps.opencode.outcome != 'skipped' ||
+        steps.opencode_test.outcome != 'skipped') }}
       shell: bash
       env:
-        CONCLUSION: >-
-          ${{ steps.claude.outputs.conclusion || steps.opencode.outputs.conclusion ||
-          steps.tester.outputs.conclusion || steps.opencode_test.outputs.conclusion }}
+        CONCLUSION: ${{ steps.opencode.outputs.conclusion || steps.opencode_test.outputs.conclusion }}
         OUTCOME: >-
-          ${{ steps.claude.outcome != 'skipped' && steps.claude.outcome ||
-          steps.opencode.outcome != 'skipped' && steps.opencode.outcome ||
-          steps.tester.outcome != 'skipped' && steps.tester.outcome ||
+          ${{ steps.opencode.outcome != 'skipped' && steps.opencode.outcome ||
           steps.opencode_test.outcome != 'skipped' && steps.opencode_test.outcome || '' }}
-        EXECUTION: >-
-          ${{ steps.claude.outputs.execution_file || steps.opencode.outputs.execution_file ||
-          steps.tester.outputs.execution_file || steps.opencode_test.outputs.execution_file }}
+        EXECUTION: ${{ steps.opencode.outputs.execution_file || steps.opencode_test.outputs.execution_file }}
       run: |
         set -euo pipefail
         echo "conclusion=${CONCLUSION}" >> "$GITHUB_OUTPUT"
@@ -4585,32 +4321,26 @@ runs:
 
     - name: Report the tool call timeline
       id: timeline
-      if: ${{ always() && (steps.claude.outcome != 'skipped' || steps.opencode.outcome != 'skipped') }}
+      if: ${{ always() && steps.opencode.outcome != 'skipped' }}
       shell: bash
       env:
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
-        ENGINE: ${{ steps.engine.outputs.name }}
         OPENCODE_EVENTS_FILE: ${{ steps.opencode.outputs.events_file }}
-        SESSION_ID: ${{ steps.claude.outputs.session_id }}
         STARTED_AT_MS: ${{ steps.plugin_ref.outputs.started_at_ms }}
         STOPPED_BECAUSE: ${{ steps.disarm_watchdog.outputs.reason }}
         TRANSCRIPT_SINCE: ${{ steps.watchdog.outputs.armed_at_ms }}
         TRIM_PREFIX: ${{ github.workspace }}
       run: |
         set -euo pipefail
+        # One arm, so no branch. The `else` arms called `ksai/progress.mjs` and `ksai/stages.mjs`,
+        # which read a transcript by `SESSION_ID` - a value this step stopped carrying when the
+        # Claude run that published it went, so they were broken rather than merely unreachable.
+        # `claude-run` still runs both modules itself, which is why they stay in the tree.
         echo "::group::What the run did"
-        if [ "${ENGINE}" = "opencode" ]; then
-          node "${SCRIPTS}/kreview/opencode-progress.mjs" || echo "The timeline could not be rendered"
-        else
-          node "${SCRIPTS}/ksai/progress.mjs" || echo "The timeline could not be rendered"
-        fi
+        node "${SCRIPTS}/kreview/opencode-progress.mjs" || echo "The timeline could not be rendered"
         echo "::endgroup::"
         echo "::group::Where the run spent its time"
-        if [ "${ENGINE}" = "opencode" ]; then
-          node "${SCRIPTS}/kreview/opencode-progress.mjs" --stages || echo "The stage timings could not be measured"
-        else
-          node "${SCRIPTS}/ksai/stages.mjs" || echo "The stage timings could not be measured"
-        fi
+        node "${SCRIPTS}/kreview/opencode-progress.mjs" --stages || echo "The stage timings could not be measured"
         echo "::endgroup::"
 
     - name: Report the run channel and status updates
@@ -4694,7 +4424,6 @@ runs:
       working-directory: ${{ runner.temp }}
       env:
         PR_NUMBER: ${{ steps.phase.outputs.pr_number || steps.open_draft.outputs.pr_number }}
-        SESSION_ID: ${{ steps.claude.outputs.session_id }}
         ENGINE: ${{ steps.engine.outputs.name }}
         OPENCODE_HOME: ${{ runner.temp }}/opencode-home
         XDG_DATA_HOME: ${{ runner.temp }}/opencode-home
