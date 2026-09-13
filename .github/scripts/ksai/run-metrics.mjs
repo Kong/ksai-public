@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 
 import { runMain } from '../lib/main.mjs';
-import { attributes, pairs, post, runAttributes } from '../lib/otlp.mjs';
+import { attributes, pairs, post, runAttributes, runSeries } from '../lib/otlp.mjs';
 
 const DELTA = 1;
 
@@ -88,11 +88,17 @@ const gauge = (name, points) => ({ name, gauge: { dataPoints: points } });
  *
  * The whole environment is passed on rather than the two values this function happens to read,
  * because `runAttributes` reads six more and a literal with two of them answers four attributes.
+ *
+ * **The naming goes on the data points as well as the resource.** Datadog's direct OTLP intake
+ * promotes a resource attribute to a span tag and not to a metric tag, so a metric naming its run
+ * only there arrives groupable by `service` alone - which is one undifferentiated series per
+ * metric, and the question this exists to answer is which arm is cheaper than which.
  */
 export function payload({ measured = null, cost = null, env = {}, at = Date.now() } = {}) {
   if (!measured) return null;
   const nanos = String(at * 1_000_000);
-  const stamps = { startTimeUnixNano: nanos, timeUnixNano: nanos };
+  const named = runSeries(env);
+  const stamps = { startTimeUnixNano: nanos, timeUnixNano: nanos, attributes: attributes(named) };
   const metrics = [];
   const spend = Number(String(cost ?? '').trim());
   if (String(cost ?? '').trim() !== '' && Number.isFinite(spend) && spend >= 0) {
@@ -110,7 +116,7 @@ export function payload({ measured = null, cost = null, env = {}, at = Date.now(
           .map((one) => ({
             ...stamps,
             asInt: whole(one.count),
-            attributes: attributes([['type', one.type]]),
+            attributes: attributes([...named, ['type', one.type]]),
           })),
       ),
     );

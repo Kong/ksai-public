@@ -3,6 +3,15 @@ const EXPORT_TIMEOUT_MS = 10_000;
 const SERVICE = 'ksai';
 
 /**
+ * PER_RUN names the attributes that identify one run rather than a class of them.
+ *
+ * They belong on a resource and on a span, and never on a metric's data points: a tag whose value
+ * is new every run is a new timeseries every run, which is what a trace is for and what a metric
+ * is billed for. `runSeries` is the same naming with these left out.
+ */
+const PER_RUN = Object.freeze(['run', 'attempt', 'job', 'job_index']);
+
+/**
  * pairs reads the `k=v,k=v` form that OTLP headers and resource attributes are both written in.
  *
  * The split is on the first `=` alone, because a resource attribute's value is allowed to hold one.
@@ -88,4 +97,17 @@ export async function post({
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * runSeries names the class of run a measurement belongs to, for a signal that is aggregated.
+ *
+ * Datadog's direct OTLP intake promotes a resource attribute to a span tag and not to a metric tag,
+ * so a metric that names its run only on the resource arrives groupable by nothing: measured on the
+ * live intake, a day of `ksai.run.step.count` grouped by any of these answered `N/A` while the same
+ * names were present on the traces from the same runs. The identity therefore goes on the data
+ * points too - **less whatever identifies one run**, which would be a new timeseries per review.
+ */
+export function runSeries(env = process.env) {
+  return runAttributes(env).filter(([key]) => !PER_RUN.includes(key));
 }
