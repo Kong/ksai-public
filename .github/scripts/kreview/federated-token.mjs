@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer';
-import { appendFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+
+import { writeOutputs } from '../lib/outputs.mjs';
 
 const GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:jwt-bearer';
 const BETAS = 'oauth-2025-04-20,oidc-federation-2026-04-01';
@@ -203,7 +204,20 @@ export async function exchange({ assertion, env, fetchImpl = fetch }) {
   if (!body.access_token) {
     throw new Error(`token exchange returned no access_token (request-id ${requestId})`);
   }
-  return { accessToken: body.access_token, expiresIn: Number(body.expires_in), requestId };
+  /*
+   * A life, refused here rather than carried as NaN. `Number(undefined)` is NaN, and every reader
+   * treats that as no expiry at all: the renewing plugin's `seed` rejects a non-finite one, holds
+   * nothing, and mints again on the very first request - the second-zero double exchange this
+   * endpoint answers 429 to. Both callers are covered by refusing at the source, the step that
+   * publishes the output and the `--print` the renewal reads through.
+   */
+  const expiresIn = Number(body.expires_in);
+  if (!Number.isFinite(expiresIn) || expiresIn <= 0) {
+    throw new Error(
+      `token exchange returned no usable expires_in, so nothing could hold this token (request-id ${requestId})`,
+    );
+  }
+  return { accessToken: body.access_token, expiresIn, requestId };
 }
 
 /**
@@ -298,13 +312,17 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       console.error(`minted a bearer for a caller, expires_in ${expiresIn}s (request-id ${requestId})`);
       process.exit(0);
     }
-    appendFileSync(process.env.GITHUB_ENV, `ANTHROPIC_FEDERATED_TOKEN=${accessToken}\n`);
-    // The renewing plugin holds this one first. Without the expiry it would mint again on the very
-    // first request, one second after this, which is what the exchange answered 429 to.
-    appendFileSync(
-      process.env.GITHUB_ENV,
-      `ANTHROPIC_FEDERATED_TOKEN_EXPIRES_AT=${Date.now() + Number(expiresIn) * 1000}\n`,
-    );
+    /*
+     * A step output, not `GITHUB_ENV`. Appended to the job environment the bearer reached every step
+     * below this one, so a step added there could spend without naming a credential and no reader of
+     * the manifest could see that it had one. Only the two runs name this output, so only they hold
+     * it. The expiry travels with it: the renewing plugin holds this token first, and without the
+     * expiry it mints again on the very first request, which is what the exchange answered 429 to.
+     */
+    writeOutputs(process.env.GITHUB_OUTPUT, {
+      token: accessToken,
+      expires_at: Date.now() + Number(expiresIn) * 1000,
+    });
     console.error(`minted a bearer for ${originOf(process.env)}, expires_in ${expiresIn}s (request-id ${requestId})`);
   } catch (error) {
     console.error(`::error::${error.message}`);

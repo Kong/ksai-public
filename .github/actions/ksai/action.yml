@@ -3943,6 +3943,8 @@ runs:
         OPENCODE_VERSION: ${{ steps.opencode_install.outputs.version }}
         ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
         ANTHROPIC_AUTH: ${{ inputs.anthropic_auth }}
+        ANTHROPIC_FEDERATED_TOKEN: ${{ steps.mint.outputs.token }}
+        ANTHROPIC_FEDERATED_TOKEN_EXPIRES_AT: ${{ steps.mint.outputs.expires_at }}
         ANTHROPIC_FEDERATION_RULE_ID: ${{ inputs.federation_rule_id }}
         ANTHROPIC_ORGANIZATION_ID: ${{ inputs.organization_id }}
         ANTHROPIC_SERVICE_ACCOUNT_ID: ${{ inputs.service_account_id }}
@@ -4266,6 +4268,8 @@ runs:
         OPENCODE_SDK_ROOT: ${{ runner.temp }}/ksai-opencode-sdk
         ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
         ANTHROPIC_AUTH: ${{ inputs.anthropic_auth }}
+        ANTHROPIC_FEDERATED_TOKEN: ${{ steps.mint.outputs.token }}
+        ANTHROPIC_FEDERATED_TOKEN_EXPIRES_AT: ${{ steps.mint.outputs.expires_at }}
         ANTHROPIC_FEDERATION_RULE_ID: ${{ inputs.federation_rule_id }}
         ANTHROPIC_ORGANIZATION_ID: ${{ inputs.organization_id }}
         ANTHROPIC_SERVICE_ACCOUNT_ID: ${{ inputs.service_account_id }}
