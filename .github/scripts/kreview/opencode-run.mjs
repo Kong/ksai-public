@@ -32,6 +32,7 @@ import {
   spending,
   validateProviderPolicyConfig,
   validateProviderPolicyVersion,
+  MASKED_HOMES,
 } from '../lib/opencode.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
 import { bearer, heldExpiry } from '../lib/opencode-token.mjs';
@@ -43,8 +44,6 @@ import resultProtocol from './review-result.cjs';
 const { structuredSubmission, submitted } = resultProtocol;
 
 export { listed, main };
-
-const MASKED_HOMES = ['.config', '.claude', '.opencode'];
 
 /**
  * DENIED_CREDENTIALS names what a tool call may not read, and it is a declaration rather than a copy.
@@ -496,11 +495,16 @@ export function runtimeSummary(invocations) {
   };
 }
 
-export function scopeBinds(env = process.env, exists = existsSync) {
-  const scopes = sandboxScopes(env, exists);
+export function scopeBinds(env = process.env, exists = existsSync, real = realpathSync) {
+  const scopes = sandboxScopes(env, exists, real);
   for (const at of scopes.missing) {
     console.log(
       `::warning::the sandbox scope ${at} is not on this runner, so nothing is bound there and no tool may reach it`,
+    );
+  }
+  for (const at of scopes.masked) {
+    console.log(
+      `::warning::the sandbox scope ${at} names a masked credential store, so it is refused rather than bound back`,
     );
   }
   const args = [];

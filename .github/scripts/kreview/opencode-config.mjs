@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import modelCatalog from '../lib/model-catalog.json' with { type: 'json' };
@@ -77,7 +77,7 @@ for (const { name, key, granted } of stated ? mergedDenials(policy) : phaseDenia
     `::warning::${name} is denied and ${granted.join(' and ')} granted, and opencode gates them all behind one ${key} key - so the denial is dropped and ${name} is reachable here where the Claude engine refuses it`,
   );
 }
-const scopes = sandboxScopes(process.env, existsSync).allow;
+const scopes = sandboxScopes(process.env, existsSync, realpathSync).allow;
 const permission = stated ? opencodePermissions(policy, scopes) : phasePermissions(phase, scopes);
 if (!permission) {
   console.log(

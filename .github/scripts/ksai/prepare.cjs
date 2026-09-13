@@ -390,15 +390,18 @@ async function selectTesterArm({ github, core, owner, repo, env }) {
         })
       : '');
 
-  // `command` and `route_surface` were read by the Claude tester alone and are published nowhere
-  // else, so they go with it rather than becoming outputs nothing can read
+  // `command` and `route_surface` lost their only reader with the Claude tester and were dropped
+  // rather than left unread. The tester's telemetry reads them now, so they are published again -
+  // without them a test run bills with no command and no surface to group it by
   const outputs = {
     model: '',
     effort: '',
     mine: out.mine ? 'true' : 'false',
     notice,
     notice_kind: out.help ? 'guide' : '',
+    command: out.command ?? '',
     route_source: out.routeSource ?? '',
+    route_surface: out.routeSurface ?? '',
     receipt: '',
     test_mode: testModeFor(out.dryRun, env.TEST_MODE),
   };

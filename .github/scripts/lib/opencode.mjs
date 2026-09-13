@@ -80,17 +80,51 @@ export function expandHome(value, env = process.env) {
 
 const within = (at, root) => at === root || at.startsWith(`${root.replace(/\/+$/, '')}/`);
 
+/** pointsAt answers where a path really leads, or the path itself where nothing is there to follow. */
+function pointsAt(at, real) {
+  try {
+    return String(real(at));
+  } catch {
+    return at;
+  }
+}
+
+/**
+ * MASKED_HOMES names the credential stores the sandbox replaces with an empty tmpfs.
+ *
+ * It lives here, beside the scope resolver that has to refuse them, because it lived beside the
+ * masks alone and nothing tied the two lists together: a caller-supplied write scope was bound
+ * *after* the masks, last match wins, and `~` reopened every store the masks exist to hide.
+ */
+export const MASKED_HOMES = Object.freeze(['.config', '.claude', '.opencode']);
+
+/** maskedHomes answers the absolute credential stores this run masks, for the home it runs under. */
+export function maskedHomes(env) {
+  const home = String(env.HOME ?? '').trim();
+  return home ? MASKED_HOMES.map((name) => join(home, name)) : [];
+}
+
 /**
  * sandboxScopes answers the paths a caller named, resolved the way both the sandbox and the tool policy read them.
  *
  * `exists` is required rather than defaulted: a scope the runner does not hold is bound by neither
  * side, and a default answering yes would grant what no mount backs.
  *
+ * `real` is required for the reason `exists` is: a default that did not follow a link would make
+ * the refusal below lexical again, silently, for any caller that forgot to pass one.
+ *
+ * `real` is what makes the refusal of a masked home more than lexical. `resolve` and `expandHome`
+ * normalise text and nothing else, so a symlink planted on the runner and named by the caller reads
+ * as an ordinary path here - while bwrap resolves a bind source on the host, mounting the store's
+ * contents at the alias. Both the name and what it points at are checked, and a path that resolves
+ * to nothing keeps its lexical form, since the missing-scope filter below is what drops it.
+ *
  * @param {Record<string, string | undefined>} env
  * @param {(at: string) => boolean} exists
- * @returns {{allow: string[], deny: string[], missing: string[]}}
+ * @param {(at: string) => string} real
+ * @returns {{allow: string[], deny: string[], missing: string[], masked: string[]}}
  */
-export function sandboxScopes(env, exists) {
+export function sandboxScopes(env, exists, real) {
   const workspace = String(env.GITHUB_WORKSPACE ?? '').trim() || '/';
   const staged = [
     String(env.RUNNER_TEMP ?? ''),
@@ -106,16 +140,33 @@ export function sandboxScopes(env, exists) {
     .map((one) => resolve(workspace, expandHome(one, env)));
   /** @type {string[]} */
   const missing = [];
+  /** @type {string[]} */
+  const masked = [];
+  /*
+   * The stores are followed too, or a resolved scope is compared against an unresolved root and
+   * matches nothing - `/var` is itself a link to `/private/var` on macOS, and a runner's home can
+   * sit behind one just as easily. `pointsAt` answers the lexical path where nothing resolves, so
+   * this covers a store that is not on the runner without naming that case twice.
+   */
+  const hidden = maskedHomes(env).map((one) => pointsAt(one, real));
   const scoped = (value) =>
     listed(value)
       .map((one) => resolve(workspace, expandHome(one, env)))
       .filter((at) => !staged.some((root) => within(root, at) || within(at, root)))
       .filter((at) => {
+        // A scope over a masked home is refused the way one over the trusted checkout is, and for
+        // the same reason: the bind lands after the mask, so granting it hands back the credentials
+        const over = (one) => hidden.some((root) => within(root, one) || within(one, root));
+        if (!over(at) && !over(pointsAt(at, real))) return true;
+        masked.push(at);
+        return false;
+      })
+      .filter((at) => {
         if (exists(at)) return true;
         missing.push(at);
         return false;
       });
-  return { allow: scoped(env.SANDBOX_ALLOW_WRITE), deny: scoped(env.SANDBOX_DENY_WRITE), missing };
+  return { allow: scoped(env.SANDBOX_ALLOW_WRITE), deny: scoped(env.SANDBOX_DENY_WRITE), missing, masked };
 }
 
 /**

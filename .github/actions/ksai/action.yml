@@ -3966,7 +3966,8 @@ runs:
         OTEL_EXPORTER_OTLP_HEADERS: ${{ inputs.otel_headers }}
         OTEL_RESOURCE_ATTRIBUTES: >-
           team=${{ steps.telemetry.outputs.team }},repo=${{ github.repository }},workflow=${{
-          steps.telemetry.outputs.workflow }}${{ inputs.otel_extra_attributes != '' &&
+          steps.telemetry.outputs.workflow }},intent_command=${{ steps.select_test.outputs.command }},intent_surface=${{
+          steps.select_test.outputs.route_surface }},intent_source=${{ steps.select_test.outputs.route_source }}${{ inputs.otel_extra_attributes != '' &&
           format(',{0}', inputs.otel_extra_attributes) || '' }}
       working-directory: ${{ runner.temp }}
       run: node "${SCRIPTS}/kreview/opencode-run.mjs"
@@ -4291,7 +4292,8 @@ runs:
         OTEL_EXPORTER_OTLP_HEADERS: ${{ inputs.otel_headers }}
         OTEL_RESOURCE_ATTRIBUTES: >-
           team=${{ steps.telemetry.outputs.team }},repo=${{ github.repository }},workflow=${{
-          steps.telemetry.outputs.workflow }}${{ inputs.otel_extra_attributes != '' &&
+          steps.telemetry.outputs.workflow }},intent_command=${{ steps.select.outputs.command || steps.select_arm.outputs.command }},intent_surface=${{
+          steps.select.outputs.route_surface || steps.select_arm.outputs.route_surface }},intent_source=${{ steps.select.outputs.route_source || steps.select_arm.outputs.route_source }}${{ inputs.otel_extra_attributes != '' &&
           format(',{0}', inputs.otel_extra_attributes) || '' }}
         OPENCODE_LSP_TOOL: ${{ steps.build_review.outputs.lsp_tool }}
         OPENCODE_LSP_MEASURE: ${{ steps.build_review.outputs.lsp_measure }}
