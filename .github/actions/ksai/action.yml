@@ -4146,6 +4146,7 @@ runs:
         KSAI_CHANNEL_WARN: ${{ steps.halt.outputs.warn || '0' }}
         OPENCODE_RESUME_SESSION: ${{ steps.plan_session.outputs.session_id }}
         SUBPROCESS_ENV_SCRUB: "1"
+        KSAI_JOB_INDEX: ${{ strategy.job-index || 0 }}
         OTEL_EXPORTER_OTLP_ENDPOINT: ${{ inputs.otel_endpoint }}
         OTEL_EXPORTER_OTLP_HEADERS: ${{ inputs.otel_headers }}
         OTEL_RESOURCE_ATTRIBUTES: >-
@@ -4601,6 +4602,7 @@ runs:
         KSAI_CHANNEL_WARN: ${{ steps.halt.outputs.warn || '0' }}
         OPENCODE_RESUME_SESSION: ${{ steps.plan_session.outputs.session_id }}
         SUBPROCESS_ENV_SCRUB: "1"
+        KSAI_JOB_INDEX: ${{ strategy.job-index || 0 }}
         OTEL_EXPORTER_OTLP_ENDPOINT: ${{ inputs.otel_endpoint }}
         OTEL_EXPORTER_OTLP_HEADERS: ${{ inputs.otel_headers }}
         OTEL_RESOURCE_ATTRIBUTES: >-
@@ -5923,6 +5925,33 @@ runs:
             env: process.env,
           });
           for (const line of notices) core.info(line);
+
+    - name: Report what this run spent as metrics
+      if: >-
+        ${{ always() && steps.engine.outputs.name == 'opencode' && inputs.otel_headers != '' &&
+        steps.model_run.outputs.execution_file != '' }}
+      continue-on-error: true
+      shell: bash
+      env:
+        EXECUTION_FILE: ${{ steps.model_run.outputs.execution_file }}
+        ENGINE: ${{ steps.engine.outputs.name }}
+        FLOW: ${{ inputs.flow }}
+        KSAI_JOB_INDEX: ${{ strategy.job-index || 0 }}
+        MODEL: ${{ steps.write_arm.outputs.model || steps.select_test.outputs.model || steps.select_arm.outputs.model }}
+        VARIANT: ${{ steps.write_arm.outputs.effort || steps.select_test.outputs.effort || steps.select_arm.outputs.effort }}
+        SPEND_COST: >-
+          ${{ steps.write_report.outputs.spend_usd || steps.write_progress.outputs.spend_usd ||
+          steps.write_comment.outputs.spend_usd || steps.eval_record.outputs.spend_usd ||
+          steps.test_artifact.outputs.spend_usd }}
+        OTEL_EXPORTER_OTLP_ENDPOINT: ${{ inputs.otel_endpoint }}
+        OTEL_EXPORTER_OTLP_HEADERS: ${{ inputs.otel_headers }}
+        OTEL_RESOURCE_ATTRIBUTES: >-
+          team=${{ steps.telemetry.outputs.team }},repo=${{ github.repository }},workflow=${{
+          steps.telemetry.outputs.workflow }}${{ inputs.otel_extra_attributes != '' &&
+          format(',{0}', inputs.otel_extra_attributes) || '' }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      working-directory: ${{ runner.temp }}
+      run: node "${SCRIPTS}/ksai/run-metrics.mjs"
 
     - name: Report what this run cost
       if: >-

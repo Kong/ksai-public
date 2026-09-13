@@ -2,14 +2,12 @@ import { createServer } from 'node:http';
 import { gunzipSync, inflateSync } from 'node:zlib';
 
 import { collectSecrets, scrub } from '../lib/opencode.mjs';
-import { attributes, pairs, post } from '../lib/otlp.mjs';
+import { attributes, pairs, post, runAttributes } from '../lib/otlp.mjs';
 import { encoded } from './otlp-protobuf.mjs';
 
 const SIGNALS = Object.freeze({ '/v1/traces': 'traces', '/v1/logs': 'logs' });
 
 const RESOURCE_KEYS = Object.freeze(['resourceSpans', 'resourceLogs']);
-
-const SERVICE = 'ksai';
 
 const CONTENT_TYPE = 'application/x-protobuf';
 
@@ -60,31 +58,6 @@ export function target(env = process.env) {
   const auth = String(env.OTEL_EXPORTER_OTLP_HEADERS ?? '').trim();
   if (!endpoint || !auth) return null;
   return { endpoint, headers: Object.fromEntries(pairs(auth)) };
-}
-
-/**
- * runAttributes names the run a record belongs to, and the trusted side is the only thing that names it.
- *
- * The same values are handed to the agent as `OTEL_RESOURCE_ATTRIBUTES` so its own exporter stamps
- * them, and that is a convenience rather than the guarantee. `service.name` is here because Datadog
- * routes on it: a sandbox that could name it could write an ERROR log into any service in the org.
- */
-export function runAttributes(env = process.env) {
-  const named = new Map();
-  for (const [key, value] of pairs(env.OTEL_RESOURCE_ATTRIBUTES)) named.set(key, value);
-  if (!named.has('service.name')) named.set('service.name', SERVICE);
-  for (const [key, value] of [
-    ['repo', env.GITHUB_REPOSITORY],
-    ['engine', 'opencode'],
-    ['flow', env.FLOW],
-    ['model', env.MODEL],
-    ['effort', env.VARIANT],
-    ['run', env.GITHUB_RUN_ID],
-    ['attempt', env.GITHUB_RUN_ATTEMPT],
-  ]) {
-    named.set(key, String(value ?? '').trim());
-  }
-  return [...named].filter(([, value]) => String(value ?? '').trim() !== '');
 }
 
 /**

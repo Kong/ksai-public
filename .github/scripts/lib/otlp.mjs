@@ -1,5 +1,7 @@
 const EXPORT_TIMEOUT_MS = 10_000;
 
+const SERVICE = 'ksai';
+
 /**
  * pairs reads the `k=v,k=v` form that OTLP headers and resource attributes are both written in.
  *
@@ -14,6 +16,38 @@ export function pairs(text) {
     if (key !== '') out.push([key, entry.slice(at + 1).trim()]);
   }
   return out;
+}
+
+/**
+ * runAttributes names the run a record belongs to, and the trusted side is the only thing that names it.
+ *
+ * One implementation, because a trace and a metric that name the same run differently cannot be
+ * read together. It is handed an environment, never a literal holding the two values a caller
+ * happens to think of: six of these come off names a step does not spell, and a literal missing
+ * them answers four attributes rather than ten.
+ *
+ * `job` and `job_index` are here because two legs of one run otherwise collapse into one series -
+ * the same reason the control plane's spend attempt names both. `service.name` is here because Datadog routes on it: anything that could name it
+ * could write a record into any service in the organisation.
+ */
+export function runAttributes(env = process.env) {
+  const named = new Map();
+  for (const [key, value] of pairs(env.OTEL_RESOURCE_ATTRIBUTES)) named.set(key, value);
+  if (!named.has('service.name')) named.set('service.name', SERVICE);
+  for (const [key, value] of [
+    ['repo', env.GITHUB_REPOSITORY],
+    ['engine', String(env.ENGINE ?? '').trim() || 'opencode'],
+    ['flow', env.FLOW],
+    ['model', env.MODEL],
+    ['effort', env.VARIANT],
+    ['run', env.GITHUB_RUN_ID],
+    ['attempt', env.GITHUB_RUN_ATTEMPT],
+    ['job', env.GITHUB_JOB],
+    ['job_index', env.KSAI_JOB_INDEX],
+  ]) {
+    named.set(key, String(value ?? '').trim());
+  }
+  return [...named].filter(([, value]) => String(value ?? '').trim() !== '');
 }
 
 /** attributes renders `k=v` pairs as the attribute list every OTLP/JSON signal carries. */
