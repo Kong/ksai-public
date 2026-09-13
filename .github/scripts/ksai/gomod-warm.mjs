@@ -7,6 +7,25 @@ const require = createRequire(import.meta.url);
 const { MODULE_FILE, SUM_FILE, gitConfigEnv, goPrivate, parseTokens, recase, warn } = require('./gomod.cjs');
 const { renderGoNote, spliceGoNote } = require('./prompt.cjs');
 
+const NULL_DEVICE = process.platform === 'win32' ? 'NUL' : '/dev/null';
+
+/**
+ * NO_AMBIENT_GIT closes the credential paths `GIT_CONFIG_COUNT` does not.
+ *
+ * Counting the injected keys closes only that mechanism. A `~/.gitconfig` or `/etc/gitconfig`
+ * carrying a token in an `insteadOf` rewrite is still read, and `HOME` is inherited, so the public
+ * path - the one that warns it uses no private-module credential - could spend one anyway. The list
+ * is the one `trusted-git.cjs` already keeps for the same reason.
+ */
+const NO_AMBIENT_GIT = Object.freeze({
+  GIT_CONFIG_GLOBAL: NULL_DEVICE,
+  GIT_CONFIG_NOSYSTEM: '1',
+  GIT_TERMINAL_PROMPT: '0',
+  GIT_ASKPASS: 'false',
+  SSH_ASKPASS: 'false',
+  GIT_SSH_COMMAND: 'false',
+});
+
 const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 
 const WARM_BUDGET_MS = 15 * 60 * 1000;
@@ -25,6 +44,24 @@ const MODULE_READ_BUDGET = 4 * 1024 * 1024;
  * module that exists while still being a value rather than an absence.
  */
 const NOTHING_PRIVATE = 'none.invalid';
+
+/**
+ * FETCH_TRUST names the two settings that decide whether a download is checked at all.
+ *
+ * Both were inherited from the runner. `GOSUMDB=off` short-circuits the checksum check before the
+ * `GONOSUMDB` prefix list is consulted, so it turns verification off for every module rather than
+ * for a matching owner, and `GOINSECURE='*'` drops the TLS check. Neither has a use in warming a
+ * cache, and together they let a public repository's download arrive unverified from whatever git
+ * answered, into a cache the model reads and whose transcript is uploaded.
+ *
+ * `GOPROXY` is deliberately not here: it decides where a module comes from, a corporate mirror is a
+ * legitimate reason to set it, and a redirected fetch is still checked against the sum database.
+ *
+ * `GOINSECURE` is cleared to a name rather than to nothing, for the reason `GOPRIVATE` is: an empty
+ * value is not a cleared one, and `Getenv` falls through to the `go env -w` user file - so a runner
+ * bootstrapped with `go env -w GOINSECURE='*'` kept the TLS check off through an empty override.
+ */
+const FETCH_TRUST = Object.freeze({ GOSUMDB: 'sum.golang.org', GOINSECURE: NOTHING_PRIVATE });
 
 function tellThePrompt(at, note) {
   let prompt;
@@ -187,7 +224,14 @@ export function main(
     ...(pairs.length > 0 || readable
       ? { GOPRIVATE: privateTo, GONOPROXY: privateTo, GONOSUMDB: privateTo }
       : {}),
-    ...(readable ? { GOAUTH: 'off' } : {}),
+    /*
+     * The public path only, like the credential work below it. A private run with no tokens writes
+     * no `GONOSUMDB` exemption, so forcing the public sum database there asks it to verify private
+     * modules against a log that has never seen them - and a runner set to `GOSUMDB=off` because
+     * its egress reaches a corporate proxy alone would lose every download it used to make. That
+     * configuration is the best answer available on a path this step cannot authenticate itself.
+     */
+    ...(readable ? { GOAUTH: 'off', ...FETCH_TRUST, ...NO_AMBIENT_GIT } : {}),
   };
 
   const failed = [];
