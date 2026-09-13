@@ -700,6 +700,13 @@ jobs:
       classifier_duration: ${{ steps.gate.outputs.classifier_duration }}
       model: ${{ steps.record.outputs.model || steps.dials.outputs.model }}
       effort: ${{ steps.record.outputs.effort || steps.dials.outputs.effort }}
+      shadow_percent: ${{ steps.dials.outputs.shadow_percent }}
+      allowed_models: ${{ steps.dials.outputs.allowed_models }}
+      max_effort: ${{ steps.dials.outputs.max_effort }}
+      min_effort: ${{ steps.dials.outputs.min_effort }}
+      job_timeout_minutes: ${{ steps.dials.outputs.job_timeout_minutes }}
+      max_consecutive_tool_failures: ${{ steps.dials.outputs.max_consecutive_tool_failures }}
+      max_repeated_tool_calls: ${{ steps.dials.outputs.max_repeated_tool_calls }}
       dials_arm: ${{ steps.record.outputs.model == '' && steps.dials.outputs.arm || '' }}
       record_command: ${{ steps.record.outputs.command }}
       record_requester: ${{ steps.record.outputs.requester }}
@@ -788,6 +795,13 @@ jobs:
           endpoint: ${{ inputs.fleet_dials_endpoint }}
           model: ${{ inputs.model }}
           effort: ${{ inputs.effort }}
+          shadow_percent: ${{ inputs.shadow_percent }}
+          allowed_models: ${{ inputs.allowed_models }}
+          max_effort: ${{ inputs.max_effort }}
+          min_effort: ${{ inputs.min_effort }}
+          job_timeout_minutes: ${{ inputs.job_timeout_minutes }}
+          max_consecutive_tool_failures: ${{ inputs.max_consecutive_tool_failures }}
+          max_repeated_tool_calls: ${{ inputs.max_repeated_tool_calls }}
 
       - name: Read the dispatch record
         id: record
@@ -912,7 +926,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-help
           repository: Kong/ksai-public
-          ref: v3.70.2
+          ref: v3.71.0
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -999,7 +1013,7 @@ jobs:
     outputs:
       bot_login: ${{ inputs.push_as_app && format('{0}[bot]', steps.post-token.outputs.app-slug) || 'github-actions[bot]' }}
     runs-on: ${{ startsWith(inputs.runs_on, '[') && fromJSON(inputs.runs_on) || inputs.runs_on }}
-    timeout-minutes: ${{ inputs.job_timeout_minutes }}
+    timeout-minutes: ${{ fromJSON(needs.gate.outputs.job_timeout_minutes || format('{0}', inputs.job_timeout_minutes)) }}
     environment: ${{ inputs.job_environment }}
     permissions:
       contents: read
@@ -1066,9 +1080,9 @@ jobs:
           service_account_id: ${{ inputs.service_account_id }}
           workspace_id: ${{ inputs.workspace_id }}
           artifact_retention_days: ${{ inputs.artifact_retention_days }}
-          job_timeout_minutes: ${{ inputs.job_timeout_minutes }}
-          max_consecutive_tool_failures: ${{ inputs.max_consecutive_tool_failures }}
-          max_repeated_tool_calls: ${{ inputs.max_repeated_tool_calls }}
+          job_timeout_minutes: ${{ needs.gate.outputs.job_timeout_minutes || inputs.job_timeout_minutes }}
+          max_consecutive_tool_failures: ${{ needs.gate.outputs.max_consecutive_tool_failures || inputs.max_consecutive_tool_failures }}
+          max_repeated_tool_calls: ${{ needs.gate.outputs.max_repeated_tool_calls || inputs.max_repeated_tool_calls }}
           classifier_model_used: ${{ needs.gate.outputs.classifier_model }}
           verdict: ${{ needs.gate.outputs.verdict }}
           classifier_cost: ${{ needs.gate.outputs.classifier_cost }}
@@ -1081,9 +1095,9 @@ jobs:
           dials_arm: ${{ needs.gate.outputs.dials_arm }}
           fleet_dials_endpoint: ${{ inputs.fleet_dials_endpoint }}
           effort: ${{ needs.gate.outputs.effort || inputs.effort }}
-          allowed_models: ${{ inputs.allowed_models }}
-          max_effort: ${{ inputs.max_effort }}
-          min_effort: ${{ inputs.min_effort }}
+          allowed_models: ${{ needs.gate.outputs.allowed_models || inputs.allowed_models }}
+          max_effort: ${{ needs.gate.outputs.max_effort || inputs.max_effort }}
+          min_effort: ${{ needs.gate.outputs.min_effort || inputs.min_effort }}
           classifier_model: ${{ inputs.classifier_model }}
           write_triage_model: ${{ inputs.write_triage_model }}
           status_updates: ${{ inputs.status_updates }}
@@ -1112,7 +1126,7 @@ jobs:
     needs: gate
     if: ${{ needs.gate.outputs.authorized == 'true' && needs.gate.outputs.test == 'true' }}
     runs-on: ${{ startsWith(inputs.runs_on, '[') && fromJSON(inputs.runs_on) || inputs.runs_on }}
-    timeout-minutes: ${{ inputs.job_timeout_minutes }}
+    timeout-minutes: ${{ fromJSON(needs.gate.outputs.job_timeout_minutes || format('{0}', inputs.job_timeout_minutes)) }}
     outputs:
       artifact_attempt: ${{ steps.artifact_attempt.outputs.attempt }}
     environment: ${{ inputs.job_environment }}
@@ -1242,7 +1256,7 @@ jobs:
           service_account_id: ${{ inputs.service_account_id }}
           workspace_id: ${{ inputs.workspace_id }}
           artifact_retention_days: ${{ inputs.artifact_retention_days }}
-          job_timeout_minutes: ${{ inputs.job_timeout_minutes }}
+          job_timeout_minutes: ${{ needs.gate.outputs.job_timeout_minutes || inputs.job_timeout_minutes }}
           classifier_model_used: ${{ needs.gate.outputs.classifier_model }}
           verdict: ${{ needs.gate.outputs.verdict }}
           classifier_cost: ${{ needs.gate.outputs.classifier_cost }}
@@ -1255,9 +1269,9 @@ jobs:
           dials_arm: ${{ needs.gate.outputs.dials_arm }}
           fleet_dials_endpoint: ${{ inputs.fleet_dials_endpoint }}
           effort: ${{ needs.gate.outputs.effort || inputs.effort }}
-          allowed_models: ${{ inputs.allowed_models }}
-          max_effort: ${{ inputs.max_effort }}
-          min_effort: ${{ inputs.min_effort }}
+          allowed_models: ${{ needs.gate.outputs.allowed_models || inputs.allowed_models }}
+          max_effort: ${{ needs.gate.outputs.max_effort || inputs.max_effort }}
+          min_effort: ${{ needs.gate.outputs.min_effort || inputs.min_effort }}
           team: ${{ inputs.team }}
           anthropic_base_url: ${{ inputs.anthropic_base_url }}
           anthropic_auth: ${{ inputs.anthropic_auth }}
@@ -1331,10 +1345,10 @@ jobs:
       ${{ !cancelled() &&
       (inputs.shadow_model != '' || inputs.shadow_strategy != '' ||
       (inputs.shadow_engine != '' && inputs.shadow_engine != 'claude')) &&
-      (vars.KSAI_SHADOW_PERCENT || inputs.shadow_percent) != '0' &&
+      (vars.KSAI_SHADOW_PERCENT || needs.gate.outputs.shadow_percent || inputs.shadow_percent) != '0' &&
       needs.gate.outputs.authorized == 'true' && needs.gate.outputs.review == 'true' }}
     runs-on: ${{ startsWith(inputs.runs_on, '[') && fromJSON(inputs.runs_on) || inputs.runs_on }}
-    timeout-minutes: ${{ inputs.job_timeout_minutes }}
+    timeout-minutes: ${{ fromJSON(needs.gate.outputs.job_timeout_minutes || format('{0}', inputs.job_timeout_minutes)) }}
     environment: ${{ inputs.job_environment }}
     permissions:
       contents: read
@@ -1353,7 +1367,7 @@ jobs:
         with:
           token: ${{ github.token }}
           repository: Kong/ksai-public
-          ref: v3.70.2
+          ref: v3.71.0
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1388,7 +1402,7 @@ jobs:
           LIVE_STRATEGY: ${{ inputs.review_strategy }}
           SHADOW_STRATEGY: ${{ inputs.shadow_strategy }}
           LIVE_ENGINE: ${{ inputs.engine }}
-          SHADOW_PERCENT: ${{ vars.KSAI_SHADOW_PERCENT || inputs.shadow_percent }}
+          SHADOW_PERCENT: ${{ vars.KSAI_SHADOW_PERCENT || needs.gate.outputs.shadow_percent || inputs.shadow_percent }}
           REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ inputs.pr || needs.gate.outputs.number }}
           HEAD_SHA: ${{ needs.gate.outputs.head_sha || steps.head.outputs.result }}
@@ -1435,9 +1449,9 @@ jobs:
           service_account_id: ${{ inputs.service_account_id }}
           workspace_id: ${{ inputs.workspace_id }}
           artifact_retention_days: ${{ inputs.artifact_retention_days }}
-          job_timeout_minutes: ${{ inputs.job_timeout_minutes }}
-          max_consecutive_tool_failures: ${{ inputs.max_consecutive_tool_failures }}
-          max_repeated_tool_calls: ${{ inputs.max_repeated_tool_calls }}
+          job_timeout_minutes: ${{ needs.gate.outputs.job_timeout_minutes || inputs.job_timeout_minutes }}
+          max_consecutive_tool_failures: ${{ needs.gate.outputs.max_consecutive_tool_failures || inputs.max_consecutive_tool_failures }}
+          max_repeated_tool_calls: ${{ needs.gate.outputs.max_repeated_tool_calls || inputs.max_repeated_tool_calls }}
           verdict: ${{ needs.gate.outputs.verdict }}
           otel_endpoint: ${{ inputs.otel_endpoint }}
           model: ${{ needs.gate.outputs.model || inputs.model }}
@@ -1445,9 +1459,9 @@ jobs:
           fleet_dials_endpoint: ${{ inputs.fleet_dials_endpoint }}
           shadow_model: ${{ inputs.shadow_model }}
           effort: ${{ needs.gate.outputs.effort || inputs.effort }}
-          allowed_models: ${{ inputs.allowed_models }}
-          max_effort: ${{ inputs.max_effort }}
-          min_effort: ${{ inputs.min_effort }}
+          allowed_models: ${{ needs.gate.outputs.allowed_models || inputs.allowed_models }}
+          max_effort: ${{ needs.gate.outputs.max_effort || inputs.max_effort }}
+          min_effort: ${{ needs.gate.outputs.min_effort || inputs.min_effort }}
           classifier_model: ${{ inputs.classifier_model }}
           write_triage_model: ${{ inputs.write_triage_model }}
           status_updates: ${{ inputs.status_updates }}
@@ -1482,7 +1496,7 @@ jobs:
         needs.gate.outputs.authorized == 'true' &&
         needs.gate.outputs.implement == 'true'))
     runs-on: ${{ startsWith(inputs.runs_on, '[') && fromJSON(inputs.runs_on) || inputs.runs_on }}
-    timeout-minutes: ${{ inputs.job_timeout_minutes }}
+    timeout-minutes: ${{ fromJSON(needs.gate.outputs.job_timeout_minutes || format('{0}', inputs.job_timeout_minutes)) }}
     environment: ${{ inputs.job_environment }}
     permissions:
       contents: write
@@ -1695,9 +1709,9 @@ jobs:
             ${{ steps.go-token-one.outputs.token != '' && format('{0}={1}', steps.go-owners.outputs.one, steps.go-token-one.outputs.token) || '' }}
             ${{ steps.go-token-two.outputs.token != '' && format('{0}={1}', steps.go-owners.outputs.two, steps.go-token-two.outputs.token) || '' }}
           artifact_retention_days: ${{ inputs.artifact_retention_days }}
-          job_timeout_minutes: ${{ inputs.job_timeout_minutes }}
-          max_consecutive_tool_failures: ${{ inputs.max_consecutive_tool_failures }}
-          max_repeated_tool_calls: ${{ inputs.max_repeated_tool_calls }}
+          job_timeout_minutes: ${{ needs.gate.outputs.job_timeout_minutes || inputs.job_timeout_minutes }}
+          max_consecutive_tool_failures: ${{ needs.gate.outputs.max_consecutive_tool_failures || inputs.max_consecutive_tool_failures }}
+          max_repeated_tool_calls: ${{ needs.gate.outputs.max_repeated_tool_calls || inputs.max_repeated_tool_calls }}
           classifier_model_used: ${{ needs.gate.outputs.classifier_model }}
           verdict: ${{ needs.gate.outputs.verdict }}
           classifier_cost: ${{ needs.gate.outputs.classifier_cost }}
@@ -1715,9 +1729,9 @@ jobs:
           dials_arm: ${{ needs.gate.outputs.dials_arm }}
           fleet_dials_endpoint: ${{ inputs.fleet_dials_endpoint }}
           effort: ${{ needs.gate.outputs.effort || inputs.effort }}
-          allowed_models: ${{ inputs.allowed_models }}
-          max_effort: ${{ inputs.max_effort }}
-          min_effort: ${{ inputs.min_effort }}
+          allowed_models: ${{ needs.gate.outputs.allowed_models || inputs.allowed_models }}
+          max_effort: ${{ needs.gate.outputs.max_effort || inputs.max_effort }}
+          min_effort: ${{ needs.gate.outputs.min_effort || inputs.min_effort }}
           classifier_model: ${{ inputs.classifier_model }}
           write_triage_model: ${{ inputs.write_triage_model }}
           triage: ${{ inputs.triage }}
@@ -1818,7 +1832,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-recover
           repository: Kong/ksai-public
-          ref: v3.70.2
+          ref: v3.71.0
           sparse-checkout: |
             .github/scripts
           persist-credentials: false

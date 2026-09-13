@@ -5,7 +5,65 @@ const ARM = new RegExp(`^${SEGMENT}(:${SEGMENT})?$`);
 
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 
-const held = (model, effort, why) => ({ model, effort, arm: '', served: false, why });
+const WHOLE = /^(?:0|[1-9][0-9]*)$/;
+
+/**
+ * @param {number} low
+ * @param {number} high
+ */
+const between = (low, high) => (/** @type {string} */ value) =>
+  WHOLE.test(value) && Number(value) >= low && Number(value) <= high;
+
+const SHARE = /^(?:0|[1-9][0-9]*)(\.[0-9]+)?$/;
+
+export const ALIASES = ['fast', 'balanced', 'flagship', 'opus', 'sonnet', 'haiku'];
+
+export const PINNED = {
+  shadow_percent: (/** @type {string} */ value) =>
+    SHARE.test(value) && Number(value) >= 0 && Number(value) <= 100,
+  allowed_models: (/** @type {string} */ value) => {
+    const named = value.split(/[,\s]+/).filter((one) => one !== '');
+    return named.length > 0
+      && named.every((one) => MODEL.test(one) && !ALIASES.includes(one.toLowerCase()));
+  },
+  max_effort: (/** @type {string} */ value) => EFFORTS.includes(value),
+  min_effort: (/** @type {string} */ value) => EFFORTS.includes(value),
+  job_timeout_minutes: between(2, 1440),
+  max_consecutive_tool_failures: between(0, 100000),
+  max_repeated_tool_calls: (/** @type {string} */ value) =>
+    between(0, 100000)(value) && Number(value) !== 1,
+};
+
+/**
+ * @param {Record<string, string>} dials
+ * @param {string} effort
+ */
+function inverted(dials, effort) {
+  const floor = EFFORTS.indexOf(dials.min_effort || 'medium');
+  const ceiling = EFFORTS.indexOf(dials.max_effort || effort);
+  return floor >= 0 && ceiling >= 0 && floor > ceiling;
+}
+
+/** @param {Record<string, string>} pinned */
+const kept = (pinned) => Object.fromEntries(
+  Object.keys(PINNED).map((name) => [name, pinned[name] ?? '']),
+);
+
+/**
+ * @param {string} model
+ * @param {string} effort
+ * @param {Record<string, string>} pinned
+ * @param {string} why
+ */
+const held = (model, effort, pinned, why) => ({
+  model,
+  effort,
+  arm: '',
+  dials: kept(pinned),
+  refused: /** @type {string[]} */ ([]),
+  served: false,
+  why,
+});
 
 /**
  * bare reports whether an endpoint is an https URL with a host and nothing a request would carry
@@ -32,6 +90,7 @@ function bare(endpoint) {
  *   audience?: string,
  *   model: string,
  *   effort: string,
+ *   pinned?: Record<string, string>,
  *   env?: Record<string, string | undefined>,
  *   mint: (audience: string) => Promise<string>,
  *   secret?: (token: string) => void,
@@ -44,13 +103,14 @@ export async function readDials({
   audience = 'ksai-cp',
   model,
   effort,
+  pinned = {},
   env = process.env,
   mint,
   secret = () => {},
   fetch = globalThis.fetch,
   timeout = 10000,
 }) {
-  const keep = (why) => held(model, effort, why);
+  const keep = (why) => held(model, effort, pinned, why);
 
   if (endpoint === '') return keep('');
   if (!bare(endpoint)) return keep('the control plane endpoint is not a bare https URL');
@@ -92,5 +152,23 @@ export async function readDials({
 
   const arm = typeof served.arm === 'string' && ARM.test(served.arm) ? served.arm : '';
 
-  return { model: servedModel, effort: servedEffort, arm, served: true, why: '' };
+  const dials = kept(pinned);
+  const refused = [];
+  for (const [name, shaped] of Object.entries(PINNED)) {
+    const value = served[name];
+    if (value === undefined || value === '') continue;
+    if (typeof value !== 'string' || !shaped(value)) {
+      refused.push(name);
+      continue;
+    }
+    dials[name] = value;
+  }
+  if (inverted(dials, servedEffort)) {
+    for (const name of ['min_effort', 'max_effort']) {
+      dials[name] = pinned[name] ?? '';
+      if (!refused.includes(name)) refused.push(name);
+    }
+  }
+
+  return { model: servedModel, effort: servedEffort, arm, dials, refused, served: true, why: '' };
 }

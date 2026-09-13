@@ -41,6 +41,37 @@ inputs:
   effort:
     description: effort pinned in this workflow, used whenever the control plane does not answer with one
     required: true
+  shadow_percent:
+    description: share of runs compared against the shadow engine, pinned in this workflow
+    required: false
+    default: ""
+  allowed_models:
+    description: model ids a comment or an automatic selector may choose, pinned in this workflow
+    required: false
+    default: ""
+  max_effort:
+    description: highest effort a comment or an automatic selector may choose, pinned in this workflow
+    required: false
+    default: ""
+  min_effort:
+    description: lowest effort a comment or an automatic selector may choose, pinned in this workflow
+    required: false
+    default: ""
+  job_timeout_minutes:
+    description: >-
+      the job's own timeout, pinned in this workflow. It takes no default here for the reason it
+      takes none in the run action: a caller that agreed with the assumed ceiling and a caller that
+      never looked are the same run, and only the caller knows what it capped the job at.
+    required: false
+    default: ""
+  max_consecutive_tool_failures:
+    description: how many tool calls may fail in a row before the watchdog stops the run, pinned in this workflow
+    required: false
+    default: ""
+  max_repeated_tool_calls:
+    description: how many times one call may repeat before the watchdog stops the run, pinned in this workflow
+    required: false
+    default: ""
 
 outputs:
   model:
@@ -63,6 +94,35 @@ outputs:
       shape is the model's plus one colon, so an arm cannot carry a newline into
       whatever records it.
     value: ${{ steps.dials.outputs.arm }}
+  shadow_percent:
+    description: >-
+      share of runs to compare against the shadow engine. This output and the
+      six below it are the value the control plane served, or the one pinned in
+      this workflow where it served none - which is what the control plane
+      leaving a dial out means, and what it does with one served in a shape this
+      workflow would refuse later.
+    value: ${{ steps.dials.outputs.shadow_percent }}
+  allowed_models:
+    description: model ids a comment or an automatic selector may choose
+    value: ${{ steps.dials.outputs.allowed_models }}
+  max_effort:
+    description: highest effort a comment or an automatic selector may choose
+    value: ${{ steps.dials.outputs.max_effort }}
+  min_effort:
+    description: lowest effort a comment or an automatic selector may choose
+    value: ${{ steps.dials.outputs.min_effort }}
+  job_timeout_minutes:
+    description: >-
+      the job's own timeout. A caller passing this to the run action has to cap
+      the job at the same value, because an action cannot read the ceiling it is
+      running under.
+    value: ${{ steps.dials.outputs.job_timeout_minutes }}
+  max_consecutive_tool_failures:
+    description: how many tool calls may fail in a row before the watchdog stops the run
+    value: ${{ steps.dials.outputs.max_consecutive_tool_failures }}
+  max_repeated_tool_calls:
+    description: how many times one call may repeat before the watchdog stops the run
+    value: ${{ steps.dials.outputs.max_repeated_tool_calls }}
 
 runs:
   using: composite
@@ -76,14 +136,31 @@ runs:
         DIALS_AUDIENCE: ${{ inputs.audience }}
         DIALS_MODEL: ${{ inputs.model }}
         DIALS_EFFORT: ${{ inputs.effort }}
+        DIALS_SHADOW_PERCENT: ${{ inputs.shadow_percent }}
+        DIALS_ALLOWED_MODELS: ${{ inputs.allowed_models }}
+        DIALS_MAX_EFFORT: ${{ inputs.max_effort }}
+        DIALS_MIN_EFFORT: ${{ inputs.min_effort }}
+        DIALS_JOB_TIMEOUT_MINUTES: ${{ inputs.job_timeout_minutes }}
+        DIALS_MAX_CONSECUTIVE_TOOL_FAILURES: ${{ inputs.max_consecutive_tool_failures }}
+        DIALS_MAX_REPEATED_TOOL_CALLS: ${{ inputs.max_repeated_tool_calls }}
       with:
         script: |
           const { readDials } = await import(`file://${process.env.DIALS_ACTION_PATH}/dials.mjs`);
+          const pinned = {
+            shadow_percent: process.env.DIALS_SHADOW_PERCENT,
+            allowed_models: process.env.DIALS_ALLOWED_MODELS,
+            max_effort: process.env.DIALS_MAX_EFFORT,
+            min_effort: process.env.DIALS_MIN_EFFORT,
+            job_timeout_minutes: process.env.DIALS_JOB_TIMEOUT_MINUTES,
+            max_consecutive_tool_failures: process.env.DIALS_MAX_CONSECUTIVE_TOOL_FAILURES,
+            max_repeated_tool_calls: process.env.DIALS_MAX_REPEATED_TOOL_CALLS,
+          };
           const answer = await readDials({
             endpoint: process.env.DIALS_ENDPOINT,
             audience: process.env.DIALS_AUDIENCE,
             model: process.env.DIALS_MODEL,
             effort: process.env.DIALS_EFFORT,
+            pinned,
             mint: (audience) => core.getIDToken(audience),
             secret: (token) => core.setSecret(token),
           });
@@ -92,6 +169,12 @@ runs:
           } else if (answer.why) {
             core.notice(`ksai kept the dials pinned in this workflow: ${answer.why}`);
           }
+          if (answer.refused.length > 0) {
+            core.notice(`ksai kept these dials pinned in this workflow, because the control plane served a shape it will not pass on: ${answer.refused.join(', ')}`);
+          }
           core.setOutput('model', answer.model);
           core.setOutput('effort', answer.effort);
           core.setOutput('arm', answer.arm);
+          for (const [name, value] of Object.entries(answer.dials)) {
+            core.setOutput(name, value);
+          }
