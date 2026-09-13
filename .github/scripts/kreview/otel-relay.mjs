@@ -235,6 +235,7 @@ export async function startRelay({ env = process.env, fetchImpl = fetch, observe
   const secrets = collectSecrets(env);
   const named = runAttributes(env);
   const counts = { forwarded: 0, dropped: 0, refused: 0, bytes: 0, sent: 0, posts: 0 };
+  const observation = { bytes: 0, posts: 0 };
   const flight = new Set();
 
   const forward = async (signal, body) => {
@@ -298,7 +299,16 @@ export async function startRelay({ env = process.env, fetchImpl = fetch, observe
         const text = read(chunks, request.headers['content-encoding']);
         counts.bytes += size;
         counts.posts += 1;
-        if (!text || flight.size >= MAX_IN_FLIGHT || counts.bytes > MAX_TOTAL_BYTES || counts.posts > MAX_POSTS) {
+        observation.bytes += size;
+        observation.posts += 1;
+        const mayObserve = typeof observe === 'function'
+          && observation.bytes <= MAX_TOTAL_BYTES
+          && observation.posts <= MAX_POSTS;
+        const mayForward = Boolean(where)
+          && flight.size < MAX_IN_FLIGHT
+          && counts.bytes <= MAX_TOTAL_BYTES
+          && counts.posts <= MAX_POSTS;
+        if (!text || (!mayObserve && !mayForward)) {
           counts.dropped += 1;
           return;
         }
@@ -307,8 +317,14 @@ export async function startRelay({ env = process.env, fetchImpl = fetch, observe
           counts.dropped += 1;
           return;
         }
-        try { observe?.(signal, payload); } catch {}
+        if (mayObserve) {
+          try { observe(signal, payload); } catch {}
+        }
         if (!where) return;
+        if (!mayForward) {
+          counts.dropped += 1;
+          return;
+        }
         const body = encoded(signal, payload, MAX_VALUE_BYTES);
         if (!body || body.length > MAX_BODY_BYTES || counts.sent + body.length > MAX_TOTAL_BYTES) {
           counts.dropped += 1;
@@ -352,6 +368,11 @@ export async function startRelay({ env = process.env, fetchImpl = fetch, observe
   const url = `http://127.0.0.1:${port}`;
   say(where ? `telemetry relayed from ${url} to ${where.endpoint}` : `runtime telemetry observed at ${url}`);
 
+  const beginObservation = () => {
+    observation.bytes = 0;
+    observation.posts = 0;
+  };
+
   const close = async () => {
     const deadline = Date.now() + DRAIN_MS;
     while (flight.size > 0 && Date.now() < deadline) {
@@ -380,5 +401,5 @@ export async function startRelay({ env = process.env, fetchImpl = fetch, observe
     return { ...counts, in_flight: flight.size };
   };
 
-  return { url, close, counts };
+  return { url, close, counts, beginObservation };
 }

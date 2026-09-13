@@ -37,7 +37,7 @@ import {
 import { writeOutputs } from '../lib/outputs.mjs';
 import { bearer, heldExpiry } from '../lib/opencode-token.mjs';
 import { completeFinal, completeStage, LIMITS, readExport, recordChildren, recordedCompletion, recoverReview, reviewAnswer, reviewSession, streamFailure } from './opencode-review.mjs';
-import { compactionSample, supportsCompaction, traceObserver } from './opencode-runtime.mjs';
+import { compactionSample, mcpServerCount, supportsCompaction, toolTiming, traceObserver } from './opencode-runtime.mjs';
 import { startRelay } from './otel-relay.mjs';
 import resultProtocol from './review-result.cjs';
 import { isolatedPtyCommand, ptyPilotEnabled } from './opencode-pty-core.mjs';
@@ -455,7 +455,7 @@ export function monitorProcess(rootPid, table = processTable, everyMs = PROCESS_
   };
 }
 
-export function runtimeSummary(invocations) {
+export function runtimeSummary(invocations, mcpServers = null) {
   const complete = (field, rows = invocations) => rows.length > 0 && rows.every(
     (metric) => Number.isFinite(metric[field]) && metric[field] >= 0,
   );
@@ -463,6 +463,7 @@ export function runtimeSummary(invocations) {
     ? rows.reduce((total, metric) => total + metric[field], 0)
     : null;
   const withMcp = invocations.filter((metric) => Number(metric.mcp_connects) > 0);
+  const withTool = invocations.filter((metric) => Number(metric.tool_calls) > 0);
   const failed = invocations.filter((metric) => metric.exit_code !== 0).length;
   const compactionAvailable = invocations.length > 0 && invocations.every(
     (metric) => Number.isInteger(metric.compaction_count) && metric.compaction_count >= 0,
@@ -471,6 +472,8 @@ export function runtimeSummary(invocations) {
     mode: 'one-shot',
     span_source: 'unauthenticated-loopback',
     compaction_source: 'unauthenticated-sandbox-sidecar',
+    event_source: 'unauthenticated-json-stream',
+    mcp_servers: mcpServers,
     invocation_count: invocations.length,
     failed_invocations: failed,
     failure_rate: invocations.length ? failed / invocations.length : null,
@@ -481,8 +484,12 @@ export function runtimeSummary(invocations) {
     first_mcp_ms: complete('first_mcp_ms', withMcp)
       ? sum('first_mcp_ms', withMcp) / withMcp.length
       : null,
+    first_tool_ms: complete('tool_calls') && complete('first_tool_ms', withTool)
+      ? sum('first_tool_ms', withTool) / withTool.length
+      : null,
     model_calls: sum('model_calls'),
     mcp_connects: sum('mcp_connects'),
+    tool_calls: sum('tool_calls'),
     compaction_count: compactionAvailable ? sum('compaction_count') : null,
     compacted_invocations: compactionAvailable
       ? invocations.filter((metric) => metric.compaction_count > 0).length
@@ -914,7 +921,11 @@ async function main(env = process.env, { probe: probeWith = spawnSync } = {}) {
   let deadlineExpired = false;
   let ticking = null;
   const runtimeMetrics = [];
-  let runtime = runtimeSummary(runtimeMetrics);
+  let configuredMcp = null;
+  try {
+    configuredMcp = mcpServerCount(JSON.parse(readFileSync(String(env.OPENCODE_CONFIG ?? ''), 'utf8')));
+  } catch {}
+  let runtime = runtimeSummary(runtimeMetrics, configuredMcp);
   try {
     if (tokenFile) {
       await broker(tokenFile, env);
@@ -959,6 +970,7 @@ async function main(env = process.env, { probe: probeWith = spawnSync } = {}) {
       if (nativeRuntime) args.unshift(join(String(env.SCRIPTS ?? ''), 'kreview/opencode-cgroup.mjs'), nativeCgroup, nativeReturnCgroup, String(process.pid), '--');
       else args.shift();
       const began = Date.now();
+      relay?.beginObservation();
       const finishTrace = traces.begin(began);
       const ran = spawn(command, args, {
         env: { ...runEnv, KSAI_REVIEW_RESULT_FILE: resultFile, KSAI_REVIEW_RESULT_KIND: resultKind, KSAI_REVIEW_CANDIDATE_IDS: JSON.stringify(candidateIds) },
@@ -992,17 +1004,19 @@ async function main(env = process.env, { probe: probeWith = spawnSync } = {}) {
       const enforcement = stopEnforcing?.();
       status = enforcedStatus(status, enforcement);
       const ended = Date.now();
-      runtimeMetrics.push({
+      const runtimeMetric = {
         invocation: runtimeMetrics.length + 1,
         exit_code: status,
         total_ms: Math.max(0, ended - began),
         ...compactionSample(compactionFile, began, ended),
         ...finishTrace(ended),
         ...stopMonitoring(),
-      });
+      };
+      runtimeMetrics.push(runtimeMetric);
       if (timeout) clearTimeout(timeout);
       if (hardStop) clearTimeout(hardStop);
       const segment = parsed(readFileSync(events).subarray(offset).toString('utf8'));
+      Object.assign(runtimeMetric, toolTiming(segment, began, ended));
       const submission = resultTransport === 'tool'
         ? submitted({ file: resultFile, events: segment, kind: resultKind, candidateIds })
         : resultTransport === 'structured'
@@ -1049,7 +1063,7 @@ async function main(env = process.env, { probe: probeWith = spawnSync } = {}) {
     console.log('::error::the model runner failed; reducing and redacting the partial stream');
   } finally {
     if (ticking) clearInterval(ticking);
-    runtime = runtimeSummary(runtimeMetrics);
+    runtime = runtimeSummary(runtimeMetrics, configuredMcp);
     try {
       writeSync(out, `${JSON.stringify({ type: 'ksai_runtime', runtime })}\n`);
     } catch (error) {
