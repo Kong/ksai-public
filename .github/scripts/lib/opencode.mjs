@@ -200,6 +200,48 @@ export const RUNTIME_CONFIG = Object.freeze({
   permission: opencodePermissions(claudeArgs.TOOL_POLICY.review),
 });
 
+export const PROVIDER_POLICY_VERSION = '1.18.30';
+
+export const PROVIDER_POLICY = Object.freeze([
+  Object.freeze({ effect: 'deny', action: 'provider.use', resource: '*' }),
+  Object.freeze({ effect: 'allow', action: 'provider.use', resource: 'anthropic' }),
+]);
+
+export const PROVIDER_POLICY_CONFIG = Object.freeze({
+  $schema: 'https://opencode.ai/config.json',
+  enabled_providers: Object.freeze(['anthropic']),
+  experimental: Object.freeze({ policies: PROVIDER_POLICY }),
+});
+
+export const PROVIDER_POLICY_GITIGNORE = 'node_modules\npackage.json\npackage-lock.json\nbun.lock\n.gitignore';
+
+export function providerPolicyDirectory(home) {
+  const root = String(home ?? '').trim();
+  if (!root) throw new Error('OPENCODE_HOME names no path for the trusted provider policy');
+  return join(root, 'config', 'opencode');
+}
+
+export function providerPolicyFile(home) {
+  return join(providerPolicyDirectory(home), 'opencode.json');
+}
+
+export function validateProviderPolicyVersion(version) {
+  const actual = String(version ?? '').trim();
+  if (actual !== PROVIDER_POLICY_VERSION) {
+    throw new Error(
+      `opencode ${actual || '(unknown)'} has no verified provider policy contract; use ${PROVIDER_POLICY_VERSION}`,
+    );
+  }
+  return actual;
+}
+
+export function validateProviderPolicyConfig(value, at = 'trusted provider policy') {
+  if (JSON.stringify(value) !== JSON.stringify(PROVIDER_POLICY_CONFIG)) {
+    throw new Error(`trusted provider policy ${at} does not restrict every provider except anthropic`);
+  }
+  return value;
+}
+
 export function phasePermissions(phase, scopes = []) {
   const policy = claudeArgs.toolPolicy(phase);
   return policy ? opencodePermissions(policy, scopes) : null;

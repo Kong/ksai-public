@@ -18,7 +18,21 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { conclusionOf, exitedOn, stopReason } from '../lib/execution-log.mjs';
-import { DEFAULT_OPENCODE_MODEL, answer, collectSecrets, executionLog, listed, parsed, sandboxScopes, scrub, spending } from '../lib/opencode.mjs';
+import {
+  DEFAULT_OPENCODE_MODEL,
+  answer,
+  collectSecrets,
+  executionLog,
+  listed,
+  parsed,
+  providerPolicyDirectory,
+  providerPolicyFile,
+  sandboxScopes,
+  scrub,
+  spending,
+  validateProviderPolicyConfig,
+  validateProviderPolicyVersion,
+} from '../lib/opencode.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
 import { bearer, heldExpiry } from '../lib/opencode-token.mjs';
 import { completeFinal, completeStage, LIMITS, readExport, recordChildren, recordedCompletion, recoverReview, reviewAnswer, reviewSession, streamFailure } from './opencode-review.mjs';
@@ -29,7 +43,7 @@ const { structuredSubmission, submitted } = resultProtocol;
 
 export { listed };
 
-const MASKED_HOMES = ['.config', '.claude'];
+const MASKED_HOMES = ['.config', '.claude', '.opencode'];
 
 /**
  * DENIED_CREDENTIALS names what a tool call may not read, and it is a declaration rather than a copy.
@@ -65,7 +79,7 @@ export const DENIED_MINTS = Object.freeze([
   'ACTIONS_RUNTIME_TOKEN',
 ]);
 
-const UNSET = [...DENIED_CREDENTIALS, ...DENIED_MINTS];
+const UNSET = [...DENIED_CREDENTIALS, ...DENIED_MINTS, 'OPENCODE_CONFIG_CONTENT'];
 
 const EXPORTER_ENDPOINT = 'OTEL_EXPORTER_OTLP_ENDPOINT';
 
@@ -123,6 +137,7 @@ export function sandboxArgs(
   const workspace = String(env.GITHUB_WORKSPACE ?? '');
   const temp = String(env.RUNNER_TEMP ?? '');
   const opencodeHome = String(env.OPENCODE_HOME ?? '');
+  const providerPolicyDir = providerPolicyDirectory(opencodeHome);
   const args = [
     '--ro-bind',
     '/',
@@ -160,7 +175,20 @@ export function sandboxArgs(
   args.push('--bind', workspace, workspace);
   const trusted = join(workspace, '_ksai');
   if (exists(trusted)) args.push('--ro-bind', trusted, trusted);
-  args.push('--ro-bind', config, config, '--ro-bind', scripts, scripts, '--bind', opencodeHome, opencodeHome);
+  args.push(
+    '--ro-bind',
+    config,
+    config,
+    '--ro-bind',
+    scripts,
+    scripts,
+    '--bind',
+    opencodeHome,
+    opencodeHome,
+    '--ro-bind',
+    providerPolicyDir,
+    providerPolicyDir,
+  );
 
   const channel = String(env.KSAI_CHANNEL_DIR ?? '');
   if (channel && exists(channel)) {
@@ -216,7 +244,21 @@ export function sandboxArgs(
   for (const name of new Set([...UNSET, ...exporter, ...scrubbed, ...denied])) {
     args.push('--unsetenv', name);
   }
-  args.push('--unshare-user', '--unshare-pid', '--new-session', '--die-with-parent', '--chdir', workspace, '--');
+  args.push(
+    '--setenv',
+    'OPENCODE_DISABLE_PROJECT_CONFIG',
+    '1',
+    '--setenv',
+    'OPENCODE_CONFIG_DIR',
+    providerPolicyDirectory(opencodeHome),
+    '--unshare-user',
+    '--unshare-pid',
+    '--new-session',
+    '--die-with-parent',
+    '--chdir',
+    workspace,
+    '--',
+  );
   return args;
 }
 
@@ -247,6 +289,19 @@ export function runArgs(env = process.env) {
   const session = String(env.OPENCODE_RESUME_SESSION ?? '').trim();
   if (session) args.push('--session', session, '--fork');
   return args;
+}
+
+export function validateProviderPolicy(home, version, read = readFileSync) {
+  validateProviderPolicyVersion(version);
+  const at = providerPolicyFile(home);
+  let policy;
+  try {
+    policy = JSON.parse(read(at, 'utf8'));
+  } catch (error) {
+    throw new Error(`trusted provider policy ${at} cannot be read: ${error.message}`, { cause: error });
+  }
+  validateProviderPolicyConfig(policy, at);
+  return at;
 }
 
 export async function writeToken(at, env, now = Date.now(), ask = bearer, expiry = heldExpiry) {
@@ -318,6 +373,13 @@ async function main(env = process.env) {
   const resultDir = resultTransport === 'tool' ? mkdtempSync(join(runnerTemp, 'review-results-')) : '';
   if (resultDir) chmodSync(resultDir, 0o700);
 
+  try {
+    validateProviderPolicy(home, env.OPENCODE_VERSION);
+  } catch (error) {
+    console.log(`::error::${error.message}`);
+    if (resultDir) rmSync(resultDir, { recursive: true, force: true });
+    return 1;
+  }
   const relay = await startRelay({ env });
   const sandbox = sandboxArgs({
     ...env,

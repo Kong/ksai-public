@@ -3495,13 +3495,11 @@ runs:
         echo '${{ runner.temp }}/ksai-opencode/bin' >> "$GITHUB_PATH"
         actual="$(opencode --version)"
         echo "opencode ${actual}"
-        case "${actual}" in
-          *"${VERSION}"*) ;;
-          *)
-            echo "::error::opencode reports ${actual}, and this run pinned ${VERSION} - two builds of one reviewer are not one reviewer"
-            exit 1
-            ;;
-        esac
+        if [[ "${actual}" != "${VERSION}" ]]; then
+          echo "::error::opencode reports ${actual}, and this run pinned ${VERSION} - two builds of one reviewer are not one reviewer"
+          exit 1
+        fi
+        echo "version=${actual}" >> "$GITHUB_OUTPUT"
 
     - name: Put the planning session where the CLI reads it
       id: plan_session
@@ -3827,29 +3825,16 @@ runs:
         set -euo pipefail
         node "${SCRIPTS}/ksai/attribution.mjs"
 
-    - name: Mint the bearer this review starts on
-      id: mint
-      if: ${{ steps.opencode_install.outcome == 'success' }}
-      shell: bash
-      env:
-        ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
-        ANTHROPIC_AUTH: ${{ inputs.anthropic_auth }}
-        ANTHROPIC_FEDERATION_RULE_ID: ${{ inputs.federation_rule_id }}
-        ANTHROPIC_ORGANIZATION_ID: ${{ inputs.organization_id }}
-        ANTHROPIC_SERVICE_ACCOUNT_ID: ${{ inputs.service_account_id }}
-        ANTHROPIC_WORKSPACE_ID: ${{ inputs.workspace_id }}
-        SCRIPTS: ${{ runner.temp }}/ksai-scripts
-      working-directory: ${{ runner.temp }}
-      run: node "${SCRIPTS}/kreview/federated-token.mjs"
-
     - name: Write the opencode runtime config
       id: opencode_config
-      if: ${{ steps.mint.outcome == 'success' }}
+      if: ${{ steps.opencode_install.outcome == 'success' }}
       shell: bash
       env:
         REVIEW_STRATEGY: ${{ inputs.review_strategy }}
         REVIEW_RESULT_TRANSPORT: ${{ steps.build_review.outputs.result_transport }}
         OPENCODE_CONFIG: ${{ runner.temp }}/opencode-runtime.json
+        OPENCODE_HOME: ${{ runner.temp }}/opencode-home
+        OPENCODE_VERSION: ${{ steps.opencode_install.outputs.version }}
         KREVIEW_PLUGIN_ROOT: ${{ github.workspace }}/_ksai/plugins/kreview
         OPENCODE_MODEL: ${{ steps.write_arm.outputs.model || steps.select_test.outputs.model || steps.select_arm.outputs.model }}
         OPENCODE_PHASE: ${{ inputs.flow == 'review' && 'review' || inputs.flow == 'test' && 'test' || steps.size.outputs.phase }}
@@ -3871,6 +3856,21 @@ runs:
         set -euo pipefail
         node "${SCRIPTS}/kreview/opencode-config.mjs"
         echo "file=${OPENCODE_CONFIG}" >> "$GITHUB_OUTPUT"
+
+    - name: Mint the bearer this review starts on
+      id: mint
+      if: ${{ steps.opencode_config.outcome == 'success' }}
+      shell: bash
+      env:
+        ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
+        ANTHROPIC_AUTH: ${{ inputs.anthropic_auth }}
+        ANTHROPIC_FEDERATION_RULE_ID: ${{ inputs.federation_rule_id }}
+        ANTHROPIC_ORGANIZATION_ID: ${{ inputs.organization_id }}
+        ANTHROPIC_SERVICE_ACCOUNT_ID: ${{ inputs.service_account_id }}
+        ANTHROPIC_WORKSPACE_ID: ${{ inputs.workspace_id }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      working-directory: ${{ runner.temp }}
+      run: node "${SCRIPTS}/kreview/federated-token.mjs"
 
     - name: Arm the watchdog
       id: watchdog
@@ -4021,7 +4021,7 @@ runs:
       id: opencode_test
       if: >-
         ${{ inputs.dry_run == 'false' && inputs.flow == 'test' &&
-        steps.opencode_config.outcome == 'success' }}
+        steps.mint.outcome == 'success' }}
       continue-on-error: true
       shell: bash
       env:
@@ -4030,6 +4030,7 @@ runs:
         VARIANT: ${{ steps.select_test.outputs.effort }}
         OPENCODE_CONFIG: ${{ steps.opencode_config.outputs.file }}
         OPENCODE_HOME: ${{ runner.temp }}/opencode-home
+        OPENCODE_VERSION: ${{ steps.opencode_install.outputs.version }}
         ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
         ANTHROPIC_AUTH: ${{ inputs.anthropic_auth }}
         ANTHROPIC_FEDERATION_RULE_ID: ${{ inputs.federation_rule_id }}
@@ -4474,7 +4475,7 @@ runs:
     - name: Run opencode
       id: opencode
       if: >-
-        ${{ steps.opencode_config.outcome == 'success' &&
+        ${{ steps.mint.outcome == 'success' &&
         ((inputs.flow == 'implement' && steps.build_implement.outcome == 'success') ||
         (inputs.flow == 'review' && steps.build_review.outcome == 'success')) }}
       shell: bash
@@ -4486,6 +4487,7 @@ runs:
         VARIANT: ${{ steps.write_arm.outputs.effort || steps.select_test.outputs.effort || steps.select_arm.outputs.effort }}
         OPENCODE_CONFIG: ${{ steps.opencode_config.outputs.file }}
         OPENCODE_HOME: ${{ runner.temp }}/opencode-home
+        OPENCODE_VERSION: ${{ steps.opencode_install.outputs.version }}
         OPENCODE_SDK_ROOT: ${{ runner.temp }}/ksai-opencode-sdk
         ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
         ANTHROPIC_AUTH: ${{ inputs.anthropic_auth }}

@@ -1,5 +1,5 @@
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 import modelCatalog from '../lib/model-catalog.json' with { type: 'json' };
 import { counted } from '../lib/text.cjs';
@@ -7,6 +7,8 @@ import { AUTH_MODES, originProblem } from './federated-token.mjs';
 import { LIMITS } from './review-pipeline.cjs';
 import {
   CHANNEL_PLUGIN,
+  PROVIDER_POLICY_CONFIG,
+  PROVIDER_POLICY_GITIGNORE,
   REVIEW_RESULT_PLUGIN,
   agentEntry,
   headerLines,
@@ -15,14 +17,28 @@ import {
   phaseDenials,
   phasePermissions,
   providerBaseUrl,
+  providerPolicyFile,
   runtimeConfig,
   sandboxScopes,
   underWorkspace,
+  validateProviderPolicyVersion,
 } from '../lib/opencode.mjs';
 
 const destination = process.env.OPENCODE_CONFIG;
 if (!destination) {
   console.log('::error::OPENCODE_CONFIG names no path, so the review would run on a config it discovered itself');
+  process.exit(1);
+}
+
+let providerPolicy;
+try {
+  validateProviderPolicyVersion(process.env.OPENCODE_VERSION);
+  providerPolicy = providerPolicyFile(process.env.OPENCODE_HOME);
+  mkdirSync(dirname(providerPolicy), { recursive: true });
+  writeFileSync(providerPolicy, `${JSON.stringify(PROVIDER_POLICY_CONFIG, null, 2)}\n`, { mode: 0o600 });
+  writeFileSync(join(dirname(providerPolicy), '.gitignore'), PROVIDER_POLICY_GITIGNORE, { mode: 0o600 });
+} catch (error) {
+  console.log(`::error::${error.message}`);
   process.exit(1);
 }
 
@@ -164,6 +180,7 @@ else if (phase === 'review' && resultTransport !== 'text') config.default_agent 
 writeFileSync(destination, JSON.stringify(config, null, 2) + '\n');
 
 console.log(`opencode runtime config written to ${destination}`);
+console.log(`trusted provider policy written to ${providerPolicy}`);
 console.log(`model calls go to ${baseUrl}, authenticated by ${auth}`);
 console.log(
   `this run works under the ${stated ? 'tool list its caller named' : `${phase} tool policy`}${skills.length ? `, with skills from ${skills.join(', ')}` : ' and no skills'}`,
