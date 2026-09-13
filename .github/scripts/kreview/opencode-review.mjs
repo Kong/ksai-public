@@ -50,7 +50,7 @@ export async function completeStage({ name, prompt, timeoutMs, candidateIds = nu
     if (left <= 0) break;
     const correction = attempt ? `The previous submission was rejected: ${problem}. Correct it now. ` : '';
     const contract = resultTransport === 'tool'
-      ? 'Call submit_review_result exactly once. After it accepts the result, end the turn without repeating it as text.'
+      ? 'Call submit_review_result. If it refuses, correct what the error names and call again while attempts remain. After it accepts the result, end the turn without repeating it as text.'
       : 'Return exactly one JSON object with coverage (complete or incomplete), summary and findings.';
     const final = await invoke({
       prompt: `${correction}Finish the ${name} stage using only the evidence already collected. ${contract} Coverage is incomplete if the assigned investigation was interrupted or not performed; an empty findings array does not make it complete. For discovery: findings carry root_cause and full evidence from the original contract. For audit: summary "audit", findings [], and one decision per original candidate ID with id, verdict (keep, remove or insufficient_evidence), a nonempty reason explaining the evidence, and the corrected full finding for every keep. ${candidateIds ? `Original candidate IDs: ${JSON.stringify(candidateIds)}. ` : ''}No new research or other tool calls. An unsupported claim is insufficient evidence.`,

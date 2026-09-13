@@ -102,12 +102,12 @@ const OUTPUT_CONTRACT = `7. Emit your final message as exactly one fenced \`\`\`
 
 const constraintsFor = (transport) => transport === 'tool' ? CONSTRAINTS.replace(
   /You have NO GitHub token[^]*?before or after the block\./,
-  'You have NO GitHub token and cannot post anything; a separate trusted step publishes the validated result you submit. Call `submit_review_result` exactly once at step 7. After it accepts the result, end the turn without repeating it as text.',
+  'You have NO GitHub token and cannot post anything; a separate trusted step publishes the validated result you submit. Call `submit_review_result` at step 7. If it refuses, correct what the error names and call again while attempts remain. After it accepts the result, end the turn without repeating it as text.',
 ) : CONSTRAINTS;
 
 const outputContractFor = (transport) => transport === 'tool' ? OUTPUT_CONTRACT.replace(
   '7. Emit your final message as exactly one fenced ```json block matching this contract:',
-  '7. Call `submit_review_result` exactly once. Pass its `submission` argument an object matching this contract:',
+  '7. Call `submit_review_result`. Pass its `submission` argument an object matching this contract:',
 ).replace(
   'Put every concrete issue in `findings`; do not list individual issues inside\n     `summary`. Output nothing outside the single ```json block.',
   'Put every concrete issue in `findings`; do not list individual issues inside\n     `summary`. After the tool accepts the result, end the turn without repeating it.',
