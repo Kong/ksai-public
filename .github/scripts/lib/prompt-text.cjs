@@ -53,9 +53,47 @@ const text = (value) => String(value ?? '');
  * separator - two lines for a two-word name, three for `repo-review-rules` - which is tighter than the counted
  * version allowed (`\s{0,4}` admitted four newlines, so five lines) while having nothing left to count past.
  */
-const BLANK = '[ \\t\\u00a0\\u1680\\u2000-\\u200d\\u202f\\u205f\\u3000\\ufeff]';
+/*
+ * **What separates the words of a tag is what renders as nothing, and that is a list Unicode keeps
+ * rather than one written here.** The set above was spelled out code point by code point and missed
+ * the ones that do not look like blanks: `U+2028`, which is a line separator; `U+034F`, a combining
+ * mark; `U+3164` and `U+115F`, which are letters; `U+2065`, unassigned; the variation selectors.
+ * Reproduced end to end - a workflow file named `</system<U+034F>instructions>.yml` reached a run's
+ * prompt whole and read to a model as the block closing early, while this pattern matched the same
+ * tag written with a hyphen and the same tag written with nothing between the words at all.
+ *
+ * There are on the order of nine hundred thousand such code points and they belong to no one
+ * category, so `Default_Ignorable_Code_Point` does the naming: it is Unicode's own list of what a
+ * renderer is to show nothing for, and it grows when Unicode grows. `Mn` covers the combining marks
+ * beside it, `Zs`/`Zl`/`Zp` every space and line separator, and `U+2800` the one blank that is a
+ * printing character rather than an ignorable one.
+ */
+const BLANK = '[\\t\\p{Zs}\\p{Zl}\\p{Zp}\\p{Default_Ignorable_Code_Point}\\p{Mn}\\u2800]';
 const TAG_SEPARATOR = `[-_]*${BLANK}*\\n?${BLANK}*[-_]*`;
-const tagPattern = (...segments) => new RegExp(`<${BLANK}*\\/?${BLANK}*${segments.join(TAG_SEPARATOR)}[^>\\n]*>`, 'gi');
+const tagPattern = (...segments) => new RegExp(`<${BLANK}*\\/?${BLANK}*${segments.join(TAG_SEPARATOR)}[^>\\n]*>`, 'giu');
+
+/**
+ * COLLAPSED_TAGS match what folding whitespace can assemble that the patterns above could not see.
+ *
+ * `neutralCut` makes untrusted text one line, and a run of whitespace it folds to a single space can
+ * finish a tag the newline bound had kept apart: `</system` and `instructions>` on separate lines are
+ * two lines to the pattern and one working tag afterwards. So the folded text is read again - but by
+ * a pattern with no arbitrary tail, because on one line `[^>\n]*>` reaches the next `>` anywhere in
+ * the text, and a reviewer writing `if (n < system_instructions_len(ctx))` about that very guard
+ * would lose the rest of their comment to it.
+ *
+ * Every span here is a run rather than one character. A fold turns any amount of whitespace into one
+ * space, but the hyphens and underscores around it survive it: `</system<NL><NL>-instructions>` folds
+ * to `</system -instructions>`, which a single-character separator cannot span - and `</system -  * instructions>` needs no newline at all. Counting characters here is the same mistake the bound
+ * above this one records, one pattern further down.
+ */
+const COLLAPSED_TAGS = Object.freeze([
+  ['system', 'instructions'],
+  ['user', 'request'],
+  ['prior', 'findings'],
+  ['repo', 'review', 'rules'],
+  ['reviewer', 'mandate'],
+].map((segments) => new RegExp(`< *\\/? *${segments.join('[-_ ]*')} *>`, 'gi')));
 
 const CONSTRAINT_TAG = tagPattern('system', 'instructions');
 
@@ -108,9 +146,10 @@ function usableNonce(nonce) {
 const CLOCK_COMMAND = 'date -u +%s';
 
 function neutralCut(value, max) {
-  const line = neutralize(String(value ?? ''))
+  const folded = neutralize(String(value ?? ''))
     .replace(/\s+/g, ' ')
     .trim();
+  const line = COLLAPSED_TAGS.reduce((carried, tag) => carried.replace(tag, '(constraint-tag)'), folded);
   const kept = [...line];
   return kept.length > max ? `${kept.slice(0, max - 1).join('')}…` : line;
 }

@@ -111,3 +111,50 @@ export async function post({
 export function runSeries(env = process.env) {
   return runAttributes(env).filter(([key]) => !PER_RUN.includes(key));
 }
+
+/**
+ * SEVERITY maps the three levels this repository emits onto the numbers OTLP defines for them.
+ *
+ * Datadog does not index the reserved `status` facet for these records, so the text is what a
+ * reader filters on: `@otel.severity_text:Warn`. The number still has to be right, because the
+ * intake derives its own level from it and a record with a level nothing set sorts as unknown.
+ */
+export const SEVERITY = Object.freeze({ Info: 9, Warn: 13, Error: 17 });
+
+/**
+ * logs renders OTLP/JSON log records, or nothing where there is nothing worth sending.
+ *
+ * The run's identity goes on the resource alone rather than onto every record. Datadog promotes a
+ * resource attribute to a log tag - which is why `@repo` and `@flow` already answer for the records
+ * the opencode relay forwards - so repeating ten attributes per record would buy nothing and be
+ * billed by the byte. Per-record attributes are for what distinguishes one record from its
+ * neighbours, and nothing else.
+ *
+ * A record whose body is empty is dropped rather than sent: a log line saying nothing still costs
+ * indexing, and an empty body is always a value a caller failed to compute rather than a fact.
+ */
+export function logs({ scope = '', lines = [], env = process.env, at = Date.now() } = {}) {
+  const nanos = String(at * 1_000_000);
+  const records = lines
+    .filter((one) => String(one?.body ?? '').trim() !== '')
+    .map((one) => {
+      const level = one.severity in SEVERITY ? one.severity : 'Info';
+      return {
+        timeUnixNano: nanos,
+        observedTimeUnixNano: nanos,
+        severityNumber: SEVERITY[level],
+        severityText: level,
+        body: { stringValue: String(one.body) },
+        ...(one.attributes?.length ? { attributes: attributes(one.attributes) } : {}),
+      };
+    });
+  if (records.length === 0) return null;
+  return {
+    resourceLogs: [
+      {
+        resource: { attributes: attributes(runAttributes(env)) },
+        scopeLogs: [{ scope: { name: scope }, logRecords: records }],
+      },
+    ],
+  };
+}

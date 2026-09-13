@@ -43,9 +43,10 @@ const alive = (signal, pid) => {
 };
 
 export async function reap(env, say = console.log, signal = process.kill, sleep = wait, within = SETTLE_MS) {
-  if (!there(env.PID_FILE)) return;
+  if (!there(env.PID_FILE)) return { unwatched: false, overrun: false };
   const pid = Number(firstLine(env.PID_FILE));
   let watching = false;
+  let overrun = false;
   if (Number.isInteger(pid) && pid > 0 && !defunct(pid)) {
     try {
       signal(pid, 'SIGTERM');
@@ -58,6 +59,7 @@ export async function reap(env, say = console.log, signal = process.kill, sleep 
     const until = Date.now() + within;
     while (alive(signal, pid) && Date.now() < until) await sleep(LOOK_MS);
     if (alive(signal, pid)) {
+      overrun = true;
       try {
         signal(pid, 'SIGKILL');
       } catch {}
@@ -66,7 +68,8 @@ export async function reap(env, say = console.log, signal = process.kill, sleep 
       );
     }
   }
-  if (!watching && !there(env.FIRED_FILE) && !there(env.MISSED_FILE)) {
+  const unwatched = !watching && !there(env.FIRED_FILE) && !there(env.MISSED_FILE);
+  if (unwatched) {
     warningFor(say)(
       'the watchdog loop was not running when this step reaped it, and it neither stopped the run nor recorded a ceiling it could not act on. This run was unwatched: nothing would have stopped it before the job ceiling',
     );
@@ -74,16 +77,18 @@ export async function reap(env, say = console.log, signal = process.kill, sleep 
   try {
     rmSync(env.PID_FILE, { force: true });
   } catch {}
+  return { unwatched, overrun };
 }
 
 export function verdict(env, say = console.log) {
+  const missed = there(env.MISSED_FILE);
   if (!there(env.FIRED_FILE)) {
-    if (there(env.MISSED_FILE)) {
+    if (missed) {
       warningFor(say)(
         `${firstLine(env.MISSED_FILE)}, and no CLI process running in this workspace was found to stop. Nothing was salvaged by the watchdog`,
       );
     }
-    return { fired: 'false', cause: '', reason: '' };
+    return { fired: 'false', cause: '', reason: '', missed };
   }
   const reason = firstLine(env.REASON_FILE);
   const said = firstLine(env.CAUSE_FILE);
@@ -92,16 +97,19 @@ export function verdict(env, say = console.log) {
     `This run was stopped on purpose: ${reason || 'no reason was recorded'}. The "SDK execution error" and "exited with code 143" above are that stop - 143 is SIGTERM - and not a fault in the run. What it had done before it was stopped is under "What the run did"`,
   );
   say('The watchdog fired: the CLI was stopped short of the job ceiling');
-  return { fired: 'true', cause, reason };
+  return { fired: 'true', cause, reason, missed };
 }
 
 export async function main(env = process.env, say = console.log) {
-  await reap(env, say);
+  const reaped = await reap(env, say);
   const said = verdict(env, say);
   writeOutputs(env.GITHUB_OUTPUT, {
     fired: said.fired,
     cause: said.cause,
     reason: said.reason,
+    missed: said.missed ? 'true' : 'false',
+    unwatched: reaped.unwatched ? 'true' : 'false',
+    overrun: reaped.overrun ? 'true' : 'false',
   });
   return 0;
 }

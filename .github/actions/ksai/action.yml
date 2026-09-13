@@ -5494,8 +5494,7 @@ runs:
 
     - name: Report what this run spent as metrics
       if: >-
-        ${{ always() && steps.engine.outputs.name == 'opencode' && inputs.otel_headers != '' &&
-        steps.model_run.outputs.execution_file != '' }}
+        ${{ always() && inputs.otel_headers != '' && steps.model_run.outputs.execution_file != '' }}
       continue-on-error: true
       shell: bash
       env:
@@ -5518,6 +5517,34 @@ runs:
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       working-directory: ${{ runner.temp }}
       run: node "${SCRIPTS}/ksai/run-metrics.mjs"
+
+    - name: Report what the watchdog did
+      if: >-
+        ${{ always() && inputs.otel_headers != '' && steps.watchdog.outcome == 'success' }}
+      continue-on-error: true
+      shell: bash
+      env:
+        WATCHDOG_ARMED_AT_MS: ${{ steps.watchdog.outputs.armed_at_ms }}
+        WATCHDOG_KILL_AT_MS: ${{ steps.watchdog.outputs.kill_at_ms }}
+        WATCHDOG_FIRED: ${{ steps.disarm_watchdog.outputs.fired }}
+        WATCHDOG_CAUSE: ${{ steps.disarm_watchdog.outputs.cause }}
+        WATCHDOG_MISSED: ${{ steps.disarm_watchdog.outputs.missed }}
+        WATCHDOG_UNWATCHED: ${{ steps.disarm_watchdog.outputs.unwatched }}
+        WATCHDOG_OVERRUN: ${{ steps.disarm_watchdog.outputs.overrun }}
+        ENGINE: ${{ steps.engine.outputs.name }}
+        FLOW: ${{ inputs.flow }}
+        KSAI_JOB_INDEX: ${{ strategy.job-index || 0 }}
+        MODEL: ${{ steps.write_arm.outputs.model || steps.select_test.outputs.model || steps.select_arm.outputs.model }}
+        VARIANT: ${{ steps.write_arm.outputs.effort || steps.select_test.outputs.effort || steps.select_arm.outputs.effort }}
+        OTEL_EXPORTER_OTLP_ENDPOINT: ${{ inputs.otel_endpoint }}
+        OTEL_EXPORTER_OTLP_HEADERS: ${{ inputs.otel_headers }}
+        OTEL_RESOURCE_ATTRIBUTES: >-
+          team=${{ steps.telemetry.outputs.team }},repo=${{ github.repository }},workflow=${{
+          steps.telemetry.outputs.workflow }}${{ inputs.otel_extra_attributes != '' &&
+          format(',{0}', inputs.otel_extra_attributes) || '' }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      working-directory: ${{ runner.temp }}
+      run: node "${SCRIPTS}/ksai/watchdog-report.mjs"
 
     - name: Report what this run cost
       if: >-
