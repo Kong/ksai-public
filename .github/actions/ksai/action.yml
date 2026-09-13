@@ -5926,6 +5926,30 @@ runs:
           });
           for (const line of notices) core.info(line);
 
+    - name: Replay the tool calls as spans
+      if: >-
+        ${{ always() && steps.engine.outputs.name == 'opencode' && inputs.otel_headers != '' &&
+        (steps.opencode.outputs.events_file != '' || steps.opencode_test.outputs.events_file != '') }}
+      continue-on-error: true
+      shell: bash
+      env:
+        EVENTS_FILE: ${{ steps.opencode.outputs.events_file || steps.opencode_test.outputs.events_file }}
+        OPENCODE_CHILDREN_FILE: ${{ steps.opencode.outputs.children_file }}
+        ENGINE: ${{ steps.engine.outputs.name }}
+        FLOW: ${{ inputs.flow }}
+        MODEL: ${{ steps.write_arm.outputs.model || steps.select_test.outputs.model || steps.select_arm.outputs.model }}
+        VARIANT: ${{ steps.write_arm.outputs.effort || steps.select_test.outputs.effort || steps.select_arm.outputs.effort }}
+        KSAI_JOB_INDEX: ${{ strategy.job-index || 0 }}
+        OTEL_EXPORTER_OTLP_ENDPOINT: ${{ inputs.otel_endpoint }}
+        OTEL_EXPORTER_OTLP_HEADERS: ${{ inputs.otel_headers }}
+        OTEL_RESOURCE_ATTRIBUTES: >-
+          team=${{ steps.telemetry.outputs.team }},repo=${{ github.repository }},workflow=${{
+          steps.telemetry.outputs.workflow }}${{ inputs.otel_extra_attributes != '' &&
+          format(',{0}', inputs.otel_extra_attributes) || '' }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      working-directory: ${{ runner.temp }}
+      run: node "${SCRIPTS}/kreview/tool-spans.mjs"
+
     - name: Report what this run spent as metrics
       if: >-
         ${{ always() && steps.engine.outputs.name == 'opencode' && inputs.otel_headers != '' &&

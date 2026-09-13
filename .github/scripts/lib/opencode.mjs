@@ -560,8 +560,22 @@ export function spending(events) {
  * opencode's own wording when a tool call is refused by the permission map. It is matched rather than
  * inferred from the error status, because a `bash` command that merely exits non-zero is an error too
  * and counting those would report a reviewer's failed `grep` as a denied one.
+ *
+ * Both wordings it uses are matched. A map answering `ask` says the user rejected the call, and this
+ * fleet's own map answers `ask` nowhere - but a caller's profile may, and a refusal counted as an
+ * ordinary failure is the one reading this exists to prevent.
  */
-const REFUSED = /prevents you from using this specific tool call/i;
+const REFUSED = /(prevents you from using|rejected permission to use) this specific tool call/i;
+
+/**
+ * refused answers whether the permission map turned a call down, rather than the call failing on its own.
+ *
+ * One implementation, because a timeline that reads a refusal as a failure and a report that does not
+ * are two answers to "was this reviewer scoped too tightly".
+ */
+export function refused(state) {
+  return state?.status === 'error' && REFUSED.test(String(state.output ?? state.error ?? ''));
+}
 
 /**
  * denials answers the calls the permission map refused, in the shape the run report counts.
@@ -586,8 +600,7 @@ export function denials(events) {
   for (const one of events) {
     if (one?.type !== 'tool_use') continue;
     const state = one.part?.state ?? {};
-    if (state.status !== 'error') continue;
-    if (!REFUSED.test(String(state.output ?? state.error ?? ''))) continue;
+    if (!refused(state)) continue;
     const tool = String(one.part?.tool ?? 'unknown');
     const input = state.input && typeof state.input === 'object' ? state.input : {};
     const { command_digest: _digest, ...detail } = detailed(CLAUDE_NAME[tool] ?? tool, input);
