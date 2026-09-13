@@ -8,6 +8,7 @@ import { LIMITS } from './review-pipeline.cjs';
 import { LSP_ARM, lspConfig } from './opencode-lsp.mjs';
 import {
   CHANNEL_PLUGIN,
+  PTY_PLUGIN,
   COMPACTION_PLUGIN,
   PROVIDER_POLICY_CONFIG,
   PROVIDER_POLICY_GITIGNORE,
@@ -25,6 +26,7 @@ import {
   underWorkspace,
   validateProviderPolicyVersion,
 } from '../lib/opencode.mjs';
+import { ptyPilotEnabled } from './opencode-pty-core.mjs';
 
 const destination = process.env.OPENCODE_CONFIG;
 if (!destination) {
@@ -84,6 +86,10 @@ if (!permission) {
     `::error::opencode_phase ${phase || '(empty)'} names no entry in the shared tool table, so this run has no tool policy - a phase resolving to a default would run a write flow read-only, or hand a reviewer the tools to change the tree it is reviewing`,
   );
   process.exit(1);
+}
+const pty = ptyPilotEnabled(process.env);
+if (pty) {
+  for (const name of ['pty_spawn', 'pty_write', 'pty_read', 'pty_list', 'pty_kill']) permission[name] = 'allow';
 }
 
 const skills = String(process.env.OPENCODE_SKILLS ?? '')
@@ -190,7 +196,7 @@ if (staged) {
 }
 const channel = String(process.env.KSAI_CHANNEL_NONCE ?? '').trim() === '' ? '' : CHANNEL_PLUGIN;
 const config = runtimeConfig({ channel, agents, skills, permission, baseUrl, auth, attribution,
-  plugins: [COMPACTION_PLUGIN, ...(resultTransport === 'tool' ? [REVIEW_RESULT_PLUGIN] : [])],
+  plugins: [COMPACTION_PLUGIN, ...(pty ? [PTY_PLUGIN] : []), ...(resultTransport === 'tool' ? [REVIEW_RESULT_PLUGIN] : [])],
 });
 if (lsp) config.lsp = lsp;
 if (staged) config.default_agent = 'ksai-review-stage';
@@ -216,6 +222,7 @@ console.log(
 );
 console.log(config.plugin ? `the renewing auth plugin is ${config.plugin[0]}` : '::warning::no auth plugin, so this run lasts one token');
 console.log(`review results use the ${resultTransport} transport`);
+console.log(pty ? `the audited PTY pilot is enabled for ${phase}` : `the PTY pilot is not loaded for ${phase || '(empty)'}`);
 console.log(lsp
   ? `native LSP canary uses ${Object.entries(lsp).filter(([, server]) => server.disabled !== true).map(([name]) => name).join(' and ')}`
   : 'native LSP canary is off');

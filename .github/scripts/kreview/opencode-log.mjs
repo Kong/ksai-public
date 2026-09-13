@@ -75,6 +75,15 @@ const log = executionLog({
   said: process.env.OPENCODE_REVIEW_FILE ? readFileSync(process.env.OPENCODE_REVIEW_FILE, 'utf8') : staged || recovered ? null : carries ? whole : said,
 });
 Object.assign(log[0], { opencode_runtime: runtime });
+if (process.env.KSAI_PTY_METRICS_FILE) {
+  try {
+    const metrics = JSON.parse(readFileSync(process.env.KSAI_PTY_METRICS_FILE, 'utf8'));
+    Object.assign(metrics, { tokens: log[0].usage, duration_ms: log[0].duration_ms });
+    Object.assign(log[0], { opencode_pty: metrics });
+  } catch (why) {
+    console.log(`::warning::no readable PTY pilot metrics: ${why.message}`);
+  }
+}
 if (process.env.FLOW === 'review') {
   const held = process.env.REVIEW_PIPELINE_FILE ? JSON.parse(readFileSync(process.env.REVIEW_PIPELINE_FILE, 'utf8')) : null;
   const completedCalls = held?.stages?.length > 0 && held.stages.every((stage) => stage.invocations?.length > 0 && stage.invocations.every((call) => call.exit_code === 0 && call.usage));

@@ -132,6 +132,7 @@ export function sandboxScopes(env, exists, real) {
     String(env.KSAI_TOKEN_DIR ?? ''),
     String(env.KSAI_CHANNEL_DIR ?? ''),
     String(env.KSAI_REVIEW_RESULT_DIR ?? ''),
+    String(env.KSAI_PTY_METRICS_FILE ?? ''),
     String(env.KSAI_COMPACTION_FILE ?? ''),
     join(workspace, '_ksai'),
   ]
@@ -372,6 +373,8 @@ export const CHANNEL_PLUGIN = fileURLToPath(new URL('../kreview/opencode-channel
 export const COMPACTION_PLUGIN = fileURLToPath(new URL('../kreview/opencode-compaction.mjs', import.meta.url));
 
 export const REVIEW_RESULT_PLUGIN = fileURLToPath(new URL('../kreview/opencode-review-result.mjs', import.meta.url));
+
+export const PTY_PLUGIN = fileURLToPath(new URL('../kreview/opencode-pty.mjs', import.meta.url));
 
 const asFileUrl = (path) => (path.startsWith('file://') ? path : `file://${path}`);
 

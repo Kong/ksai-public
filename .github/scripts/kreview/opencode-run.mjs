@@ -40,6 +40,7 @@ import { completeFinal, completeStage, LIMITS, readExport, recordChildren, recor
 import { compactionSample, supportsCompaction, traceObserver } from './opencode-runtime.mjs';
 import { startRelay } from './otel-relay.mjs';
 import resultProtocol from './review-result.cjs';
+import { isolatedPtyCommand, ptyPilotEnabled } from './opencode-pty-core.mjs';
 
 const { structuredSubmission, submitted } = resultProtocol;
 
@@ -79,7 +80,7 @@ export const DENIED_MINTS = Object.freeze([
   'ACTIONS_RUNTIME_TOKEN',
 ]);
 
-const UNSET = [...DENIED_CREDENTIALS, ...DENIED_MINTS, 'OPENCODE_CONFIG_CONTENT'];
+const UNSET = [...DENIED_CREDENTIALS, ...DENIED_MINTS, 'OPENCODE_CONFIG_CONTENT', 'KSAI_PTY_LIVE_FIXTURE'];
 
 const EXPORTER_ENDPOINT = 'OTEL_EXPORTER_OTLP_ENDPOINT';
 
@@ -567,6 +568,11 @@ export function sandboxArgs(
   const resultDir = String(env.KSAI_REVIEW_RESULT_DIR ?? '');
   if (resultDir && exists(resultDir)) args.push('--bind', resultDir, resultDir);
 
+  const ptyMetrics = String(env.KSAI_PTY_METRICS_FILE ?? '');
+  if (ptyMetrics && exists(ptyMetrics)) {
+    args.push('--bind', ptyMetrics, ptyMetrics, '--setenv', 'KSAI_PTY_METRICS_FILE', ptyMetrics);
+  }
+
   const compactionFile = String(env.KSAI_COMPACTION_FILE ?? '');
   if (compactionFile && exists(compactionFile)) {
     args.push('--dir', dirname(compactionFile), '--bind', compactionFile, compactionFile);
@@ -796,6 +802,15 @@ async function main(env = process.env, { probe: probeWith = spawnSync } = {}) {
   }
   const resultDir = resultTransport === 'tool' ? mkdtempSync(join(runnerTemp, 'review-results-')) : '';
   if (resultDir) chmodSync(resultDir, 0o700);
+  const ptyMetrics = ptyPilotEnabled(env) ? join(runnerTemp, 'opencode-pty-metrics.json') : '';
+  if (ptyMetrics) {
+    writeFileSync(ptyMetrics, '{"version":1,"leaked_process_count":null}\n', { mode: 0o600 });
+    env.KSAI_PTY_METRICS_FILE = ptyMetrics;
+  }
+  const removePtyMetrics = () => {
+    if (ptyMetrics) rmSync(ptyMetrics, { force: true });
+  };
+
   let compactionDir = '';
   if (runnerTemp && supportsCompaction(env.OPENCODE_VERSION)) {
     try {
@@ -813,6 +828,8 @@ async function main(env = process.env, { probe: probeWith = spawnSync } = {}) {
   } catch (error) {
     console.log(`::error::${error.message}`);
     if (resultDir) rmSync(resultDir, { recursive: true, force: true });
+    if (compactionDir) rmSync(compactionDir, { recursive: true, force: true });
+    removePtyMetrics();
     return 1;
   }
   const traces = traceObserver();
@@ -840,7 +857,21 @@ async function main(env = process.env, { probe: probeWith = spawnSync } = {}) {
     await relay?.close();
     if (resultDir) rmSync(resultDir, { recursive: true, force: true });
     if (compactionDir) rmSync(compactionDir, { recursive: true, force: true });
+    removePtyMetrics();
     return 1;
+  }
+  if (ptyPilotEnabled(env)) {
+    const isolated = isolatedPtyCommand('true', [], String(env.GITHUB_WORKSPACE ?? ''), true);
+    const nested = probeWith('bwrap', [...quiet, isolated.command, ...isolated.args], { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
+    if (nested.status !== 0) {
+      const said = `${nested.stdout ?? ''}${nested.stderr ?? ''}`.trim() || String(nested.error?.message ?? 'no output');
+      console.log(`::error::the PTY pilot cannot create its per-session PID namespace: ${said}`);
+      await relay?.close();
+      if (resultDir) rmSync(resultDir, { recursive: true, force: true });
+      if (compactionDir) rmSync(compactionDir, { recursive: true, force: true });
+      removePtyMetrics();
+      return 1;
+    }
   }
   console.log(`sandboxed opencode ${String(probe.stdout ?? '').trim()}`);
 
@@ -874,6 +905,7 @@ async function main(env = process.env, { probe: probeWith = spawnSync } = {}) {
       closeSync(out);
       if (resultDir) rmSync(resultDir, { recursive: true, force: true });
       if (compactionDir) rmSync(compactionDir, { recursive: true, force: true });
+      removePtyMetrics();
       return 1;
     }
   }
@@ -1050,6 +1082,17 @@ async function main(env = process.env, { probe: probeWith = spawnSync } = {}) {
       console.log('::warning::child sessions could not be recorded; their usage remains unmeasured');
     }
   }
+  if (ptyMetrics) {
+    try {
+      const metrics = JSON.parse(readFileSync(ptyMetrics, 'utf8'));
+      metrics.active_at_runner_exit = Number(metrics.active_sessions) || 0;
+      metrics.namespace_cleanup_count = metrics.active_at_runner_exit;
+      metrics.active_sessions = 0;
+      writeFileSync(ptyMetrics, `${JSON.stringify(metrics)}\n`);
+    } catch {
+      console.log('::warning::the PTY pilot metrics could not be finalized');
+    }
+  }
   await relay?.close();
   const reduced = spawnSync(process.execPath, [join(String(env.SCRIPTS ?? ''), 'kreview/opencode-log.mjs')], {
     env: {
@@ -1061,6 +1104,7 @@ async function main(env = process.env, { probe: probeWith = spawnSync } = {}) {
     },
     stdio: 'inherit',
   });
+  removePtyMetrics();
   if (reduced.status !== 0) {
     console.log('::error::the opencode event stream could not be reduced to an execution log, so this run reports nothing it spent');
     if (resultDir) rmSync(resultDir, { recursive: true, force: true });

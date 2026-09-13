@@ -292,6 +292,13 @@ inputs:
     required: false
     # renovate: datasource=npm depName=opencode-ai
     default: "1.18.30"
+  opencode_pty:
+    description: >-
+      Opt-in pilot for audited background PTY sessions in OpenCode test and active implementation
+      phases. `true` loads pinned opencode-pty 0.3.6 through KSAI's bounded adapter. Review,
+      planning and isolated runs never load it.
+    required: false
+    default: "false"
   model:
     description: "model id or catalog alias for the run. Exposed as an input so one value feeds both the CLI and any later record; `--model` stays forbidden in extra_claude_args."
     required: false
@@ -947,6 +954,8 @@ runs:
         MAX_TURNS: ${{ inputs.max_turns }}
         EXTRA_ARGS: ${{ inputs.extra_claude_args }}
         REVIEW_STRATEGY: ${{ inputs.review_strategy }}
+        OPENCODE_PTY: ${{ inputs.opencode_pty }}
+        OPENCODE_VERSION: ${{ inputs.opencode_version }}
       run: |
         set -euo pipefail
         if [[ -n "${ENGINE}" && "${FLOW}" == "test-publish" ]]; then
@@ -995,6 +1004,20 @@ runs:
             fi
             ;;
           *) echo "::error::unknown review_strategy"; exit 1 ;;
+        esac
+        case "${OPENCODE_PTY}" in
+          false) ;;
+          true)
+            if [[ "${FLOW}" != "implement" && "${FLOW}" != "test" ]]; then
+              echo "::error::opencode_pty: true is limited to implement and test flows"
+              exit 1
+            fi
+            if [[ "${OPENCODE_VERSION}" != "1.18.30" ]]; then
+              echo "::error::opencode_pty: true requires the audited opencode_version 1.18.30"
+              exit 1
+            fi
+            ;;
+          *) echo "::error::opencode_pty must be true or false"; exit 1 ;;
         esac
         echo "name=${ENGINE}" >> "$GITHUB_OUTPUT"
         echo "cli_pattern=${pattern}" >> "$GITHUB_OUTPUT"
@@ -3470,6 +3493,9 @@ runs:
       working-directory: ${{ runner.temp }}
       env:
         VERSION: ${{ inputs.opencode_version }}
+        OPENCODE_PTY: ${{ inputs.opencode_pty }}
+        OPENCODE_PHASE: ${{ inputs.flow == 'test' && 'test' || steps.size.outputs.phase }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: |
         set -euo pipefail
         cached="/opt/ksai-tools/opencode/${VERSION}/linux-x64/bin/opencode"
@@ -3496,6 +3522,9 @@ runs:
           exit 1
         fi
         echo "version=${actual}" >> "$GITHUB_OUTPUT"
+        if [[ "${OPENCODE_PTY:-false}" == "true" && "${OPENCODE_PHASE:-}" =~ ^(test|direct|step|fix|do)$ ]]; then
+          npm ci --prefix "${SCRIPTS}/vendor/opencode-pty" --omit=dev --omit=peer --ignore-scripts
+        fi
 
     - name: Put the planning session where the CLI reads it
       id: plan_session
@@ -3864,6 +3893,7 @@ runs:
         KREVIEW_PLUGIN_ROOT: ${{ github.workspace }}/_ksai/plugins/kreview
         OPENCODE_MODEL: ${{ steps.write_arm.outputs.model || steps.select_test.outputs.model || steps.select_arm.outputs.model }}
         OPENCODE_PHASE: ${{ inputs.flow == 'review' && 'review' || inputs.flow == 'test' && 'test' || steps.size.outputs.phase }}
+        OPENCODE_PTY: ${{ inputs.opencode_pty }}
         OPENCODE_ALLOWED: >-
           ${{ steps.build_implement.outputs.allowed_tools || steps.test_tools.outputs.allowed_tools ||
           steps.build_review.outputs.allowed_tools }}
@@ -3959,6 +3989,8 @@ runs:
         FLOW: ${{ inputs.flow }}
         KSAI_CHANNEL_NONCE: ${{ steps.channel.outputs.nonce || 'none' }}
         KSAI_CHANNEL_WARN: ${{ steps.halt.outputs.warn || '0' }}
+        OPENCODE_PTY: ${{ inputs.opencode_pty }}
+        OPENCODE_PHASE: test
         OPENCODE_RESUME_SESSION: ${{ steps.plan_session.outputs.session_id }}
         SUBPROCESS_ENV_SCRUB: "1"
         KSAI_JOB_INDEX: ${{ strategy.job-index || 0 }}
@@ -4285,6 +4317,8 @@ runs:
         FLOW: ${{ inputs.flow }}
         KSAI_CHANNEL_NONCE: ${{ steps.channel.outputs.nonce || 'none' }}
         KSAI_CHANNEL_WARN: ${{ steps.halt.outputs.warn || '0' }}
+        OPENCODE_PTY: ${{ inputs.opencode_pty }}
+        OPENCODE_PHASE: ${{ inputs.flow == 'review' && 'review' || steps.size.outputs.phase }}
         OPENCODE_RESUME_SESSION: ${{ steps.plan_session.outputs.session_id }}
         SUBPROCESS_ENV_SCRUB: "1"
         KSAI_JOB_INDEX: ${{ strategy.job-index || 0 }}
