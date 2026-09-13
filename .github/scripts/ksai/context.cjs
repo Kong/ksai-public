@@ -465,27 +465,6 @@ function resolveAuthorization({
   return { ok: false, why: 'no-bar-cleared' };
 }
 
-const AUTHZ_REASONS = Object.freeze(
-  Object.assign(Object.create(null), {
-    'no-answer': 'the CODEOWNERS check could not answer, so nothing ran. Check the token it was given.',
-    'not-a-codeowner': 'you are not a code owner of this repository with write access, so nothing ran.',
-    'no-bar-cleared':
-      'you neither own a path in this repository\'s CODEOWNERS with write access nor hold write access ' +
-      'on it, and one of those is the bar for every command here, so nothing ran.',
-    'write-unreadable':
-      'a command here runs for anyone with write access, and GitHub could not be asked whether you hold ' +
-      'it, so this refused rather than guessing. The authorization token needs metadata:read on this ' +
-      'repository.',
-    'jira-needs-approval':
-      'a run triggered from Jira may only plan behind a human release, so this repository must set ' +
-      '`require_plan_approval: "true"` before a Jira ticket can start one. Nothing ran.',
-    'jira-actor-not-a-codeowner':
-      'the Jira account that asked for this has connected a GitHub login, and that login is not a code owner ' +
-      'of this repository with write access, so nothing ran. This check only ever adds a refusal: a ticket ' +
-      'whose requester has connected nothing is answered exactly as it was before.',
-  }),
-);
-
 module.exports = {
   NUMBER_SHAPE,
   asCommentEvent,
@@ -493,7 +472,6 @@ module.exports = {
   withLastEdit,
   resolveDispatchedComment,
   AUTHZ_LOGIN_SHAPE,
-  AUTHZ_REASONS,
   CONTINUATION_EVENT,
   COMMENT_EVENT,
   REVIEW_COMMENT_EVENT,

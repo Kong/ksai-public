@@ -536,11 +536,6 @@ on:
         required: false
         type: string
         default: ""
-      jira_cloud_id:
-        description: Atlassian cloud UUID for the Jira site; empty disables Jira work
-        required: false
-        type: string
-        default: ""
       jira_site:
         description: Jira site hostname used to render ticket links
         required: false
@@ -551,21 +546,6 @@ on:
         required: false
         type: string
         default: ""
-      jira_approver_group:
-        description: Jira group whose members may release a plan; empty requires GitHub approval
-        required: false
-        type: string
-        default: ""
-      jira_trigger_label:
-        description: Jira label that must be present before a ticket may start a run
-        required: false
-        type: string
-        default: ''
-      jira_approve_label:
-        description: Jira label a configured approver adds to release a plan
-        required: false
-        type: string
-        default: "ksai-approved"
       jira_allow_public_repo:
         description: 'literal "true" permits Jira ticket text to enter artifacts in a public repository'
         required: false
@@ -576,16 +556,6 @@ on:
         required: false
         type: string
         default: "none"
-      jira_transition_on_plan:
-        description: Jira transition or target status name applied when the draft pull request opens; empty leaves status unchanged
-        required: false
-        type: string
-        default: ""
-      jira_transition_on_ready:
-        description: Jira transition or target status name applied when the pull request becomes ready; empty leaves status unchanged
-        required: false
-        type: string
-        default: ""
       environments:
         description: >-
           comma-separated pull request test environments to start. Empty selects `.ksai/pr-test.json`'s
@@ -674,12 +644,6 @@ on:
         required: false
       datadog_key:
         description: Datadog API key for OTLP metrics; empty disables telemetry export
-        required: false
-      jira_client_id:
-        description: client ID for the Atlassian service account's OAuth 2.0 credential
-        required: false
-      jira_client_secret:
-        description: client secret for the Atlassian service account's OAuth 2.0 credential
         required: false
 
 permissions: {}
@@ -948,7 +912,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-help
           repository: Kong/ksai-public
-          ref: v3.68.1
+          ref: v3.68.2
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1389,7 +1353,7 @@ jobs:
         with:
           token: ${{ github.token }}
           repository: Kong/ksai-public
-          ref: v3.68.1
+          ref: v3.68.2
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1770,18 +1734,10 @@ jobs:
           record_id: ${{ inputs.record_id }}
           app_slug: ${{ steps.authz-token.outputs.app-slug }}
           work_actor: ${{ needs.gate.outputs.record_requester }}
-          jira_cloud_id: ${{ inputs.jira_cloud_id }}
           jira_site: ${{ inputs.jira_site }}
           jira_projects: ${{ inputs.jira_projects }}
-          jira_approver_group: ${{ inputs.jira_approver_group }}
-          jira_approve_label: ${{ inputs.jira_approve_label }}
-          jira_trigger_label: ${{ inputs.jira_trigger_label }}
           jira_allow_public_repo: ${{ inputs.jira_allow_public_repo }}
           jira_title_key: ${{ inputs.jira_title_key }}
-          jira_transition_on_plan: ${{ inputs.jira_transition_on_plan }}
-          jira_transition_on_ready: ${{ inputs.jira_transition_on_ready }}
-          jira_client_id: ${{ secrets.jira_client_id }}
-          jira_client_secret: ${{ secrets.jira_client_secret }}
           continuation_attempt: ${{ inputs.attempt }}
           continuation_stall: ${{ inputs.stall }}
           continuation_prev_remaining: ${{ inputs.prev_remaining }}
@@ -1862,7 +1818,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-recover
           repository: Kong/ksai-public
-          ref: v3.68.1
+          ref: v3.68.2
           sparse-checkout: |
             .github/scripts
           persist-credentials: false

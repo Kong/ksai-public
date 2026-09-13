@@ -7,7 +7,7 @@ allowed-tools: Agent, Bash, Read, Grep, Glob, Write
 
 # ksai plan
 
-Turn one ticket - a GitHub issue, or a Jira ticket when the request named one - into an ordered plan of
+Turn one ticket - a GitHub issue, or a Jira ticket the run was started from - into an ordered plan of
 steps that a separate skill implements one at a
 time. You produce the plan. You do not write code.
 
@@ -47,7 +47,7 @@ Facts that follow, and that the plan has to respect:
 - **You have no GitHub token, and no Jira credential.** No `gh`, no `git push`, no `git remote`, no
   `git commit`. Every ticket you are given is handed to you already fetched. Never plan a step that
   needs any of those - trusted steps do every write, including the commit that lands your document,
-  the PR, the issue comments and anything posted back to Jira.
+  the PR and the issue comments.
 - **The plan document is the only file you write**, at the path the run names, plus the manifest.
   Editing anything else leaves the tree dirty and the push gate refuses the whole run.
 - **Every step costs a whole workflow run** and a model call. A step with no work in it still
@@ -62,9 +62,6 @@ Facts that follow, and that the plan has to respect:
   anyone with write access to that project can edit - a wider set of people than can comment here.
 
 ## Phase 1 - Read the ticket as a spec
-
-When you are given both a Jira ticket and a GitHub issue, the ticket is the requirement and the issue is
-the conversation the run was triggered from. Read both; where they disagree, the ticket wins.
 
 When you are given a Jira ticket and no GitHub issue, the run was started from the ticket itself. There is
 no conversation to read and nowhere to ask - the ticket is the whole requirement, and the branch you name

@@ -736,37 +736,12 @@ inputs:
     description: "extra OTEL_RESOURCE_ATTRIBUTES appended after team/repo/workflow; same strict comma-separated key=value format"
     required: false
     default: ""
-  jira_cloud_id:
-    description: >-
-      Atlassian cloud id (a UUID) for the Jira site to read. Empty turns the Jira work source off, which is
-      every repository until it is set. Not a secret - it is the site's public identifier, like the Anthropic
-      routing ids above. Note this is a cloud id and NOT a site hostname: a scoped or OAuth credential
-      authenticates only against api.atlassian.com/ex/jira/<cloud id>, and <site>.atlassian.net answers 401.
-    required: false
-    default: ""
   jira_site:
     description: >-
       the Jira site hostname, e.g. your-site.atlassian.net. Used only to render links and the criteria marker
-      that carries the ticket key to every later run; requests go to the gateway named by `jira_cloud_id`.
+      that carries the ticket key to every later run.
     required: false
     default: ""
-  jira_approver_group:
-    description: >-
-      the Jira group whose members may release a plan by labelling the ticket, e.g. `ksai-approvers`. Empty
-      by default, which turns the Jira half of the approval gate off: approval then has to come from GitHub.
-      Setting it delegates release to that group, so it is a statement about who may spend this repository's
-      budget and have a bot commit to a branch - narrower than the trigger label, which only buys a plan.
-      Membership is read with `read:jira-work`'s companion `read:jira-user` scope plus the `Browse users and
-      groups` global permission; neither exposes an email address, so no user privacy setting is involved.
-    required: false
-    default: ""
-  jira_approve_label:
-    description: >-
-      the Jira label a member of `jira_approver_group` adds to release a plan. Read only when that group is
-      set. Deliberately not the trigger label: adding one asks for a plan and adding the other releases it,
-      and the permission scheme can restrict them separately.
-    required: false
-    default: "ksai-approved"
   jira_projects:
     description: >-
       the Jira project keys this repository may plan from, comma or space separated, e.g. `KAG MESH`. This is
@@ -775,22 +750,6 @@ inputs:
       empty value with a credential set rejects every Jira-backed run rather than allowing every project.
     required: false
     default: ""
-  jira_client_id:
-    description: "client id of the Atlassian service account's OAuth 2.0 credential"
-    required: false
-    default: ""
-  jira_client_secret:
-    description: "client secret of that credential. Held only by trusted steps; the model never sees it, for the same reason it never holds a GitHub token."
-    required: false
-    default: ""
-  jira_trigger_label:
-    description: >-
-      the Jira label your poller adds to a ticket to ask for a run. It is the second half of the bound on who
-      may start one: `jira_projects` says which projects may be read, and this says who asked. A
-      `workflow_dispatch` naming a ticket carries neither, so a run whose ticket does not carry this label is
-      refused before anything spends.
-    required: false
-    default: ''
   jira_allow_public_repo:
     description: >-
       allow a Jira work source on a PUBLIC repository. Off by default, and deliberately: this action uploads
@@ -810,30 +769,14 @@ inputs:
       trailer on every commit, so the link holds either way.
     required: false
     default: "none"
-  jira_transition_on_plan:
-    description: >-
-      Jira transition to apply when the draft pull request is opened, e.g. `In Progress`. Matched against the
-      transitions the ticket itself offers, by transition name and then by the name of the status it leads to,
-      and skipped with a warning when it offers neither - a workflow is per-project and a guessed id moves a
-      ticket sideways in silence. Empty means the status is left alone. Needs `write:jira-work` on the
-      credential AND Transition Issues in the project's permission scheme; the two are configured separately.
-    required: false
-    default: ""
-  jira_transition_on_ready:
-    description: >-
-      Jira transition to apply when the plan is finished and the pull request is marked ready for review, e.g.
-      `In Review`. Same matching and the same skip as `jira_transition_on_plan`.
-    required: false
-    default: ""
   work_ref:
     description: >-
-      the work to do when there is no GitHub issue at all, as `jira/<KEY>` - e.g. `jira/KAG-1234`. This
-      is how a ticket labelled in Jira starts a run: the ticket is both the requirement and the thread,
-      and every notice this action would post on an issue is posted on the ticket instead. Dispatch-only.
-      A run started this way is refused unless `require_plan_approval` is "true", because the CODEOWNERS
-      gate bounds who may trigger a run and a Jira label is not a GitHub identity - the approval is what
-      puts a code owner back in front of the first commit. Which tickets can start one is bounded by
-      `jira_projects` and by who may add the label in Jira, both of which the team controls.
+      the work to do when there is no GitHub issue at all, as `jira/<KEY>` - e.g. `jira/KAG-1234`. It names
+      a Jira work item a run was started for through the control plane, which hands the run that work item
+      in its record. Dispatch-only. A run started this way is refused unless `require_plan_approval` is
+      "true", because the CODEOWNERS gate bounds who may trigger a run and a Jira assignment is not a GitHub
+      identity - the approval is what puts a code owner back in front of the first commit. Which tickets can
+      start one is bounded by `jira_projects`.
     required: false
     default: ""
   work_actor:
@@ -1082,7 +1025,6 @@ runs:
         sparse-checkout: |
           .github/actions/codeowners-authz
           .github/actions/dispatch-record
-          .github/actions/ksai-jira-report
           .github/scripts
         persist-credentials: false
 
@@ -2167,54 +2109,12 @@ runs:
       if: ${{ inputs.flow == 'implement' }}
       shell: bash
       env:
-        PLAN_KEY: ${{ steps.subject.outputs.jira_key || steps.select.outputs.jira_key || steps.context.outputs.jira_key }}
+        PLAN_KEY: ${{ steps.subject.outputs.jira_key || steps.context.outputs.jira_key }}
         STEP_KEY: ${{ steps.read_plan.outputs.jira_key }}
       run: |
         set -euo pipefail
-        named=false
-        [ -n "${PLAN_KEY}${STEP_KEY}" ] && named=true
         echo "plan_key=${PLAN_KEY}" >> "$GITHUB_OUTPUT"
         echo "step_key=${STEP_KEY}" >> "$GITHUB_OUTPUT"
-        echo "named=${named}" >> "$GITHUB_OUTPUT"
-
-    - name: Resolve a Jira approval
-      id: jira_approval
-      if: >-
-        ${{ inputs.jira_approver_group != '' && steps.validate_args.outcome == 'success' &&
-        (steps.phase.outputs.phase == 'step' || steps.phase.outputs.phase == 'plan-review') }}
-      shell: bash
-      env:
-        PLAN_KEY: ${{ steps.jira_ref.outputs.plan_key }}
-        STEP_KEY: ${{ steps.jira_ref.outputs.step_key }}
-        BRANCH: ${{ steps.phase.outputs.ref }}
-        JIRA_CLOUD_ID: ${{ inputs.jira_cloud_id }}
-        JIRA_PROJECTS: ${{ inputs.jira_projects }}
-        JIRA_CLIENT_ID: ${{ inputs.jira_client_id }}
-        JIRA_CLIENT_SECRET: ${{ inputs.jira_client_secret }}
-        JIRA_APPROVER_GROUP: ${{ inputs.jira_approver_group }}
-        JIRA_APPROVE_LABEL: ${{ inputs.jira_approve_label }}
-        SCRIPTS: ${{ runner.temp }}/ksai-scripts
-      run: |
-        set -euo pipefail
-        node "${SCRIPTS}/ksai/jira-approval-step.mjs"
-
-    - name: Resolve who acted in Jira
-      id: jira_identity
-      if: >-
-        ${{ inputs.jira_client_id != '' &&
-        (steps.jira_approval.outputs.account_id != '' ||
-        steps.read_plan.outputs.release_kind == 'jira') }}
-      shell: bash
-      env:
-        ACCOUNT_ID: ${{ steps.jira_approval.outputs.account_id }}
-        RELEASE_REF: ${{ steps.read_plan.outputs.release_ref }}
-        JIRA_CLOUD_ID: ${{ inputs.jira_cloud_id }}
-        JIRA_CLIENT_ID: ${{ inputs.jira_client_id }}
-        JIRA_CLIENT_SECRET: ${{ inputs.jira_client_secret }}
-        SCRIPTS: ${{ runner.temp }}/ksai-scripts
-      run: |
-        set -euo pipefail
-        node "${SCRIPTS}/ksai/jira-identity-step.mjs"
 
     - name: Resolve the phase checkpoint
       id: checkpoint
@@ -2234,7 +2134,6 @@ runs:
         THREAD_ROOT_ID: ${{ steps.context.outputs.thread_root_id }}
         DISPATCHED: ${{ steps.context.outputs.dispatched }}
         REVIEW_ID: ${{ steps.context.outputs.review_id }}
-        JIRA_TOKEN: ${{ steps.jira_approval.outputs.phase_token }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:
         github-token: ${{ inputs.source_org_github_token }}
@@ -2335,8 +2234,6 @@ runs:
         DISABLED_COMMANDS: ${{ inputs.disabled_commands }}
         WRITE_ACCESS_COMMANDS: ${{ inputs.write_access_commands }}
         RELEASED_REF: ${{ steps.read_plan.outputs.release_ref }}
-        JIRA_APPROVER: ${{ steps.jira_approval.outputs.account_id }}
-        JIRA_APPROVER_BLOCK: ${{ steps.jira_approval.outputs.refused || steps.jira_approval.outputs.error }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:
         github-token: ${{ inputs.authorization_github_token || inputs.source_org_github_token }}
@@ -2400,8 +2297,6 @@ runs:
         REPO: ${{ github.repository }}
         PR_NUMBER: ${{ steps.phase.outputs.pr_number }}
         RELEASE_REF: ${{ steps.approval.outputs.released_by }}
-        PHASE_TOKEN: ${{ steps.jira_approval.outputs.phase_token }}
-        RELEASED_BY: ${{ steps.jira_identity.outputs.released_by }}
         APPROVAL_URL: ${{ steps.approval.outputs.approval_url }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: |
@@ -2507,7 +2402,6 @@ runs:
         repository: Kong/ksai-public
         ref: ${{ steps.plugin_ref.outputs.ref }}
         sparse-checkout: |
-          .github/actions/ksai-jira-report
           plugins/kreview
           plugins/ksai-implement
         persist-credentials: false
@@ -2744,13 +2638,9 @@ runs:
       env:
         PLAN_KEY: ${{ steps.jira_ref.outputs.plan_key }}
         STEP_KEY: ${{ steps.jira_ref.outputs.step_key }}
-        JIRA_CLOUD_ID: ${{ inputs.jira_cloud_id }}
         JIRA_PROJECTS: ${{ inputs.jira_projects }}
-        JIRA_CLIENT_ID: ${{ inputs.jira_client_id }}
-        JIRA_CLIENT_SECRET: ${{ inputs.jira_client_secret }}
         JIRA_SITE: ${{ inputs.jira_site }}
         JIRA_ALLOW_PUBLIC: ${{ inputs.jira_allow_public_repo }}
-        JIRA_LABEL: ${{ inputs.jira_trigger_label }}
         WORK_ITEM: ${{ inputs.work_item }}
         IS_PRIVATE: ${{ steps.context.outputs.is_private }}
         TRIGGER: ${{ inputs.trigger_phrase }}
@@ -2854,7 +2744,6 @@ runs:
         BOT_LOGIN: ${{ inputs.bot_login }}
         JIRA_KEY: ${{ steps.subject.outputs.jira_key || steps.fetch_jira.outputs.key }}
         JIRA_SITE: ${{ steps.fetch_jira.outputs.site }}
-        PHASE_TOKEN: ${{ steps.jira_approval.outputs.phase_token }}
         RUN_ID: ${{ github.run_id }}
         REQUESTER: ${{ steps.context.outputs.commenter || steps.context.outputs.work_actor }}
         COMMAND: ${{ steps.select.outputs.command }}
@@ -3157,8 +3046,7 @@ runs:
         KSAI_GIT_AUTHOR_NAME: ${{ steps.identity.outputs.author_name }}
         KSAI_GIT_AUTHOR_EMAIL: ${{ steps.identity.outputs.author_email }}
         KSAI_GIT_FILEMODE: ${{ steps.configure_git.outputs.filemode }}
-        CO_AUTHOR: ${{ steps.identity.outputs.coauthor || steps.jira_identity.outputs.co_author }}
-        RELEASED_BY: ${{ steps.jira_identity.outputs.released_by }}
+        CO_AUTHOR: ${{ steps.identity.outputs.coauthor }}
         DEFAULT_BRANCH: ${{ steps.issue.outputs.default_branch || steps.context.outputs.default_branch }}
         TRIGGER: ${{ inputs.trigger_phrase }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
@@ -4751,8 +4639,7 @@ runs:
         KSAI_GIT_AUTHOR_NAME: ${{ steps.identity.outputs.author_name }}
         KSAI_GIT_AUTHOR_EMAIL: ${{ steps.identity.outputs.author_email }}
         KSAI_GIT_FILEMODE: ${{ steps.configure_git.outputs.filemode }}
-        CO_AUTHOR: ${{ steps.identity.outputs.coauthor || steps.jira_identity.outputs.co_author }}
-        RELEASED_BY: ${{ steps.jira_identity.outputs.released_by }}
+        CO_AUTHOR: ${{ steps.identity.outputs.coauthor }}
         JIRA_KEY: ${{ steps.jira_ref.outputs.step_key || steps.jira_ref.outputs.plan_key }}
         COMMIT_AUTHOR_NAME: ${{ steps.identity.outputs.author_name }}
         COMMIT_AUTHOR_EMAIL: ${{ steps.identity.outputs.author_email }}
@@ -4863,8 +4750,7 @@ runs:
         KSAI_GIT_AUTHOR_NAME: ${{ steps.identity.outputs.author_name }}
         KSAI_GIT_AUTHOR_EMAIL: ${{ steps.identity.outputs.author_email }}
         KSAI_GIT_FILEMODE: ${{ steps.configure_git.outputs.filemode }}
-        CO_AUTHOR: ${{ steps.identity.outputs.coauthor || steps.jira_identity.outputs.co_author }}
-        RELEASED_BY: ${{ steps.jira_identity.outputs.released_by }}
+        CO_AUTHOR: ${{ steps.identity.outputs.coauthor }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: |
         set -euo pipefail
@@ -4893,8 +4779,7 @@ runs:
         KSAI_GIT_AUTHOR_NAME: ${{ steps.identity.outputs.author_name }}
         KSAI_GIT_AUTHOR_EMAIL: ${{ steps.identity.outputs.author_email }}
         KSAI_GIT_FILEMODE: ${{ steps.configure_git.outputs.filemode }}
-        CO_AUTHOR: ${{ steps.identity.outputs.coauthor || steps.jira_identity.outputs.co_author }}
-        RELEASED_BY: ${{ steps.jira_identity.outputs.released_by }}
+        CO_AUTHOR: ${{ steps.identity.outputs.coauthor }}
         JIRA_KEY: ${{ steps.jira_ref.outputs.step_key || steps.jira_ref.outputs.plan_key }}
         COMMIT_AUTHOR_NAME: ${{ steps.identity.outputs.author_name }}
         COMMIT_AUTHOR_EMAIL: ${{ steps.identity.outputs.author_email }}
@@ -4933,81 +4818,6 @@ runs:
           });
           for (const line of notices) core.info(line);
 
-    - name: Report the plan to the Jira ticket
-      id: report_jira_plan
-      if: >-
-        ${{ steps.publish.outputs.status == 'planned' && steps.approval.outputs.blocked != 'true' &&
-        inputs.dry_run == 'false' && steps.jira_ref.outputs.named == 'true' }}
-      uses: ./_ksai/.github/actions/ksai-jira-report
-      with:
-          event: planned
-          pr_url: ${{ steps.publish.outputs.pr_url }}
-          transition: ${{ inputs.jira_transition_on_plan }}
-          plan_key: ${{ steps.jira_ref.outputs.plan_key }}
-          step_key: ${{ steps.jira_ref.outputs.step_key }}
-          jira_cloud_id: ${{ inputs.jira_cloud_id }}
-          jira_projects: ${{ inputs.jira_projects }}
-          jira_client_id: ${{ inputs.jira_client_id }}
-          jira_client_secret: ${{ inputs.jira_client_secret }}
-          scripts_dir: ${{ runner.temp }}/ksai-scripts
-
-    - name: Report the approval wait to the Jira ticket
-      id: report_jira_waiting
-      if: >-
-        ${{ steps.approval.outputs.blocked == 'true' && inputs.dry_run == 'false' &&
-        (steps.size.outputs.phase == 'step' || steps.size.outputs.phase == 'plan-review' ||
-        steps.publish.outputs.status == 'planned') &&
-        steps.jira_ref.outputs.named == 'true' }}
-      uses: ./_ksai/.github/actions/ksai-jira-report
-      with:
-          event: waiting
-          pr_url: ${{ steps.publish.outputs.pr_url || steps.phase.outputs.pr_url }}
-          reason: ${{ steps.approval.outputs.stated_reason }}
-          transition: ${{ inputs.jira_transition_on_plan }}
-          plan_key: ${{ steps.jira_ref.outputs.plan_key }}
-          step_key: ${{ steps.jira_ref.outputs.step_key }}
-          jira_cloud_id: ${{ inputs.jira_cloud_id }}
-          jira_projects: ${{ inputs.jira_projects }}
-          jira_client_id: ${{ inputs.jira_client_id }}
-          jira_client_secret: ${{ inputs.jira_client_secret }}
-          scripts_dir: ${{ runner.temp }}/ksai-scripts
-
-    - name: Tell the Jira ticket a phase is waiting for approval
-      id: report_jira_paused
-      if: >-
-        ${{ steps.checkpoint.outputs.paused == 'true' && inputs.dry_run == 'false' &&
-        steps.jira_ref.outputs.named == 'true' }}
-      uses: ./_ksai/.github/actions/ksai-jira-report
-      with:
-          event: paused
-          pr_url: ${{ steps.publish.outputs.pr_url || steps.phase.outputs.pr_url }}
-          plan_key: ${{ steps.jira_ref.outputs.plan_key }}
-          step_key: ${{ steps.jira_ref.outputs.step_key }}
-          jira_cloud_id: ${{ inputs.jira_cloud_id }}
-          jira_projects: ${{ inputs.jira_projects }}
-          jira_client_id: ${{ inputs.jira_client_id }}
-          jira_client_secret: ${{ inputs.jira_client_secret }}
-          scripts_dir: ${{ runner.temp }}/ksai-scripts
-
-    - name: Report the release to the Jira ticket
-      id: report_jira_released
-      if: >-
-        ${{ inputs.dry_run == 'false' && (steps.record_release.outcome == 'success' ||
-        steps.checkpoint.outputs.release == 'true') && steps.jira_approval.outputs.account_id != '' &&
-        steps.jira_ref.outputs.named == 'true' && steps.release_checkpoint.outputs.remaining != '0' }}
-      uses: ./_ksai/.github/actions/ksai-jira-report
-      with:
-          event: released
-          actor: ${{ steps.jira_identity.outputs.display_name }}
-          pr_url: ${{ steps.phase.outputs.pr_url }}
-          plan_key: ${{ steps.jira_ref.outputs.plan_key }}
-          step_key: ${{ steps.jira_ref.outputs.step_key }}
-          jira_cloud_id: ${{ inputs.jira_cloud_id }}
-          jira_projects: ${{ inputs.jira_projects }}
-          jira_client_id: ${{ inputs.jira_client_id }}
-          jira_client_secret: ${{ inputs.jira_client_secret }}
-          scripts_dir: ${{ runner.temp }}/ksai-scripts
-
     - name: Verify, push and record the step
       id: record
       if: >-
@@ -5032,8 +4842,7 @@ runs:
         KSAI_GIT_AUTHOR_NAME: ${{ steps.identity.outputs.author_name }}
         KSAI_GIT_AUTHOR_EMAIL: ${{ steps.identity.outputs.author_email }}
         KSAI_GIT_FILEMODE: ${{ steps.configure_git.outputs.filemode }}
-        CO_AUTHOR: ${{ steps.identity.outputs.coauthor || steps.jira_identity.outputs.co_author }}
-        RELEASED_BY: ${{ steps.jira_identity.outputs.released_by }}
+        CO_AUTHOR: ${{ steps.identity.outputs.coauthor }}
         JIRA_KEY: ${{ steps.jira_ref.outputs.step_key || steps.jira_ref.outputs.plan_key }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: |
@@ -5067,8 +4876,7 @@ runs:
         KSAI_GIT_AUTHOR_NAME: ${{ steps.identity.outputs.author_name }}
         KSAI_GIT_AUTHOR_EMAIL: ${{ steps.identity.outputs.author_email }}
         KSAI_GIT_FILEMODE: ${{ steps.configure_git.outputs.filemode }}
-        CO_AUTHOR: ${{ steps.identity.outputs.coauthor || steps.jira_identity.outputs.co_author }}
-        RELEASED_BY: ${{ steps.jira_identity.outputs.released_by }}
+        CO_AUTHOR: ${{ steps.identity.outputs.coauthor }}
         JIRA_KEY: ${{ steps.jira_ref.outputs.step_key || steps.jira_ref.outputs.plan_key }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: |
@@ -5101,8 +4909,7 @@ runs:
         KSAI_GIT_AUTHOR_NAME: ${{ steps.identity.outputs.author_name }}
         KSAI_GIT_AUTHOR_EMAIL: ${{ steps.identity.outputs.author_email }}
         KSAI_GIT_FILEMODE: ${{ steps.configure_git.outputs.filemode }}
-        CO_AUTHOR: ${{ steps.identity.outputs.coauthor || steps.jira_identity.outputs.co_author }}
-        RELEASED_BY: ${{ steps.jira_identity.outputs.released_by }}
+        CO_AUTHOR: ${{ steps.identity.outputs.coauthor }}
         JIRA_KEY: ${{ steps.jira_ref.outputs.step_key || steps.jira_ref.outputs.plan_key }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: |
@@ -5220,8 +5027,7 @@ runs:
         KSAI_GIT_AUTHOR_NAME: ${{ steps.identity.outputs.author_name }}
         KSAI_GIT_AUTHOR_EMAIL: ${{ steps.identity.outputs.author_email }}
         KSAI_GIT_FILEMODE: ${{ steps.configure_git.outputs.filemode }}
-        CO_AUTHOR: ${{ steps.identity.outputs.coauthor || steps.jira_identity.outputs.co_author }}
-        RELEASED_BY: ${{ steps.jira_identity.outputs.released_by }}
+        CO_AUTHOR: ${{ steps.identity.outputs.coauthor }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: |
         set -euo pipefail
@@ -5254,43 +5060,6 @@ runs:
           for (const [name, value] of Object.entries(outputs)) core.setOutput(name, value);
           for (const line of notices) core.info(line);
           if (failure) core.setFailed(failure);
-
-    - name: Report the finish to the Jira ticket
-      id: report_jira_ready
-      if: >-
-        ${{ inputs.dry_run == 'false' && steps.finish.outcome == 'success' &&
-        steps.finish.outputs.ready == 'true' && steps.jira_ref.outputs.named == 'true' }}
-      uses: ./_ksai/.github/actions/ksai-jira-report
-      with:
-          event: ready
-          actor: ${{ steps.jira_identity.outputs.display_name }}
-          pr_url: ${{ steps.phase.outputs.pr_url }}
-          transition: ${{ inputs.jira_transition_on_ready }}
-          plan_key: ${{ steps.jira_ref.outputs.plan_key }}
-          step_key: ${{ steps.jira_ref.outputs.step_key }}
-          jira_cloud_id: ${{ inputs.jira_cloud_id }}
-          jira_projects: ${{ inputs.jira_projects }}
-          jira_client_id: ${{ inputs.jira_client_id }}
-          jira_client_secret: ${{ inputs.jira_client_secret }}
-          scripts_dir: ${{ runner.temp }}/ksai-scripts
-
-    - name: Report a landed step to the Jira ticket
-      id: report_jira_stepped
-      if: >-
-        ${{ steps.record.outputs.status == 'stepped' && steps.context.outputs.threadless == 'true' &&
-        inputs.dry_run == 'false' && steps.finish.outcome != 'success' }}
-      uses: ./_ksai/.github/actions/ksai-jira-report
-      with:
-          event: stepped
-          actor: ${{ steps.jira_identity.outputs.display_name }}
-          pr_url: ${{ steps.phase.outputs.pr_url }}
-          plan_key: ${{ steps.jira_ref.outputs.plan_key }}
-          step_key: ${{ steps.jira_ref.outputs.step_key }}
-          jira_cloud_id: ${{ inputs.jira_cloud_id }}
-          jira_projects: ${{ inputs.jira_projects }}
-          jira_client_id: ${{ inputs.jira_client_id }}
-          jira_client_secret: ${{ inputs.jira_client_secret }}
-          scripts_dir: ${{ runner.temp }}/ksai-scripts
 
     - name: Finalize the durable write report
       id: write_report
@@ -5436,55 +5205,6 @@ runs:
           });
           for (const [name, value] of Object.entries(outputs)) core.setOutput(name, value);
           for (const line of notices) core.info(line);
-
-    - name: Report a refused plan to the Jira ticket
-      id: report_jira_blocked
-      if: >-
-        ${{ always() && !cancelled() && inputs.dry_run == 'false' && steps.jira_ref.outputs.named == 'true'
-        && (steps.publish.outputs.status == 'blocked' || steps.open_draft.outputs.status == 'blocked' ||
-        steps.fetch_jira.outputs.error != '' ||
-        steps.phase.outputs.stop_notice != '' || steps.read_plan.outputs.error != '') }}
-      uses: ./_ksai/.github/actions/ksai-jira-report
-      with:
-          event: blocked
-          reason: ${{ steps.fetch_jira.outputs.error || steps.phase.outputs.stop_notice || steps.read_plan.outputs.error }}
-          reason_file: ${{ steps.publish.outputs.message_file || steps.open_draft.outputs.message_file }}
-          plan_key: ${{ steps.jira_ref.outputs.plan_key }}
-          step_key: ${{ steps.jira_ref.outputs.step_key }}
-          jira_cloud_id: ${{ inputs.jira_cloud_id }}
-          jira_projects: ${{ inputs.jira_projects }}
-          jira_client_id: ${{ inputs.jira_client_id }}
-          jira_client_secret: ${{ inputs.jira_client_secret }}
-          scripts_dir: ${{ runner.temp }}/ksai-scripts
-
-    - name: Report a stopped run to the Jira ticket
-      id: report_jira_stopped
-      if: >-
-        ${{ always() && !cancelled() && inputs.dry_run == 'false' && steps.jira_ref.outputs.named == 'true'
-        && steps.report_jira_blocked.outcome != 'success' &&
-        steps.report_jira_plan.outcome != 'success' && steps.report_jira_waiting.outcome != 'success' &&
-        steps.report_jira_released.outcome != 'success' && steps.report_jira_stepped.outcome != 'success' &&
-        steps.report_jira_ready.outcome != 'success' && (steps.authz.outputs.reason != '' ||
-        steps.select.outputs.notice != '' || steps.open_draft.outcome == 'failure' ||
-        steps.build_implement.outcome == 'failure' || steps.model_run.outputs.outcome == 'failure' ||
-        steps.publish.outcome == 'failure' || steps.record.outcome == 'failure' ||
-        steps.record_release.outcome == 'failure' || steps.finished.outcome == 'failure' ||
-        steps.finish.outcome == 'failure' || steps.finish.outputs.ready == 'false') }}
-      uses: ./_ksai/.github/actions/ksai-jira-report
-      with:
-          event: stopped
-          pr_url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          reason: >-
-            ${{ steps.authz.outputs.reason || steps.select.outputs.notice ||
-            steps.finish.outputs.reason || 'the workflow run failed before it could report. The run log
-            linked below is the record.' }}
-          plan_key: ${{ steps.jira_ref.outputs.plan_key }}
-          step_key: ${{ steps.jira_ref.outputs.step_key }}
-          jira_cloud_id: ${{ inputs.jira_cloud_id }}
-          jira_projects: ${{ inputs.jira_projects }}
-          jira_client_id: ${{ inputs.jira_client_id }}
-          jira_client_secret: ${{ inputs.jira_client_secret }}
-          scripts_dir: ${{ runner.temp }}/ksai-scripts
 
     - name: Comment when the run failed
       if: >-

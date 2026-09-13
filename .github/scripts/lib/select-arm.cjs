@@ -89,13 +89,9 @@ function armLabel(model, effort) {
   return level ? `${said}/${level}` : said;
 }
 
-const VALUE_OPTIONS = Object.freeze(['--model', '--effort', '--jira']);
+const VALUE_OPTIONS = Object.freeze(['--model', '--effort']);
 
 const JIRA_KEY_SHAPE = /^[A-Z][A-Z0-9]{1,9}-[1-9][0-9]{0,9}$/;
-
-const JIRA_ACCOUNT_CORE = '[A-Za-z0-9](?:[A-Za-z0-9:_-]{0,126}[A-Za-z0-9])?';
-
-const JIRA_ACCOUNT_SHAPE = new RegExp(`^${JIRA_ACCOUNT_CORE}$`);
 
 const FLAGS = Object.freeze(['--force', '--plan', '--no-plan', '--plan-given', '--dry-run']);
 
@@ -982,22 +978,6 @@ function selectArm({
     model = resolved;
   }
 
-  let jiraKey = null;
-  if ('--jira' in requested) {
-    const wanted = requested['--jira'].toUpperCase();
-    if (!JIRA_KEY_SHAPE.test(wanted)) {
-      return reject(`\`--jira\` needs a Jira issue key like \`KONG-1234\`, got: ${safeEcho(requested['--jira'])}`);
-    }
-    if (!plansWorkHere(command, onIssue)) {
-      return reject(
-        '`--jira` names the work to plan, so it belongs on a request that starts work from a ticket - ' +
-          `${PLAN_ASK_COMMANDS.map((named) => `\`${named}\``).join(' or ')} on an issue - rather than on ` +
-          `\`${safeEcho(command)}\` here`,
-      );
-    }
-    jiraKey = wanted;
-  }
-
   let usedTriage = false;
   const wantTier = String(triage?.tier ?? '');
   if (wantTier && !('--model' in requested)) {
@@ -1068,7 +1048,6 @@ function selectArm({
     dryRun,
     planAsk,
     planGiven,
-    jiraKey,
     selectedBy: '--model' in requested || '--effort' in requested ? 'comment' : usedTriage ? 'triage' : 'input',
     modelSelectedBy: '--model' in requested ? 'comment' : usedTriage && model !== fallbackModel ? 'triage' : 'input',
     effortSelectedBy: '--effort' in requested ? 'comment' : usedTriage && effort !== fallbackEffort ? 'triage' : 'input',
@@ -1245,8 +1224,6 @@ module.exports = {
   shortModel,
   armLabel,
   JIRA_KEY_SHAPE,
-  JIRA_ACCOUNT_CORE,
-  JIRA_ACCOUNT_SHAPE,
   parseAllowedModels,
   resolveModel,
   parseOptions,

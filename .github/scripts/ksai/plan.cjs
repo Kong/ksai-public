@@ -1,7 +1,7 @@
 
 const { createHash } = require('node:crypto');
 const { escapeForRegExp, triggerPhrases, DEFAULT_TRIGGER_PHRASE } = require('../lib/text.cjs');
-const { asAlert, JIRA_KEY_SHAPE, JIRA_ACCOUNT_CORE } = require('../lib/select-arm.cjs');
+const { asAlert, JIRA_KEY_SHAPE } = require('../lib/select-arm.cjs');
 const { SITE, aboutLink, marked } = require('./marker.cjs');
 const { nativeApprovalMarker } = require('./native-approval-ref.cjs');
 const { COMMIT_TYPES, BRANCH_SHAPE, FLOW_BRANCH_SHAPE, JIRA_BRANCH_SHAPE, safeEcho } = require('./verify-chunk.cjs');
@@ -1083,27 +1083,16 @@ const RELEASE_MARKER_PREFIX = '<!-- ksai-released:';
 
 const GITHUB_RELEASE_SHAPE = new RegExp(`^github\\/(${LOGIN_SHAPE.source.slice(1, -1)})$`);
 
-const JIRA_RELEASE_SHAPE = new RegExp(`^jira\\/(${JIRA_ACCOUNT_CORE})$`);
-
-function releaseRef({ login = null, accountId = null } = {}) {
+function releaseRef({ login = null } = {}) {
   const who = String(login ?? '').trim();
-  if (who) {
-    const ref = `github/${who}`;
-    return GITHUB_RELEASE_SHAPE.test(ref) ? ref : null;
-  }
-  const account = String(accountId ?? '').trim();
-  if (!account) return null;
-  const ref = `jira/${account}`;
-  return JIRA_RELEASE_SHAPE.test(ref) ? ref : null;
+  if (!who) return null;
+  const ref = `github/${who}`;
+  return GITHUB_RELEASE_SHAPE.test(ref) ? ref : null;
 }
 
 function readRelease(value) {
-  const ref = String(value ?? '');
-  const github = GITHUB_RELEASE_SHAPE.exec(ref);
-  if (github) return { kind: 'github', login: github[1] };
-  const jira = JIRA_RELEASE_SHAPE.exec(ref);
-  if (jira) return { kind: 'jira', accountId: jira[1] };
-  return null;
+  const github = GITHUB_RELEASE_SHAPE.exec(String(value ?? ''));
+  return github ? { kind: 'github', login: github[1] } : null;
 }
 
 const MARKER_SHAPES = new Map();
@@ -1138,22 +1127,17 @@ function releaseOf(body) {
   return markerValue(body, RELEASE_MARKER_PREFIX, readRelease);
 }
 
-const RELEASED_BY_SHAPE = new RegExp(`^[^\\n<>()]+ \\(jira:${JIRA_ACCOUNT_CORE}\\)$`);
-
 const CREDIT_HEADING = '## Additional information';
 
 const ASKED_SHAPE = /^- (?:\[Requested\]\((?<where>[^)\s]+)\)|Requested) by (?<who>@[A-Za-z0-9-]+|`[^`\n]+`)\.?$/;
 
-function approverOf(ref, name) {
+function approverOf(ref) {
   const read = readRelease(String(ref ?? ''));
-  if (!read) return null;
-  if (read.kind === 'github') return `@${read.login}`;
-  const said = String(name ?? '').trim();
-  return RELEASED_BY_SHAPE.test(said) ? said : null;
+  return read ? `@${read.login}` : null;
 }
 
-function creditLine(ref, { name = null, url = null, asked = null } = {}) {
-  const who = approverOf(ref, name);
+function creditLine(ref, { url = null, asked = null } = {}) {
+  const who = approverOf(ref);
   if (who === null) return null;
   const at = String(url ?? '');
   const verb = URL_SHAPE.test(at) ? `[approved](${at})` : 'approved';
@@ -1163,13 +1147,11 @@ function creditLine(ref, { name = null, url = null, asked = null } = {}) {
   return `${asked.head} by ${asked.who}, ${verb} by ${who}`;
 }
 
-const APPROVED_SHAPE = /(?:^-? ?|, |and )(?:\[approved\]\((?<where>[^)\s]+)\)|approved) by (?<who>@[A-Za-z0-9-]+|[^\n]+ \(jira:[^)\n]+\))$/im;
+const APPROVED_SHAPE = /(?:^-? ?|, |and )(?:\[approved\]\((?<where>[^)\s]+)\)|approved) by (?<who>@[A-Za-z0-9-]+)$/im;
 
 function approvalIn(body) {
   const found = APPROVED_SHAPE.exec(creditSpan(String(body ?? '')).said);
-  if (!found) return { name: null, url: null };
-  const who = found.groups.who;
-  return { name: who.startsWith('@') ? null : who, url: found.groups.where ?? null };
+  return { url: found?.groups.where ?? null };
 }
 
 function askedIn(said) {
@@ -1218,14 +1200,14 @@ function withCredit(body, line, asked) {
   return above + [...lines.slice(0, last + 1), line, ...lines.slice(last + 1)].join('\n') + below;
 }
 
-function withRelease(body, ref, { name = null, url = null } = {}) {
+function withRelease(body, ref, { url = null } = {}) {
   const text = String(body ?? '');
   const value = String(ref ?? '');
   if (!readRelease(value)) return null;
   if (releaseOf(text)) return { body: text, changed: false };
   const span = creditSpan(text).said;
   const asked = askedIn(span);
-  const credit = APPROVED_SHAPE.test(span) ? null : creditLine(value, { name, url, asked });
+  const credit = APPROVED_SHAPE.test(span) ? null : creditLine(value, { url, asked });
   const said = credit ? withCredit(text, credit, asked) : text;
   return { body: appended(said, `${RELEASE_MARKER_PREFIX} ${value} -->`), changed: true };
 }
@@ -1517,7 +1499,6 @@ module.exports = {
   holdMarker,
   withHold,
   withoutHold,
-  RELEASED_BY_SHAPE,
   jiraBrowseUrl,
   REGION_BEGIN,
   REGION_END,

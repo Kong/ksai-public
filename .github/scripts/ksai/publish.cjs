@@ -17,7 +17,7 @@ const { renderAwaiting, awaitingKind } = require('./gate.cjs');
 const { workRefFor } = require('./context.cjs');
 const { KINDS, KIND_TABLE, payloadFor, marked } = require('./marker.cjs');
 const { decideFinish } = require('./phase.cjs');
-const { checkStep, creditOf, oneLine, parseBody, scrub } = require('./plan.cjs');
+const { checkStep, creditOf, parseBody, scrub } = require('./plan.cjs');
 const { asAlert } = require('../lib/select-arm.cjs');
 const { renderClassifierFooter } = require('./classify.cjs');
 
@@ -35,10 +35,6 @@ function decideFinished(env) {
 }
 
 async function markReady({ github, core, owner, repo, env }) {
-  const outputs = {
-    ready: 'false',
-    reason: '',
-  };
   const { data: pull } = await github.rest.pulls.get({
     owner,
     repo,
@@ -60,11 +56,8 @@ async function markReady({ github, core, owner, repo, env }) {
     dryRun: env.DRY_RUN === 'true',
   });
 
-  if (out.error) return { outputs, notices: [], failure: out.error };
-  if (out.ready === true) outputs.ready = 'true';
-  else if (out.ready === false) outputs.reason = oneLine(out.reason ?? '', { triggerPhrase: env.TRIGGER });
-  else outputs.ready = '';
-  return { outputs, notices: [`ready=${out.ready}, notified=${out.notified ?? 'nobody'}`], failure: null };
+  if (out.error) return { outputs: {}, notices: [], failure: out.error };
+  return { outputs: {}, notices: [`ready=${out.ready}, notified=${out.notified ?? 'nobody'}`], failure: null };
 }
 
 async function say({ github, owner, repo, target, notice, env, warnings }) {
@@ -144,6 +137,11 @@ async function dispatchNext({ github, core, owner, repo, env, fetch: call = glob
       warnings: [],
     };
   }
+  if (workRef !== '') {
+    return undispatched(
+      'no control plane holds the work for this ticket, and a run started without its record could not read the work item',
+    );
+  }
 
   const out = await dispatchSuccessor({
     github,
@@ -155,7 +153,7 @@ async function dispatchNext({ github, core, owner, repo, env, fetch: call = glob
     ref: env.REF,
     checkProtection: verdict.attempt === 0,
     inputs: {
-      ...(workRef ? { work_ref: workRef } : { issue_number: env.ISSUE_NUM }),
+      issue_number: env.ISSUE_NUM,
       attempt: String(verdict.attempt + 1),
       stall: String(verdict.stall),
       prev_remaining: verdict.remainingForSuccessor,

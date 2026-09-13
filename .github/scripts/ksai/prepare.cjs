@@ -28,7 +28,6 @@ const { DEFAULT_TRIGGER_PHRASE, afterTrigger } = require('../lib/text.cjs');
 const { labelReaders, readLabelBasis, readReviewBasis, recordBasis } = require('./label-basis.cjs');
 const loadKsaiConfig = require('./config.cjs');
 const {
-  AUTHZ_REASONS,
   COMMENT_EVENT,
   CONTINUATION_EVENT,
   REVIEW_COMMENT_EVENT,
@@ -52,7 +51,7 @@ const {
   resolveSubject,
 } = require('./phase.cjs');
 const path = require('node:path');
-const { isPlanFile, planDirOf, planFilePathFor, pullUrl, readRelease, scrub, withoutHold } = require('./plan.cjs');
+const { isPlanFile, planDirOf, planFilePathFor, readRelease, scrub, withoutHold } = require('./plan.cjs');
 const {
   renderDirectPrompt,
   renderDoPrompt,
@@ -229,7 +228,6 @@ async function selectImplementArm({ github, core, owner, repo, env }) {
     model_source: '',
     effort_source: '',
     guidance_html: '',
-    jira_key: '',
     plan_mode: '',
     route_source: out.routeSource ?? '',
     route_surface: '',
@@ -307,7 +305,6 @@ async function selectImplementArm({ github, core, owner, repo, env }) {
       effort_source: out.effortSelectedBy,
       guidance_html: out.guidanceHtml,
       plan_given: out.planGiven === true ? 'true' : 'false',
-      jira_key: out.jiraKey ?? '',
       route_surface: out.routeSurface,
       receipt: out.receipt,
     });
@@ -605,7 +602,6 @@ function resolveAuth(env) {
   const outputs = {
     ok: out.ok ? 'true' : 'false',
     why: out.why,
-    reason: out.ok ? '' : (AUTHZ_REASONS[out.why] ?? ''),
   };
   return { outputs, notices: [`authorized=${out.ok} (${out.why})`] };
 }
@@ -637,7 +633,6 @@ async function resolveCheckpoint({ github, owner, repo, env }) {
     threadRootId: env.THREAD_ROOT_ID,
     dispatched: env.DISPATCHED,
     reviewId: env.REVIEW_ID,
-    jiraToken: env.JIRA_TOKEN,
   });
   const asked = {
     atCheckpoint: env.AT_CHECKPOINT,
@@ -646,7 +641,6 @@ async function resolveCheckpoint({ github, owner, repo, env }) {
     write: env.WRITE_ACCESS,
     writeAccessCommands: env.WRITE_ACCESS_COMMANDS,
     disabledCommands: env.DISABLED_COMMANDS,
-    jiraToken: env.JIRA_TOKEN,
     commentEdited: env.COMMENT_EDITED,
   };
   const seen = needsReleaseRead(asked)
@@ -666,7 +660,6 @@ async function resolveCheckpoint({ github, owner, repo, env }) {
   const outputs = {
     release: out.release ? 'true' : 'false',
     waiting: out.waiting ? 'true' : 'false',
-    paused: out.waiting && out.reason !== 'already-released' ? 'true' : 'false',
     reason: out.reason,
     detail,
     release_token: out.release ? token : '',
@@ -734,7 +727,6 @@ async function decidePhase({ github, core, owner, repo, env }) {
     ref: '',
     is_draft: '',
     pr_number: '',
-    pr_url: '',
     pending: '',
     deferred: '',
     disputed: '',
@@ -769,7 +761,6 @@ async function decidePhase({ github, core, owner, repo, env }) {
     ref: out.ref,
     is_draft: out.isDraft,
     pr_number: out.prNumber,
-    pr_url: pullUrl({ serverUrl: env.SERVER_URL, repository: env.REPOSITORY, prNumber: out.prNumber }),
     pending: out.pending,
     deferred: out.deferred,
     disputed: out.disputed,
@@ -1037,7 +1028,6 @@ async function readPlan({ github, owner, repo, env }) {
     at_checkpoint: '',
     jira_key: '',
     release_ref: '',
-    release_kind: '',
     requested_by: '',
     held: '',
   };
@@ -1078,7 +1068,6 @@ async function readPlan({ github, owner, repo, env }) {
     at_checkpoint: out.atCheckpoint ? 'true' : 'false',
     jira_key: out.criteria?.kind === 'jira' ? out.criteria.key : '',
     release_ref: out.releasedRef ?? '',
-    release_kind: readRelease(out.releasedRef ?? '')?.kind ?? '',
     requested_by: out.requestedBy ?? '',
   });
   return { outputs };
@@ -1442,14 +1431,10 @@ function buildPrompt({ env }) {
   return { outputs, failure: null };
 }
 
-const stated = (outputs) =>
-  Object.assign(outputs, { stated_reason: outputs.reason === 'awaiting-approval' ? '' : outputs.reason });
-
 async function resolveApprovalGate({ github, core, owner, repo, env, authorize, writeAccess }) {
   const outputs = {
     blocked: 'true',
     reason: '',
-    stated_reason: '',
     approval_url: '',
     approval_thread: '',
     approval_ref: '',
@@ -1464,7 +1449,7 @@ async function resolveApprovalGate({ github, core, owner, repo, env, authorize, 
   const config = applies ? await loadKsaiConfig({ github, core, owner, repo }) : { aliases: null };
   if (config.error) {
     outputs.reason = `could not read the command aliases, so an approval cannot be recognised: ${config.error}`;
-    return { outputs: stated(outputs), notices: [] };
+    return { outputs, notices: [] };
   }
 
   const opened = applies
@@ -1472,7 +1457,7 @@ async function resolveApprovalGate({ github, core, owner, repo, env, authorize, 
     : { commands: [] };
   if (opened.error) {
     outputs.reason = `could not read which commands write access releases here: ${opened.error}`;
-    return { outputs: stated(outputs), notices: [] };
+    return { outputs, notices: [] };
   }
 
   const out = await resolveApproval({
@@ -1489,8 +1474,6 @@ async function resolveApprovalGate({ github, core, owner, repo, env, authorize, 
     trigger: env.TRIGGER,
     commandAliases: config.aliases,
     releasedRef: env.RELEASED_REF,
-    jiraApprover: env.JIRA_APPROVER,
-    jiraApproverBlock: env.JIRA_APPROVER_BLOCK,
     knownOwner: env.CHECKED_OWNER,
     disabledCommands: env.DISABLED_COMMANDS,
     nativeReview: {
@@ -1519,7 +1502,7 @@ async function resolveApprovalGate({ github, core, owner, repo, env, authorize, 
     open_threads: out.openThreads == null ? '' : String(out.openThreads),
     overrode: out.blocked === false && out.overrode === true ? 'true' : 'false',
   });
-  return { outputs: stated(outputs), notices: [describeApproval(out)] };
+  return { outputs, notices: [describeApproval(out)] };
 }
 
 module.exports = {

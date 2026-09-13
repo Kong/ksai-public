@@ -115,9 +115,6 @@ async function withoutScan({
   writeAccess = null,
   writeAccessCommands = NO_WRITE_ACCESS,
   disabledCommands = null,
-  releasedRef = null,
-  jiraApprover = null,
-  jiraApproverBlock = null,
 } = {}) {
   if (!approvalApplies({ required, phase })) {
     return { required: false, blocked: false };
@@ -146,39 +143,6 @@ async function withoutScan({
   }
   if (!Number.isSafeInteger(Number(prNumber)) || Number(prNumber) <= 0) {
     return { required: true, blocked: true, reason: 'awaiting-approval', candidates: 0 };
-  }
-
-  const already = readRelease(releasedRef);
-
-  const jiraBlock = String(jiraApproverBlock ?? '').trim();
-  if (jiraBlock) {
-    return { required: true, blocked: true, reason: jiraBlock, candidates: 0 };
-  }
-
-  const fromJira = String(jiraApprover ?? '').trim();
-  if (fromJira) {
-    const ref = releaseRef({ accountId: fromJira });
-    if (ref === null) {
-      return { required: true, blocked: true, reason: `\`${fromJira}\` is not an Atlassian account id` };
-    }
-    return {
-      required: true,
-      blocked: false,
-      released: already?.kind === 'jira',
-      release: { kind: 'jira', accountId: fromJira },
-      releaseRef: ref,
-    };
-  }
-
-  if (already?.kind === 'jira') {
-    return {
-      required: true,
-      blocked: true,
-      reason:
-        'the plan records a release from Jira, and this run could not confirm it. Check that the approval ' +
-        'label is still on the ticket and that `jira_approver_group` is still set.',
-      candidates: 0,
-    };
   }
 
   return null;
@@ -230,8 +194,6 @@ async function resolveApproval({
   knownOwner = null,
   disabledCommands = null,
   releasedRef = null,
-  jiraApprover = null,
-  jiraApproverBlock = null,
   nativeReview = null,
 } = {}) {
   const settled = await withoutScan({
@@ -243,9 +205,6 @@ async function resolveApproval({
     writeAccess,
     writeAccessCommands,
     disabledCommands,
-    releasedRef,
-    jiraApprover,
-    jiraApproverBlock,
   });
   if (settled !== null) {
     if (settled.required !== true || settled.blocked !== false) return settled;

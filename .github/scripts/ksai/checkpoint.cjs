@@ -6,9 +6,16 @@ const {
   commandEnabled,
   writeAccessNames,
   releaserOf,
-  JIRA_ACCOUNT_CORE,
 } = require('../lib/select-arm.cjs');
-const { LOGIN_SHAPE, PHASE_MARKER_PREFIX, appended, markerValues, scrub, shapesIn } = require('./plan.cjs');
+const {
+  LOGIN_SHAPE,
+  PHASE_MARKER_PREFIX,
+  POSITIVE_ID_SHAPE,
+  appended,
+  markerValues,
+  scrub,
+  shapesIn,
+} = require('./plan.cjs');
 const { PAGE_SIZE: RELEASE_PER_PAGE, probeComments } = require('./pages.cjs');
 const { offersPlan, ownState, EDITED, FOREIGN, UNEDITED } = require('./approval.cjs');
 const { counted, plural } = require('../lib/text.cjs');
@@ -16,23 +23,15 @@ const { counted, plural } = require('../lib/text.cjs');
 const RELEASE_MARKER_PREFIX = PHASE_MARKER_PREFIX;
 const COMMENT_SPACES = Object.freeze(['issue', 'thread', 'review', 'dispatch']);
 
-const RELEASE_TOKEN_CORE = `(?:${COMMENT_SPACES.join('|')})\\/[1-9][0-9]{0,17}|[1-9][0-9]{0,17}|jira\\/${JIRA_ACCOUNT_CORE}\\/[0-9a-f]{12}`;
+const ID_CORE = POSITIVE_ID_SHAPE.source.slice(1, -1);
+
+const RELEASE_TOKEN_CORE = `(?:${COMMENT_SPACES.join('|')})\\/${ID_CORE}|${ID_CORE}`;
 
 const RELEASE_TOKEN_SHAPE = new RegExp(`^(?:${RELEASE_TOKEN_CORE})$`);
 
 const RELEASE_VALUE_SHAPE = new RegExp(`^(${RELEASE_TOKEN_CORE})(?::([1-9][0-9]{0,2}))?$`);
 
 const MAX_RELEASE_PAGES = 5;
-
-const PLAN_RELEASE_MARKER_PREFIX = '<!-- ksai-plan-release:';
-
-function planReleaseMarker(token) {
-  const wanted = String(token ?? '').trim();
-  return RELEASE_TOKEN_SHAPE.test(wanted) ? `${PLAN_RELEASE_MARKER_PREFIX}${wanted} -->` : '';
-}
-
-const planReleasesIn = (body) =>
-  markerValues(body, PLAN_RELEASE_MARKER_PREFIX, (value) => (RELEASE_TOKEN_SHAPE.test(value) ? value : null));
 
 function releaseMarker(token, at = 0) {
   const bound = Number(at) > 0 ? `:${String(Number(at))}` : '';
@@ -54,16 +53,11 @@ function withPhaseRelease(body, token, at = 0) {
   return { body: appended(text, releaseMarker(wanted, at)), changed: true };
 }
 
-function phaseReleaseOf(body) {
-  return releasesIn(body).at(-1)?.token ?? null;
-}
-
 async function releasedTokens({ github = null, owner = null, repo = null, prNumber = null, botLogin = null } = {}) {
   const known = String(botLogin ?? '').trim();
   if (!known) {
     return {
       tokens: new Set(),
-      planTokens: new Set(),
       bound: [],
       shape: null,
       sealed: null,
@@ -73,7 +67,6 @@ async function releasedTokens({ github = null, owner = null, repo = null, prNumb
   }
 
   const tokens = new Set();
-  const planTokens = new Set();
   const bound = [];
   let shape = null;
   let sealed = null;
@@ -95,7 +88,6 @@ async function releasedTokens({ github = null, owner = null, repo = null, prNumb
         if (releasesIn(comment?.body).length > 0) editedRelease = true;
         return;
       }
-      for (const token of planReleasesIn(comment.body)) planTokens.add(token);
       const release = releasesIn(comment.body).at(-1);
       if (release !== undefined) {
         tokens.add(release.token);
@@ -109,7 +101,7 @@ async function releasedTokens({ github = null, owner = null, repo = null, prNumb
     },
   });
 
-  const answer = { tokens, planTokens, bound, shape, sealed, editedRelease };
+  const answer = { tokens, bound, shape, sealed, editedRelease };
   if (unreadable) return { ...answer, unreadable };
   if (editedShape) {
     return {
@@ -132,7 +124,7 @@ async function alreadyReleased({
 } = {}) {
   const wanted = String(commentId ?? '').trim();
   if (!RELEASE_TOKEN_SHAPE.test(wanted)) {
-    return { released: false, unreadable: `\`${wanted}\` is not a comment id or a Jira release` };
+    return { released: false, unreadable: `\`${wanted}\` is not a comment id` };
   }
   const known = String(botLogin ?? '').trim();
   if (!known) return { released: false, unreadable: 'no bot login was given to gate the marker on' };
@@ -147,7 +139,7 @@ async function alreadyReleased({
   if (releasesIn(body).some((release) => release.token === wanted)) return { released: true, unreadable: null };
 
   const seen = await releasedTokens({ github, owner, repo, prNumber, botLogin });
-  if (seen.tokens.has(wanted) || seen.planTokens.has(wanted)) return { released: true, unreadable: null };
+  if (seen.tokens.has(wanted)) return { released: true, unreadable: null };
   return { released: false, unreadable: seen.unreadable };
 }
 
@@ -160,7 +152,6 @@ function withoutRelease({
   write = null,
   writeAccessCommands = null,
   disabledCommands = null,
-  jiraToken = null,
   commentEdited = null,
 } = {}) {
   if (String(atCheckpoint) !== 'true') return { release: false, waiting: false, reason: 'no-checkpoint' };
@@ -181,9 +172,7 @@ function withoutRelease({
     if (!bar.authorized) return { release: false, waiting: true, reason: 'unauthorized' };
     return null;
   }
-  const fromJira = String(jiraToken ?? '').trim();
-  if (fromJira === '') return { release: false, waiting: true, reason: 'no-approval' };
-  return RELEASE_TOKEN_SHAPE.test(fromJira) ? null : { release: false, waiting: true, reason: 'unauthorized' };
+  return { release: false, waiting: true, reason: 'no-approval' };
 }
 
 function spaceOf({ threadRootId, dispatched }) {
@@ -197,9 +186,8 @@ function releaseTokenFor({
   threadRootId = null,
   dispatched = null,
   reviewId = null,
-  jiraToken = null,
 } = {}) {
-  if (!isApprove(command)) return String(jiraToken ?? '').trim();
+  if (!isApprove(command)) return '';
   const said = String(commentId ?? '').trim();
   if (said !== '') return `${spaceOf({ threadRootId, dispatched })}/${said}`;
   const submitted = String(reviewId ?? '').trim();
@@ -337,9 +325,7 @@ module.exports = {
   RELEASE_MARKER_PREFIX,
   MAX_RELEASE_PAGES,
   RELEASE_PER_PAGE,
-  planReleaseMarker,
   releaseMarker,
-  phaseReleaseOf,
   releasesIn,
   releasedTokens,
   withPhaseRelease,

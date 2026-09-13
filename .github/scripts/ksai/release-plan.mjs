@@ -24,7 +24,6 @@ const {
 } = require('./plan.cjs');
 const { NUMBER_SHAPE } = require('./context.cjs');
 const { safeEcho } = require('./verify-chunk.cjs');
-const { planReleaseMarker } = require('./checkpoint.cjs');
 const { FOREIGN, ownState, vouchedOwn, withLastEdits } = require('./approval.cjs');
 import { runCommand } from './run.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
@@ -89,7 +88,6 @@ export async function releasePlan({
   bodyFile = null,
   serverUrl = null,
   marker = null,
-  phaseToken = null,
   run = runCommand,
 } = {}) {
   const number = String(prNumber ?? '');
@@ -175,7 +173,6 @@ export async function releasePlan({
 
   const digest = stepDigest(rendered.body);
   const shape = renderShape(rendered.checkpoints, trusted, { sealedWith: digest });
-  const planGate = planReleaseMarker(phaseToken);
   if (!shape || !digest) {
     return block(`The plan holds ${String(rendered.checkpoints)} phase boundaries, which cannot be recorded.`);
   }
@@ -185,7 +182,7 @@ export async function releasePlan({
         'as its own commit here. This comment seals what was approved, so rewording a task or changing a phase ' +
         'boundary stops the next run',
       { triggerPhrase },
-    ) + `\n\n${shape}${planGate ? `\n${planGate}` : ''}`,
+    ) + `\n\n${shape}`,
     { ...marker, kind: 'plan-approved', triggerPhrase },
   );
   if (!run('gh', ['pr', 'comment', number, '--repo', repo, '--body', said]).ok) {
@@ -232,7 +229,6 @@ export async function main(env = process.env, { run = runCommand } = {}) {
     bodyFile: path.join(tmp, 'ksai-pr-body.md'),
     serverUrl: env.GITHUB_SERVER_URL,
     marker: payloadFor(env, {}),
-    phaseToken: env.PHASE_TOKEN,
     run,
   });
 
