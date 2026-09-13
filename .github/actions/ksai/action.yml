@@ -3586,6 +3586,11 @@ runs:
         MERGED_REF: ${{ steps.merge_base.outputs.merged_ref }}
         MERGE_CONFLICTED: ${{ steps.merge_base.outputs.conflicted }}
         GUIDANCE: ${{ steps.phase.outputs.request || inputs.work_guidance }}
+        SAW_TRIGGER: ${{ steps.dispatch_record.outputs.trigger }}
+        SAW_RUN: ${{ steps.dispatch_record.outputs.trigger_run }}
+        SAW_ATTEMPT: ${{ steps.dispatch_record.outputs.trigger_attempt }}
+        SAW_STATE: ${{ steps.dispatch_record.outputs.trigger_state }}
+        SAW_NAME: ${{ steps.dispatch_record.outputs.trigger_name }}
         DENIED_PATHS: ${{ inputs.denied_paths }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:

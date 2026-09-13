@@ -64,6 +64,61 @@ const SHA_SHAPE = /^[0-9a-fA-F]{40}$/;
 const LABEL_MAX = 50;
 
 /**
+ * TRIGGERS is what the control plane may say set a run going, and TRIGGER_STATES what it may say that
+ * thing reported. Both are words it chooses from sets of its own, so a run states them plainly.
+ *
+ * SHOWABLE_NAME is the alphabet the one author-written value is drawn from: a workflow file is named
+ * by whoever added it and a status context by whoever reports it. The control plane holds the same
+ * alphabet, and it has no angle bracket in it, so the name cannot spell the constraint block a run
+ * puts it inside - which is the property that survives without anyone listing the ways to hide a
+ * character. The one addition is the ellipsis the control plane appends to a name it cut, which is
+ * its own mark rather than the author's, and refusing it here would drop every long name.
+ *
+ * None of these refuses a run. They are evidence rather than a boundary, so a word this release does
+ * not know is dropped and the run carries on with what it has: refusing would redden every autofix
+ * dispatch in a repository the day the control plane learned one more.
+ */
+export const TRIGGERS = Object.freeze([
+  'build_failed', 'status_failed', 'labeled', 'review_submitted', 'comment', 'opened', 'review_requested',
+]);
+
+export const TRIGGER_STATES = Object.freeze([
+  'failure', 'timed_out', 'error', 'changes_requested', 'commented', 'approved', 'dismissed',
+]);
+
+const SHOWABLE_NAME = /^[A-Za-z0-9 ._/:-]+\u2026?$/;
+
+/*
+ * NAME_BOUND is the control plane's own cut, and the ellipsis is the one character it may add past
+ * it. Both counted in UTF-16 units, which is the same number as its bytes: the alphabet above is
+ * ASCII, so a name that fits its 256-byte cut fits this, and one that does not was never sent.
+ */
+const NAME_BOUND = 256;
+
+const CUT_MARK = '\u2026';
+
+const COUNT_SHAPE = /^[1-9][0-9]{0,18}$/;
+
+/** oneOf answers a value from a set the control plane chooses from, or empty for anything else. */
+const oneOf = (value, of) => (typeof value === 'string' && of.includes(value) ? value : '');
+
+/** counted answers a positive whole number as it was written, or empty. */
+const counted = (value) => (typeof value === 'string' && COUNT_SHAPE.test(value) ? value : '');
+
+/*
+ * showable answers the name a run may be shown, or empty.
+ *
+ * Trimmed because a name of nothing but spaces is inside the alphabet and would render a heading over
+ * a blank line, which reads as a name this action lost rather than as one nobody wrote.
+ */
+function showable(value) {
+  if (typeof value !== 'string') return '';
+  const name = value.trim();
+  const bound = name.endsWith(CUT_MARK) ? NAME_BOUND + CUT_MARK.length : NAME_BOUND;
+  return name.length <= bound && SHOWABLE_NAME.test(name) ? name : '';
+}
+
+/**
  * narrows reports whether a scope names work this runner does. A record naming work it does not is
  * refused rather than passed on empty: an empty scope narrows nothing, so passing it on would widen the
  * run to everything the control plane meant to keep it away from.
@@ -186,6 +241,8 @@ function recordFrom(served) {
 
   const {
     command, label, pr, head_sha: headSha, scope, requester, model, effort, guidance, work_item: workItem,
+    trigger, trigger_run: triggerRun, trigger_attempt: triggerAttempt,
+    trigger_state: triggerState, trigger_name: triggerName,
   } = /** @type {Record<string, unknown>} */ (served);
   if (command !== undefined && (typeof command !== 'string' || !COMMANDS.includes(command))) {
     throw stopped('the record names a command this runner does not answer');
@@ -224,6 +281,11 @@ function recordFrom(served) {
     pr: text(pr),
     head_sha: text(headSha).toLowerCase(),
     scope: text(scope),
+    trigger: oneOf(trigger, TRIGGERS),
+    triggerRun: counted(triggerRun),
+    triggerAttempt: counted(triggerAttempt),
+    triggerState: oneOf(triggerState, TRIGGER_STATES),
+    triggerName: showable(triggerName),
     requester: text(requester),
     model: text(model),
     effort: text(effort),
@@ -297,6 +359,11 @@ export async function readRecord({
       pr: '',
       head_sha: '',
       scope: '',
+      trigger: '',
+      triggerRun: '',
+      triggerAttempt: '',
+      triggerState: '',
+      triggerName: '',
       requester: '',
       model: '',
       effort: '',

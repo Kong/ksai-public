@@ -669,6 +669,23 @@ async function resolveCheckpoint({ github, owner, repo, env }) {
   return { outputs, notices: [detail === '' ? said : `${said}: ${detail}`] };
 }
 
+/**
+ * sawFrom reads what the control plane said it saw, from the values the record action passed on.
+ *
+ * Every one of them is already bounded by the reader: the trigger and the state are words from sets
+ * the control plane chooses from, the run and the attempt are numbers, and the name is drawn from an
+ * alphabet that cannot spell the constraint block. This only gathers them.
+ */
+function sawFrom(env) {
+  return {
+    trigger: env.SAW_TRIGGER,
+    run: env.SAW_RUN,
+    attempt: env.SAW_ATTEMPT,
+    state: env.SAW_STATE,
+    name: env.SAW_NAME,
+  };
+}
+
 function plannedByDispatch(env) {
   if (String(env.AUTHZ_WHY ?? '') !== 'continuation') return '';
   return (
@@ -1294,6 +1311,7 @@ const PHASES = Object.freeze(
           issueJson,
           jiraJson,
           jiraKey: env.JIRA_KEY,
+          saw: sawFrom(env),
           budgetMinutes: ceilingMinutes(env.JOB_TIMEOUT_MINUTES),
           channelNonce: env.CHANNEL_NONCE,
         }),
@@ -1311,6 +1329,7 @@ const PHASES = Object.freeze(
           scope: env.GUIDANCE,
           deferred: Number.parseInt(env.DEFERRED, 10),
           threadScoped: String(env.THREAD_ROOT_ID ?? '') !== '',
+          saw: sawFrom(env),
           baseDiffRef: env.BASE_DIFF_REF,
           denied,
           issueJson,
@@ -1334,6 +1353,7 @@ const PHASES = Object.freeze(
           mergedRef: env.MERGED_REF,
           mergedSha: env.MERGED_SHA,
           conflicted: env.MERGE_CONFLICTED,
+          saw: sawFrom(env),
           denied,
           issueJson,
           budgetMinutes: ceilingMinutes(env.JOB_TIMEOUT_MINUTES),
