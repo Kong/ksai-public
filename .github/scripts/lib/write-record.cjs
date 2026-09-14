@@ -60,7 +60,20 @@ const ATTEMPT_FIELDS = Object.freeze([
   'at',
   'reason',
   'dials_arm',
+  'verification',
 ]);
+
+const VERIFICATION_STATUSES = Object.freeze(['verified', 'failed', 'unverified', 'not-applicable']);
+
+function validVerification(verification) {
+  if (verification === null || verification === undefined) return true;
+  if (!verification || typeof verification !== 'object' || Array.isArray(verification)) return false;
+  if (!VERIFICATION_STATUSES.includes(verification.status)) return false;
+  if (typeof verification.target !== 'string' || [...verification.target].length > 200) return false;
+  if (typeof verification.command !== 'string' || [...verification.command].length > 1024) return false;
+  if (!validNullableInteger(verification.exit_status)) return false;
+  return shaped(verification.reason, REASON_SHAPE);
+}
 
 function armFields(arm) {
   if (!Array.isArray(arm)) return null;
@@ -119,6 +132,7 @@ function validAttempt(attempt) {
   if (attempt.at !== null && !(Number.isSafeInteger(attempt.at) && attempt.at > 0)) return false;
   if (attempt.reason !== null && !shaped(attempt.reason, REASON_SHAPE)) return false;
   if (attempt.dials_arm !== null && !shaped(attempt.dials_arm, DIALS_ARM_SHAPE)) return false;
+  if (!validVerification(attempt.verification)) return false;
   return typeof attempt.selection === 'string' && attempt.selection.length <= 80;
 }
 
@@ -301,6 +315,7 @@ module.exports = {
   unpackAttempt,
   validAttempt,
   validLabelSource,
+  validVerification,
   writeIdentityIn,
   writeStateIn,
   writeStateMarker,

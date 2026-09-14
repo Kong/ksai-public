@@ -3640,6 +3640,25 @@ runs:
           for (const [name, value] of Object.entries(outputs)) core.setOutput(name, value);
           if (failure) core.setFailed(failure);
 
+    - name: Warm locked Node dependencies while there is still a network
+      if: >-
+        ${{ inputs.flow == 'implement' && inputs.dry_run == 'false' &&
+        steps.build_implement.outcome == 'success' && steps.size.outputs.phase == 'do' &&
+        steps.phase.outputs.checks_file != '' }}
+      continue-on-error: true
+      shell: bash
+      env:
+        WORKSPACE: ${{ github.workspace }}
+        CHECKS_FILE: ${{ steps.phase.outputs.checks_file }}
+        PROMPT_FILE: ${{ steps.build_implement.outputs.file }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+        GH_TOKEN:
+        GITHUB_TOKEN:
+        ANTHROPIC_AUTH:
+        ANTHROPIC_FEDERATED_TOKEN:
+        OTEL_EXPORTER_OTLP_HEADERS:
+      run: node "${SCRIPTS}/ksai/package-warm.mjs"
+
     - name: Look for a Go module in the tree under work
       id: go_detect
       if: >-
@@ -4805,6 +4824,9 @@ runs:
         KSAI_GIT_FILEMODE: ${{ steps.configure_git.outputs.filemode }}
         CO_AUTHOR: ${{ steps.identity.outputs.coauthor }}
         JIRA_KEY: ${{ steps.jira_ref.outputs.step_key || steps.jira_ref.outputs.plan_key }}
+        CHECKS_FILE: ${{ steps.phase.outputs.checks_file }}
+        OPENCODE_EVENTS_FILE: ${{ steps.opencode.outputs.events_file }}
+        VERIFICATION_FILE: ${{ runner.temp }}/ksai-fix-verification.json
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: |
         set -euo pipefail
@@ -5021,6 +5043,7 @@ runs:
         CLASSIFIER_EFFORT: ${{ steps.verdict.outputs.model && 'low' || '' }}
         MAIN_EXECUTION: ${{ steps.model_run.outputs.execution_file }}
         MAIN_CALLED: ${{ steps.model_run.outputs.outcome }}
+        VERIFICATION_FILE: ${{ steps.record_do.outputs.verification_file }}
         STATUS_MODEL: ${{ steps.status_gate.outputs.model }}
         STATUS_EFFORT: ${{ steps.status_gate.outputs.model && 'low' || '' }}
         STATUS: ${{ steps.status_report.outputs.record }}

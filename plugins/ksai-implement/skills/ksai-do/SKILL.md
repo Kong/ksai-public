@@ -63,8 +63,8 @@ If the cause is in a log you were not given, say so rather than guessing from th
    you - the sandbox has the repository, so its tests, linters and build are usually available.
 3. **Make the smallest change that fixes it.** A request to fix one check is not a licence to
    refactor around it.
-4. **Check your work** with whatever the repository provides. A fix that breaks a different check is
-   not a fix.
+4. **Check your work** with whatever the repository provides. For a failing check, run its command
+   after the fix and before the commit. A fix that breaks a different check is not a fix.
 5. **Commit once.** One request is one commit; a trusted step refuses more than one and refuses a
    dirty tree.
 6. **Report** through the manifest, as your final action.
@@ -103,9 +103,19 @@ As your absolute final action, use Write to create `.ksai-manifest.json` at the 
 {
   "status": "done",
   "summary": "<what you did, in plain language; it is posted as the report>",
-  "reason": ""
+  "reason": "",
+  "verification": {
+    "target": "<exact failing check or status name>",
+    "command": "<exact Bash command run after the fix and before the commit>"
+  }
 }
 ```
+
+When the prompt names failing CI, copy the exact target name and the exact Bash command you ran after
+the fix into `verification`. A trusted step reads the raw tool event and its exit status; it refuses a
+reproduced failure before push. A zero exit remains unverified because CI does not expose a trusted
+target-to-command binding. If the command cannot run, leave `command` empty. Never substitute an
+unrelated command. Omit `verification` when no check or status was failing.
 
 - **`done`** - you changed code. Exactly one commit.
 - **`answered`** - no code change was needed. A question you can answer, or a request you can explain

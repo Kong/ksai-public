@@ -115,6 +115,8 @@ const SHAPES = Object.freeze([
   { linkRuns: false, withArms: false, notes: 1, withWhy: true },
   { linkRuns: false, withArms: false, notes: 0, withWhy: true },
   { linkRuns: false, withArms: false, notes: 0, withWhy: false },
+  { linkRuns: false, withArms: false, notes: 0, withWhy: false, withoutOldVerificationCommands: true },
+  { linkRuns: false, withArms: false, notes: 0, withWhy: false, withoutOldVerification: true },
 ]);
 
 function historyOf(state, triggerPhrase = null) {
@@ -280,6 +282,16 @@ function currentOfEnv(env) {
   return env.CURRENT;
 }
 
+function verificationOfEnv(env) {
+  const named = String(env.VERIFICATION_FILE ?? '').trim();
+  if (named === '') return null;
+  try {
+    return JSON.parse(fs.readFileSync(named, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 function wasCalled(value) {
   return ['success', 'failure', 'cancelled', 'true'].includes(String(value ?? ''));
 }
@@ -420,6 +432,7 @@ function attemptOf(env = process.env, now = Date.now()) {
     at: Number.isSafeInteger(now) && now > 0 ? Math.floor(now / 1000) : null,
     reason: reasonToken(env.REASON),
     dials_arm: dialsArm(env.DIALS_ARM),
+    verification: verificationOfEnv(env),
     ...spendOfEnv(env),
   };
   return validAttempt(attempt) ? { attempt, run_base: runBase } : { error: 'this run attempt is not valid write-report state' };
@@ -651,15 +664,31 @@ function renderWriteReport({
   const kept = historyOf(state, triggerPhrase);
   const follow = URL_SHAPE.test(String(live?.link ?? '')) ? `[Follow it](${live.link})` : '';
   const counters = [statusLine(live?.arm, live?.cells), follow].filter(Boolean).join(' · ');
-  const render = (linkRuns, withArms, notes, withWhy = true) => {
+  const render = (
+    linkRuns,
+    withArms,
+    notes,
+    withWhy = true,
+    withoutOldVerificationCommands = false,
+    withoutOldVerification = false,
+  ) => {
     const history = notes === null ? kept : kept.slice(Math.max(0, kept.length - notes));
     const trimmed = { ...state, history };
-    const leaner = (attempt) => ({
+    const leaner = (attempt, index) => ({
       ...attempt,
       ...(withArms ? {} : { arms: [] }),
       ...(withWhy ? {} : { selection: '' }),
+      ...(index < trimmed.attempts.length - 1 && attempt.verification
+        ? withoutOldVerification
+          ? { verification: null }
+          : withoutOldVerificationCommands
+            ? { verification: { ...attempt.verification, command: '' } }
+            : {}
+        : {}),
     });
-    const held = withArms && withWhy ? trimmed : { ...trimmed, attempts: trimmed.attempts.map(leaner) };
+    const held = withArms && withWhy && !withoutOldVerificationCommands && !withoutOldVerification
+      ? trimmed
+      : { ...trimmed, attempts: trimmed.attempts.map(leaner) };
     const lines = historyLines(STAGED(history), historyMode);
     const said = lines.length === 0 ? [currentText(current, triggerPhrase)] : lines;
     const heading = headingFor(said[0] ?? '');
@@ -687,7 +716,14 @@ function renderWriteReport({
   };
   let body = '';
   for (const shape of SHAPES) {
-    body = render(shape.linkRuns, shape.withArms, shape.notes, shape.withWhy);
+    body = render(
+      shape.linkRuns,
+      shape.withArms,
+      shape.notes,
+      shape.withWhy,
+      shape.withoutOldVerificationCommands,
+      shape.withoutOldVerification,
+    );
     if (body.length < budget) break;
   }
   return body;

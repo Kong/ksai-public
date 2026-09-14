@@ -82,8 +82,9 @@ const TOOLCHAIN_NOTE = Object.freeze([
 ]);
 
 const TOOLCHAIN_ANCHOR = `  ${TOOLCHAIN_NOTE.at(-1)}\n`;
+const PACKAGE_NOTE_START = 'NODE DEPENDENCIES ARE AN EXCEPTION to the toolchain paragraph above.';
 
-const anchorFollowers = () => [COMMIT_MESSAGE_NOTE[0], MERGE_COMMIT_NOTE[0]];
+const anchorFollowers = () => [PACKAGE_NOTE_START, COMMIT_MESSAGE_NOTE[0], MERGE_COMMIT_NOTE[0]];
 
 function spliceGoNote(prompt, note) {
   for (const follower of anchorFollowers()) {
@@ -119,6 +120,26 @@ function renderGoNote({ version, failed = [] }) {
     );
   }
   return lines;
+}
+
+function renderPackageNote({ manager, version, failed = false }) {
+  const named = neutralize(text(manager));
+  const pinned = neutralize(text(version));
+  return [
+    PACKAGE_NOTE_START,
+    `The repository pins \`${named}@${pinned}\`, and a trusted step ${failed ? 'tried to install' : 'installed'} its`,
+    `locked dependencies before this prompt ran, outside the sandbox${failed ? ' but did not finish' : ''}.`,
+    ...(failed
+      ? [
+          'The dependency tree is incomplete. A command failing because a package is absent is unavailable,',
+          'not proof about your change; report it that way.',
+        ]
+      : [
+          'Commands using those installed dependencies can run here. Their output is real, but lifecycle scripts',
+          'were disabled while installing, so read any native or generated-artifact failure before attributing it.',
+        ]),
+    'The sandbox still has no network, and no package manager can fetch anything else.',
+  ];
 }
 
 const { COMMIT_TYPES } = require('./verify-chunk.cjs');
@@ -1364,7 +1385,16 @@ function renderDoPrompt({
           '    {',
           '      "status": "done" | "answered" | "blocked",',
           '      "summary": "<what you did, in plain language; it is posted as the report>",',
-          '      "reason": "<only when status is \\"blocked\\": what a human has to decide>"',
+          '      "reason": "<only when status is \\"blocked\\": what a human has to decide>"' +
+            (failing > 0 ? ',' : ''),
+          ...(failing > 0
+            ? [
+                '      "verification": {',
+                '        "target": "<exact failing check or status name>",',
+                '        "command": "<exact Bash command run after the fix and before the commit>"',
+                '      }',
+              ]
+            : []),
           '    }',
           '  Use "done" when you changed code: exactly one commit for the whole request, because',
           '  a trusted step refuses more and refuses a dirty tree.',
@@ -1373,6 +1403,15 @@ function renderDoPrompt({
           '  posted, and it carries a trusted line saying nothing changed, so a report cannot',
           '  read as a fix that landed.',
           '  Use "blocked" when the request needs a human decision, with that as the reason.',
+          ...(failing > 0
+            ? [
+                '  Before committing, run the command that exercises the failing target. Copy the exact target',
+                '  name and Bash command into `verification`; a trusted step reads the raw tool event and its',
+                '  exit status. A reproduced failure is refused before push. A zero exit is still unverified',
+                '  because CI does not expose a trusted target-to-command binding. If the command cannot run,',
+                '  leave `command` empty. Never substitute an unrelated command.',
+              ]
+            : []),
           '  One request is one run and one commit. There is no second pass: if the fix needs',
           '  more than that, do the part you can stand behind and say what is left.',
           `  The report is at most ${MAX_REPORT_CHARS} characters. Anything past that is CUT, mid-`,
@@ -1435,6 +1474,7 @@ module.exports = {
   renderDoPrompt,
   renderChecks,
   renderGoNote,
+  renderPackageNote,
   spliceGoNote,
   TOOLCHAIN_NOTE,
   MERGE_COMMIT_NOTE,

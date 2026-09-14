@@ -11,6 +11,7 @@ const { renderDoMarker, unaskedRun, MAX_REPORT_CHARS } = require('./do.cjs');
 import { blockerFor, field, readManifest, reasonOf, runCommand, shown } from './run.mjs';
 import { publishCommit } from './signed-push.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
+import { verificationOf, writeVerification } from './fix-verification.mjs';
 
 export function renderReportFooter({ sha = null, triggerPhrase = null, merged = null } = {}) {
   const short = typeof sha === 'string' && /^[0-9a-f]{7,64}$/.test(sha) ? sha.slice(0, 12) : '';
@@ -73,6 +74,9 @@ export function recordDo({
   mergedRef = null,
   conflicted = null,
   mergeMessageFile = null,
+  checksPath = null,
+  eventsPath = null,
+  verificationPath = null,
   run = runCommand,
 } = {}) {
   const block = blockerFor(manifestPath);
@@ -99,6 +103,19 @@ export function recordDo({
   }
 
   const pushing = merging || status === 'done';
+  const verification = pushing
+    ? verificationOf({ manifest, checksPath, eventsPath, merging })
+    : { status: 'not-applicable', target: '', command: '', exit_status: null, reason: 'no-change' };
+  writeVerification(verificationPath, verification);
+  if (verification.status === 'failed') {
+    const said = verification.reason === 'command-after-commit'
+      ? 'ran after the commit, so its ordering cannot be trusted'
+      : `exited ${verification.exit_status === null ? 'without a status' : verification.exit_status}`;
+    return blocked(
+      `I did not push the work: verification command \`${safeEcho(verification.command)}\` ${said} for ` +
+        `\`${safeEcho(verification.target)}\`.`,
+    );
+  }
   rmSync(manifestPath, { force: true });
 
   let sha = '';
@@ -211,6 +228,7 @@ export function recordDo({
 export function main(env = process.env, { run = runCommand } = {}) {
   const tmp = env.RUNNER_TEMP || '/tmp';
   const messageFile = path.join(tmp, 'ksai-message.txt');
+  const verificationFile = env.VERIFICATION_FILE || path.join(tmp, 'ksai-fix-verification.json');
 
   const result = recordDo({
     manifestPath: env.MANIFEST,
@@ -229,6 +247,9 @@ export function main(env = process.env, { run = runCommand } = {}) {
     mergedRef: env.MERGED_REF,
     conflicted: env.MERGE_CONFLICTED,
     mergeMessageFile: path.join(tmp, 'ksai-merge-message.txt'),
+    checksPath: env.CHECKS_FILE,
+    eventsPath: env.OPENCODE_EVENTS_FILE,
+    verificationPath: verificationFile,
     run,
   });
 
@@ -238,6 +259,7 @@ export function main(env = process.env, { run = runCommand } = {}) {
   writeOutputs(env.GITHUB_OUTPUT, {
     status: result.status,
     message_file: messageFile,
+    verification_file: verificationFile,
   });
   process.stdout.write(`${result.message}\n`);
   return 0;
