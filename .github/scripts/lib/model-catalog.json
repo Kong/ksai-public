@@ -1,5 +1,9 @@
 {
   "defaultAlias": "flagship",
+  "defaultEffort": "high",
+  "defaultEfforts": {
+    "zai-org/GLM-5.3-Flash": "max"
+  },
   "allowedAliases": [
     "fast",
     "balanced",
@@ -102,9 +106,9 @@
       "options": {
         "thinking": {
           "type": "enabled",
-          "budgetTokens": 8192
+          "budgetTokens": 16000
         },
-        "effort": "high",
+        "effort": "max",
         "sendReasoning": true
       },
       "variants": {

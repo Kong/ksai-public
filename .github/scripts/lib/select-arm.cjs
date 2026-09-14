@@ -55,6 +55,16 @@ const KNOWN_MODELS = Object.freeze([
 
 const CANONICAL_MODELS = new Map(KNOWN_MODELS.map((model) => [model.toLowerCase(), model]));
 
+const DEFAULT_EFFORT = MODEL_CATALOG.defaultEffort;
+
+const MODEL_EFFORTS = new Map(
+  Object.entries(MODEL_CATALOG.defaultEfforts ?? {}).map(([model, effort]) => [model.toLowerCase(), effort]),
+);
+
+function defaultEffortFor(model) {
+  return MODEL_EFFORTS.get(String(model ?? '').trim().toLowerCase()) ?? DEFAULT_EFFORT;
+}
+
 /**
  * canonicalOf answers the allowed model a value names, in the spelling the gateway knows it by.
  *
@@ -875,11 +885,11 @@ function selectArm({
   bare = false,
 } = {}) {
   const allowed = parseAllowedModels(allowedModels);
-  const fallbackEffort = String(defaultEffort ?? '').trim();
+  const configuredEffort = String(defaultEffort ?? '').trim();
   const fallbackModel = resolveModel(defaultModel);
 
-  if (!ALLOWED_EFFORTS.includes(fallbackEffort)) {
-    return { error: `the \`effort\` input must be one of ${ALLOWED_EFFORTS.join(', ')}, got: ${safeEcho(fallbackEffort)}` };
+  if (configuredEffort !== '' && !ALLOWED_EFFORTS.includes(configuredEffort)) {
+    return { error: `the \`effort\` input must be one of ${ALLOWED_EFFORTS.join(', ')}, got: ${safeEcho(configuredEffort)}` };
   }
   if (!MODEL_SHAPE.test(fallbackModel)) {
     return { error: `the \`model\` input is not a usable model id: ${safeEcho(fallbackModel)}` };
@@ -914,22 +924,29 @@ function selectArm({
   if (opened.error) return { error: opened.error };
 
   const configuredCeiling = String(maxEffort ?? '').trim();
-  const ceiling = configuredCeiling || fallbackEffort;
-  if (!ALLOWED_EFFORTS.includes(ceiling)) {
-    return { error: `the \`max_effort\` input must be one of ${ALLOWED_EFFORTS.join(', ')}, got: ${safeEcho(ceiling)}` };
-  }
-
   const configuredFloor = String(minEffort ?? '').trim();
-  let floor = configuredFloor || DEFAULT_MIN_EFFORT;
-  if (!ALLOWED_EFFORTS.includes(floor)) {
-    return { error: `the \`min_effort\` input must be one of ${ALLOWED_EFFORTS.join(', ')}, got: ${safeEcho(floor)}` };
-  }
-  if (!configuredFloor && !configuredCeiling && ALLOWED_EFFORTS.indexOf(floor) > ALLOWED_EFFORTS.indexOf(ceiling)) {
-    floor = ceiling;
-  }
-  if (ALLOWED_EFFORTS.indexOf(floor) > ALLOWED_EFFORTS.indexOf(ceiling)) {
-    return { error: `\`min_effort\` (\`${floor}\`) is above \`max_effort\` (\`${ceiling}\`), so no effort can be requested` };
-  }
+  const boundsFor = (callerEffort) => {
+    const upper = configuredCeiling || callerEffort;
+    if (!ALLOWED_EFFORTS.includes(upper)) {
+      return { error: `the \`max_effort\` input must be one of ${ALLOWED_EFFORTS.join(', ')}, got: ${safeEcho(upper)}` };
+    }
+    let lower = configuredFloor || DEFAULT_MIN_EFFORT;
+    if (!ALLOWED_EFFORTS.includes(lower)) {
+      return { error: `the \`min_effort\` input must be one of ${ALLOWED_EFFORTS.join(', ')}, got: ${safeEcho(lower)}` };
+    }
+    if (!configuredFloor && !configuredCeiling && ALLOWED_EFFORTS.indexOf(lower) > ALLOWED_EFFORTS.indexOf(upper)) {
+      lower = upper;
+    }
+    if (ALLOWED_EFFORTS.indexOf(lower) > ALLOWED_EFFORTS.indexOf(upper)) {
+      return { error: `\`min_effort\` (\`${lower}\`) is above \`max_effort\` (\`${upper}\`), so no effort can be requested` };
+    }
+    return { ceiling: upper, floor: lower };
+  };
+
+  let fallbackEffort = configuredEffort || defaultEffortFor(fallbackModel);
+  let bounds = boundsFor(fallbackEffort);
+  if (bounds.error) return { error: bounds.error };
+  let { ceiling, floor } = bounds;
 
   const defaultCommand = defaultCommandFor(onIssue, threadRootId, onReview, reviewState);
   const parsed = parseOptions(prompt, { commandAliases, defaultCommand, bare });
@@ -951,23 +968,6 @@ function selectArm({
 
   const { requested } = parsed;
   let model = fallbackModel;
-  let effort = fallbackEffort;
-
-  if ('--effort' in requested) {
-    const wanted = requested['--effort'].toLowerCase();
-    if (!ALLOWED_EFFORTS.includes(wanted)) {
-      return reject(`unknown effort \`${safeEcho(wanted)}\``);
-    }
-    if (ALLOWED_EFFORTS.indexOf(wanted) > ALLOWED_EFFORTS.indexOf(ceiling)) {
-      return reject(`effort \`${safeEcho(wanted)}\` is above this repo's ceiling of \`${ceiling}\``);
-    }
-    if (ALLOWED_EFFORTS.indexOf(wanted) < ALLOWED_EFFORTS.indexOf(floor)) {
-      return reject(
-        `effort \`${safeEcho(wanted)}\` is below this repo's floor of \`${floor}\`, where a run does not reliably complete`,
-      );
-    }
-    effort = wanted;
-  }
 
   if ('--model' in requested) {
     const wanted = requested['--model'].toLowerCase();
@@ -991,6 +991,30 @@ function selectArm({
         usedTriage = true;
       }
     }
+  }
+
+  if (!configuredEffort && defaultEffortFor(model) !== fallbackEffort) {
+    fallbackEffort = defaultEffortFor(model);
+    bounds = boundsFor(fallbackEffort);
+    if (bounds.error) return { ...reject(bounds.error), ceiling: undefined, floor: undefined };
+    ({ ceiling, floor } = bounds);
+  }
+  let effort = fallbackEffort;
+
+  if ('--effort' in requested) {
+    const wanted = requested['--effort'].toLowerCase();
+    if (!ALLOWED_EFFORTS.includes(wanted)) {
+      return reject(`unknown effort \`${safeEcho(wanted)}\``);
+    }
+    if (ALLOWED_EFFORTS.indexOf(wanted) > ALLOWED_EFFORTS.indexOf(ceiling)) {
+      return reject(`effort \`${safeEcho(wanted)}\` is above this repo's ceiling of \`${ceiling}\``);
+    }
+    if (ALLOWED_EFFORTS.indexOf(wanted) < ALLOWED_EFFORTS.indexOf(floor)) {
+      return reject(
+        `effort \`${safeEcho(wanted)}\` is below this repo's floor of \`${floor}\`, where a run does not reliably complete`,
+      );
+    }
+    effort = wanted;
   }
 
   const wantEffort = String(triage?.effort ?? '');
@@ -1208,6 +1232,8 @@ module.exports = {
   namedRepo,
   ALLOWED_EFFORTS,
   DEFAULT_MIN_EFFORT,
+  DEFAULT_EFFORT,
+  defaultEffortFor,
   ALIASES,
   MODEL_TIERS,
   COMMANDS,

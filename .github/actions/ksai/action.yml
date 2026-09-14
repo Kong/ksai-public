@@ -411,9 +411,9 @@ inputs:
     required: false
     default: "balanced"
   effort:
-    description: "reasoning effort for the run: low|medium|high|xhigh|max"
+    description: "reasoning effort for the run: low|medium|high|xhigh|max. Empty uses the model's default: max for GLM-5.3-Flash, high otherwise"
     required: false
-    default: "high"
+    default: ""
   max_effort:
     description: >-
       highest effort a comment may request. Empty means the `effort` input is the ceiling, so a comment cannot

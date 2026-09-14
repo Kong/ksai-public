@@ -39,7 +39,7 @@ inputs:
     description: model pinned in this workflow, used whenever the control plane does not answer with one
     required: true
   effort:
-    description: effort pinned in this workflow, used whenever the control plane does not answer with one
+    description: effort pinned in this workflow, used whenever the control plane does not answer with one; empty leaves it to the model's default
     required: true
   shadow_percent:
     description: share of runs compared against the shadow engine, pinned in this workflow

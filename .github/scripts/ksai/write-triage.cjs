@@ -13,6 +13,7 @@ const {
   parseAllowedModels,
   resolveModel,
   safeEcho,
+  defaultEffortFor,
 } = require('../lib/select-arm.cjs');
 const { neutralCut } = require('../lib/prompt-text.cjs');
 
@@ -330,7 +331,7 @@ function selectWriteArm(env = process.env) {
   if (effortSource !== 'comment') {
     const resolved = automaticEffort({
       target: profile.effort,
-      fallback: String(env.DEFAULT_EFFORT ?? effort).trim(),
+      fallback: String(env.DEFAULT_EFFORT ?? effort).trim() || defaultEffortFor(selectedModel),
       max: env.MAX_EFFORT,
       min: env.MIN_EFFORT,
     });
