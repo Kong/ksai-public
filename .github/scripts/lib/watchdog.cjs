@@ -44,12 +44,20 @@ function watchdogDetail(env) {
   return ` It stopped because ${shown}.`;
 }
 
+const HEAD_SHAPE = /^[0-9a-f]{40}$|^[0-9a-f]{64}$/;
+
+function movedHead(text) {
+  const said = String(text ?? '').trim().toLowerCase();
+  return HEAD_SHAPE.test(said) ? said : '';
+}
+
 module.exports = {
   ASSUMED_CEILING_MINUTES,
   MAX_CEILING_MINUTES,
   MAX_REASON_CHARS,
   SALVAGE_MARGIN_MINUTES,
   ceilingMinutes,
+  movedHead,
   watchdogDetail,
   wholeNumber,
 };

@@ -79,7 +79,7 @@ const LABEL_MAX = 50;
  * dispatch in a repository the day the control plane learned one more.
  */
 export const TRIGGERS = Object.freeze([
-  'build_failed', 'status_failed', 'labeled', 'review_submitted', 'comment', 'opened', 'review_requested',
+  'build_failed', 'status_failed', 'labeled', 'review_submitted', 'comment', 'opened', 'review_requested', 'pushed',
 ]);
 
 export const TRIGGER_STATES = Object.freeze([

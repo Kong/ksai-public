@@ -6,7 +6,7 @@ const { DIALS_ARM_SHAPE, MODEL_TIERS, armLabel } = require('../lib/select-arm.cj
 const { renderClassifierFooter } = require('../ksai/classify.cjs');
 const { href: markerHref } = require('../ksai/marker.cjs');
 const { scrub } = require('../ksai/plan.cjs');
-const { watchdogDetail } = require('../lib/watchdog.cjs');
+const { movedHead, watchdogDetail } = require('../lib/watchdog.cjs');
 const { collectSecrets, scrub: scrubSecrets } = require('./secrets.cjs');
 const { counted } = require('../lib/text.cjs');
 
@@ -470,7 +470,7 @@ function renderRunReport(env) {
   ].join('\n');
 }
 
-const CARRIED_NOTICE = Object.freeze(['failed']);
+const CARRIED_NOTICE = Object.freeze(['failed', 'head_moved']);
 
 function carriedKind(env) {
   if (String(env.CANCELLED ?? '') === 'true') return null;
@@ -485,11 +485,12 @@ function reviewPointer(env) {
 function reviewHeading(env, status, kind) {
   const pointer = reviewPointer(env);
   if (kind === null && !endedBadly(env)) return runHeading('review', status?.stage, true, env.COMMAND, env.TRIGGER, pointer);
+  const moved = kind === 'head_moved';
   return ksaiHeading({
     command: env.COMMAND,
     flow: 'review',
-    said: 'Failed',
-    mark: 'failed',
+    said: moved ? 'Stopped' : 'Failed',
+    mark: moved ? 'stopped' : 'failed',
     href: pointer,
     triggerPhrase: env.TRIGGER,
   });
@@ -500,6 +501,7 @@ function decideReviewNotice(env) {
   if (env.BUILD_ERROR) return 'unbuildable';
   if (env.STAND_DOWN !== '') return 'stood_down';
   if (env.RULES_NOTICE) return 'rules';
+  if (String(env.HEAD_MOVED ?? '') !== '' || env.WATCHDOG_CAUSE === 'head_moved') return 'head_moved';
   const live = env.DRY_RUN === 'false';
   if (live && env.VALIDATE_OUTCOME === 'success' && env.TRIAGE_SKIP === 'true') return 'skipped';
   if (
@@ -547,18 +549,36 @@ function renderReviewNotice(kind, env, { headed = true } = {}) {
         'again to run a full review',
     ].join('\n');
   }
+  if (kind === 'head_moved') {
+    const head = movedHead(env.HEAD_MOVED);
+    const now = head === '' ? '' : ` (the head is now \`${head.slice(0, 7)}\`)`;
+    return [
+      ...opened('Stopped', 'stopped'),
+      `A commit was pushed while this review ran${now}, so its findings were not posted against code that has ` +
+        'since changed. Ask for a review again to review the new head',
+    ].join('\n');
+  }
   const halted =
     env.WATCHDOG_CAUSE === 'progress'
       ? `The review watchdog stopped it because it had stopped making progress.${watchdogDetail(env)}`
-      : `The review watchdog stopped it about 1 minute short of the job's ${env.CEILING}-minute ceiling.`;
+      : env.WATCHDOG_CAUSE === 'halt'
+        ? `The review was stopped on request.${watchdogDetail(env)}`
+        : `The review watchdog stopped it about 1 minute short of the job's ${env.CEILING}-minute ceiling.`;
+  const finished = env.WATCHDOG_FIRED !== 'true' && env.STOP_REASON === 'success';
   const stopped =
     env.WATCHDOG_FIRED === 'true'
       ? halted
-      : `The review did not complete (\`${env.STOP_REASON || 'no result'}\`).`;
+      : finished
+        ? 'The review finished.'
+        : `The review did not complete (\`${env.STOP_REASON || 'no result'}\`).`;
   const salvage =
     env.RESULT_OUTCOME === 'failure'
-      ? 'Findings were salvaged and the review comment itself failed to post.'
-      : 'Nothing was salvaged to post as a review.';
+      ? finished
+        ? 'Its findings could not be posted.'
+        : 'Findings were salvaged and the review comment itself failed to post.'
+      : finished
+        ? 'It left nothing that could be posted as a review.'
+        : 'Nothing was salvaged to post as a review.';
   return [
     ...opened('Failed', 'failed'),
     `${stopped} ${salvage} What it spent is below; see the [workflow run](${env.RUN_URL}) for details`,

@@ -956,6 +956,7 @@ const SAW_TRIGGER = Object.freeze(
     labeled: 'this pull request carries the autofix label',
     review_submitted: 'somebody submitted a review on this pull request',
     review_requested: 'somebody asked this flow for a review',
+    pushed: 'a commit was pushed while a review of this pull request was still owed',
     opened: 'this pull request was opened',
     comment: 'somebody left a comment',
   }),

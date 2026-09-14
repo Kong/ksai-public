@@ -13,6 +13,14 @@ const { applySuppression } = require('./suppress.cjs');
 
 const SUCCESS = 'success';
 
+class HeadMoved extends Error {
+  constructor(head) {
+    super('PR head moved; this review was not published');
+    this.name = 'HeadMoved';
+    this.head = String(head ?? '');
+  }
+}
+
 /*
  * A run that ended in error publishes no text of its own, whatever it happened to be saying.
  *
@@ -258,7 +266,8 @@ module.exports = async ({
   if (!['baseline', 'evidence', 'dual'].includes(reviewStrategy)) throw new Error('unknown trusted review strategy');
   const current = async () => {
     const response = await github.rest.pulls.get({ owner, repo, pull_number: prNumber });
-    if (response.data?.head?.sha !== commitId) throw new Error('PR head moved; this review was not published');
+    const head = response.data?.head?.sha;
+    if (head !== commitId) throw new HeadMoved(head);
   };
   const postComment = async (args) => {
     await current();
@@ -474,3 +483,5 @@ module.exports = async ({
     }
   }
 };
+
+module.exports.HeadMoved = HeadMoved;

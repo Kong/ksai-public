@@ -84,7 +84,7 @@ outputs:
   trigger:
     description: >-
       what the control plane says set this run going - `build_failed`, `status_failed`, `labeled`,
-      `review_submitted`, `comment`, `opened` or `review_requested` - or empty. Its own word, from a
+      `review_submitted`, `comment`, `opened`, `review_requested` or `pushed` - or empty. Its own word, from a
       set it holds, so a run may state it plainly
     value: ${{ steps.record.outputs.trigger }}
   trigger_run:
