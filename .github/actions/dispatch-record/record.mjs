@@ -240,7 +240,8 @@ function recordFrom(served) {
   }
 
   const {
-    command, label, pr, head_sha: headSha, scope, requester, model, effort, guidance, work_item: workItem,
+    command, label, pr, head_sha: headSha, scope, requester, approver, approval_id: approvalId,
+    model, effort, guidance, work_item: workItem,
     trigger, trigger_run: triggerRun, trigger_attempt: triggerAttempt,
     trigger_state: triggerState, trigger_name: triggerName,
   } = /** @type {Record<string, unknown>} */ (served);
@@ -261,6 +262,16 @@ function recordFrom(served) {
   }
   if (requester !== undefined && (typeof requester !== 'string' || !REQUESTER.test(requester))) {
     throw stopped('the record names a requester that is not a GitHub login');
+  }
+  if (approver !== undefined && (typeof approver !== 'string' || !REQUESTER.test(approver))) {
+    throw stopped('the record names an approver that is not a GitHub login');
+  }
+  if (approvalId !== undefined && (typeof approvalId !== 'string' || !RECORD_ID.test(approvalId))) {
+    throw stopped('the record names an approval the control plane could not have minted');
+  }
+  if ((approver !== undefined || approvalId !== undefined) &&
+    (approver === undefined || approvalId === undefined || command !== 'approve' || pr === undefined || headSha === undefined)) {
+    throw stopped('the record names an approval without the approver, the approval, the pull request and the head it was given for');
   }
   if (model !== undefined && (typeof model !== 'string' || !MODEL.test(model))) {
     throw stopped('the record names a model this workflow will not pass on');
@@ -287,6 +298,8 @@ function recordFrom(served) {
     triggerState: oneOf(triggerState, TRIGGER_STATES),
     triggerName: showable(triggerName),
     requester: text(requester),
+    approver: text(approver),
+    approvalId: text(approvalId),
     model: text(model),
     effort: text(effort),
     guidance: text(guidance),
@@ -365,6 +378,8 @@ export async function readRecord({
       triggerState: '',
       triggerName: '',
       requester: '',
+      approver: '',
+      approvalId: '',
       model: '',
       effort: '',
       guidance: '',

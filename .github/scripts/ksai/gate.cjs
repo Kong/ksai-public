@@ -1,11 +1,16 @@
 'use strict';
 
-const { findApprovals, findAcknowledgment, lastRework, withLastEdits } = require('./approval.cjs');
+const { findApprovals, findAcknowledgment, lastRework, vouchedOwn, withLastEdits } = require('./approval.cjs');
 const { AUTHZ_LOGIN_SHAPE } = require('./context.cjs');
 const { scrub, readRelease, releaseRef } = require('./plan.cjs');
 
 const { openPlanThreads } = require('./revise.cjs');
 const { latestNativeApprovals } = require('./native-approval.cjs');
+const {
+  controlPlaneApprovalRef,
+  controlPlaneApprovalsIn,
+  readControlPlaneApprovalRef,
+} = require('./control-plane-approval.cjs');
 const { isOwnLogin } = require('./threads.cjs');
 const {
   asAlert,
@@ -91,6 +96,79 @@ async function readNativeApprovals({
         `could not read native reviews on #${String(prNumber)}: ${error.message}. ` +
         'The approval gate reads them with `authorization_github_token`, which needs pull-requests:read.',
     };
+  }
+}
+
+async function readControlPlaneApprovals({
+  github,
+  owner,
+  repo,
+  prNumber,
+  botLogin,
+  asked,
+  already,
+  acknowledgments,
+}) {
+  const recorded = [];
+  for (const comment of acknowledgments ?? []) {
+    if (!vouchedOwn(comment, botLogin)) continue;
+    for (const one of controlPlaneApprovalsIn(comment.body)) {
+      recorded.push({
+        ...one,
+        url: String(comment.html_url ?? ''),
+        id: comment.id,
+        at: Date.parse(String(comment.created_at ?? '')) || 0,
+      });
+    }
+  }
+  const askedRef = controlPlaneApprovalRef({ approvalId: asked?.approvalId, headSha: asked?.headSha });
+  const approver = String(asked?.approver ?? '').trim();
+  const fresh =
+    askedRef !== null && AUTHZ_LOGIN_SHAPE.test(approver) && String(asked?.prNumber ?? '').trim() === String(prNumber);
+  const pulls = github?.rest?.pulls;
+  if ((!fresh && recorded.length === 0) || typeof pulls?.get !== 'function') {
+    return { approvals: [], unreadable: null };
+  }
+  try {
+    const { data: pull } = await pulls.get({ owner, repo, pull_number: Number(prNumber) });
+    if (pull?.draft !== true || !isOwnLogin(pull?.user?.login, botLogin)) {
+      return { approvals: [], unreadable: null };
+    }
+    const head = String(pull?.head?.sha ?? '').trim().toLowerCase();
+    const proven = (one) =>
+      readControlPlaneApprovalRef(one.approvalRef)?.commitId === head ||
+      (already?.kind === 'github' && one.login === already.login);
+    const approvals = recorded.filter((one) => proven(one)).map((one) => ({ ...one, forced: false, association: '' }));
+    if (fresh && readControlPlaneApprovalRef(askedRef)?.commitId === head) {
+      approvals.push({
+        login: approver,
+        url: String(pull?.html_url ?? ''),
+        id: asked.approvalId,
+        approvalRef: askedRef,
+        forced: false,
+        association: '',
+        at: Date.now(),
+      });
+    }
+    return { approvals, unreadable: null };
+  } catch (error) {
+    return {
+      approvals: [],
+      unreadable:
+        `could not read #${String(prNumber)} to check the plan approval given in Jira: ${error.message}. ` +
+        'The approval gate reads it with `authorization_github_token`, which needs pull-requests:read.',
+    };
+  }
+}
+
+function adopt(found, approvals, thread) {
+  for (const approval of approvals) {
+    const held = found.find((seen) => seen.login === approval.login);
+    if (!held) {
+      found.push({ ...approval, thread });
+      continue;
+    }
+    if (approval.at > held.at) Object.assign(held, approval, { thread, forced: held.forced });
   }
 }
 
@@ -195,6 +273,7 @@ async function resolveApproval({
   disabledCommands = null,
   releasedRef = null,
   nativeReview = null,
+  controlPlaneApproval = null,
 } = {}) {
   const settled = await withoutScan({
     github,
@@ -296,14 +375,20 @@ async function resolveApproval({
     acknowledgments,
   });
   if (native.unreadable !== null) unreadable.push(native.unreadable);
-  for (const approval of native.approvals) {
-    const held = found.find((seen) => seen.login === approval.login);
-    if (!held) {
-      found.push({ ...approval, thread: Number(prNumber) });
-      continue;
-    }
-    if (approval.at > held.at) Object.assign(held, approval, { thread: Number(prNumber), forced: held.forced });
-  }
+  adopt(found, native.approvals, Number(prNumber));
+
+  const approvedInJira = await readControlPlaneApprovals({
+    github,
+    owner,
+    repo,
+    prNumber,
+    botLogin,
+    asked: controlPlaneApproval,
+    already,
+    acknowledgments,
+  });
+  if (approvedInJira.unreadable !== null) unreadable.push(approvedInJira.unreadable);
+  adopt(found, approvedInJira.approvals, Number(prNumber));
 
   const ownScanned = threads.includes(Number(prNumber));
   const reworked = lastRework([...(ownReplies ?? []), ...(ownComments ?? [])], { botLogin });

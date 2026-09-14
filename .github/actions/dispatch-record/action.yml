@@ -108,6 +108,15 @@ outputs:
       the GitHub login of whoever asked, for a run nothing on GitHub started, or empty. Never a grant:
       the runner checks it against CODEOWNERS read from GitHub, and it can only add a refusal
     value: ${{ steps.record.outputs.requester }}
+  approver:
+    description: >-
+      the GitHub login the control plane verified through GitHub sign-in as approving the plan in Jira,
+      or empty. Unlike the requester it is proven, and it still grants nothing by itself: the approval
+      gate re-checks it against CODEOWNERS, and only at the pull request and head the record names
+    value: ${{ steps.record.outputs.approver }}
+  approval_id:
+    description: the identifier the control plane minted for that approval, or empty
+    value: ${{ steps.record.outputs.approval_id }}
   model:
     description: the model this run was asked for, or empty where nobody asked for one
     value: ${{ steps.record.outputs.model }}
@@ -166,7 +175,7 @@ runs:
             ['head_sha', 'head_sha'], ['scope', 'scope'], ['trigger', 'trigger'],
             ['trigger_run', 'triggerRun'], ['trigger_attempt', 'triggerAttempt'],
             ['trigger_state', 'triggerState'], ['trigger_name', 'triggerName'],
-            ['requester', 'requester'], ['model', 'model'],
+            ['requester', 'requester'], ['approver', 'approver'], ['approval_id', 'approvalId'], ['model', 'model'],
             ['effort', 'effort'], ['guidance', 'guidance'], ['work_item', 'workItem']]) {
             core.setOutput(name, answer[held]);
           }

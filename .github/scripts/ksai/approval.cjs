@@ -1,6 +1,7 @@
 
 const { parseOptions, DEFAULT_COMMAND } = require('../lib/select-arm.cjs');
 const { nativeApprovalOf, readNativeApprovalRef } = require('./native-approval-ref.cjs');
+const { controlPlaneApprovalsIn, readControlPlaneApprovalRef } = require('./control-plane-approval.cjs');
 const { triggerAlternation } = require('../lib/text.cjs');
 const { markerOf } = require('./marker.cjs');
 const { planDocsIn } = require('./plan.cjs');
@@ -114,13 +115,18 @@ function findAcknowledgment(comments, { botLogin = null, approvalRef = null } = 
   const known = String(botLogin ?? '').trim();
   if (!known) return { acknowledged: false, reason: 'no bot login was given to gate the marker on' };
   const wanted = String(approvalRef ?? '').trim();
-  if (readNativeApprovalRef(wanted) === null) {
+  const fromControlPlane = readControlPlaneApprovalRef(wanted) !== null;
+  if (!fromControlPlane && readNativeApprovalRef(wanted) === null) {
     return { acknowledged: false, reason: 'the native approval reference is not readable' };
   }
 
   for (const comment of comments ?? []) {
     if (!ownUnedited(comment, known)) continue;
-    if (nativeApprovalOf(String(comment.body ?? '')) !== wanted) continue;
+    const body = String(comment.body ?? '');
+    const receipted = fromControlPlane
+      ? controlPlaneApprovalsIn(body).some((one) => one.approvalRef === wanted)
+      : nativeApprovalOf(body) === wanted;
+    if (!receipted) continue;
     return { acknowledged: true, url: comment.html_url ?? '', id: comment.id };
   }
   return { acknowledged: false };

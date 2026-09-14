@@ -4,6 +4,7 @@ const { escapeForRegExp, triggerPhrases, DEFAULT_TRIGGER_PHRASE } = require('../
 const { asAlert, JIRA_KEY_SHAPE } = require('../lib/select-arm.cjs');
 const { SITE, aboutLink, marked } = require('./marker.cjs');
 const { nativeApprovalMarker } = require('./native-approval-ref.cjs');
+const { controlPlaneApprovalMarker } = require('./control-plane-approval.cjs');
 const { COMMIT_TYPES, BRANCH_SHAPE, FLOW_BRANCH_SHAPE, JIRA_BRANCH_SHAPE, safeEcho } = require('./verify-chunk.cjs');
 
 const REGION_BEGIN = '<!-- ksai-plan:begin -->';
@@ -1458,6 +1459,28 @@ function renderNativeApprovalReceipt({
   });
 }
 
+function renderControlPlaneApprovalReceipt({
+  triggerPhrase = null,
+  issueNumber = null,
+  prNumber = null,
+  runId = null,
+  approvalRef = null,
+  approver = null,
+} = {}) {
+  const recorded = controlPlaneApprovalMarker(approvalRef, approver);
+  if (recorded === null) throw new Error('a readable control plane approval reference and approver are required');
+  const by = String(approver).trim();
+  return marked(`Recorded the plan approval \`${by}\` gave in Jira before changing the pull request head\n\n${recorded}`, {
+    kind: 'plan-approved',
+    flow: 'implement',
+    command: 'approve',
+    issue: issueNumber,
+    pr: prNumber,
+    run: runId,
+    triggerPhrase,
+  });
+}
+
 const POSITIVE_ID_SHAPE = /^[1-9][0-9]{0,18}$/;
 
 const SERVER_SHAPE = /^https?:\/\/[A-Za-z0-9.-]+(?::[0-9]{1,5})?$/;
@@ -1552,4 +1575,5 @@ module.exports = {
   POSITIVE_ID_SHAPE,
   checkStep,
   renderNativeApprovalReceipt,
+  renderControlPlaneApprovalReceipt,
 };

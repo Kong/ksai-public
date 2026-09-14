@@ -2278,6 +2278,10 @@ runs:
         DISABLED_COMMANDS: ${{ inputs.disabled_commands }}
         WRITE_ACCESS_COMMANDS: ${{ inputs.write_access_commands }}
         RELEASED_REF: ${{ steps.read_plan.outputs.release_ref }}
+        CONTROL_PLANE_APPROVER: ${{ steps.context.outputs.threadless == 'true' && steps.dispatch_record.outputs.approver || '' }}
+        CONTROL_PLANE_APPROVAL_ID: ${{ steps.context.outputs.threadless == 'true' && steps.dispatch_record.outputs.approval_id || '' }}
+        CONTROL_PLANE_HEAD_SHA: ${{ steps.context.outputs.threadless == 'true' && steps.dispatch_record.outputs.head_sha || '' }}
+        CONTROL_PLANE_PR: ${{ steps.context.outputs.threadless == 'true' && steps.dispatch_record.outputs.pr || '' }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:
         github-token: ${{ inputs.authorization_github_token || inputs.source_org_github_token }}
@@ -2297,7 +2301,7 @@ runs:
           for (const [name, value] of Object.entries(outputs)) core.setOutput(name, value);
           for (const line of notices) core.info(line);
 
-    - name: Record the native review approval
+    - name: Record the approval before the pull request head moves
       id: acknowledge_native
       if: >-
         ${{ inputs.publish == 'true' && steps.approval.outputs.needs_ack == 'true' &&
@@ -2306,6 +2310,7 @@ runs:
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         APPROVAL_REF: ${{ steps.approval.outputs.approval_ref }}
+        APPROVER: ${{ steps.approval.outputs.approval_login }}
         THREAD: ${{ steps.approval.outputs.approval_thread }}
         ISSUE_NUM: ${{ steps.subject.outputs.number }}
         PR_NUMBER: ${{ steps.phase.outputs.pr_number }}
@@ -2315,18 +2320,21 @@ runs:
       with:
         github-token: ${{ inputs.source_org_github_token }}
         script: |
-          const { renderNativeApprovalReceipt } = require(`${process.env.SCRIPTS}/ksai/plan.cjs`);
+          const { renderControlPlaneApprovalReceipt, renderNativeApprovalReceipt } = require(`${process.env.SCRIPTS}/ksai/plan.cjs`);
+          const receipt = {
+            triggerPhrase: process.env.TRIGGER,
+            issueNumber: process.env.ISSUE_NUM,
+            prNumber: process.env.PR_NUMBER,
+            runId: process.env.RUN_ID,
+            approvalRef: process.env.APPROVAL_REF,
+          };
           await github.rest.issues.createComment({
             owner: context.repo.owner,
             repo: context.repo.repo,
             issue_number: Number(process.env.THREAD),
-            body: renderNativeApprovalReceipt({
-              triggerPhrase: process.env.TRIGGER,
-              issueNumber: process.env.ISSUE_NUM,
-              prNumber: process.env.PR_NUMBER,
-              runId: process.env.RUN_ID,
-              approvalRef: process.env.APPROVAL_REF,
-            }),
+            body: process.env.APPROVAL_REF.startsWith('cp/')
+              ? renderControlPlaneApprovalReceipt({ ...receipt, approver: process.env.APPROVER })
+              : renderNativeApprovalReceipt(receipt),
           });
 
     - name: Record the release in the plan
