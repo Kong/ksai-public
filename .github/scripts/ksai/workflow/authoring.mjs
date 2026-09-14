@@ -31,10 +31,25 @@ function rootOf(path) {
   return realpathSync(resolve(path));
 }
 
+function directoryInside(root, directory) {
+  const rootIdentity = lstatSync(root);
+  let current = realpathSync(directory);
+  while (true) {
+    const identity = lstatSync(current);
+    if (identity.dev === rootIdentity.dev && identity.ino === rootIdentity.ino) return true;
+    const parent = dirname(current);
+    if (parent === current) return false;
+    current = parent;
+  }
+}
+
 function outputPath(root, path, where) {
   const requested = resolve(path);
   const outside = (target) => {
     if (target === root || target.startsWith(`${root}${sep}`)) throw new Error(`${where} must be outside the package`);
+  };
+  const outsideDirectory = (directory) => {
+    if (directoryInside(root, directory)) throw new Error(`${where} must be outside the package`);
   };
   outside(requested);
   let ancestor = dirname(requested);
@@ -45,9 +60,12 @@ function outputPath(root, path, where) {
     missing.unshift(basename(ancestor));
     ancestor = parent;
   }
+  outsideDirectory(ancestor);
   outside(resolve(realpathSync(ancestor), ...missing, basename(requested)));
   mkdirSync(dirname(requested), { recursive: true });
-  const target = join(realpathSync(dirname(requested)), basename(requested));
+  const parent = realpathSync(dirname(requested));
+  outsideDirectory(parent);
+  const target = join(parent, basename(requested));
   outside(target);
   let held;
   try {

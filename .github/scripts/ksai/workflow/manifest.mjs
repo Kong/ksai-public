@@ -285,17 +285,27 @@ function graph(manifest) {
       consumers.get(dependency).push(stage.id);
     }
   }
-  const visiting = new Set();
-  const visited = new Set();
-  const visit = (id) => {
-    if (visiting.has(id)) throw new Error(`manifest graph has a cycle at ${id}`);
-    if (visited.has(id)) return;
-    visiting.add(id);
-    for (const dependency of byId.get(id).needs ?? []) visit(dependency);
-    visiting.delete(id);
-    visited.add(id);
-  };
-  stages.forEach((stage) => visit(stage.id));
+  const state = new Map();
+  for (const stage of stages) {
+    if (state.get(stage.id) === 'visited') continue;
+    const pending = [{ id: stage.id, dependency: 0 }];
+    state.set(stage.id, 'visiting');
+    while (pending.length) {
+      const current = pending.at(-1);
+      const needs = byId.get(current.id).needs ?? [];
+      if (current.dependency === needs.length) {
+        state.set(current.id, 'visited');
+        pending.pop();
+        continue;
+      }
+      const dependency = needs[current.dependency];
+      current.dependency += 1;
+      if (state.get(dependency) === 'visiting') throw new Error(`manifest graph has a cycle at ${dependency}`);
+      if (state.get(dependency) === 'visited') continue;
+      state.set(dependency, 'visiting');
+      pending.push({ id: dependency, dependency: 0 });
+    }
+  }
   for (const stage of stages.filter((held) => held.kind === 'publisher')) {
     if (consumers.get(stage.id).length) throw new Error(`publisher stage ${stage.id} is not terminal`);
     const source = stage.publisher.from.result ?? stage.publisher.from.artifact;

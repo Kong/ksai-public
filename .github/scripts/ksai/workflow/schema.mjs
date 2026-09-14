@@ -147,29 +147,31 @@ function typeOf(value) {
 }
 
 function check(schema, value, root, path, where, problems, seen, resolveReference) {
-  if (schema === true) return;
+  if (schema === true) return false;
   if (schema === false) {
     problems.push(`${where} is forbidden by its schema`);
-    return;
+    return false;
   }
   if (!object(schema)) throw new Error(`${where} schema is not an object or boolean`);
   for (const key of Object.keys(schema)) {
     if (!KEYWORDS.has(key)) throw new Error(`${where} schema uses unsupported keyword ${key}`);
   }
+  let blocked = false;
   if (schema.$ref !== undefined) {
     const target = referenced(root, schema.$ref, path, resolveReference);
     const identity = `${target.path}\0${schema.$ref}\0${where}`;
-    if (!seen.has(identity)) check(
+    if (seen.has(identity)) blocked = true;
+    else if (check(
       target.schema, value, target.root, target.path, where, problems,
       new Set([...seen, identity]), resolveReference,
-    );
+    )) blocked = true;
   }
   const types = schema.type === undefined ? [] : Array.isArray(schema.type) ? schema.type : [schema.type];
   if (types.some((type) => !TYPE.has(type))) throw new Error(`${where} schema names an unsupported type`);
   const actual = typeOf(value);
   if (types.length && !types.includes(actual) && !(actual === 'integer' && types.includes('number'))) {
     problems.push(`${where} must be ${types.join(' or ')}`);
-    return;
+    return blocked;
   }
   if (Array.isArray(schema.enum) && !schema.enum.some((one) => same(one, value))) problems.push(`${where} is not an allowed value`);
   if (Object.hasOwn(schema, 'const') && !same(schema.const, value)) problems.push(`${where} is not the required value`);
@@ -179,12 +181,14 @@ function check(schema, value, root, path, where, problems, seen, resolveReferenc
     if (!Array.isArray(schema[keyword]) || schema[keyword].length === 0) throw new Error(`${where} schema ${keyword} is empty`);
     const outcomes = schema[keyword].map((branch) => {
       const held = [];
-      check(branch, value, root, path, where, held, seen, resolveReference);
-      return held;
+      const branchBlocked = check(branch, value, root, path, where, held, seen, resolveReference);
+      return { blocked: branchBlocked, problems: held };
     });
-    if (keyword === 'allOf') outcomes.flat().forEach((problem) => problems.push(problem));
-    if (keyword === 'anyOf' && outcomes.every((held) => held.length)) problems.push(`${where} matches no allowed schema`);
-    if (keyword === 'oneOf' && outcomes.filter((held) => held.length === 0).length !== 1) problems.push(`${where} does not match exactly one schema`);
+    if (keyword === 'allOf') outcomes.flatMap((outcome) => outcome.problems).forEach((problem) => problems.push(problem));
+    const matches = outcomes.filter((outcome) => !outcome.blocked && outcome.problems.length === 0).length;
+    if (keyword === 'anyOf' && matches === 0) problems.push(`${where} matches no allowed schema`);
+    if (keyword === 'oneOf' && matches !== 1) problems.push(`${where} does not match exactly one schema`);
+    if (outcomes.some((outcome) => outcome.blocked)) blocked = true;
   }
 
   if (typeof value === 'string') {
@@ -201,9 +205,9 @@ function check(schema, value, root, path, where, problems, seen, resolveReferenc
   if (Array.isArray(value)) {
     if (Number.isInteger(schema.minItems) && value.length < schema.minItems) problems.push(`${where} has too few items`);
     if (Number.isInteger(schema.maxItems) && value.length > schema.maxItems) problems.push(`${where} has too many items`);
-    if (schema.items !== undefined) value.forEach((item, index) => check(
-      schema.items, item, root, path, `${where}[${index}]`, problems, seen, resolveReference,
-    ));
+    if (schema.items !== undefined) value.forEach((item, index) => {
+      if (check(schema.items, item, root, path, `${where}[${index}]`, problems, seen, resolveReference)) blocked = true;
+    });
   }
   if (object(value)) {
     const required = schema.required ?? [];
@@ -212,13 +216,18 @@ function check(schema, value, root, path, where, problems, seen, resolveReferenc
     const properties = schema.properties ?? {};
     if (!object(properties)) throw new Error(`${where} schema properties is invalid`);
     for (const [key, held] of Object.entries(value)) {
-      if (Object.hasOwn(properties, key)) check(properties[key], held, root, path, `${where}.${key}`, problems, seen, resolveReference);
+      if (Object.hasOwn(properties, key)) {
+        if (check(properties[key], held, root, path, `${where}.${key}`, problems, seen, resolveReference)) blocked = true;
+      }
       else if (schema.additionalProperties === false) problems.push(`${where}.${key} is not declared`);
       else if (object(schema.additionalProperties) || typeof schema.additionalProperties === 'boolean') {
-        check(schema.additionalProperties, held, root, path, `${where}.${key}`, problems, seen, resolveReference);
+        blocked = check(
+          schema.additionalProperties, held, root, path, `${where}.${key}`, problems, seen, resolveReference,
+        ) || blocked;
       }
     }
   }
+  return blocked;
 }
 
 /** Validate a value against the dependency-free runner schema subset. */
