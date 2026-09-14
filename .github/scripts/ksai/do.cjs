@@ -171,6 +171,23 @@ function doRequestOf(body) {
  * That is the opposite bias to `readFailingChecks` next door, and the difference is what the answer costs: a
  * missing log costs the model some context, and a missed report costs a duplicate commit on somebody's branch.
  */
+/*
+ * UNASKED_TRIGGERS are the triggers the control plane records for a run nobody typed a command for: a failed
+ * build, a failed status, an autofix label going on, and a submitted review. Named rather than read as
+ * "anything but `comment`", so a trigger the control plane learns later, an empty one from a hand-started
+ * run, or a record written before triggers existed is still treated as a request somebody wrote.
+ */
+const UNASKED_TRIGGERS = Object.freeze(['build_failed', 'status_failed', 'labeled', 'review_submitted']);
+
+/**
+ * Whether the control plane started this run rather than a comment. Both must hold: a recorded trigger nobody
+ * typed, and no comment id. A run carrying a comment id answers that comment whatever else it says.
+ */
+function unaskedRun({ trigger = null, commentId = null } = {}) {
+  const said = String(trigger ?? '').trim().toLowerCase();
+  return UNASKED_TRIGGERS.includes(said) && String(commentId ?? '').trim() === '';
+}
+
 async function alreadyReported({
   github = null,
   owner = null,
@@ -269,6 +286,7 @@ async function resolveDoPhase({
   botLogin = null,
   guidance = null,
   commentId = null,
+  trigger = null,
   checksFile = null,
   threadRootId = null,
   threadsFile = null,
@@ -307,7 +325,17 @@ async function resolveDoPhase({
    * the evidence file would leave the caller with a path it must not use, which is the kind of half-state this
    * phase's whole record shape exists to avoid.
    */
-  const seen = await alreadyReported({ github, owner, repo, prNumber: number, botLogin, commentId });
+  /*
+   * A run nobody asked for in a comment has no request to replay, so there is nothing to look up. The control
+   * plane already allows one such run per head, which is the duplicate this check exists to stop.
+   */
+  const unasked = unaskedRun({ trigger, commentId });
+  if (unasked) {
+    core?.info?.(`#${number}: nobody asked for this run in a comment, so there is no earlier answer to look for.`);
+  }
+  const seen = unasked
+    ? { answered: false, unreadable: null }
+    : await alreadyReported({ github, owner, repo, prNumber: number, botLogin, commentId });
   if (seen.unreadable) {
     return { error: `I could not tell whether I had already answered this request: ${seen.unreadable}` };
   }
@@ -420,6 +448,8 @@ module.exports = {
   doRequestOf,
   alreadyReported,
   resolveDoPhase,
+  unaskedRun,
+  UNASKED_TRIGGERS,
   // The exceptions to the rule above: do-record.mjs and prompt.cjs share the cap, and the wiring test pins the YAML to the phase.
   MAX_REPORT_CHARS,
   REPLAYED_PHASE,

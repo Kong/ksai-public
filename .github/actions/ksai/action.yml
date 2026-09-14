@@ -4773,6 +4773,7 @@ runs:
         BRANCH: ${{ steps.phase.outputs.ref }}
         REMOTE_SHA: ${{ steps.checkout_source.outputs.commit }}
         COMMENT_ID: ${{ steps.context.outputs.comment_id }}
+        SAW_TRIGGER: ${{ steps.dispatch_record.outputs.trigger }}
         TRIGGER: ${{ inputs.trigger_phrase }}
         DENIED_PATHS: ${{ inputs.denied_paths }}
         PLAN_DIR: ${{ inputs.plan_file_path }}

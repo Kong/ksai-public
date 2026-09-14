@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { cap, MAX_PR_TITLE_CHARS, planDirOf, scrub, retargetPermalinks } = require('./plan.cjs');
 const { safeEcho, verifyChunk, verifyMerge, gitVia, noChangeLeftBehind } = require('./verify-chunk.cjs');
-const { renderDoMarker, MAX_REPORT_CHARS } = require('./do.cjs');
+const { renderDoMarker, unaskedRun, MAX_REPORT_CHARS } = require('./do.cjs');
 import { blockerFor, field, readManifest, reasonOf, runCommand, shown } from './run.mjs';
 import { publishCommit } from './signed-push.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
@@ -42,17 +42,18 @@ export function renderReport({
   summary = null,
   sha = null,
   commentId = null,
+  trigger = null,
   triggerPhrase = null,
   repo = null,
   localSha = null,
   merged = null,
 } = {}) {
   const marker = renderDoMarker(commentId);
-  if (!marker) return '';
+  if (!marker && !unaskedRun({ trigger, commentId })) return '';
   const retargeted = retargetPermalinks(scrub(field(summary), { triggerPhrase }), { repo, from: localSha, to: sha });
   const said = cap(retargeted.trim(), MAX_REPORT_CHARS);
   const footer = renderReportFooter({ sha, triggerPhrase, merged });
-  return [footer, ...(said ? ['', said] : []), '', marker].join('\n');
+  return [footer, ...(said ? ['', said] : []), ...(marker ? ['', marker] : [])].join('\n');
 }
 
 export function recordDo({
@@ -65,6 +66,7 @@ export function recordDo({
   deniedPaths = null,
   planDir = null,
   commentId = null,
+  trigger = null,
   triggerPhrase = null,
   commitFile = null,
   mergedSha = null,
@@ -89,7 +91,7 @@ export function recordDo({
     return blocked(`The run reported an unrecognized status: ${safeEcho(shown(manifest?.status))}`);
   }
 
-  if (!renderDoMarker(commentId)) {
+  if (!renderDoMarker(commentId) && !unaskedRun({ trigger, commentId })) {
     return blocked(
       `I could not record this request, because \`${safeEcho(shown(commentId))}\` is not a comment id. Nothing ` +
         'was pushed: without the record, every later request would do this work again.',
@@ -197,6 +199,7 @@ export function recordDo({
       summary: manifest?.summary,
       sha,
       commentId,
+      trigger,
       triggerPhrase,
       repo,
       localSha,
@@ -219,6 +222,7 @@ export function main(env = process.env, { run = runCommand } = {}) {
     deniedPaths: env.DENIED_PATHS,
     planDir: planDirOf(env.PLAN_DIR),
     commentId: env.COMMENT_ID,
+    trigger: env.SAW_TRIGGER,
     triggerPhrase: env.TRIGGER,
     commitFile: path.join(tmp, 'ksai-commit.json'),
     mergedSha: env.MERGED_SHA,

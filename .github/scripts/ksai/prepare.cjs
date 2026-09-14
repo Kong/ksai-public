@@ -714,13 +714,7 @@ function noticeFor(out, env) {
 const REVIEW_QUIET =
   'nobody typed a command to start this run and nothing here is waiting on it, so nothing ran and no notice was posted';
 
-/*
- * UNASKED_TRIGGERS are the triggers the control plane records for a run nobody typed a command for: a failed
- * build, a failed status, an autofix label going on, and a submitted review. Named rather than read as
- * "anything but `comment`", so a trigger the control plane learns later, an empty one from a hand-started
- * run, or a record written before triggers existed keeps the notice until somebody decides it should not.
- */
-const UNASKED_TRIGGERS = Object.freeze(['build_failed', 'status_failed', 'labeled', 'review_submitted']);
+const { UNASKED_TRIGGERS } = require('./do.cjs');
 
 /**
  * phaseNotice decides what a phase that found nothing says, and whether it says it at all.
@@ -762,6 +756,7 @@ async function decidePhase({ github, core, owner, repo, env }) {
     threadsFile: env.THREADS_FILE,
     threadStateFile: env.THREAD_STATE_FILE,
     commentId: env.COMMENT_ID,
+    sawTrigger: env.SAW_TRIGGER,
     checksFile: env.CHECKS_FILE,
     threadRootId: env.THREAD_ROOT_ID,
     scope: env.RECORD_SCOPE,
