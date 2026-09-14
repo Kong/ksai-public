@@ -35,3 +35,40 @@ Write in ASD-STE100 Simplified Technical English:
 
 Brevity is part of the review, not a trade against it. A finding a reader skips is a finding
 that did not land. Length budgets are in `format_policy`.
+
+## Source comments
+
+Every review must inspect each source-code comment added or edited by the diff.
+Also inspect an adjacent comment when changed code makes its claim stale. Judge the comment's
+content, never its presumed author. When a caller splits discovery into independent stages, the
+local discovery stage owns this check. Other stages do not repeat it.
+
+A useful comment supplies information the code cannot express:
+
+- why a non-obvious choice, invariant, security boundary or business rule exists
+- why a simpler-looking implementation is unsafe
+- what external defect or compatibility constraint forces a workaround
+- public API documentation, a legal notice or a tool directive the repository requires
+
+Report a comment when it:
+
+- narrates statements, control flow, identifiers, types, parameters, returns, test setup or
+  assertions already visible in the code
+- records LLM reasoning, the authoring process, the pull request or change history instead of a
+  durable reason
+- buries one useful reason in a long tutorial, heading sequence, repetition or speculative detail
+- makes a false, stale or broader claim than the code enforces
+
+Use Low `[delete]` when removing the comment loses no non-obvious information. Use Low `[shrink]`
+when one short reason should replace a long comment. Use `[risk]` or `[bug]` for a false comment
+only when you can show the concrete misuse or failure it causes, and size severity by that impact.
+Group one contiguous block under one finding.
+
+This is the narrow exception to the rule that findings need a failing runtime input. The added or
+edited comment and the code beside it are the evidence. Do not dismiss a `[delete]` or `[shrink]`
+finding only because the program still runs. Do not demand a comment for self-explanatory code.
+Prefer simpler code over prose that explains avoidable complexity.
+
+Any retained or proposed comment explains the non-obvious why in short, direct ASD-STE100
+Simplified Technical English. Apply comment syntax, TSDoc/JSDoc form and character restrictions
+only when the repository conventions require them.

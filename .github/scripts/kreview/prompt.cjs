@@ -384,6 +384,9 @@ ${reviewStep(reviewers, available, conventions, common)}
    already hold, would read both a second time, and would report back what you can see now.
    Read the tree around a hunk as the mandate requires. Anchor every finding to a concrete
    failure: the input, the sequence or the state that makes the change wrong.
+   Apply the mandatory Source comments check in \`review_instructions\` while reading every
+   hunk. Its \`[delete]\` and \`[shrink]\` findings use the changed comment as evidence and are
+   the only exception to the concrete-failure rule.
 
    Before audit, finish discovery with Additional Risk findings covering:
 
