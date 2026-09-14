@@ -535,6 +535,40 @@ export function resolverBinds(real = realpathSync) {
   return at.startsWith(`${MASKED_RUNTIME}/`) ? ['--ro-bind', at, at] : [];
 }
 
+/** Bind a complete workflow-stage ABI, refusing partial or writable trusted inputs. */
+export function workflowBinds(env = process.env, exists = existsSync, kind = (at) => statSync(at)) {
+  const values = {
+    KSAI_WORKFLOW_PACKAGE: String(env.KSAI_WORKFLOW_PACKAGE ?? ''),
+    KSAI_STAGE_REQUEST: String(env.KSAI_STAGE_REQUEST ?? ''),
+    KSAI_STAGE_RESULT: String(env.KSAI_STAGE_RESULT ?? ''),
+    KSAI_STAGE_ARTIFACTS: String(env.KSAI_STAGE_ARTIFACTS ?? ''),
+    KSAI_STAGE_INPUTS: String(env.KSAI_STAGE_INPUTS ?? ''),
+  };
+  const present = Object.values(values).filter(Boolean).length;
+  if (present === 0) return [];
+  if (present !== Object.keys(values).length) throw new Error('workflow stage ABI is incomplete');
+  const resultDirectory = dirname(values.KSAI_STAGE_RESULT);
+  for (const [name, path] of Object.entries(values)) {
+    if (name === 'KSAI_STAGE_RESULT') {
+      if (exists(path) || !exists(resultDirectory) || !kind(resultDirectory).isDirectory()) {
+        throw new Error('workflow stage result is not one new file');
+      }
+    } else if (!exists(path)) throw new Error(`${name} does not exist`);
+  }
+  for (const name of ['KSAI_WORKFLOW_PACKAGE', 'KSAI_STAGE_ARTIFACTS', 'KSAI_STAGE_INPUTS']) {
+    if (!kind(values[name]).isDirectory()) throw new Error(`${name} is not a directory`);
+  }
+  if (!kind(values.KSAI_STAGE_REQUEST).isFile()) throw new Error('KSAI_STAGE_REQUEST is not a file');
+  return [
+    '--ro-bind', values.KSAI_WORKFLOW_PACKAGE, values.KSAI_WORKFLOW_PACKAGE,
+    '--ro-bind', values.KSAI_STAGE_REQUEST, values.KSAI_STAGE_REQUEST,
+    '--ro-bind', values.KSAI_STAGE_INPUTS, values.KSAI_STAGE_INPUTS,
+    '--bind', resultDirectory, resultDirectory,
+    '--bind', values.KSAI_STAGE_ARTIFACTS, values.KSAI_STAGE_ARTIFACTS,
+    ...Object.entries(values).flatMap(([name, value]) => ['--setenv', name, value]),
+  ];
+}
+
 export function sandboxArgs(
   env = process.env,
   exists = existsSync,
@@ -574,6 +608,7 @@ export function sandboxArgs(
 
   const resultDir = String(env.KSAI_REVIEW_RESULT_DIR ?? '');
   if (resultDir && exists(resultDir)) args.push('--bind', resultDir, resultDir);
+  args.push(...workflowBinds(env, exists, kind));
 
   const ptyMetrics = String(env.KSAI_PTY_METRICS_FILE ?? '');
   if (ptyMetrics && exists(ptyMetrics)) {

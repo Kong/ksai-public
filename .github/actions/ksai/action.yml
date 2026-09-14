@@ -1046,6 +1046,7 @@ runs:
         repository: Kong/ksai-public
         ref: ${{ steps.plugin_ref.outputs.ref }}
         sparse-checkout: |
+          .github/agent-workflows
           .github/actions/codeowners-authz
           .github/actions/dispatch-record
           .github/scripts
@@ -1061,6 +1062,8 @@ runs:
         set -euo pipefail
         rm -rf -- "$DEST"
         cp -R -- "${GITHUB_WORKSPACE}/_ksai/.github/scripts" "$DEST"
+        rm -rf -- "${RUNNER_TEMP}/ksai-workflows"
+        cp -R -- "${GITHUB_WORKSPACE}/_ksai/.github/agent-workflows" "${RUNNER_TEMP}/ksai-workflows"
         echo "sha=$(git -C "${GITHUB_WORKSPACE}/_ksai" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
         cp -R -- "${GITHUB_WORKSPACE}/_ksai/.github/actions/codeowners-authz" "${DEST}/codeowners-authz"
         find "$DEST" -name '*.test.mjs' -delete
@@ -1806,6 +1809,26 @@ runs:
         set -euo pipefail
         node "${SCRIPTS}/ksai/pr-test/run-dir.mjs"
 
+    - name: Prepare the manifest-backed test stage
+      if: >-
+        ${{ steps.test_paths.outcome == 'success' &&
+        steps.select_test.outputs.test_mode == 'test' }}
+      id: workflow_stage
+      shell: bash
+      env:
+        WORKFLOW_REGISTRY: ${{ runner.temp }}/ksai-workflows
+        WORKFLOW_RUNTIME: ${{ runner.temp }}/ksai-workflow-stage
+        WORKFLOW_JOB: ${{ format('{0}_{1}_{2}', github.run_id, github.job, strategy.job-index || 0) }}
+        THREAD_NUM: ${{ steps.context.outputs.issue_number }}
+        WORKFLOW_REPOSITORY: ${{ github.repository }}
+        WORKFLOW_ATTEMPT: ${{ github.run_attempt }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      run: |
+        set -euo pipefail
+        WORKFLOW_HEAD="$(git rev-parse HEAD)"
+        export WORKFLOW_HEAD
+        node "${SCRIPTS}/ksai/workflow/prepare.mjs"
+
     - name: Resolve acceptance criteria
       if: ${{ steps.test_paths.outcome == 'success' }}
       shell: bash
@@ -1950,23 +1973,26 @@ runs:
 
     - name: Assemble the tester prompt
       if: >-
-        ${{ steps.test_paths.outcome == 'success' && steps.select_test.outputs.test_mode == 'test' &&
+        ${{ steps.workflow_stage.outcome == 'success' &&
         steps.start_test_environments.outcome == 'success' }}
       id: build_test
       shell: bash
       env:
         BASE: ${{ steps.test_base.outputs.ref }}
         RUN_DIR: ${{ steps.test_paths.outputs.dir }}
+        ENTRYPOINT: ${{ steps.workflow_stage.outputs.entrypoint }}
+        STAGE_RESULT: ${{ steps.workflow_stage.outputs.result }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: |
         set -euo pipefail
         prompt="${RUNNER_TEMP}/pr-test-prompt.md"
-        cat "${SCRIPTS}/ksai/pr-test/prompt.md" > "${prompt}"
+        cat "${ENTRYPOINT}" > "${prompt}"
         {
           echo
           echo "## This run"
           echo
-          echo "- Run directory: \`${RUN_DIR}\`. Write the verdict to \`${RUN_DIR}/.pr-test-verdict.json\`."
+          echo "- Run directory: \`${RUN_DIR}\`."
+          echo "- Write the stage candidate to \`${STAGE_RESULT}\`."
           echo "- Read \`${RUN_DIR}/ENVIRONMENT.md\` and \`${RUN_DIR}/CRITERIA.md\` before anything else."
           echo "- The base branch is \`${BASE}\`. See the change with: git diff origin/${BASE}...HEAD"
           echo
@@ -1980,10 +2006,12 @@ runs:
       id: test_tools
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
+        PROFILE: ${{ steps.workflow_stage.outputs.profile }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:
         script: |
           const { toolPolicy } = require(`${process.env.SCRIPTS}/lib/claude-args.cjs`);
+          if (process.env.PROFILE !== 'product-test') return core.setFailed('the test adapter requires the product-test profile');
           const policy = toolPolicy('test');
           core.setOutput('allowed_tools', policy.allowed);
           core.setOutput('disallowed_tools', policy.disallowed);
@@ -3940,7 +3968,8 @@ runs:
       id: watchdog
       if: >-
         ${{ inputs.dry_run == 'false' && inputs.job_timeout_minutes != '0' &&
-        (steps.build_implement.outcome == 'success' || steps.build_review.outcome == 'success') }}
+        (steps.build_implement.outcome == 'success' || steps.build_review.outcome == 'success' ||
+        steps.build_test.outcome == 'success') }}
       shell: bash
       env:
         JOB_TIMEOUT_MINUTES: ${{ inputs.job_timeout_minutes }}
@@ -3994,6 +4023,11 @@ runs:
         FLOW: ${{ inputs.flow }}
         KSAI_CHANNEL_NONCE: ${{ steps.channel.outputs.nonce || 'none' }}
         KSAI_CHANNEL_WARN: ${{ steps.halt.outputs.warn || '0' }}
+        KSAI_WORKFLOW_PACKAGE: ${{ steps.workflow_stage.outputs.package }}
+        KSAI_STAGE_REQUEST: ${{ steps.workflow_stage.outputs.request }}
+        KSAI_STAGE_RESULT: ${{ steps.workflow_stage.outputs.result }}
+        KSAI_STAGE_ARTIFACTS: ${{ steps.workflow_stage.outputs.artifacts }}
+        KSAI_STAGE_INPUTS: ${{ steps.workflow_stage.outputs.inputs }}
         OPENCODE_PTY: ${{ inputs.opencode_pty }}
         OPENCODE_PHASE: test
         OPENCODE_RESUME_SESSION: ${{ steps.plan_session.outputs.session_id }}
@@ -4008,6 +4042,19 @@ runs:
           format(',{0}', inputs.otel_extra_attributes) || '' }}
       working-directory: ${{ runner.temp }}
       run: node "${SCRIPTS}/kreview/opencode-run.mjs"
+
+    - name: Accept the manifest-backed test result
+      id: accept_test_stage
+      if: >-
+        ${{ always() && inputs.flow == 'test' &&
+        steps.workflow_stage.outcome == 'success' &&
+        steps.opencode_test.outcome == 'success' }}
+      continue-on-error: true
+      shell: bash
+      env:
+        WORKFLOW_DESCRIPTOR: ${{ steps.workflow_stage.outputs.descriptor }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      run: node "${SCRIPTS}/ksai/workflow/accept.mjs"
 
     - name: Record what the tester spent
       if: >-
@@ -4054,6 +4101,10 @@ runs:
       shell: bash
       env:
         RUN: ${{ steps.test_paths.outputs.dir }}
+        VERDICT: ${{ steps.accept_test_stage.outputs.output }}
+        ALLOW_RUN_VERDICT: >-
+          ${{ steps.select_test.outputs.test_mode != 'test' ||
+          steps.start_test_environments.outcome == 'failure' }}
         SPEND: ${{ runner.temp }}/pr-test-spend/spend.json
         CLASSIFIER_COST: ${{ steps.verdict.outputs.cost }}
         DEST: ${{ runner.temp }}/pr-test-verdict

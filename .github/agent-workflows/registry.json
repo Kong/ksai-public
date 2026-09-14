@@ -1,0 +1,13 @@
+{
+  "apiVersion": "ksai.konghq.com/package-registry/v1alpha1",
+  "packages": [
+    {
+      "workflow": "adversarial-pull-request-test",
+      "version": "1.0.0",
+      "digest": "sha256:0045e7bf6f781e0a02a22121fe75deb7cec8a09bb2848eb1df8c053721ebd9b4",
+      "manifestDigest": "sha256:79ccc2c03ed571985328b7ceb4b741e13cee6dd960673ee4e67a4f69374576d8",
+      "state": "active",
+      "path": "packages/adversarial-pull-request-test/1.0.0"
+    }
+  ]
+}

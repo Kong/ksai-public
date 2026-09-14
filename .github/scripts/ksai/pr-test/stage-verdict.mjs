@@ -4,7 +4,13 @@ import { writeOutputs } from '../../lib/outputs.mjs';
 import { stageVerdict } from './staging.mjs';
 
 export function main(env = process.env) {
-  const outcome = stageVerdict({ run: env.RUN, spend: env.SPEND, dest: env.DEST });
+  const outcome = stageVerdict({
+    run: env.RUN,
+    verdict: env.VERDICT,
+    allowRunVerdict: env.ALLOW_RUN_VERDICT === 'true',
+    spend: env.SPEND,
+    dest: env.DEST,
+  });
   writeOutputs(env.GITHUB_OUTPUT, {
     sha256: outcome.sha256 || undefined,
     dir: outcome.dir,

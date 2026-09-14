@@ -1,0 +1,38 @@
+{
+  "apiVersion": "ksai.konghq.com/v1alpha1",
+  "kind": "AgentWorkflow",
+  "metadata": {
+    "name": "adversarial-pull-request-test",
+    "version": "1.0.0"
+  },
+  "spec": {
+    "triggers": [
+      {
+        "id": "pull-request",
+        "subject": "pull-request",
+        "inputSchema": "schemas/pull-request.json",
+        "starts": ["test"]
+      }
+    ],
+    "limits": {
+      "maxParallel": 1,
+      "maxStages": 1,
+      "bytes": {
+        "candidateResult": 131072
+      }
+    },
+    "stages": [
+      {
+        "id": "test",
+        "kind": "agent",
+        "profile": "product-test",
+        "entrypoint": {
+          "type": "skill",
+          "path": "stages/test/SKILL.md"
+        },
+        "outputSchema": "schemas/test-verdict.json",
+        "timeoutMinutes": 30
+      }
+    ]
+  }
+}

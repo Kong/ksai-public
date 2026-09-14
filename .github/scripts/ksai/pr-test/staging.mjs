@@ -51,11 +51,11 @@ export function stageFile(source = '', dest = '', file = '', missing = '') {
   return { dir: dest };
 }
 
-export function stageVerdict({ run = '', spend = '', dest = '' } = {}) {
+export function stageVerdict({ run = '', verdict = '', allowRunVerdict = true, spend = '', dest = '' } = {}) {
   fresh(dest);
   const outcome = { dir: dest, present: 'false', staged: 'false', sha256: '' };
-  const source = `${run}/${VERDICT_FILE}`;
-  if (regular(source)) {
+  const source = verdict || (allowRunVerdict ? `${run}/${VERDICT_FILE}` : '');
+  if (source && regular(source)) {
     const staged = join(dest, VERDICT_FILE);
     copyFileSync(source, staged);
     Object.assign(outcome, { present: 'true', staged: 'true', sha256: sha256Of(staged) });
