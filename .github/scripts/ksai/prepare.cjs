@@ -551,8 +551,24 @@ async function resolveRunContext({ github, context, env }) {
   if (read.error) return refuse(read.error);
   const reviewed = labelled ? null : await reviewBasisOf({ github, context, env, read });
   if (reviewed?.error) return refuse(reviewed.error);
+  if (reviewed && read.reviewId == null) {
+    return refuse(
+      `the submitted review on pull request #${String(read.issueNumber)} names no review id, so its autofix ` +
+        'context cannot be scoped and nothing ran',
+    );
+  }
   const rested = labelled ?? reviewed;
   const out = reviewed ? labelledContext(reviewed) : read;
+  if (reviewed) {
+    Object.assign(out, {
+      reviewId: read.reviewId,
+      reviewSubmittedAt: read.reviewSubmittedAt,
+      reviewCommitId: read.reviewCommitId,
+      reviewUrl: read.reviewUrl,
+      reviewAssociation: read.reviewAssociation,
+      reviewActorType: read.reviewActorType,
+    });
+  }
 
   const outputs = {
     issue_number: out.issueNumber == null ? '' : String(out.issueNumber),
@@ -734,7 +750,7 @@ function phaseNotice(out, env) {
   return { notice: quiet ? '' : notice, quiet: quiet ? 'true' : '' };
 }
 
-async function decidePhase({ github, core, owner, repo, env }) {
+async function decidePhase({ github, core, owner, repo, env, authorize, writeAccess }) {
   const evidenceClient = env.EVIDENCE_TOKEN
     ? new github.constructor({ auth: env.EVIDENCE_TOKEN, baseUrl: env.GITHUB_API_URL })
     : undefined;
@@ -759,6 +775,11 @@ async function decidePhase({ github, core, owner, repo, env }) {
     sawTrigger: env.SAW_TRIGGER,
     checksFile: env.CHECKS_FILE,
     threadRootId: env.THREAD_ROOT_ID,
+    reviewId: env.REVIEW_ID,
+    authorize,
+    writeAccess,
+    writeAccessCommands: env.WRITE_ACCESS_COMMANDS,
+    triggerPhrase: env.TRIGGER,
     scope: env.RECORD_SCOPE,
   });
 
@@ -1233,12 +1254,16 @@ async function fetchConversation({ github, owner, repo, env }) {
 
   const issue_number = Number(env.ISSUE_NUM);
   const head = readJson(env.HEAD_FILE);
-  const comments = await github.paginate(github.rest.issues.listComments, {
-    owner,
-    repo,
-    issue_number,
-    per_page: 100,
-  });
+  const phase = String(env.PHASE ?? '');
+  const omitComments = env.ON_ISSUE === 'false' && (phase === 'fix' || phase === 'do');
+  const comments = omitComments
+    ? []
+    : await github.paginate(github.rest.issues.listComments, {
+        owner,
+        repo,
+        issue_number,
+        per_page: 100,
+      });
 
   const payload = {
     ...head,
@@ -1251,7 +1276,10 @@ async function fetchConversation({ github, owner, repo, env }) {
 
   fs.writeFileSync(env.ISSUE_FILE, stripOwnComments(JSON.stringify(payload, null, 2), env.BOT_LOGIN));
   outputs.file = env.ISSUE_FILE;
-  return { outputs, notices: [] };
+  return {
+    outputs,
+    notices: omitComments ? ['Pull request conversation comments were omitted from this autofix prompt.'] : [],
+  };
 }
 
 const readJson = (at) => JSON.parse(fs.readFileSync(at, 'utf8'));

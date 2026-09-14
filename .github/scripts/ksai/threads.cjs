@@ -24,11 +24,11 @@ const THREAD_QUERY = `
             path
             line
             root: comments(first: 1) {
-              nodes { databaseId author { login } body createdAt updatedAt lastEditedAt }
+              nodes { databaseId author { login } body createdAt updatedAt lastEditedAt pullRequestReview { databaseId } }
             }
             recent: comments(last: ${REPLY_SEARCH_DEPTH}) {
               totalCount
-              nodes { databaseId author { login } body createdAt updatedAt lastEditedAt replyTo { databaseId } }
+              nodes { databaseId author { login } body createdAt updatedAt lastEditedAt replyTo { databaseId } pullRequestReview { databaseId } }
             }
           }
         }
@@ -43,7 +43,7 @@ const THREAD_COMMENTS_QUERY = `
       ... on PullRequestReviewThread {
         comments(first: ${PER_PAGE}, after: $cursor) {
           pageInfo { hasNextPage endCursor }
-          nodes { databaseId author { login } body createdAt updatedAt lastEditedAt replyTo { databaseId } }
+          nodes { databaseId author { login } body createdAt updatedAt lastEditedAt replyTo { databaseId } pullRequestReview { databaseId } }
         }
       }
     }
@@ -51,7 +51,8 @@ const THREAD_COMMENTS_QUERY = `
 `;
 
 const { markerOf } = require('./marker.cjs');
-const { isOwnLogin, ownUnedited, wasEdited } = require('./approval.cjs');
+const { commandOf, editState, isOwnLogin, ownUnedited, wasEdited, UNEDITED } = require('./approval.cjs');
+const { commandAuthorized, writeAccessNames } = require('../lib/select-arm.cjs');
 
 const LOCK_KIND = 'thread-locked';
 
@@ -84,6 +85,7 @@ const shapeComment = (comment) => ({
   commentId: Number.isInteger(comment?.databaseId) ? comment.databaseId : null,
   created_at: String(comment?.createdAt ?? ''),
   updated_at: String(comment?.updatedAt ?? ''),
+  reviewId: String(comment?.pullRequestReview?.databaseId ?? ''),
   ...(comment && Object.hasOwn(comment, 'lastEditedAt') ? { last_edited_at: comment.lastEditedAt } : {}),
 });
 
@@ -117,6 +119,7 @@ async function readThreads({ github = null, owner = null, repo = null, prNumber 
         path: String(node?.path ?? ''),
         line: Number.isInteger(node?.line) ? node.line : null,
         rootCommentId: root.commentId,
+        reviewId: root.reviewId,
         truncated: total === null || total > REPLY_SEARCH_DEPTH + 1,
         commentCount: total,
         comments: [root, ...following],
@@ -234,6 +237,158 @@ async function hydrateScopedThread({ github, threads, threadRootId }) {
   const complete = await readCompleteThread({ github, thread: scoped });
   if (complete.error) return { error: complete.error };
   return { threads: threads.map((thread) => (thread === scoped ? complete.thread : thread)) };
+}
+
+const REVIEW_ID_SHAPE = /^[1-9][0-9]{0,18}$/;
+
+function reviewScope(threads, reviewId) {
+  const wanted = String(reviewId ?? '').trim();
+  if (wanted === '') return { threads };
+  if (!REVIEW_ID_SHAPE.test(wanted)) return { error: `\`${wanted}\` is not a submitted review id` };
+  return { threads: (threads ?? []).filter((thread) => thread?.reviewId === wanted) };
+}
+
+function authorizerCore(core) {
+  let failure = '';
+  return {
+    core: {
+      debug: (...args) => core?.debug?.(...args),
+      error: (...args) => core?.error?.(...args),
+      info: (...args) => core?.info?.(...args),
+      setFailed: (message) => {
+        failure = String(message ?? 'authorization failed');
+      },
+      setOutput: () => {},
+      warning: (...args) => core?.warning?.(...args),
+    },
+    failure: () => failure,
+  };
+}
+
+async function authorizeThreadContext({
+  threads,
+  github,
+  core,
+  owner,
+  repo,
+  botLogin,
+  authorize,
+  writeAccess,
+  writeAccessCommands,
+  triggerPhrase,
+}) {
+  if ((threads ?? []).length === 0) return { threads: [] };
+  if (typeof authorize !== 'function') {
+    return { error: 'no comment authorizer was passed, so review feedback cannot be trusted' };
+  }
+
+  const decisions = new Map();
+  const cache = Object.create(null);
+  const opened = writeAccessNames(writeAccessCommands);
+  const decide = async (rawLogin) => {
+    const login = String(rawLogin ?? '').trim();
+    if (login === '') return { allowed: false };
+    if (isOwnLogin(login, botLogin)) return { allowed: true };
+    const key = login.toLowerCase();
+    if (decisions.has(key)) return decisions.get(key);
+
+    const pending = (async () => {
+      const auth = authorizerCore(core);
+      let owns;
+      try {
+        owns = await authorize({ github, core: auth.core, owner, repo, username: login, cache });
+      } catch (error) {
+        return { error: `could not authorize @${login} for review feedback: ${error?.message ?? error}` };
+      }
+      if (auth.failure() !== '') {
+        return { error: `could not authorize @${login} for review feedback: ${auth.failure()}` };
+      }
+      if (owns !== true && owns !== false) {
+        return { error: `the authorizer returned no definite ownership answer for @${login}` };
+      }
+
+      let write = '';
+      let bar = commandAuthorized('fix', {
+        codeowner: owns ? 'true' : 'false',
+        write,
+        writeAccessCommands: opened,
+      });
+      if (bar.authorized) return { allowed: true };
+      if (!bar.undecided) return { allowed: false };
+      if (typeof writeAccess !== 'function') {
+        return { error: '`fix` is open to write access, but no write-access reader was passed' };
+      }
+      try {
+        write = await writeAccess({ github, core: auth.core, owner, repo, username: login, cache });
+      } catch (error) {
+        return { error: `could not read @${login}'s write access for review feedback: ${error?.message ?? error}` };
+      }
+      if (auth.failure() !== '') {
+        return { error: `could not authorize @${login} for review feedback: ${auth.failure()}` };
+      }
+      if (write !== 'true' && write !== 'false') {
+        return { error: `GitHub returned no definite write-access answer for @${login}` };
+      }
+      bar = commandAuthorized('fix', {
+        codeowner: 'false',
+        write,
+        writeAccessCommands: opened,
+      });
+      return { allowed: bar.authorized };
+    })();
+    decisions.set(key, pending);
+    return pending;
+  };
+
+  const accepted = [];
+  const warnEdited = (comment, state, effect) => {
+    core?.warning?.(
+      `Review comment ${String(comment?.commentId ?? '(unknown)')} by @${String(comment?.login ?? '')} ` +
+        `${state === 'edited' ? 'was edited' : 'has no readable edit state'}; ${effect}.`,
+    );
+  };
+  for (const thread of threads ?? []) {
+    const [root, ...replies] = thread?.comments ?? [];
+    const rootVerdict = await decide(root?.login);
+    if (rootVerdict.error) return rootVerdict;
+    const rootState = editState(root);
+
+    const keptReplies = [];
+    let replyWasEdited = false;
+    for (const reply of replies) {
+      const verdict = await decide(reply?.login);
+      if (verdict.error) return verdict;
+      if (!verdict.allowed) continue;
+      const state = editState(reply);
+      if (state !== UNEDITED) {
+        warnEdited(reply, state, 'the thread was excluded from trusted feedback');
+        replyWasEdited = true;
+        continue;
+      }
+      keptReplies.push({ ...reply, authorized: true });
+    }
+
+    if (replyWasEdited) continue;
+
+    const endorser = keptReplies.find(
+      (reply) => !isOwnLogin(reply?.login, botLogin) && commandOf(reply?.body, { trigger: triggerPhrase }) === 'fix',
+    );
+    if (!rootVerdict.allowed && !endorser) continue;
+    if (rootState !== UNEDITED) {
+      warnEdited(root, rootState, 'the thread was excluded from trusted feedback');
+      continue;
+    }
+    const keptRoot = rootVerdict.allowed
+      ? { ...root, authorized: true }
+      : {
+          ...root,
+          authorized: false,
+          endorsedBy: { commentId: endorser.commentId, login: endorser.login },
+        };
+    const comments = [keptRoot, ...keptReplies];
+    accepted.push({ ...thread, commentCount: comments.length, comments });
+  }
+  return { threads: accepted };
 }
 
 function selectThread(threads, { threadRootId = null, core = null, botLogin = null, allowLocked = false, counts = { total: 0, resolved: 0, disputed: 0, scope: '' } } = {}) {
@@ -357,6 +512,11 @@ async function resolveFixPhase({
   guidance = null,
   threadRootId = null,
   allowLocked = false,
+  reviewId = null,
+  authorize = null,
+  writeAccess = null,
+  writeAccessCommands = null,
+  triggerPhrase = null,
 } = {}) {
   if (!String(botLogin ?? '').trim()) {
     return { error: 'no bot_login was passed, so review thread state cannot be trusted' };
@@ -369,9 +529,25 @@ async function resolveFixPhase({
   const read = await readThreads({ github, owner, repo, prNumber: number });
   if (read.error) return { error: read.error };
 
-  const hydrated = await hydrateScopedThread({ github, threads: read.threads, threadRootId });
+  const scopedToReview = reviewScope(read.threads, reviewId);
+  if (scopedToReview.error) return { error: scopedToReview.error };
+
+  const hydrated = await hydrateScopedThread({ github, threads: scopedToReview.threads, threadRootId });
   if (hydrated.error) return { error: hydrated.error };
-  const { threads } = hydrated;
+  const trusted = await authorizeThreadContext({
+    threads: hydrated.threads,
+    github,
+    core,
+    owner,
+    repo,
+    botLogin,
+    authorize,
+    writeAccess,
+    writeAccessCommands,
+    triggerPhrase,
+  });
+  if (trusted.error) return { error: trusted.error };
+  const { threads } = trusted;
 
   const { error: refused, ...selected } = selectThreads(threads, {
     botLogin,
@@ -385,6 +561,7 @@ async function resolveFixPhase({
     `#${number} on ${ref}: ${selected.pending.length} of ${counted(selected.total, 'review thread')} offered ` +
       `(${selected.resolved} resolved${selected.deferred ? `, ${selected.deferred} deferred past the bound` : ''})` +
       `${threadRootId ? `, scoped to the thread opened by comment ${String(threadRootId)}` : ''}` +
+      `${reviewId ? `, scoped to submitted review ${String(reviewId)}` : ''}` +
       `${selected.scope ? `, scoped to: ${selected.scope}` : ''}.`,
   );
   return {
@@ -430,5 +607,6 @@ module.exports = {
   workableThreads,
   selectThreads,
   namesTheReview,
+  authorizeThreadContext,
   resolveFixPhase,
 };

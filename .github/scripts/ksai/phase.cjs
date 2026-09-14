@@ -429,6 +429,11 @@ async function resolvePhase({
   sawTrigger = null,
   checksFile = null,
   threadRootId = null,
+  reviewId = null,
+  authorize = null,
+  writeAccess = null,
+  writeAccessCommands = null,
+  triggerPhrase = null,
   scope = null,
   sleep = null,
   writeFile = (at, body) => require('node:fs').writeFileSync(at, body),
@@ -479,6 +484,11 @@ async function resolvePhase({
         guidance: request,
         threadRootId,
         allowLocked: wanted === 'unlock',
+        reviewId,
+        authorize,
+        writeAccess,
+        writeAccessCommands,
+        triggerPhrase,
       });
       if (out.error) return refuse(out.error);
       if (!threadsFile) return refuse('no path was given to write the review threads to');
@@ -591,6 +601,10 @@ async function resolvePhase({
       botLogin,
       planFile: out.planFile,
       guidance,
+      authorize,
+      writeAccess,
+      writeAccessCommands,
+      triggerPhrase,
     });
     if (asked.error) return refuse(asked.error);
     if (asked.pending.length === 0) {

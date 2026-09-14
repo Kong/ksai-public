@@ -1,6 +1,6 @@
 'use strict';
 
-const { ANSWERED, readThreads, selectThreads, threadState } = require('./threads.cjs');
+const { ANSWERED, authorizeThreadContext, readThreads, selectThreads, threadState } = require('./threads.cjs');
 const { isPlanFile } = require('./plan.cjs');
 const { counted } = require('../lib/text.cjs');
 
@@ -13,6 +13,10 @@ async function resolveRevisePhase({
   botLogin = null,
   planFile = null,
   guidance = null,
+  authorize = null,
+  writeAccess = null,
+  writeAccessCommands = null,
+  triggerPhrase = null,
 } = {}) {
   if (!String(botLogin ?? '').trim()) {
     return { error: 'no bot_login was passed, so review thread state cannot be trusted' };
@@ -27,7 +31,21 @@ async function resolveRevisePhase({
 
   const onPlan = read.threads.filter((thread) => String(thread?.path ?? '') === named);
   const elsewhere = read.threads.length - onPlan.length;
-  const { error, ...selected } = selectThreads(onPlan, { botLogin, guidance, core, answerDisputed: true });
+  const trusted = await authorizeThreadContext({
+    threads: onPlan,
+    github,
+    core,
+    owner,
+    repo,
+    botLogin,
+    authorize,
+    writeAccess,
+    writeAccessCommands,
+    triggerPhrase,
+  });
+  if (trusted.error) return { error: trusted.error };
+
+  const { error, ...selected } = selectThreads(trusted.threads, { botLogin, guidance, core, answerDisputed: true });
   if (error) return { error };
 
   core?.info?.(
@@ -40,7 +58,7 @@ async function resolveRevisePhase({
   return {
     planFile: named,
     pending: selected.pending,
-    threads: onPlan,
+    threads: trusted.threads,
     deferred: selected.deferred,
     total: selected.total,
     resolved: selected.resolved,

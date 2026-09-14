@@ -2088,6 +2088,8 @@ runs:
         THREADS_FILE: ${{ runner.temp }}/ksai-threads.json
         THREAD_STATE_FILE: ${{ runner.temp }}/ksai-thread-state.json
         THREAD_ROOT_ID: ${{ steps.context.outputs.thread_root_id }}
+        REVIEW_ID: ${{ steps.context.outputs.review_id }}
+        WRITE_ACCESS_COMMANDS: ${{ steps.select.outputs.write_access_commands }}
         RECORD_SCOPE: ${{ steps.dispatch_record.outputs.scope }}
         SAW_TRIGGER: ${{ steps.dispatch_record.outputs.trigger }}
         COMMENT_ID: ${{ steps.context.outputs.comment_id }}
@@ -2096,15 +2098,19 @@ runs:
         EVIDENCE_TOKEN: ${{ inputs.ci_evidence_github_token }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:
-        github-token: ${{ inputs.source_org_github_token }}
+        github-token: ${{ inputs.authorization_github_token || inputs.source_org_github_token }}
+        retries: 3
         script: |
           const { decidePhase } = require(`${process.env.SCRIPTS}/ksai/prepare.cjs`);
+          const authorize = require(`${process.env.SCRIPTS}/codeowners-authz/authorize.cjs`);
           const { outputs, notices } = await decidePhase({
             github,
             core,
             owner: context.repo.owner,
             repo: context.repo.repo,
             env: process.env,
+            authorize,
+            writeAccess: authorize.writeAccess,
           });
           for (const [name, value] of Object.entries(outputs)) core.setOutput(name, value);
           for (const line of notices) core.info(line);
@@ -2885,6 +2891,8 @@ runs:
         HEAD_FILE: ${{ steps.issue.outputs.head_file }}
         ISSUE_FILE: ${{ runner.temp }}/ksai-issue.json
         BOT_LOGIN: ${{ inputs.bot_login }}
+        ON_ISSUE: ${{ steps.context.outputs.on_issue }}
+        PHASE: ${{ steps.phase.outputs.phase }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:
         github-token: ${{ inputs.source_org_github_token }}

@@ -591,7 +591,9 @@ function renderThread(thread, index) {
     `Thread ${index + 1} - id \`${text(thread?.id)}\` - \`${text(thread?.path)}\` (${anchor}).${stale}`,
   ];
 
-  const all = thread?.comments ?? [];
+  const all = (thread?.comments ?? []).filter(
+    (comment) => comment?.authorized !== false || comment?.endorsedBy != null,
+  );
   const shownRest = all.slice(1).slice(1 - MAX_THREAD_COMMENTS);
   const shown = all.slice(0, 1).concat(shownRest);
   const total = Number.isInteger(thread?.commentCount) ? thread.commentCount : null;
@@ -603,7 +605,12 @@ function renderThread(thread, index) {
     const body = neutralize(comment?.body);
     const capped = cap(body, MAX_COMMENT_CHARS);
     const cut = capped === body ? body : `${capped} [truncated]`;
-    lines.push(`  @${text(comment?.login)}:`);
+    const endorsed = comment?.endorsedBy;
+    const provenance = endorsed
+      ? ` (external comment ${text(comment?.commentId)}, endorsed by @${text(endorsed.login)} ` +
+        `in comment ${text(endorsed.commentId)})`
+      : '';
+    lines.push(`  @${text(comment?.login)}${provenance}:`);
     for (const line of cut.split('\n')) lines.push(`    ${line}`);
   }
   return lines.join('\n');
