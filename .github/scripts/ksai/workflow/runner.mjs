@@ -7,7 +7,7 @@ import { canonicalJson, parseIJson } from './json.mjs';
 import {
   loadManifest, manifestStage, packageDigest, packageFile, sha256, validDigest, validVersion, validWorkflowId,
 } from './manifest.mjs';
-import { validateSchema } from './schema.mjs';
+import { validateSchemaWithReferences } from './schema.mjs';
 
 const RECORD_VERSION = 'ksai.konghq.com/stage-record/v1alpha1';
 const CANDIDATE_VERSION = 'ksai.konghq.com/stage-candidate/v1alpha1';
@@ -128,6 +128,27 @@ function regular(path, where) {
   return held;
 }
 
+/** Validate one parsed candidate with the same checks used by trusted acceptance. */
+export function validateCandidate({ candidate, bytes, artifactsRoot, held }) {
+  const limit = Math.min(MAX_CANDIDATE_BYTES, held.manifest.spec.limits?.bytes?.candidateResult ?? MAX_CANDIDATE_BYTES);
+  if (bytes > limit) throw new Error(`stage candidate exceeds ${limit} bytes`);
+  fields(candidate, ['apiVersion', 'output', 'artifacts'], ['apiVersion', 'output', 'artifacts'], 'stage candidate');
+  if (candidate.apiVersion !== CANDIDATE_VERSION || !Array.isArray(candidate.artifacts)) throw new Error('stage candidate version or artifacts are invalid');
+  const declarations = new Map((held.stage.artifacts ?? []).map((artifact) => [artifact.id, artifact]));
+  const seen = new Set();
+  for (const artifact of candidate.artifacts) {
+    fields(artifact, ['id', 'path'], ['id', 'path'], 'stage candidate artifact');
+    if (!declarations.has(artifact.id) || artifact.path !== artifact.id || seen.has(artifact.id)) throw new Error('stage candidate artifact is undeclared or duplicated');
+    seen.add(artifact.id);
+    packageFile(artifactsRoot, artifact.path, `stage artifact ${artifact.id}`);
+  }
+  const problems = validateSchemaWithReferences(
+    held.schema, candidate.output, 'output', held.schemaDocumentPath, held.schemaReference,
+  );
+  if (problems.length) throw new Error(`stage output failed its declared schema: ${problems.join('; ')}`);
+  return { output: candidate.output, digest: sha256(Buffer.from(canonicalJson(candidate.output))) };
+}
+
 /** Validate a candidate against its pinned manifest before returning trusted output. */
 export function acceptStage({ descriptor: descriptorPath }) {
   regular(descriptorPath, 'workflow descriptor');
@@ -140,21 +161,12 @@ export function acceptStage({ descriptor: descriptorPath }) {
   const limit = Math.min(MAX_CANDIDATE_BYTES, held.manifest.spec.limits?.bytes?.candidateResult ?? MAX_CANDIDATE_BYTES);
   if (stat.size > limit) throw new Error(`stage candidate exceeds ${limit} bytes`);
   const candidate = parseIJson(readFileSync(candidatePath), 'stage candidate');
-  fields(candidate, ['apiVersion', 'output', 'artifacts'], ['apiVersion', 'output', 'artifacts'], 'stage candidate');
-  if (candidate.apiVersion !== CANDIDATE_VERSION || !Array.isArray(candidate.artifacts)) throw new Error('stage candidate version or artifacts are invalid');
-  const declarations = new Map((held.stage.artifacts ?? []).map((artifact) => [artifact.id, artifact]));
-  const seen = new Set();
-  for (const artifact of candidate.artifacts) {
-    fields(artifact, ['id', 'path'], ['id', 'path'], 'stage candidate artifact');
-    if (!declarations.has(artifact.id) || artifact.path !== artifact.id || seen.has(artifact.id)) throw new Error('stage candidate artifact is undeclared or duplicated');
-    seen.add(artifact.id);
-    packageFile(join(descriptor.runtimeRoot, 'artifacts'), artifact.path, `stage artifact ${artifact.id}`);
-  }
-  const problems = validateSchema(held.schema, candidate.output);
-  if (problems.length) throw new Error(`stage output failed its declared schema: ${problems.join('; ')}`);
+  const acceptedCandidate = validateCandidate({
+    candidate, bytes: stat.size, artifactsRoot: join(descriptor.runtimeRoot, 'artifacts'), held,
+  });
   const accepted = join(descriptor.runtimeRoot, 'accepted-output.json');
-  writeFileSync(accepted, `${canonicalJson(candidate.output)}\n`, { mode: 0o600, flag: 'wx' });
-  return { output: accepted, digest: sha256(Buffer.from(canonicalJson(candidate.output))) };
+  writeFileSync(accepted, `${canonicalJson(acceptedCandidate.output)}\n`, { mode: 0o600, flag: 'wx' });
+  return { output: accepted, digest: acceptedCandidate.digest };
 }
 
 /** Construct the pinned compatibility record for the existing pull request tester. */
