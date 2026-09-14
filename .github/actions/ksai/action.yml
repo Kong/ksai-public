@@ -2781,12 +2781,12 @@ runs:
         GH_TOKEN: ${{ inputs.source_org_github_token }}
         REPO: ${{ github.repository }}
         PR_NUMBER: ${{ steps.phase.outputs.pr_number }}
-        ISSUE_NUM: ${{ steps.subject.outputs.number }}
+        ISSUE_NUM: ${{ steps.subject.outputs.issue }}
         BRANCH: ${{ steps.phase.outputs.ref }}
         PLAN_DIR: ${{ inputs.plan_file_path }}
         BOT_LOGIN: ${{ inputs.bot_login }}
         JIRA_KEY: ${{ steps.subject.outputs.jira_key || steps.fetch_jira.outputs.key }}
-        JIRA_SITE: ${{ steps.fetch_jira.outputs.site }}
+        JIRA_SITE: ${{ steps.fetch_jira.outputs.site || inputs.jira_site }}
         RUN_ID: ${{ github.run_id }}
         REQUESTER: ${{ steps.context.outputs.commenter || steps.context.outputs.work_actor }}
         COMMAND: ${{ steps.select.outputs.command }}
@@ -4607,10 +4607,10 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.source_org_github_token }}
         REPO: ${{ github.repository }}
-        ISSUE_NUM: ${{ steps.subject.outputs.number }}
+        ISSUE_NUM: ${{ steps.subject.outputs.issue }}
         PR_NUMBER: ${{ steps.phase.outputs.pr_number || steps.open_draft.outputs.pr_number }}
-        JIRA_KEY: ${{ steps.fetch_jira.outputs.key }}
-        JIRA_SITE: ${{ steps.fetch_jira.outputs.site }}
+        JIRA_KEY: ${{ steps.subject.outputs.jira_key || steps.fetch_jira.outputs.key }}
+        JIRA_SITE: ${{ steps.fetch_jira.outputs.site || inputs.jira_site }}
         JIRA_TITLE_KEY: ${{ inputs.jira_title_key }}
         RUN_ID: ${{ github.run_id }}
         REQUESTER: ${{ steps.context.outputs.commenter || steps.context.outputs.work_actor }}
@@ -4640,7 +4640,7 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.source_org_github_token }}
         REPO: ${{ github.repository }}
-        ISSUE_NUM: ${{ steps.subject.outputs.number }}
+        ISSUE_NUM: ${{ steps.subject.outputs.issue }}
         RUN_ID: ${{ github.run_id }}
         REQUESTER: ${{ steps.context.outputs.commenter || steps.context.outputs.work_actor }}
         TRIGGER: ${{ inputs.trigger_phrase }}
@@ -4914,7 +4914,7 @@ runs:
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         PR_NUMBER: ${{ steps.phase.outputs.pr_number }}
-        ISSUE_NUM: ${{ steps.subject.outputs.number }}
+        ISSUE_NUM: ${{ steps.subject.outputs.issue }}
         RUN_ID: ${{ github.run_id }}
         DRY_RUN: ${{ inputs.dry_run }}
         TRIGGER: ${{ inputs.trigger_phrase }}

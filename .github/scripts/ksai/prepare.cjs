@@ -608,7 +608,7 @@ function resolveAuth(env) {
 }
 
 async function resolveRunSubject({ github, owner, repo, env }) {
-  const outputs = { number: '', jira_key: '', stop_notice: '' };
+  const outputs = { number: '', issue: '', jira_key: '', stop_notice: '' };
 
   const out = await resolveSubject({
     command: env.COMMAND,
@@ -624,6 +624,7 @@ async function resolveRunSubject({ github, owner, repo, env }) {
 
   outputs.number = String(out.number);
   outputs.jira_key = out.jiraKey ?? '';
+  outputs.issue = outputs.jira_key === '' ? outputs.number : '';
   return { outputs, notices: [`this run is about #${outputs.number}`] };
 }
 
