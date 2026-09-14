@@ -2089,6 +2089,7 @@ runs:
         THREAD_STATE_FILE: ${{ runner.temp }}/ksai-thread-state.json
         THREAD_ROOT_ID: ${{ steps.context.outputs.thread_root_id }}
         RECORD_SCOPE: ${{ steps.dispatch_record.outputs.scope }}
+        SAW_TRIGGER: ${{ steps.dispatch_record.outputs.trigger }}
         COMMENT_ID: ${{ steps.context.outputs.comment_id }}
         AUTHZ_WHY: ${{ steps.authz.outputs.why }}
         CHECKS_FILE: ${{ runner.temp }}/ksai-checks.json
@@ -5087,6 +5088,7 @@ runs:
         steps.select.outputs.notice != '') &&
         steps.read_plan.outputs.has_step != 'false' &&
         steps.notice.outputs.posted != 'true' &&
+        steps.phase.outputs.quiet != 'true' &&
         steps.write_comment.outputs.held_by == '' &&
         (steps.write_report.outcome == 'failure' ||
         (steps.write_comment.outputs.recorded != 'true' &&

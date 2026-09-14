@@ -710,6 +710,35 @@ function noticeFor(out, env) {
   });
 }
 
+const REVIEW_QUIET =
+  'nobody typed a command to start this run and nothing here is waiting on it, so nothing ran and no notice was posted';
+
+/*
+ * UNASKED_TRIGGERS are the triggers the control plane records for a run nobody typed a command for: a failed
+ * build, a failed status, an autofix label going on, and a submitted review. Named rather than read as
+ * "anything but `comment`", so a trigger the control plane learns later, an empty one from a hand-started
+ * run, or a record written before triggers existed keeps the notice until somebody decides it should not.
+ */
+const UNASKED_TRIGGERS = Object.freeze(['build_failed', 'status_failed', 'labeled', 'review_submitted']);
+
+/**
+ * phaseNotice decides what a phase that found nothing says, and whether it says it at all.
+ *
+ * A run the control plane started on its own answers nobody who asked for it: a person replying in three
+ * threads submits three reviews, and every run that then finds them answered posted "nothing ran" under
+ * replies that had already closed the conversation. A label or a red build that finds nothing to do is the
+ * same noise. A command somebody typed still hears back, and so does an ambiguous branch, which is a fault to
+ * fix whoever started the run. `quiet` is published so the failed-run comment does not read the missing
+ * notice as a run that stopped without saying why.
+ */
+function phaseNotice(out, env) {
+  const notice = noticeFor(out, env);
+  const phase = String(out.phase ?? '').trim().toLowerCase();
+  const trigger = String(env.SAW_TRIGGER ?? '').trim().toLowerCase();
+  const quiet = notice !== '' && phase !== 'ambiguous' && UNASKED_TRIGGERS.includes(trigger);
+  return { notice: quiet ? '' : notice, quiet: quiet ? 'true' : '' };
+}
+
 async function decidePhase({ github, core, owner, repo, env }) {
   const evidenceClient = env.EVIDENCE_TOKEN
     ? new github.constructor({ auth: env.EVIDENCE_TOKEN, baseUrl: env.GITHUB_API_URL })
@@ -757,6 +786,7 @@ async function decidePhase({ github, core, owner, repo, env }) {
     plan_file: '',
     held: '',
     conflicting: '',
+    quiet: '',
   };
 
   if (out.error) {
@@ -791,9 +821,9 @@ async function decidePhase({ github, core, owner, repo, env }) {
     plan_file: out.planFile,
     held: out.held,
     conflicting: out.conflicting,
-    notice: noticeFor(out, env),
+    ...phaseNotice(out, env),
   });
-  return { notices: [], outputs };
+  return { notices: outputs.quiet === 'true' ? [REVIEW_QUIET] : [], outputs };
 }
 
 function resolveWork({ env }) {
@@ -1535,6 +1565,7 @@ module.exports = {
   resolveRunSubject,
   resolveCheckpoint,
   decidePhase,
+  phaseNotice,
   resolveWork,
   resolveSize,
   planClassification,
