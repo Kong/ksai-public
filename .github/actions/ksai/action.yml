@@ -235,10 +235,7 @@ inputs:
     default: ""
   work_item:
     description: >-
-      the work item this run is about, as the control plane read it for the person who asked. Used in
-      place of fetching the ticket here, which is what lets a repository carrying no Jira credential be
-      given the requirement at all. A run that carries one is not asked for the trigger label: that
-      label is the second bound on a dispatch naming a ticket, and a record is a stronger one.
+      the work item this run is about, as the control plane read it for the person who asked.
     required: false
     default: ""
   engine:
@@ -752,9 +749,8 @@ inputs:
   jira_projects:
     description: >-
       the Jira project keys this repository may plan from, comma or space separated, e.g. `KAG MESH`. This is
-      the boundary: a Jira ticket is the first prompt input from outside the repository the run writes to, and
-      anyone who passes the CODEOWNERS gate could otherwise name any ticket the service account can see. An
-      empty value with a credential set rejects every Jira-backed run rather than allowing every project.
+      the boundary: a Jira ticket is the first prompt input from outside the repository the run writes to. An
+      empty value rejects every Jira-backed run rather than allowing every project.
     required: false
     default: ""
   jira_allow_public_repo:
@@ -2690,7 +2686,6 @@ runs:
         JIRA_ALLOW_PUBLIC: ${{ inputs.jira_allow_public_repo }}
         WORK_ITEM: ${{ inputs.work_item }}
         IS_PRIVATE: ${{ steps.context.outputs.is_private }}
-        TRIGGER: ${{ inputs.trigger_phrase }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: |
         set -euo pipefail

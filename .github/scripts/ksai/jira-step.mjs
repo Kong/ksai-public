@@ -29,7 +29,7 @@ const MAX_TITLE = 200;
 export function titleOf(carried, key) {
   const first = String(carried).split('\n', 1)[0].trim();
   const named = first.startsWith(`${key}: `) ? first.slice(key.length + 2) : first;
-  return named.trim().slice(0, MAX_TITLE);
+  return Array.from(named.trim()).slice(0, MAX_TITLE).join('');
 }
 
 export async function main(env = process.env) {
