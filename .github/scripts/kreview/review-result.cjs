@@ -251,11 +251,15 @@ function plugin(env = process.env) {
     'shell.env': async (_input, output) => {
       for (const key of ENV_KEYS) output.env[key] = '';
     },
+    /*
+     * Refusing the tool is the guarantee: the throw stops it before it runs, so nothing in the reviewed
+     * tree executes after acceptance, and disposal's exclusive create still defeats a precreated file.
+     * Voiding the held result on top of that guarded nothing and cost a finished review - a reviewer
+     * that ran one Bash call after its accepted submission lost the whole paid run to `missing`.
+     */
     'tool.execute.before': async () => {
       if (!accepted) return;
-      invalid = true;
-      held = null;
-      throw new Error('review result was already submitted');
+      throw new Error('review result was already submitted and accepted, so no other tool runs; end this turn');
     },
     dispose: async () => {
       if (invalid || !accepted || !held || !file) return;
