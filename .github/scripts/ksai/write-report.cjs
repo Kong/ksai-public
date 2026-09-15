@@ -42,7 +42,7 @@ const {
   validLabelSource,
   writeStateMarker,
 } = require('../lib/write-record.cjs');
-const { DIALS_ARM_SHAPE, armLabel } = require('../lib/select-arm.cjs');
+const { DIALS_ARM_SHAPE, armLabel, asAlert } = require('../lib/select-arm.cjs');
 const { counted } = require('../lib/text.cjs');
 const { STATUS_TABLE } = require('./publish.cjs');
 
@@ -629,15 +629,65 @@ const REPORT_HEADING = Object.freeze(
 );
 
 const WORKING_HEADING = KIND_TABLE['write-report'];
+const UNVERIFIED_HEADING = Object.freeze({ said: 'Not verified', mark: 'failed', next: '' });
+const UNVERIFIED_SUMMARY = 'The targeted check was not reproduced. This report makes no verification claim.';
+const FIX_CLAIM_OUTCOMES = Object.freeze(['changed', 'unchanged']);
 
 const standingHold = (env) => String(env?.PLAN_HELD ?? '').trim() !== '';
+const unverifiedReport = (state) => {
+  const last = state.attempts.at(-1);
+  return FIX_CLAIM_OUTCOMES.includes(String(last?.outcome ?? '')) &&
+    last?.verification?.status === 'unverified';
+};
 
 function reportHeading({ state, command, said, triggerPhrase, fields, paused = false, standing = false }) {
   if (carriesHeading(said)) return '';
   const outcome = paused ? 'paused' : String(state.attempts.at(-1)?.outcome ?? '');
-  const row = Object.hasOwn(REPORT_HEADING, outcome) ? REPORT_HEADING[outcome] : WORKING_HEADING;
+  const unverified = unverifiedReport(state);
+  const row = unverified
+    ? UNVERIFIED_HEADING
+    : Object.hasOwn(REPORT_HEADING, outcome)
+      ? REPORT_HEADING[outcome]
+      : WORKING_HEADING;
   const shown = standing && !paused ? { ...row, next: REPORT_HEADING.paused.next } : row;
-  return headedBlock(shown, { command, flow: 'implement', href: href(fields), triggerPhrase });
+  const heading = headedBlock(shown, { command, flow: 'implement', href: href(fields), triggerPhrase });
+  if (!unverified || heading === '') return heading;
+  return asAlert(
+    'WARNING',
+    `${heading}\n\nThe targeted check was not reproduced, so this report does not claim the failure is fixed.`,
+  );
+}
+
+function commandsBlock(verification) {
+  if (verification === null || verification === undefined) return [];
+  const commands = Array.isArray(verification.commands) ? verification.commands : [];
+  const codeCell = (value) => {
+    const text = String(value).replace(/\|/g, '\\|').replace(/\r\n?|\n/g, ' ');
+    const longest = Math.max(0, ...[...text.matchAll(/`+/g)].map((run) => run[0].length));
+    const fence = '`'.repeat(longest + 1);
+    const pad = text.startsWith('`') || text.endsWith('`') ? ' ' : '';
+    return `${fence}${pad}${text}${pad}${fence}`;
+  };
+  const rows = commands.map(([command, exit], index) => [
+    String(index + 1),
+    codeCell(command),
+    exit === null ? 'unavailable' : `\`${exit}\``,
+  ]);
+  const notes = [];
+  if (verification.commands_state === 'unavailable') {
+    notes.push('The command event stream was unavailable, so executed commands cannot be listed.');
+  } else if (verification.commands_state === 'incomplete') {
+    notes.push('The command event stream was malformed or incomplete; only its readable prefix is listed.');
+  } else if (verification.commands_state === undefined) {
+    notes.push('The command ledger was not recorded for this attempt.');
+  } else if (commands.length === 0) {
+    rows.push(['—', 'No completed Bash command was recorded', '—']);
+  }
+  if (verification.commands_capped === true) {
+    notes.push('The command ledger reached its display/storage bound; only the bounded prefix is listed.');
+  }
+  const table = rows.length === 0 ? [] : ['', ...reportTable(['#', 'Command', 'Exit status'], rows)];
+  return ['', '### Commands executed', ...table, ...notes.flatMap((note) => ['', note])];
 }
 
 function renderWriteReport({
@@ -662,7 +712,7 @@ function renderWriteReport({
   const fields = { kind: paused || standing ? 'run-paused' : 'write-report', flow: 'implement', issue, pr: state.identity.pr, run };
   const doMarker = renderDoMarker(doRequest);
   const headingFor = (said) => reportHeading({ state, command, said, triggerPhrase, fields, paused, standing });
-  const kept = historyOf(state, triggerPhrase);
+  const kept = unverifiedReport(state) ? [] : historyOf(state, triggerPhrase);
   const follow = URL_SHAPE.test(String(live?.link ?? '')) ? `[Follow it](${live.link})` : '';
   const counters = [statusLine(live?.arm, live?.cells), follow].filter(Boolean).join(' · ');
   const render = (
@@ -683,19 +733,26 @@ function renderWriteReport({
         ? withoutOldVerification
           ? { verification: null }
           : withoutOldVerificationCommands
-            ? { verification: { ...attempt.verification, command: '' } }
+            ? { verification: { ...attempt.verification, command: '', commands: [], commands_capped: false } }
             : {}
         : {}),
     });
     const held = withArms && withWhy && !withoutOldVerificationCommands && !withoutOldVerification
       ? trimmed
       : { ...trimmed, attempts: trimmed.attempts.map(leaner) };
-    const lines = historyLines(STAGED(history), historyMode);
-    const said = lines.length === 0 ? [currentText(current, triggerPhrase)] : lines;
+    const unverified = unverifiedReport(held);
+    const lines = unverified ? [] : historyLines(STAGED(history), historyMode);
+    const said = unverified
+      ? [UNVERIFIED_SUMMARY]
+      : lines.length === 0
+        ? [currentText(current, triggerPhrase)]
+        : lines;
     const heading = headingFor(said[0] ?? '');
+    const commands = commandsBlock(held.attempts.at(-1)?.verification);
     return [
       ...(heading ? [heading, ''] : []),
       ...said,
+      ...commands,
       ...(counters === '' ? [] : ['', counters]),
       '',
       '---',

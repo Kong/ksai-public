@@ -12,7 +12,7 @@ const { renderDoMarker, unaskedRun, MAX_REPORT_CHARS } = require('./do.cjs');
 import { blockerFor, field, readManifest, reasonOf, runCommand, shown } from './run.mjs';
 import { publishCommit } from './signed-push.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
-import { verificationOf, writeVerification } from './fix-verification.mjs';
+import { commandSecrets, verificationOf, writeVerification } from './fix-verification.mjs';
 
 export function renderReportFooter({ sha = null, triggerPhrase = null, merged = null } = {}) {
   const short = typeof sha === 'string' && /^[0-9a-f]{7,64}$/.test(sha) ? sha.slice(0, 12) : '';
@@ -49,10 +49,14 @@ export function renderReport({
   repo = null,
   localSha = null,
   merged = null,
+  verification = null,
 } = {}) {
   const marker = renderDoMarker(commentId);
   if (!marker && !unaskedRun({ trigger, commentId })) return '';
-  const retargeted = retargetPermalinks(scrub(field(summary), { triggerPhrase }), { repo, from: localSha, to: sha });
+  const modelSummary = verification?.status === 'unverified'
+    ? 'The targeted check was not reproduced. This result is not verified.'
+    : field(summary);
+  const retargeted = retargetPermalinks(scrub(modelSummary, { triggerPhrase }), { repo, from: localSha, to: sha });
   const said = cap(retargeted.trim(), MAX_REPORT_CHARS);
   const footer = renderReportFooter({ sha, triggerPhrase, merged });
   return [footer, ...(said ? ['', said] : []), ...(marker ? ['', marker] : [])].join('\n');
@@ -81,6 +85,7 @@ export function recordDo({
   verificationPath = null,
   changeScopePath = null,
   recordScope = writeScopeResult,
+  secrets = [],
   run = runCommand,
 } = {}) {
   const block = blockerFor(manifestPath);
@@ -96,10 +101,13 @@ export function recordDo({
   const recordOutcome = (outcome) => recordScope(changeScopePath, boundScope.scope, outcome);
 
   const read = readManifest(manifestPath, { noun: 'The run', triggerPhrase });
-  if (read.message) return blocked(read.message);
   const manifest = read.manifest;
-
   const status = field(manifest?.status);
+  const pushing = merging || status === 'done';
+  const verification = verificationOf({ manifest, checksPath, eventsPath, merging, noChange: !pushing, secrets });
+  writeVerification(verificationPath, verification);
+  if (read.message) return blocked(read.message);
+
   if (status === 'blocked') {
     return blocked(`Stopped without doing anything: ${scrub(reasonOf(manifest), { triggerPhrase }).trim()}`);
   }
@@ -114,11 +122,6 @@ export function recordDo({
     );
   }
 
-  const pushing = merging || status === 'done';
-  const verification = pushing
-    ? verificationOf({ manifest, checksPath, eventsPath, merging })
-    : { status: 'not-applicable', target: '', command: '', exit_status: null, reason: 'no-change' };
-  writeVerification(verificationPath, verification);
   if (verification.status === 'failed') {
     const said = verification.reason === 'command-after-commit'
       ? 'ran after the commit, so its ordering cannot be trusted'
@@ -279,6 +282,7 @@ export function recordDo({
       repo,
       localSha,
       merged: merging ? mergedRef || mergedSha : '',
+      verification,
     }),
   };
 }
@@ -310,6 +314,7 @@ export function main(env = process.env, { run = runCommand } = {}) {
     eventsPath: env.OPENCODE_EVENTS_FILE,
     verificationPath: verificationFile,
     changeScopePath: env.CHANGE_SCOPE_FILE,
+    secrets: commandSecrets(env),
     run,
   });
 

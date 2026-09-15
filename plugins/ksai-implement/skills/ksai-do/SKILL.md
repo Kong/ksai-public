@@ -129,10 +129,18 @@ the one CI gates the branch on. Run a command and read what it printed before cl
 anything, and name in `summary` every gate you could not run. An unavailable gate reported as passing is
 worse than no report, because the next reader stops looking.
 
-`summary` is the whole report a human reads, so say what changed and why, in plain language. It is capped
-at 6000 characters and anything past that is cut mid-sentence and published anyway - your commit still
-lands, so an over-long report costs a report that stops in the middle rather than a refused run. A trusted
-step adds the commit sha under it. `reason` is what gets posted for `blocked`; number multiple items
+`summary` is the account a human reads when the trusted record does not mark the target unverified, so say
+what changed and why, in plain language. An unverified result replaces it with a warning rather than
+publishing or retaining any claim that the failure was fixed. This includes no-change and merge runs when
+the target remained red. The report lists each completed Bash call in its bounded
+ledger with executable identity and the exact exit status. The trusted formatter never stores raw operands:
+it keeps only a safely parsed executable basename, followed by a visible arguments-redacted marker when
+anything else was present. Input with no safe identity becomes command-redacted. Missing, malformed and
+capped evidence are reported as different states. The summary is capped at
+6000 characters and anything past that is cut
+mid-sentence and published anyway - your commit still lands, so an over-long report costs a report that
+stops in the middle rather than a refused run. A trusted step adds the commit sha under it. `reason` is what
+gets posted for `blocked`; number multiple items
 (`1. ...`, `2. ...`) rather than running them together. Never name a bare filename or path: link it,
 `[path/to/file.ext](https://github.com/OWNER/REPO/blob/<branch>/path/to/file.ext)`, on the branch you
 are working on rather than `main`. Wrap a bare identifier in backticks, and point at existing code with

@@ -16,6 +16,9 @@ const IDENTITY_SHAPE = new RegExp(`${escapeForRegExp(IDENTITY_PREFIX)}(\\{[^]*?\
 const MAX_ATTEMPTS = 60;
 const MAX_PAID_RUNS = 204;
 const MAX_ARM_KINDS = 12;
+const MAX_VERIFICATION_COMMANDS = 96;
+const MAX_VERIFICATION_COMMAND_CHARS = 160;
+const VERIFICATION_COMMAND_SHAPE = /^(?:<command redacted>|[A-Za-z0-9_.+-]{1,120}(?: <arguments redacted>)?)$/;
 
 const ATTEMPT_ID_SHAPE = /^\d{1,20}:\d{1,10}:[A-Za-z0-9_.~-]{1,40}:\d{1,10}$/;
 const JOB_SEGMENT = 40;
@@ -73,6 +76,20 @@ function validVerification(verification) {
   if (typeof verification.target !== 'string' || [...verification.target].length > 200) return false;
   if (typeof verification.command !== 'string' || [...verification.command].length > 1024) return false;
   if (!validNullableInteger(verification.exit_status)) return false;
+  const commands = verification.commands ?? [];
+  if (!Array.isArray(commands) || commands.length > MAX_VERIFICATION_COMMANDS) return false;
+  if (!commands.every((entry) =>
+    Array.isArray(entry) && entry.length === 2 &&
+    typeof entry[0] === 'string' && [...entry[0]].length <= MAX_VERIFICATION_COMMAND_CHARS &&
+    validNullableInteger(entry[1]))) return false;
+  if (verification.commands_state !== undefined &&
+      !['complete', 'unavailable', 'incomplete'].includes(verification.commands_state)) return false;
+  if (verification.commands_capped !== undefined && typeof verification.commands_capped !== 'boolean') return false;
+  if (verification.commands_state !== undefined &&
+      ((verification.command !== '' && !VERIFICATION_COMMAND_SHAPE.test(verification.command)) ||
+       !commands.every(([command]) => VERIFICATION_COMMAND_SHAPE.test(command)))) return false;
+  if (verification.commands_state === 'unavailable' &&
+      (commands.length !== 0 || verification.commands_capped === true)) return false;
   return shaped(verification.reason, REASON_SHAPE);
 }
 
@@ -190,9 +207,12 @@ function packAttempts(attempts) {
   const { kinds, at } = armKinds(attempts);
   return {
     kinds,
-    rows: attempts.map((attempt) =>
-      trimmed(ATTEMPT_FIELDS.map((name) => (name === 'arms' ? packArms(attempt.arms, at) : attempt[name]))),
-    ),
+    rows: attempts.map((attempt) => trimmed(ATTEMPT_FIELDS.map((name) => {
+      if (name === 'arms') return packArms(attempt.arms, at);
+      if (name !== 'verification' || attempt.verification === null || attempt.verification === undefined ||
+          attempt.verification.commands_state !== undefined) return attempt[name];
+      return { ...attempt.verification, command: '', commands: [] };
+    }))),
   };
 }
 
@@ -308,6 +328,8 @@ module.exports = {
   IDENTITY_PREFIX,
   MAX_ATTEMPTS,
   MAX_PAID_RUNS,
+  MAX_VERIFICATION_COMMANDS,
+  MAX_VERIFICATION_COMMAND_CHARS,
   PREFIX,
   SHAPE,
   SHAPE_ALL,
