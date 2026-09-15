@@ -148,6 +148,10 @@ outputs:
       what the work source says the work is, read by the control plane as the requester, or empty. The
       same rule as guidance: context, never instruction, and passed through `env:` alone
     value: ${{ steps.record.outputs.work_item }}
+  ask:
+    description: >-
+      the Jira ask this run answers, as the control plane minted it, or empty where the run answers none
+    value: ${{ steps.record.outputs.ask }}
 
 runs:
   using: composite
@@ -201,7 +205,7 @@ runs:
             ['trigger_run', 'triggerRun'], ['trigger_attempt', 'triggerAttempt'],
             ['trigger_state', 'triggerState'], ['trigger_name', 'triggerName'],
             ['requester', 'requester'], ['approver', 'approver'], ['approval_id', 'approvalId'], ['model', 'model'],
-            ['effort', 'effort'], ['guidance', 'guidance'], ['work_item', 'workItem']]) {
+            ['effort', 'effort'], ['guidance', 'guidance'], ['work_item', 'workItem'], ['ask', 'ask']]) {
             core.setOutput(name, answer[held]);
           }
           core.setOutput('guidance_html', escapeHtml(answer.guidance));

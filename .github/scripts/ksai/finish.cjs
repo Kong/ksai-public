@@ -64,6 +64,7 @@ async function finish({
   pull = null,
   triggerPhrase = null,
   command = null,
+  ask = null,
   dryRun = false,
 } = {}) {
   if (!github?.rest) return { error: 'no authenticated GitHub client was passed' };
@@ -87,6 +88,7 @@ async function finish({
     pr: prNumber,
     run: runId,
     triggerPhrase,
+    ask,
   });
   try {
     await github.rest.issues.createComment({ owner, repo, issue_number: Number(prNumber), body });

@@ -86,6 +86,8 @@ const aboutLink = () => `[${LABEL.none}](${PAGE.none})`;
 
 const MARKER_SHAPE = /<!-- ksai:(\{[^]*?\}) -->/;
 
+const ASK_SHAPE = /^[0-9a-f]{32}$/;
+
 function positive(value) {
   const number = Number(value);
   return Number.isSafeInteger(number) && number > 0 ? number : null;
@@ -153,7 +155,8 @@ function payloadOf({
 }
 
 function marker(fields) {
-  const json = JSON.stringify(payloadOf(fields));
+  const ask = String(fields?.ask ?? '');
+  const json = JSON.stringify(ASK_SHAPE.test(ask) ? { ...payloadOf(fields), ask } : payloadOf(fields));
   if (json.includes('--')) throw new Error('a ksai comment marker cannot carry `--`, which ends the comment');
   return `<!-- ksai:${json} -->`;
 }
@@ -219,6 +222,7 @@ function payloadFor(env, extra) {
     pr: env.PR_NUMBER,
     run: env.RUN_ID,
     jira: env.JIRA_KEY,
+    ask: env.KSAI_ASK,
     ...extra,
   };
 }

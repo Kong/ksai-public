@@ -251,7 +251,7 @@ function recordFrom(served) {
 
   const {
     command, label, pr, head_sha: headSha, scope, requester, approver, approval_id: approvalId,
-    model, effort, guidance, work_item: workItem,
+    model, effort, guidance, work_item: workItem, ask,
     autofix_capability: autofixCapability, comment_id: commentId, comment_kind: commentKind,
     trigger, trigger_run: triggerRun, trigger_attempt: triggerAttempt,
     trigger_state: triggerState, trigger_name: triggerName,
@@ -296,6 +296,9 @@ function recordFrom(served) {
   }
   if (workItem !== undefined && (typeof workItem !== 'string' || !sayable(workItem, WORK_ITEM_MAX))) {
     throw policyStopped('the record carries a work item this workflow will not pass on');
+  }
+  if (ask !== undefined && (typeof ask !== 'string' || !RECORD_ID.test(ask))) {
+    throw policyStopped('the record names a Jira ask the control plane could not have minted');
   }
   if (commentId !== undefined && (typeof commentId !== 'string' || !COUNT_SHAPE.test(commentId))) {
     throw policyStopped('the record names a comment or review that is not a positive id');
@@ -346,6 +349,7 @@ function recordFrom(served) {
     effort: text(effort),
     guidance: text(guidance),
     workItem: text(workItem),
+    ask: text(ask),
   };
 }
 
@@ -447,6 +451,7 @@ export async function readRecord({
       effort: '',
       guidance: '',
       workItem: '',
+      ask: '',
     };
   }
   if (endpoint === '') throw stopped('the dispatch names a record but this workflow names no control plane endpoint');

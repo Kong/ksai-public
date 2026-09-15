@@ -53,6 +53,7 @@ async function markReady({ github, core, owner, repo, env }) {
     pull,
     triggerPhrase: env.TRIGGER,
     command: env.COMMAND,
+    ask: env.KSAI_ASK,
     dryRun: env.DRY_RUN === 'true',
   });
 

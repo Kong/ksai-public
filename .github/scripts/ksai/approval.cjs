@@ -199,6 +199,7 @@ function renderApprovalReceipt({
   runId = null,
   approvalRef = null,
   approver = null,
+  ask = null,
 } = {}) {
   const inJira = String(approvalRef ?? '').startsWith('cp/');
   const recorded = inJira ? controlPlaneApprovalMarker(approvalRef, approver) : nativeApprovalMarker(approvalRef);
@@ -220,6 +221,7 @@ function renderApprovalReceipt({
     pr: prNumber,
     run: runId,
     triggerPhrase,
+    ask,
   });
 }
 

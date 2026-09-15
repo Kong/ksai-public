@@ -695,6 +695,7 @@ function renderWriteReport({
   run,
   triggerPhrase,
   command = '',
+  ask = null,
   doRequest = null,
   budget = PUBLISHED_LIMIT,
   live = null,
@@ -716,6 +717,7 @@ function renderWriteReport({
     run,
     command,
     jira: readWorkRef(state.identity.source).key ?? '',
+    ask,
   };
   const doMarker = renderDoMarker(doRequest);
   const headingFor = (said) => reportHeading({ row, command, said, triggerPhrase, fields, paused, standing });
@@ -1016,6 +1018,7 @@ async function updateWriteProgressUnlocked({
       run: env.RUN_ID,
       triggerPhrase: env.TRIGGER,
       command: env.COMMAND,
+      ask: env.KSAI_ASK,
       doRequest,
       budget: store.budget(read.ref),
       live: reading,
@@ -1088,6 +1091,7 @@ async function mutateWriteReportUnlocked({ github, owner, repo, env = process.en
       run: env.RUN_ID,
       triggerPhrase: env.TRIGGER,
       command: env.COMMAND,
+      ask: env.KSAI_ASK,
       doRequest: env.DO_REQUEST,
       budget: store.budget(read.ref),
       historyMode: env.STATUS_HISTORY,

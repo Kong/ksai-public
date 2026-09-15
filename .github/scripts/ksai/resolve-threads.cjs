@@ -29,13 +29,14 @@ const ANSWER = Object.freeze(
   }),
 );
 
-function renderOverride({ answered = false, triggerPhrase = null, prNumber = null, command = null } = {}) {
+function renderOverride({ answered = false, triggerPhrase = null, prNumber = null, command = null, ask = null } = {}) {
   return marked(scrub(ANSWER[answered === true ? 'answered' : 'waiting'], { triggerPhrase }), {
     kind: OVERRIDE_KIND,
     flow: 'implement',
     command,
     pr: prNumber,
     triggerPhrase,
+    ask,
   });
 }
 
@@ -49,13 +50,14 @@ async function resolveOverriddenThreads({
   botLogin = null,
   triggerPhrase = null,
   command = null,
+  ask = null,
 } = {}) {
   const open = await openPlanThreads({ github, owner, repo, prNumber, planFile, botLogin, includeAnswered: true });
   if (open.error) return { answered: 0, resolved: 0, notices: [open.error] };
 
   const said = {
-    waiting: renderOverride({ answered: false, triggerPhrase, prNumber, command }),
-    answered: renderOverride({ answered: true, triggerPhrase, prNumber, command }),
+    waiting: renderOverride({ answered: false, triggerPhrase, prNumber, command, ask }),
+    answered: renderOverride({ answered: true, triggerPhrase, prNumber, command, ask }),
   };
   const notices = [];
   let answered = 0;
