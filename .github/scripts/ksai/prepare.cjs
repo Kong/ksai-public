@@ -1236,6 +1236,7 @@ async function fetchIssue({ github, core, owner, repo, env }) {
         number: issue.number,
         title: issue.title ?? '',
         body: issue.body ?? '',
+        commentCount: Number.isInteger(issue.comments) && issue.comments >= 0 ? issue.comments : null,
         labels: (issue.labels ?? []).map((label) => ({ name: typeof label === 'string' ? label : (label?.name ?? '') })),
         assignees: (issue.assignees ?? []).map((user) => ({ login: user?.login ?? '' })),
         state,
@@ -1257,7 +1258,7 @@ async function fetchConversation({ github, owner, repo, env }) {
   };
 
   const issue_number = Number(env.ISSUE_NUM);
-  const head = readJson(env.HEAD_FILE);
+  const { commentCount, ...head } = readJson(env.HEAD_FILE);
   const phase = String(env.PHASE ?? '');
   const omitComments = env.ON_ISSUE === 'false' && (phase === 'fix' || phase === 'do');
   const comments = omitComments
@@ -1282,7 +1283,13 @@ async function fetchConversation({ github, owner, repo, env }) {
   outputs.file = env.ISSUE_FILE;
   return {
     outputs,
-    notices: omitComments ? ['Pull request conversation comments were omitted from this autofix prompt.'] : [],
+    notices: omitComments
+      ? [
+          'Autofix context: source=pull-request-conversation decision=omit ' +
+            `kept=0 omitted=${Number.isInteger(commentCount) ? commentCount : 'unknown'}; ` +
+            'comment bodies were not read. Pull request conversation comments were omitted from this autofix prompt.',
+        ]
+      : [],
   };
 }
 

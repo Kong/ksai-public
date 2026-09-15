@@ -76,7 +76,7 @@ const UNSEEN = 'unseen';
 
 const WORKABLE = Object.freeze([PENDING, UNLOCKED]);
 
-const { NUMBER_SHAPE } = require('./context.cjs');
+const { AUTHZ_LOGIN_SHAPE, NUMBER_SHAPE } = require('./context.cjs');
 const { resolvePullTarget } = require('./pull.cjs');
 
 const shapeComment = (comment) => ({
@@ -265,6 +265,13 @@ function authorizerCore(core) {
   };
 }
 
+function countComments(threads) {
+  return (threads ?? []).reduce(
+    (sum, thread) => sum + (Number.isInteger(thread?.commentCount) ? thread.commentCount : (thread?.comments ?? []).length),
+    0,
+  );
+}
+
 async function authorizeThreadContext({
   threads,
   github,
@@ -276,8 +283,16 @@ async function authorizeThreadContext({
   writeAccess,
   writeAccessCommands,
   triggerPhrase,
+  source = 'review-feedback',
+  omitted = 0,
 }) {
-  if ((threads ?? []).length === 0) return { threads: [] };
+  if ((threads ?? []).length === 0) {
+    core?.info?.(
+      `Autofix context: source=${source} decision=filter kept=0 ` +
+        `omitted=${Number.isInteger(omitted) && omitted > 0 ? omitted : 0}.`,
+    );
+    return { threads: [] };
+  }
   if (typeof authorize !== 'function') {
     return { error: 'no comment authorizer was passed, so review feedback cannot be trusted' };
   }
@@ -287,8 +302,23 @@ async function authorizeThreadContext({
   const opened = writeAccessNames(writeAccessCommands);
   const decide = async (rawLogin) => {
     const login = String(rawLogin ?? '').trim();
-    if (login === '') return { allowed: false };
-    if (isOwnLogin(login, botLogin)) return { allowed: true };
+    const author = login === '' ? '(missing)' : JSON.stringify(login);
+    const decided = (allowed, reason) => {
+      core?.info?.(
+        `Autofix context author: source=${source} author=${author} ` +
+          `decision=${allowed ? 'allow' : 'omit'} reason=${reason}.`,
+      );
+      return { allowed };
+    };
+    const refused = (reason) => {
+      core?.warning?.(
+        `Autofix context author: source=${source} author=${author} decision=refuse reason=${reason}.`,
+      );
+    };
+    if (login === '') return decided(false, 'missing-login');
+    if (isOwnLogin(login, botLogin)) return decided(true, 'publisher');
+    const authorizationLogin = login.endsWith('[bot]') ? login.slice(0, -5) : login;
+    if (!AUTHZ_LOGIN_SHAPE.test(authorizationLogin)) return decided(false, 'invalid-login');
     const key = login.toLowerCase();
     if (decisions.has(key)) return decisions.get(key);
 
@@ -298,12 +328,15 @@ async function authorizeThreadContext({
       try {
         owns = await authorize({ github, core: auth.core, owner, repo, username: login, cache });
       } catch (error) {
+        refused('codeowners-unreadable');
         return { error: `could not authorize @${login} for review feedback: ${error?.message ?? error}` };
       }
       if (auth.failure() !== '') {
+        refused('codeowners-unreadable');
         return { error: `could not authorize @${login} for review feedback: ${auth.failure()}` };
       }
       if (owns !== true && owns !== false) {
+        refused('codeowners-indeterminate');
         return { error: `the authorizer returned no definite ownership answer for @${login}` };
       }
 
@@ -313,20 +346,24 @@ async function authorizeThreadContext({
         write,
         writeAccessCommands: opened,
       });
-      if (bar.authorized) return { allowed: true };
-      if (!bar.undecided) return { allowed: false };
+      if (bar.authorized) return decided(true, 'codeowner');
+      if (!bar.undecided) return decided(false, 'authorization-bar');
       if (typeof writeAccess !== 'function') {
+        refused('write-access-reader-missing');
         return { error: '`fix` is open to write access, but no write-access reader was passed' };
       }
       try {
         write = await writeAccess({ github, core: auth.core, owner, repo, username: login, cache });
       } catch (error) {
+        refused('write-access-unreadable');
         return { error: `could not read @${login}'s write access for review feedback: ${error?.message ?? error}` };
       }
       if (auth.failure() !== '') {
+        refused('write-access-unreadable');
         return { error: `could not authorize @${login} for review feedback: ${auth.failure()}` };
       }
       if (write !== 'true' && write !== 'false') {
+        refused('write-access-indeterminate');
         return { error: `GitHub returned no definite write-access answer for @${login}` };
       }
       bar = commandAuthorized('fix', {
@@ -334,7 +371,7 @@ async function authorizeThreadContext({
         write,
         writeAccessCommands: opened,
       });
-      return { allowed: bar.authorized };
+      return decided(bar.authorized, bar.authorized ? 'write-access' : 'authorization-bar');
     })();
     decisions.set(key, pending);
     return pending;
@@ -388,6 +425,12 @@ async function authorizeThreadContext({
     const comments = [keptRoot, ...keptReplies];
     accepted.push({ ...thread, commentCount: comments.length, comments });
   }
+  const inputCount = countComments(threads);
+  const keptCount = accepted.reduce((sum, thread) => sum + (thread?.comments ?? []).length, 0);
+  const omittedCount = Math.max(0, inputCount - keptCount) + (Number.isInteger(omitted) && omitted > 0 ? omitted : 0);
+  core?.info?.(
+    `Autofix context: source=${source} decision=filter kept=${keptCount} omitted=${omittedCount}.`,
+  );
   return { threads: accepted };
 }
 
@@ -531,11 +574,37 @@ async function resolveFixPhase({
 
   const scopedToReview = reviewScope(read.threads, reviewId);
   if (scopedToReview.error) return { error: scopedToReview.error };
+  const omittedByReview = Math.max(0, countComments(read.threads) - countComments(scopedToReview.threads));
 
   const hydrated = await hydrateScopedThread({ github, threads: scopedToReview.threads, threadRootId });
   if (hydrated.error) return { error: hydrated.error };
+  let contextThreads = hydrated.threads;
+  let scopedCounts = null;
+  let omittedByThread = 0;
+  if (String(threadRootId ?? '').trim() !== '') {
+    const scoped = threadByRoot(contextThreads, threadRootId);
+    if (!scoped) {
+      const selected = selectThreads(contextThreads, { botLogin, threadRootId });
+      return { error: selected.error };
+    }
+    const fullSelection = selectThreads(contextThreads, {
+      botLogin,
+      guidance,
+      core,
+      threadRootId,
+      allowLocked,
+    });
+    scopedCounts = {
+      total: fullSelection.total,
+      resolved: fullSelection.resolved,
+      deferred:
+        fullSelection.deferred + disputedThreads(contextThreads.filter((one) => one !== scoped), { botLogin }).length,
+    };
+    omittedByThread = Math.max(0, countComments(contextThreads) - countComments([scoped]));
+    contextThreads = [scoped];
+  }
   const trusted = await authorizeThreadContext({
-    threads: hydrated.threads,
+    threads: contextThreads,
     github,
     core,
     owner,
@@ -545,6 +614,8 @@ async function resolveFixPhase({
     writeAccess,
     writeAccessCommands,
     triggerPhrase,
+    source: reviewId ? 'submitted-review' : threadRootId ? 'review-thread' : 'pull-request-review-threads',
+    omitted: omittedByReview + omittedByThread,
   });
   if (trusted.error) return { error: trusted.error };
   const { threads } = trusted;
@@ -557,6 +628,11 @@ async function resolveFixPhase({
     allowLocked,
   });
   if (refused) return { error: refused };
+  if (scopedCounts) {
+    selected.total = scopedCounts.total;
+    selected.resolved = scopedCounts.resolved;
+    selected.deferred = scopedCounts.deferred;
+  }
   core?.info?.(
     `#${number} on ${ref}: ${selected.pending.length} of ${counted(selected.total, 'review thread')} offered ` +
       `(${selected.resolved} resolved${selected.deferred ? `, ${selected.deferred} deferred past the bound` : ''})` +
