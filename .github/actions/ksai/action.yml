@@ -288,7 +288,7 @@ inputs:
       latest, because that CLI cuts releases daily and an unpinned reviewer is a different reviewer every run.
     required: false
     # renovate: datasource=npm depName=opencode-ai
-    default: "1.18.30"
+    default: "1.18.31"
   opencode_pty:
     description: >-
       Opt-in pilot for audited background PTY sessions in OpenCode test and active implementation

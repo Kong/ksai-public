@@ -255,7 +255,7 @@ export const RUNTIME_CONFIG = Object.freeze({
   permission: opencodePermissions(claudeArgs.TOOL_POLICY.review),
 });
 
-export const PROVIDER_POLICY_VERSION = '1.18.30';
+export const PROVIDER_POLICY_VERSION = '1.18.31';
 
 export const PROVIDER_POLICY = Object.freeze([
   Object.freeze({ effect: 'deny', action: 'provider.use', resource: '*' }),

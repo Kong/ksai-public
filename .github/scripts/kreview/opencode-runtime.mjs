@@ -4,7 +4,7 @@ const MCP_SPAN = 'MCP.connectTransport';
 const MODEL_SPAN = 'ai.streamText.doStream';
 const MAX_SPAN_MS = 24 * 60 * 60 * 1000;
 const MAX_COMPACTION_BYTES = 32 * 1024;
-const COMPACTION_VERSION = '1.18.30';
+const COMPACTION_VERSION = '1.18.31';
 const SESSION = /^[A-Za-z0-9_-]{1,128}$/;
 
 const groups = (value) => (Array.isArray(value) ? value : []);
