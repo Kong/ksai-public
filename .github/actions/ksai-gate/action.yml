@@ -106,6 +106,18 @@ inputs:
     description: the head commit the record was decided for; a pull request whose head has moved stands the run down
     required: false
     default: ""
+  record_autofix_capability:
+    description: secured autofix policy the dispatch-record reader validated, or empty for every other request
+    required: false
+    default: ""
+  record_endpoint:
+    description: control-plane origin used only to report a secured record policy refusal
+    required: false
+    default: ""
+  record_id:
+    description: dispatch record identity used only to report a secured record policy refusal
+    required: false
+    default: ""
   app_slug:
     description: >-
       the App this flow authenticates as, which is what a dispatched comment's starter is measured against.
@@ -267,6 +279,7 @@ runs:
         ref: ${{ steps.gate_ref.outputs.ref }}
         sparse-checkout: |
           .github/actions/codeowners-authz
+          .github/actions/dispatch-record
           .github/scripts
         persist-credentials: false
 
@@ -279,6 +292,11 @@ runs:
         RECORD_LABEL: ${{ inputs.record_label }}
         RECORD_PR: ${{ inputs.record_pr }}
         RECORD_HEAD_SHA: ${{ inputs.record_head_sha }}
+        RECORD_AUTOFIX_CAPABILITY: ${{ inputs.record_autofix_capability }}
+        RECORD_ENDPOINT: ${{ inputs.record_endpoint }}
+        RECORD_ID: ${{ inputs.record_id }}
+        RECORD_AUDIENCE: ksai-cp
+        RECORD_ACTION_PATH: ${{ github.workspace }}/_ksai/.github/actions/dispatch-record
         REQUESTER: ${{ inputs.requester }}
         COMMENT_ID: ${{ inputs.comment_id }}
         COMMENT_KIND: ${{ inputs.comment_kind }}
@@ -291,8 +309,26 @@ runs:
         retries: 3
         script: |
           const { resolveRequester } = require(`${process.env.SCRIPTS}/ksai/route.cjs`);
-          const { login, failure } = await resolveRequester({ github, context, env: process.env });
+          const { login, failure, securityPolicyRefused } =
+            await resolveRequester({ github, context, env: process.env });
           core.setOutput('login', login);
+          if (failure && securityPolicyRefused && process.env.RECORD_AUTOFIX_CAPABILITY !== '') {
+            try {
+              const { AUTOFIX_CAPABILITY, reportPolicyRefusal } =
+                await import(`file://${process.env.RECORD_ACTION_PATH}/record.mjs`);
+              if (process.env.RECORD_AUTOFIX_CAPABILITY === AUTOFIX_CAPABILITY) {
+                await reportPolicyRefusal({
+                  endpoint: process.env.RECORD_ENDPOINT,
+                  recordId: process.env.RECORD_ID,
+                  audience: process.env.RECORD_AUDIENCE,
+                  mint: (audience) => core.getIDToken(audience),
+                  secret: (token) => core.setSecret(token),
+                });
+              }
+            } catch {
+              core.info('ksai could not report the security policy refusal');
+            }
+          }
           if (failure) core.setFailed(failure);
 
     - name: Authorize commenter against CODEOWNERS

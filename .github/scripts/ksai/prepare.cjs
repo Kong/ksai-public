@@ -467,6 +467,7 @@ function labelledContext(labelled) {
 }
 
 const QUIET = Object.freeze({ info() {}, warning() {} });
+const SECURED_AUTOFIX_CAPABILITY = 'secured-context-output/v1';
 
 async function reviewBasisOf({ github, context, env, read }) {
   if (read.onReview !== true || read.reviewState === 'approved' || read.reviewActorType === 'Bot') return null;
@@ -497,7 +498,7 @@ async function eventContext({ github, context, env, commented }) {
     appSlug: env.IN_APP_SLUG,
     ...commentReaders({ github, context }),
   });
-  if (dispatched.error) return { error: dispatched.error };
+  if (dispatched.error) return { error: dispatched.error, securityPolicyRefused: dispatched.securityPolicyRefused };
 
   const pullsGet = (pull_number) => github.rest.pulls.get({ ...context.repo, pull_number });
 
@@ -509,7 +510,7 @@ async function eventContext({ github, context, env, commented }) {
         issueNumber: dispatched.held ? String(dispatched.number) : env.IN_ISSUE_NUMBER,
         pullsGet,
       });
-  if (surface.error) return { error: surface.error };
+  if (surface.error) return { error: surface.error, securityPolicyRefused: surface.securityPolicyRefused };
 
   const carried = dispatched.held
     ? asCommentEvent({ dispatched, onIssue: surface.onIssue, payload: context.payload })
@@ -532,26 +533,61 @@ async function eventContext({ github, context, env, commented }) {
       on_issue: surface.onIssue ? 'true' : 'false',
     },
   });
-  return out;
+  return out.error ? { ...out, securityPolicyRefused: true } : out;
 }
 
 async function resolveRunContext({ github, context, env }) {
   const commented = context.eventName === COMMENT_EVENT || context.eventName === REVIEW_COMMENT_EVENT;
   const surfaced = String(context.payload?.issue?.number ?? context.payload?.pull_request?.number ?? '');
-  const refuse = (failure) => ({
+  const secured = String(env.RECORD_AUTOFIX_CAPABILITY ?? '') === SECURED_AUTOFIX_CAPABILITY;
+  const refuse = (failure, securityPolicyRefused = true) => ({
     outputs: { refusal: failure, refused_on: commented ? surfaced : '' },
     failure,
+    securityPolicyRefused: secured && securityPolicyRefused,
   });
 
   const basis = recordBasis(env);
   if (basis?.error) return refuse(basis.error);
   const labelled = basis ? await readLabelBasis({ basis, ...labelReaders({ github, context }) }) : null;
-  if (labelled?.error) return refuse(labelled.error);
+  if (labelled?.error) return refuse(labelled.error, labelled.securityPolicyRefused);
+
+  const securedReview = labelled && secured && String(env.SAW_TRIGGER ?? '') === 'review_submitted';
+  const exactReview = securedReview
+    ? await eventContext({
+        github,
+        context,
+        env: { ...env, IN_ISSUE_NUMBER: String(basis.pr) },
+        commented: false,
+      })
+    : null;
+  if (exactReview?.error) return refuse(exactReview.error, exactReview.securityPolicyRefused);
+  if (securedReview && (exactReview?.onReview !== true || exactReview.reviewId == null)) {
+    return refuse(
+      `the secured review autofix record names no submitted review on pull request #${String(basis.pr)}, so nothing ran`,
+    );
+  }
+  if (securedReview && !['changes_requested', 'commented'].includes(exactReview.reviewState)) {
+    return refuse(
+      `review #${String(exactReview.reviewId)} is not a change request or comment, so it asks for no autofix and nothing ran`,
+    );
+  }
+  if (securedReview && String(exactReview.reviewId) !== String(env.IN_COMMENT_ID ?? '').trim()) {
+    return refuse(
+      `the secured review autofix record names review #${String(env.IN_COMMENT_ID ?? '')}, but GitHub read back ` +
+        `review #${String(exactReview.reviewId)}, so nothing ran`,
+    );
+  }
+  if (securedReview && String(exactReview.reviewCommitId ?? '').toLowerCase() !== basis.headSha) {
+    return refuse(
+      `the review on pull request #${String(basis.pr)} was left on a commit the pull request has moved past, ` +
+        'so it stood down rather than work on a head the reviewer never saw',
+    );
+  }
 
   const read = labelled ? labelledContext(labelled) : await eventContext({ github, context, env, commented });
-  if (read.error) return refuse(read.error);
+  if (read.error) return refuse(read.error, read.securityPolicyRefused);
   const reviewed = labelled ? null : await reviewBasisOf({ github, context, env, read });
-  if (reviewed?.error) return refuse(reviewed.error);
+  if (reviewed?.error) return refuse(reviewed.error, reviewed.securityPolicyRefused);
   if (reviewed && read.reviewId == null) {
     return refuse(
       `the submitted review on pull request #${String(read.issueNumber)} names no review id, so its autofix ` +
@@ -560,14 +596,16 @@ async function resolveRunContext({ github, context, env }) {
   }
   const rested = labelled ?? reviewed;
   const out = reviewed ? labelledContext(reviewed) : read;
-  if (reviewed) {
+  const scopedReview = exactReview ?? (reviewed ? read : null);
+  if (scopedReview) {
     Object.assign(out, {
-      reviewId: read.reviewId,
-      reviewSubmittedAt: read.reviewSubmittedAt,
-      reviewCommitId: read.reviewCommitId,
-      reviewUrl: read.reviewUrl,
-      reviewAssociation: read.reviewAssociation,
-      reviewActorType: read.reviewActorType,
+      commenter: scopedReview.commenter,
+      reviewId: scopedReview.reviewId,
+      reviewSubmittedAt: scopedReview.reviewSubmittedAt,
+      reviewCommitId: scopedReview.reviewCommitId,
+      reviewUrl: scopedReview.reviewUrl,
+      reviewAssociation: scopedReview.reviewAssociation,
+      reviewActorType: scopedReview.reviewActorType,
     });
   }
 
@@ -595,7 +633,7 @@ async function resolveRunContext({ github, context, env }) {
     comment_edited: out.commentEdited ?? '',
     label: rested?.label ?? '',
     label_head: rested?.headSha ?? '',
-    label_review: reviewed ? 'true' : '',
+    label_review: scopedReview ? 'true' : '',
     thread_root_id: out.threadRootId == null ? '' : String(out.threadRootId),
     attempt: String(out.attempt),
     stall: String(out.stall),
@@ -603,7 +641,7 @@ async function resolveRunContext({ github, context, env }) {
     refusal: '',
     refused_on: '',
   };
-  return { failure: null, outputs };
+  return { failure: null, outputs, securityPolicyRefused: false };
 }
 
 function resolveAuth(env) {
@@ -1650,6 +1688,7 @@ module.exports = {
   fetchConversation,
   buildPrompt,
   resolveApprovalGate,
+  SECURED_AUTOFIX_CAPABILITY,
   EXTRA_ARGS_REFUSAL,
   PLAN_REFUSAL,
 };

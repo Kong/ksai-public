@@ -1062,6 +1062,7 @@ runs:
         cp -R -- "${GITHUB_WORKSPACE}/_ksai/.github/agent-workflows" "${RUNNER_TEMP}/ksai-workflows"
         echo "sha=$(git -C "${GITHUB_WORKSPACE}/_ksai" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
         cp -R -- "${GITHUB_WORKSPACE}/_ksai/.github/actions/codeowners-authz" "${DEST}/codeowners-authz"
+        cp -R -- "${GITHUB_WORKSPACE}/_ksai/.github/actions/dispatch-record" "${DEST}/dispatch-record"
         find "$DEST" -name '*.test.mjs' -delete
 
     - name: Resolve the status arm
@@ -1142,9 +1143,15 @@ runs:
       env:
         IN_BOT_LOGIN: ${{ inputs.bot_login }}
         RECORD_COMMAND: ${{ steps.dispatch_record.outputs.command }}
+        RECORD_AUTOFIX_CAPABILITY: ${{ steps.dispatch_record.outputs.autofix_capability }}
         RECORD_LABEL: ${{ steps.dispatch_record.outputs.label }}
         RECORD_PR: ${{ steps.dispatch_record.outputs.pr }}
         RECORD_HEAD_SHA: ${{ steps.dispatch_record.outputs.head_sha }}
+        RECORD_ENDPOINT: ${{ inputs.fleet_dials_endpoint }}
+        RECORD_ID: ${{ inputs.record_id }}
+        RECORD_AUDIENCE: ksai-cp
+        RECORD_ACTION_PATH: ${{ runner.temp }}/ksai-scripts/dispatch-record
+        SAW_TRIGGER: ${{ steps.dispatch_record.outputs.trigger }}
         FLOW: ${{ inputs.flow }}
         IN_ISSUE_NUMBER: ${{ inputs.issue_number }}
         IN_WORK_REF: ${{ inputs.work_ref }}
@@ -1155,16 +1162,31 @@ runs:
         IN_COMMENT_BODY: ${{ inputs.comment_body }}
         IN_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
         IN_ACTOR: ${{ inputs.actor }}
-        IN_COMMENT_ID: ${{ inputs.comment_id }}
-        IN_COMMENT_KIND: ${{ inputs.comment_kind }}
+        IN_COMMENT_ID: ${{ inputs.record_id == '' && inputs.comment_id || steps.dispatch_record.outputs.comment_id }}
+        IN_COMMENT_KIND: ${{ inputs.record_id == '' && inputs.comment_kind || steps.dispatch_record.outputs.comment_kind }}
         IN_APP_SLUG: ${{ inputs.app_slug }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:
         github-token: ${{ inputs.authorization_github_token || inputs.source_org_github_token }}
         script: |
           const { resolveRunContext } = require(`${process.env.SCRIPTS}/ksai/prepare.cjs`);
-          const { outputs, failure } = await resolveRunContext({ github, context, env: process.env });
+          const { outputs, failure, securityPolicyRefused } =
+            await resolveRunContext({ github, context, env: process.env });
           for (const [name, value] of Object.entries(outputs)) core.setOutput(name, value);
+          if (failure && securityPolicyRefused) {
+            try {
+              const { reportPolicyRefusal } = await import(`file://${process.env.RECORD_ACTION_PATH}/record.mjs`);
+              await reportPolicyRefusal({
+                endpoint: process.env.RECORD_ENDPOINT,
+                recordId: process.env.RECORD_ID,
+                audience: process.env.RECORD_AUDIENCE,
+                mint: (audience) => core.getIDToken(audience),
+                secret: (token) => core.setSecret(token),
+              });
+            } catch {
+              core.info('ksai could not report the security policy refusal');
+            }
+          }
           if (failure) core.setFailed(failure);
 
     - id: check

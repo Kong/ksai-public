@@ -9,6 +9,10 @@ export const COMMANDS = Object.freeze([
   'review', 'implement', 'approve', 'fix', 'revise', 'unlock', 'stop', 'pause', 'resume', 'help', 'test',
 ]);
 
+export const AUTOFIX_CAPABILITY = 'secured-context-output/v1';
+
+export const SECURED_FIX_COMMAND = 'fix-secured-v1';
+
 /**
  * WORK_SCOPES is every kind of work a record may narrow a run to, copied from
  * `.github/scripts/ksai/phase.cjs` rather than imported, for the reason COMMANDS is copied, and held to
@@ -99,6 +103,8 @@ const CUT_MARK = '\u2026';
 
 const COUNT_SHAPE = /^[1-9][0-9]{0,18}$/;
 
+const COMMENT_KINDS = Object.freeze(['issue', 'review', 'submitted_review']);
+
 /** oneOf answers a value from a set the control plane chooses from, or empty for anything else. */
 const oneOf = (value, of) => (typeof value === 'string' && of.includes(value) ? value : '');
 
@@ -138,6 +144,10 @@ const hasControl = (text) => [...text].some((character) => {
 const text = (value) => (typeof value === 'string' ? value : '');
 
 const stopped = (why) => new Error(`${why} - so this run starts nothing`);
+
+const policyStopped = (why) => Object.assign(stopped(why), { code: 'security_policy_refused' });
+
+export const isPolicyRefusal = (error) => error?.code === 'security_policy_refused';
 
 const passing = (status) => status === 408 || status === 429 || status >= 500;
 
@@ -236,62 +246,94 @@ async function attempt({ url, audience, mint, secret, fetch, timeout }) {
  */
 function recordFrom(served) {
   if (served === null || typeof served !== 'object' || Array.isArray(served)) {
-    throw stopped('the control plane answered something other than a record');
+    throw policyStopped('the control plane answered something other than a record');
   }
 
   const {
     command, label, pr, head_sha: headSha, scope, requester, approver, approval_id: approvalId,
     model, effort, guidance, work_item: workItem,
+    autofix_capability: autofixCapability, comment_id: commentId, comment_kind: commentKind,
     trigger, trigger_run: triggerRun, trigger_attempt: triggerAttempt,
     trigger_state: triggerState, trigger_name: triggerName,
   } = /** @type {Record<string, unknown>} */ (served);
-  if (command !== undefined && (typeof command !== 'string' || !COMMANDS.includes(command))) {
-    throw stopped('the record names a command this runner does not answer');
+  const securedFix = command === SECURED_FIX_COMMAND;
+  if (command !== undefined && (typeof command !== 'string' || (!COMMANDS.includes(command) && !securedFix))) {
+    throw policyStopped('the record names a command this runner does not answer');
   }
   if (label !== undefined && (typeof label !== 'string' || label === '' || label.length > LABEL_MAX || hasControl(label))) {
-    throw stopped('the record names a label GitHub could not hold');
+    throw policyStopped('the record names a label GitHub could not hold');
   }
   if (pr !== undefined && (typeof pr !== 'string' || !PR_SHAPE.test(pr))) {
-    throw stopped('the record names a pull request that is not a number');
+    throw policyStopped('the record names a pull request that is not a number');
   }
   if (headSha !== undefined && (typeof headSha !== 'string' || !SHA_SHAPE.test(headSha))) {
-    throw stopped('the record names a head that is not a commit');
+    throw policyStopped('the record names a head that is not a commit');
   }
   if (scope !== undefined && (typeof scope !== 'string' || scope === '' || !narrows(scope))) {
-    throw stopped('the record narrows this run to work this runner does not do');
+    throw policyStopped('the record narrows this run to work this runner does not do');
   }
   if (requester !== undefined && (typeof requester !== 'string' || !REQUESTER.test(requester))) {
-    throw stopped('the record names a requester that is not a GitHub login');
+    throw policyStopped('the record names a requester that is not a GitHub login');
   }
   if (approver !== undefined && (typeof approver !== 'string' || !REQUESTER.test(approver))) {
-    throw stopped('the record names an approver that is not a GitHub login');
+    throw policyStopped('the record names an approver that is not a GitHub login');
   }
   if (approvalId !== undefined && (typeof approvalId !== 'string' || !RECORD_ID.test(approvalId))) {
-    throw stopped('the record names an approval the control plane could not have minted');
+    throw policyStopped('the record names an approval the control plane could not have minted');
   }
   if ((approver !== undefined || approvalId !== undefined) &&
     (approver === undefined || approvalId === undefined || command !== 'approve' || pr === undefined || headSha === undefined)) {
-    throw stopped('the record names an approval without the approver, the approval, the pull request and the head it was given for');
+    throw policyStopped('the record names an approval without the approver, the approval, the pull request and the head it was given for');
   }
   if (model !== undefined && (typeof model !== 'string' || !MODEL.test(model))) {
-    throw stopped('the record names a model this workflow will not pass on');
+    throw policyStopped('the record names a model this workflow will not pass on');
   }
   if (effort !== undefined && (typeof effort !== 'string' || !EFFORTS.includes(effort))) {
-    throw stopped('the record names an effort this workflow will not pass on');
+    throw policyStopped('the record names an effort this workflow will not pass on');
   }
   if (guidance !== undefined && (typeof guidance !== 'string' || !sayable(guidance, GUIDANCE_MAX))) {
-    throw stopped('the record carries guidance this workflow will not pass on');
+    throw policyStopped('the record carries guidance this workflow will not pass on');
   }
   if (workItem !== undefined && (typeof workItem !== 'string' || !sayable(workItem, WORK_ITEM_MAX))) {
-    throw stopped('the record carries a work item this workflow will not pass on');
+    throw policyStopped('the record carries a work item this workflow will not pass on');
+  }
+  if (commentId !== undefined && (typeof commentId !== 'string' || !COUNT_SHAPE.test(commentId))) {
+    throw policyStopped('the record names a comment or review that is not a positive id');
+  }
+  if (commentKind !== undefined &&
+    (typeof commentKind !== 'string' || !COMMENT_KINDS.includes(commentKind) || commentId === undefined)) {
+    throw policyStopped('the record names a comment space without a usable comment or review id');
+  }
+  if (securedFix || autofixCapability !== undefined) {
+    if (!securedFix || autofixCapability !== AUTOFIX_CAPABILITY) {
+      throw policyStopped('the secured autofix command and capability do not name the same policy');
+    }
+    if (label === undefined || pr === undefined || headSha === undefined || scope === undefined) {
+      throw policyStopped('the secured autofix record has no complete label, pull request, head and scope basis');
+    }
+    if (commentKind !== undefined && commentKind !== 'submitted_review') {
+      throw policyStopped('the secured autofix record names a comment surface automatic writes do not use');
+    }
+    if (!TRIGGERS.includes(/** @type {string} */ (trigger))) {
+      throw policyStopped('the secured autofix record names no trigger this runner can bind to its context');
+    }
+    if (trigger === 'review_submitted' && (commentId === undefined || commentKind !== 'submitted_review')) {
+      throw policyStopped('the secured review autofix record names no submitted review identity');
+    }
+    if (trigger !== 'review_submitted' && (commentId !== undefined || commentKind !== undefined)) {
+      throw policyStopped('the secured autofix record names a review identity for a trigger that is not a submitted review');
+    }
   }
   return {
     read: true,
-    command: text(command),
+    command: securedFix ? 'fix' : text(command),
+    autofixCapability: securedFix ? AUTOFIX_CAPABILITY : '',
     label: text(label),
     pr: text(pr),
     head_sha: text(headSha).toLowerCase(),
     scope: text(scope),
+    commentId: text(commentId),
+    commentKind: text(commentKind),
     trigger: oneOf(trigger, TRIGGERS),
     triggerRun: counted(triggerRun),
     triggerAttempt: counted(triggerAttempt),
@@ -305,6 +347,24 @@ function recordFrom(served) {
     guidance: text(guidance),
     workItem: text(workItem),
   };
+}
+
+/** Report one authenticated, body-free policy refusal without changing the original failure. */
+export async function reportPolicyRefusal({ endpoint, recordId, audience, mint, secret, fetch = globalThis.fetch }) {
+  if (!bare(endpoint) || !RECORD_ID.test(recordId)) return false;
+  const token = await mint(audience);
+  if (typeof token !== 'string' || token === '') return false;
+  secret(token);
+  const answer = await fetch(
+    `${endpoint.replace(/\/$/, '')}/run/${recordId}/security-refusal`,
+    {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(TIMEOUT),
+    },
+  );
+  await release(answer);
+  return answer.ok;
 }
 
 function sayable(value, limit) {
@@ -372,6 +432,9 @@ export async function readRecord({
       pr: '',
       head_sha: '',
       scope: '',
+      autofixCapability: '',
+      commentId: '',
+      commentKind: '',
       trigger: '',
       triggerRun: '',
       triggerAttempt: '',

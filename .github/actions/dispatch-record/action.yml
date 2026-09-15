@@ -64,6 +64,16 @@ outputs:
       the command the control plane decided this run is for, or empty where it decided none - which is
       every run answering a comment, since a comment names its own
     value: ${{ steps.record.outputs.command }}
+  autofix_capability:
+    description: >-
+      the secured autofix context/output policy this runner validated, or empty for other records
+    value: ${{ steps.record.outputs.autofix_capability }}
+  comment_id:
+    description: the comment or submitted review id read from the trusted record, or empty
+    value: ${{ steps.record.outputs.comment_id }}
+  comment_kind:
+    description: the GitHub comment space read from the trusted record, or empty
+    value: ${{ steps.record.outputs.comment_kind }}
   label:
     description: >-
       the label a run nobody typed rests on, or empty. It names a fact for the runner to read back from
@@ -152,7 +162,8 @@ runs:
         RECORD_AUDIENCE: ${{ inputs.audience }}
       with:
         script: |
-          const { escapeHtml, readRecord } = await import(`file://${process.env.RECORD_ACTION_PATH}/record.mjs`);
+          const { escapeHtml, isPolicyRefusal, readRecord, reportPolicyRefusal } =
+            await import(`file://${process.env.RECORD_ACTION_PATH}/record.mjs`);
           let answer;
           try {
             answer = await readRecord({
@@ -164,6 +175,19 @@ runs:
               note: (why, wait) => core.info(`ksai could not read the dispatch record yet, trying again in ${Math.round(wait / 1000)}s: ${why}`),
             });
           } catch (refused) {
+            if (isPolicyRefusal(refused)) {
+              try {
+                await reportPolicyRefusal({
+                  endpoint: process.env.RECORD_ENDPOINT,
+                  recordId: process.env.RECORD_ID,
+                  audience: process.env.RECORD_AUDIENCE,
+                  mint: (audience) => core.getIDToken(audience),
+                  secret: (token) => core.setSecret(token),
+                });
+              } catch {
+                core.info('ksai could not report the security policy refusal');
+              }
+            }
             core.setFailed(refused.message);
             return;
           }
@@ -171,7 +195,8 @@ runs:
             core.notice(`ksai read the dispatch record${answer.command ? `: command ${answer.command}` : ''}`);
           }
           core.setOutput('read', answer.read ? 'true' : 'false');
-          for (const [name, held] of [['command', 'command'], ['label', 'label'], ['pr', 'pr'],
+          for (const [name, held] of [['command', 'command'], ['autofix_capability', 'autofixCapability'],
+            ['comment_id', 'commentId'], ['comment_kind', 'commentKind'], ['label', 'label'], ['pr', 'pr'],
             ['head_sha', 'head_sha'], ['scope', 'scope'], ['trigger', 'trigger'],
             ['trigger_run', 'triggerRun'], ['trigger_attempt', 'triggerAttempt'],
             ['trigger_state', 'triggerState'], ['trigger_name', 'triggerName'],

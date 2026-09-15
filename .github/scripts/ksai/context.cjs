@@ -259,6 +259,10 @@ const COMMENT_KINDS = Object.freeze(
 
 const KIND_NAMES = Object.freeze(Object.keys(COMMENT_KINDS));
 
+const dispatchedRefusal = (error) => ({ error, securityPolicyRefused: true });
+
+const dispatchedReadFailure = (error) => ({ error, securityPolicyRefused: false });
+
 const KIND_SUBJECTS = Object.freeze(
   Object.assign(Object.create(null), {
     issue: 'comment',
@@ -289,21 +293,20 @@ async function resolveDispatchedComment({
   const kind = String(commentKind ?? '').trim().toLowerCase();
   if (kind === '') return { held: false };
   if (id === '') {
-    return {
-      error:
+    return dispatchedRefusal(
         '`comment_kind` names a comment space and no `comment_id` says which comment in it, so this run has ' +
         'nothing to read back. The pair is what asks for a comment to be read; an id on its own is the ' +
         "request's identity and carries no words.",
-    };
+    );
   }
   const wanted = readCommentId(id);
   if (wanted === null) {
-    return { error: `\`comment_id\` is not a comment id (got \`${id}\`).` };
+    return dispatchedRefusal(`\`comment_id\` is not a comment id (got \`${id}\`).`);
   }
   if (!Object.prototype.hasOwnProperty.call(COMMENT_KINDS, kind)) {
-    return {
-      error: `\`comment_kind\` names no comment space this action reads (got \`${kind}\`). It expects ${KIND_NAMES.join(' or ')}.`,
-    };
+    return dispatchedRefusal(
+      `\`comment_kind\` names no comment space this action reads (got \`${kind}\`). It expects ${KIND_NAMES.join(' or ')}.`,
+    );
   }
 
   const submittedReview = kind === 'submitted_review';
@@ -311,7 +314,7 @@ async function resolveDispatchedComment({
   const subjectName = KIND_SUBJECTS[kind];
   const subject = readNumber(issueNumber);
   if (submittedReview && subject === null) {
-    return { error: '`submitted_review` requires the pull request number to read its review.' };
+    return dispatchedRefusal('`submitted_review` requires the pull request number to read its review.');
   }
   let data = null;
   try {
@@ -319,56 +322,51 @@ async function resolveDispatchedComment({
       ? await getSubmittedReview(subject, wanted)
       : review ? await getReviewComment(wanted) : await getIssueComment(wanted);
   } catch (error) {
-    return {
-      error:
+    return dispatchedReadFailure(
         `could not read the ${subjectName} #${id} this run was dispatched for ` +
         `(status ${error?.status}): ${error?.message}. A run answers a comment it can read, or it answers none.`,
-    };
+    );
   }
 
   if (String(data?.user?.type ?? '') === 'Bot') {
-    return {
-      error:
+    return dispatchedRefusal(
         `the ${subjectName} #${id} this run was dispatched for was written by a Bot ` +
         `(\`${String(data?.user?.login ?? '')}\`), so nothing ran. Every comment event is gated on the author not ` +
         'being one, and a dispatch carries an id rather than an author, so the same term is applied here - it is ' +
         'what stands between what this flow publishes and a run answering its own output.',
-    };
+    );
   }
 
   if (submittedReview && (!data?.submitted_at || !['approved', 'changes_requested', 'commented'].includes(String(data?.state ?? '').toLowerCase()))) {
-    return { error: `review #${id} is not a submitted approval, change request or comment, so nothing ran.` };
+    return dispatchedRefusal(`review #${id} is not a submitted approval, change request or comment, so nothing ran.`);
   }
   const refused = submittedReview ? null : editRefusal(data, subjectName);
-  if (refused) return refused;
+  if (refused) return { ...refused, securityPolicyRefused: true };
 
   const wrote = String(data?.user?.login ?? '');
   const sent = String(actor ?? '').trim();
   if (sent !== '' && !isOwnLogin(sent, appSlug) && sent.toLowerCase() !== wrote.toLowerCase()) {
-    return {
-      error:
+    return dispatchedRefusal(
         `comment #${id} was written by \`${wrote}\` and this run was started by \`${sent}\`, so nothing ran. A ` +
         'run answers its own author or is started by this flow itself: which comment a dispatch names is free ' +
         'text to whoever holds `actions: write`, and replaying somebody else\'s command would run it under ' +
         'their authorization rather than the dispatcher\'s.',
-    };
+    );
   }
 
   const number = numberFrom(review ? data?.pull_request_url : data?.issue_url);
   if (number === null) {
-    return {
-      error:
+    return dispatchedRefusal(
         `the ${subjectName} #${id} named no pull request or issue of its own, so this run has ` +
         'nothing to work on.',
-    };
+    );
   }
   const named = String(issueNumber ?? '').trim();
   if (named !== '' && named !== String(number)) {
-    return {
-      error:
+    return dispatchedRefusal(
         `the dispatch names #${named} and comment #${id} sits on #${number}. The comment decides what a run is ` +
         'about, so a pair that disagrees is a dispatch pointed at the wrong thread rather than a surface to pick.',
-    };
+    );
   }
 
   return { held: true, review, submittedReview, id: wanted, number, comment: data };
@@ -424,6 +422,7 @@ async function resolveOnIssue({ eventName, commentBody, issueNumber, pullsGet })
       error:
         `could not tell whether #${issueNumber} is a pull request (status ${error?.status}): ${error?.message}. ` +
         'Does the token passed as `github-token` have pull-requests:read?',
+      securityPolicyRefused: false,
     };
   }
 }

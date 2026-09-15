@@ -17,6 +17,10 @@ const hasControl = (text) => [...text].some((character) => {
 
 const sameName = (one, other) => String(one ?? '').toLowerCase() === String(other ?? '').toLowerCase();
 
+const refused = (error) => ({ error, securityPolicyRefused: true });
+
+const unreadable = (error) => ({ error, securityPolicyRefused: false });
+
 /**
  * recordBasis reads what a dispatch record says a run nobody typed rests on, from the RECORD_* values
  * the dispatch-record action passed on. It answers null where the record names no label, which is every
@@ -61,36 +65,49 @@ async function readLabelBasis({ basis, pullsGet, listIssueEvents }) {
   try {
     pull = await pullsGet(pr);
   } catch (error) {
-    return { error: `pull request #${pr} could not be read (${error?.status ?? error?.message ?? 'unknown'}), so the label behind this run was not checked and nothing ran` };
+    return unreadable(
+      `pull request #${pr} could not be read (${error?.status ?? error?.message ?? 'unknown'}), ` +
+        'so the label behind this run was not checked and nothing ran',
+    );
   }
-  if (pull?.state !== 'open') return { error: `pull request #${pr} is not open, so the label behind this run asks for nothing and nothing ran` };
+  if (pull?.state !== 'open') {
+    return refused(`pull request #${pr} is not open, so the label behind this run asks for nothing and nothing ran`);
+  }
 
   const head = pull?.head?.repo?.full_name;
   if (!head || !sameName(head, pull?.base?.repo?.full_name)) {
-    return { error: `pull request #${pr} comes from a fork, and a run nobody typed never works on one, so nothing ran` };
+    return refused(`pull request #${pr} comes from a fork, and a run nobody typed never works on one, so nothing ran`);
   }
   if (String(pull?.head?.sha ?? '').toLowerCase() !== headSha) {
-    return { error: `pull request #${pr} has moved past the commit this run was decided for, so it stood down rather than work on a head nobody asked about` };
+    return refused(
+      `pull request #${pr} has moved past the commit this run was decided for, so it stood down rather than ` +
+        'work on a head nobody asked about',
+    );
   }
   if (!(pull?.labels ?? []).some((held) => sameName(held?.name, label))) {
-    return { error: `pull request #${pr} no longer carries the label that asked for this run, so nothing ran` };
+    return refused(`pull request #${pr} no longer carries the label that asked for this run, so nothing ran`);
   }
 
   let events;
   try {
     events = await listIssueEvents(pr);
   } catch (error) {
-    return { error: `the history of pull request #${pr} could not be read (${error?.status ?? error?.message ?? 'unknown'}), so nobody could be authorized for this run and nothing ran` };
+    return unreadable(
+      `the history of pull request #${pr} could not be read (${error?.status ?? error?.message ?? 'unknown'}), ` +
+        'so nobody could be authorized for this run and nothing ran',
+    );
   }
   const applied = [...(events ?? [])].toReversed().find((one) => one?.event === 'labeled' && sameName(one?.label?.name, label));
-  if (!applied) return { error: `nothing on pull request #${pr} says who applied the label, so nobody could be authorized for this run and nothing ran` };
+  if (!applied) {
+    return refused(`nothing on pull request #${pr} says who applied the label, so nobody could be authorized for this run and nothing ran`);
+  }
 
   const login = String(applied?.actor?.login ?? '');
   if (applied?.actor?.type === 'Bot' || login.endsWith('[bot]')) {
-    return { error: `the label on pull request #${pr} was applied by an App, which asks on nobody's behalf, so nothing ran` };
+    return refused(`the label on pull request #${pr} was applied by an App, which asks on nobody's behalf, so nothing ran`);
   }
   if (!AUTHZ_LOGIN_SHAPE.test(login)) {
-    return { error: `the label on pull request #${pr} names no account this gate can authorize, so nothing ran` };
+    return refused(`the label on pull request #${pr} names no account this gate can authorize, so nothing ran`);
   }
   return { login, pr, label, headSha, command };
 }
@@ -116,14 +133,19 @@ async function readReviewBasis({ pr, reviewCommit, reviewer, pullsGet, label = A
 
   const headSha = String(pull?.head?.sha ?? '').toLowerCase();
   if (!SHA_SHAPE.test(headSha)) {
-    return { error: `pull request #${pr} names no head commit, so the review behind this run could not be pinned to one and nothing ran` };
+    return refused(
+      `pull request #${pr} names no head commit, so the review behind this run could not be pinned to one and nothing ran`,
+    );
   }
   if (String(reviewCommit ?? '').trim().toLowerCase() !== headSha) {
-    return { error: `the review on pull request #${pr} was left on a commit the pull request has moved past, so it stood down rather than work on a head the reviewer never saw` };
+    return refused(
+      `the review on pull request #${pr} was left on a commit the pull request has moved past, so it stood down ` +
+        'rather than work on a head the reviewer never saw',
+    );
   }
   const login = String(reviewer ?? '');
   if (!AUTHZ_LOGIN_SHAPE.test(login)) {
-    return { error: `the review on pull request #${pr} names no account this gate can authorize, so nothing ran` };
+    return refused(`the review on pull request #${pr} names no account this gate can authorize, so nothing ran`);
   }
   return { login, pr: Number(pr), label, headSha, command: 'fix' };
 }

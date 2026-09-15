@@ -164,10 +164,12 @@ async function resolvedWriteCommands({ core, env, readConfig }) {
 
 async function resolveRequester({ github, context, env }) {
   const basis = recordBasis(env);
-  if (basis?.error) return { login: '', failure: basis.error };
+  if (basis?.error) return { login: '', failure: basis.error, securityPolicyRefused: true };
   if (basis) {
     const read = await readLabelBasis({ basis, ...labelReaders({ github, context }) });
-    return read.error ? { login: '', failure: read.error } : { login: read.login, failure: null };
+    return read.error
+      ? { login: '', failure: read.error, securityPolicyRefused: read.securityPolicyRefused }
+      : { login: read.login, failure: null };
   }
 
   const held = await resolveDispatchedComment({
@@ -179,7 +181,9 @@ async function resolveRequester({ github, context, env }) {
     appSlug: env.APP_SLUG,
     ...commentReaders({ github, context }),
   });
-  if (held.error) return { login: '', failure: held.error };
+  if (held.error) {
+    return { login: '', failure: held.error, securityPolicyRefused: held.securityPolicyRefused };
+  }
   if (!held.held) return { login: String(env.REQUESTER ?? ''), failure: null };
 
   const login = String(held.comment?.user?.login ?? '');
