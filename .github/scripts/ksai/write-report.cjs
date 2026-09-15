@@ -2,8 +2,9 @@
 
 const fs = require('node:fs');
 const { finalResult } = require('./classify.cjs');
+const { readWorkRef } = require('./context.cjs');
 const { doRequestOf, renderDoMarker } = require('./do.cjs');
-const { KIND_TABLE, href, marker, positive } = require('./marker.cjs');
+const { href, marker, positive } = require('./marker.cjs');
 const { STATUS_BEGIN, STATUS_END, URL_SHAPE, locateStatus, oneLine, scrub, spliceStatus } = require('./plan.cjs');
 const { probeComments } = require('./pages.cjs');
 const { withIssueLock } = require('./write-lock.cjs');
@@ -44,7 +45,7 @@ const {
 } = require('../lib/write-record.cjs');
 const { DIALS_ARM_SHAPE, armLabel, asAlert } = require('../lib/select-arm.cjs');
 const { counted, safeText } = require('../lib/text.cjs');
-const { STATUS_TABLE } = require('./publish.cjs');
+const { STATUS_TABLE, reporting } = require('./publish.cjs');
 
 const MAX_PAGES = 20;
 const MAX_CURRENT_CHARS = 7_000;
@@ -618,17 +619,16 @@ function currentText(value, triggerPhrase) {
 
 const REPORT_HEADING = Object.freeze(
   Object.assign(Object.create(null), {
-    initializing: KIND_TABLE['run-started'],
-    running: KIND_TABLE['write-report'],
-    blocked: KIND_TABLE['plan-blocked'],
-    failed: KIND_TABLE['run-failed'],
-    paused: { said: 'Paused', mark: 'stopped', next: 'somebody resumes the plan' },
+    initializing: reporting('run-started'),
+    running: reporting('write-report'),
+    blocked: reporting('plan-blocked'),
+    failed: reporting('run-failed'),
+    paused: reporting('run-paused', { next: 'somebody resumes the plan' }),
     ...STATUS_TABLE,
   }),
 );
 
-const WORKING_HEADING = KIND_TABLE['write-report'];
-const UNVERIFIED_HEADING = Object.freeze({ said: 'Not verified', mark: 'failed', next: '' });
+const UNVERIFIED_HEADING = reporting('do-unverified');
 const UNVERIFIED_SUMMARY = 'The targeted check was not reproduced. This report makes no verification claim.';
 const FIX_CLAIM_OUTCOMES = Object.freeze(['changed', 'unchanged']);
 
@@ -639,18 +639,17 @@ const unverifiedReport = (state) => {
     last?.verification?.status === 'unverified';
 };
 
-function reportHeading({ state, command, said, triggerPhrase, fields, paused = false, standing = false }) {
-  if (carriesHeading(said)) return '';
+function headingRow(state, paused) {
+  if (unverifiedReport(state)) return UNVERIFIED_HEADING;
   const outcome = paused ? 'paused' : String(state.attempts.at(-1)?.outcome ?? '');
-  const unverified = unverifiedReport(state);
-  const row = unverified
-    ? UNVERIFIED_HEADING
-    : Object.hasOwn(REPORT_HEADING, outcome)
-      ? REPORT_HEADING[outcome]
-      : WORKING_HEADING;
+  return REPORT_HEADING[outcome] ?? REPORT_HEADING.running;
+}
+
+function reportHeading({ row, command, said, triggerPhrase, fields, paused = false, standing = false }) {
+  if (carriesHeading(said)) return '';
   const shown = standing && !paused ? { ...row, next: REPORT_HEADING.paused.next } : row;
   const heading = headedBlock(shown, { command, flow: 'implement', href: href(fields), triggerPhrase });
-  if (!unverified || heading === '') return heading;
+  if (row !== UNVERIFIED_HEADING || heading === '') return heading;
   return asAlert(
     'WARNING',
     `${heading}\n\nThe targeted check was not reproduced, so this report does not claim the failure is fixed.`,
@@ -708,10 +707,19 @@ function renderWriteReport({
   const cost = total.unknown
     ? `${spent} known${total.ticking ? ' so far' : ''}; some cost is unavailable`
     : `${spent} ${total.ticking ? 'so far' : 'total'}`;
-  const fields = { kind: paused || standing ? 'run-paused' : 'write-report', flow: 'implement', issue, pr: state.identity.pr, run };
+  const row = headingRow(state, paused);
+  const fields = {
+    kind: paused || standing ? REPORT_HEADING.paused.kind : row.kind,
+    flow: 'implement',
+    issue,
+    pr: state.identity.pr,
+    run,
+    command,
+    jira: readWorkRef(state.identity.source).key ?? '',
+  };
   const doMarker = renderDoMarker(doRequest);
-  const headingFor = (said) => reportHeading({ state, command, said, triggerPhrase, fields, paused, standing });
-  const kept = unverifiedReport(state) ? [] : historyOf(state, triggerPhrase);
+  const headingFor = (said) => reportHeading({ row, command, said, triggerPhrase, fields, paused, standing });
+  const kept = row === UNVERIFIED_HEADING ? [] : historyOf(state, triggerPhrase);
   const follow = URL_SHAPE.test(String(live?.link ?? '')) ? `[Follow it](${live.link})` : '';
   const counters = [statusLine(live?.arm, live?.cells), follow].filter(Boolean).join(' · ');
   const render = (

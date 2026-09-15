@@ -670,6 +670,8 @@ async function resolveRunSubject({ github, owner, repo, env }) {
     command: env.COMMAND,
     onIssue: env.ON_ISSUE,
     threadNumber: env.THREAD,
+    owner,
+    repo,
     pullsGet: async (pull_number) => (await github.rest.pulls.get({ owner, repo, pull_number })).data,
   });
 

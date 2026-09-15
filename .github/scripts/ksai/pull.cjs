@@ -5,6 +5,7 @@ const { setTimeout: wait } = require('node:timers/promises');
 const { NUMBER_SHAPE } = require('./context.cjs');
 const { heldBy } = require('./plan.cjs');
 const { matchesBranchGrammar } = require('./verify-chunk.cjs');
+const { headOrigin, sameRepo } = require('../lib/repo.cjs');
 
 const DEFAULT_NOUN = 'branch to work on';
 
@@ -54,12 +55,11 @@ async function resolvePullTarget({
     return { error: `${owner}/${repo}#${number} is ${pull?.merged ? 'merged' : String(pull?.state ?? 'unreadable')}, so nothing is pushed to it` };
   }
 
-  const headRepo = pull?.head?.repo?.full_name ?? null;
   const baseRepo = pull?.base?.repo?.full_name ?? `${owner}/${repo}`;
-  if (headRepo === null || headRepo.toLowerCase() !== String(baseRepo).toLowerCase()) {
+  if (!sameRepo(pull, baseRepo)) {
     return {
       error:
-        `#${number} is from ${headRepo === null ? 'a fork that no longer exists' : `\`${headRepo}\``}, and this ` +
+        `#${number} is from ${headOrigin(pull)}, and this ` +
         `runs with an installation token on \`${baseRepo}\` alone, so it cannot push to the branch. A ` +
         'maintainer can push the branch into this repository and re-request there.',
     };

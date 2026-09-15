@@ -1,4 +1,5 @@
 const { AUTHZ_LOGIN_SHAPE } = require('./context.cjs');
+const { sameRepo } = require('../lib/repo.cjs');
 
 const LABEL_COMMANDS = Object.freeze(['fix']);
 
@@ -74,8 +75,7 @@ async function readLabelBasis({ basis, pullsGet, listIssueEvents }) {
     return refused(`pull request #${pr} is not open, so the label behind this run asks for nothing and nothing ran`);
   }
 
-  const head = pull?.head?.repo?.full_name;
-  if (!head || !sameName(head, pull?.base?.repo?.full_name)) {
+  if (!sameRepo(pull, pull?.base?.repo?.full_name)) {
     return refused(`pull request #${pr} comes from a fork, and a run nobody typed never works on one, so nothing ran`);
   }
   if (String(pull?.head?.sha ?? '').toLowerCase() !== headSha) {
@@ -127,8 +127,7 @@ async function readReviewBasis({ pr, reviewCommit, reviewer, pullsGet, label = A
   } catch {
     return null;
   }
-  const head = pull?.head?.repo?.full_name;
-  if (pull?.state !== 'open' || !head || !sameName(head, pull?.base?.repo?.full_name)) return null;
+  if (pull?.state !== 'open' || !sameRepo(pull, pull?.base?.repo?.full_name)) return null;
   if (!(pull?.labels ?? []).some((held) => sameName(held?.name, label))) return null;
 
   const headSha = String(pull?.head?.sha ?? '').toLowerCase();

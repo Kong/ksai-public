@@ -524,4 +524,5 @@ module.exports = {
   NOTICE_ORDER,
   REACTABLE,
   STATUS_TABLE,
+  reporting,
 };

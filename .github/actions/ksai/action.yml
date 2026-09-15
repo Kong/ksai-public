@@ -1668,6 +1668,7 @@ runs:
         THREAD_NUM: ${{ steps.context.outputs.issue_number }}
         NOTICE: ${{ steps.select_test.outputs.notice }}
         NOTICE_KIND: ${{ steps.select_test.outputs.notice_kind }}
+        JIRA_KEY: ${{ steps.context.outputs.jira_key }}
         COMMAND: test
         TRIGGER: ${{ inputs.trigger_phrase }}
         ROUTE_SOURCE: ${{ steps.select_test.outputs.route_source }}
@@ -1738,6 +1739,7 @@ runs:
       env:
         THREAD_NUM: ${{ steps.context.outputs.issue_number }}
         NOTICE: ${{ steps.select_test.outputs.receipt }}
+        JIRA_KEY: ${{ steps.context.outputs.jira_key }}
         NOTICE_KIND: receipt
         COMMAND: test
         TRIGGER: ${{ inputs.trigger_phrase }}
@@ -2322,6 +2324,7 @@ runs:
         RUN_ID: ${{ github.run_id }}
         STEP_TITLE: ${{ steps.read_plan.outputs.step_title }}
         APPROVED_BY: ${{ steps.context.outputs.commenter }}
+        JIRA_KEY: ${{ steps.subject.outputs.jira_key || steps.context.outputs.jira_key }}
         COMMENT_ID: ${{ steps.checkpoint.outputs.release_token }}
         COMMAND: ${{ steps.select.outputs.command }}
         TRIGGER: ${{ inputs.trigger_phrase }}
@@ -2353,6 +2356,7 @@ runs:
         REMAINING: ${{ steps.read_plan.outputs.remaining }}
         REASON: ${{ steps.checkpoint.outputs.reason }}
         DETAIL: ${{ steps.checkpoint.outputs.detail }}
+        JIRA_KEY: ${{ steps.subject.outputs.jira_key || steps.context.outputs.jira_key }}
         WRITE_ACCESS_COMMANDS: ${{ steps.select.outputs.write_access_commands }}
         COMMAND: ${{ steps.select.outputs.command }}
         TRIGGER: ${{ inputs.trigger_phrase }}
@@ -2893,6 +2897,7 @@ runs:
         STOP_NOTICE: ${{ steps.phase.outputs.stop_notice }}
         PHASE_NOTICE: ${{ steps.phase.outputs.notice }}
         MERGE_NOTICE: ${{ steps.merge_base.outputs.error }}
+        JIRA_KEY: ${{ steps.subject.outputs.jira_key || steps.context.outputs.jira_key }}
         JIRA_ERROR: ${{ steps.fetch_jira.outputs.error }}
         HELD_NOTICE: >-
           ${{ steps.holder.outputs.held_by != '' &&
@@ -2957,6 +2962,7 @@ runs:
       env:
         PR_NUMBER: ${{ steps.phase.outputs.pr_number }}
         MESSAGE_FILE: ${{ steps.release_plan.outputs.message_file }}
+        JIRA_KEY: ${{ steps.subject.outputs.jira_key || steps.context.outputs.jira_key }}
         COMMAND: ${{ steps.select.outputs.command }}
         ISSUE_NUM: ${{ steps.subject.outputs.number }}
         RUN_ID: ${{ github.run_id }}
@@ -3397,6 +3403,7 @@ runs:
         THREAD_ROOT_ID: ${{ steps.context.outputs.thread_root_id }}
         PR_NUMBER: ${{ steps.phase.outputs.pr_number }}
         BOT_LOGIN: ${{ inputs.bot_login }}
+        JIRA_KEY: ${{ steps.subject.outputs.jira_key || steps.context.outputs.jira_key }}
         TRIGGER: ${{ inputs.trigger_phrase }}
         COMMAND: ${{ steps.select.outputs.command }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
@@ -3496,6 +3503,7 @@ runs:
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         DISPUTE_ROOTS: ${{ steps.build_dispute.outputs.roots }}
+        JIRA_KEY: ${{ steps.subject.outputs.jira_key || steps.context.outputs.jira_key }}
         DISPUTE_LOG: ${{ steps.dispute_run.outputs.execution_file }}
         DISPUTE_CALLED: ${{ steps.dispute_run.outcome }}
         PR_NUMBER: ${{ steps.phase.outputs.pr_number }}
@@ -4930,6 +4938,7 @@ runs:
         RUN_ID: ${{ github.run_id }}
         REASON: ${{ steps.approval.outputs.reason }}
         OPEN_THREADS: ${{ steps.approval.outputs.open_threads }}
+        JIRA_KEY: ${{ steps.subject.outputs.jira_key || steps.context.outputs.jira_key }}
         WRITE_ACCESS_COMMANDS: ${{ steps.select.outputs.write_access_commands }}
         COMMAND: ${{ steps.select.outputs.command }}
         TRIGGER: ${{ inputs.trigger_phrase }}
@@ -5369,6 +5378,7 @@ runs:
           steps.record_fix.outputs.status || steps.record_do.outputs.status ||
           steps.release_plan.outputs.status }}
         START_COMMENT_ID: ""
+        JIRA_KEY: ${{ steps.subject.outputs.jira_key || steps.context.outputs.jira_key }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:
         github-token: ${{ inputs.source_org_github_token }}
@@ -5422,6 +5432,7 @@ runs:
         PRESERVE_REASON: ${{ steps.preserve.outputs.reason }}
         HELD: ${{ steps.hold_plan.outputs.held }}
         CEILING: ${{ steps.watchdog.outputs.ceiling }}
+        JIRA_KEY: ${{ steps.subject.outputs.jira_key || steps.context.outputs.jira_key }}
         PHASE: ${{ steps.size.outputs.phase }}
         COMMAND: ${{ steps.select.outputs.command }}
         TRIGGER: ${{ inputs.trigger_phrase }}

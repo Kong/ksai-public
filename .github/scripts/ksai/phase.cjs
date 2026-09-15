@@ -7,6 +7,7 @@ const { pagedProbe } = require('./pages.cjs');
 const { scrub, hasPlanRegion, heldBy, planFileIn } = require('./plan.cjs');
 const { asAlert, canonicalCommand, JIRA_KEY_SHAPE, plansWorkHere } = require('../lib/select-arm.cjs');
 const { EXPLICIT_SOURCE } = require('../lib/request-intent.cjs');
+const { headOrigin, sameRepo } = require('../lib/repo.cjs');
 
 const MAX_PAGES = 10;
 const PER_PAGE = 100;
@@ -92,6 +93,7 @@ async function discoverPhase({
   maxPages = MAX_PAGES,
 } = {}) {
   if (!github?.rest) return { error: 'no authenticated GitHub client was passed' };
+  if (!String(owner ?? '').trim() || !String(repo ?? '').trim()) return { error: 'no repository was passed to list pull requests in' };
   const key = String(jiraKey ?? '').toUpperCase();
   if (key && !JIRA_KEY_SHAPE.test(key)) return { error: `\`${key}\` is not a Jira issue key` };
   const number = String(issueNumber ?? '');
@@ -112,6 +114,7 @@ async function discoverPhase({
     take: (pull) => {
       const head = pull?.head?.ref;
       if (!isBranchForWork(head, workRef)) return;
+      if (!sameRepo(pull, `${owner}/${repo}`)) return;
       candidates.push({
         prNumber: pull.number,
         ref: String(head),
@@ -380,6 +383,8 @@ async function resolveSubject({
   command = null,
   onIssue = null,
   threadNumber = null,
+  owner = null,
+  repo = null,
   pullsGet = async (_prNumber) => ({ head: { ref: null } }),
 } = {}) {
   const thread = String(threadNumber ?? '').trim();
@@ -387,11 +392,21 @@ async function resolveSubject({
 
   if (familyOf(command) !== 'plan' || String(onIssue) !== 'false') return { number: Number(thread) };
 
+  if (!String(owner ?? '').trim() || !String(repo ?? '').trim()) {
+    return { error: 'no repository was passed to read the pull request against' };
+  }
+
   let pull;
   try {
     pull = await pullsGet(Number(thread));
   } catch (error) {
     return { error: `could not read #${thread} to find the issue it implements: ${error?.message ?? error}` };
+  }
+
+  if (!sameRepo(pull, `${owner}/${repo}`)) {
+    return {
+      error: `#${thread} is from ${headOrigin(pull)}, not this repository, so its branch names no work here to plan or approve against.`,
+    };
   }
 
   const branch = String(pull?.head?.ref ?? '');

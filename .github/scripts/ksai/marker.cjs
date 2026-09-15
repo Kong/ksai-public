@@ -2,7 +2,7 @@
 
 const { SITE } = require('../lib/docs.cjs');
 const { headedBlock, reportTable } = require('../lib/run-progress.cjs');
-const { SURFACE } = require('../lib/select-arm.cjs');
+const { ANY_SURFACE, SURFACE, canonicalCommand } = require('../lib/select-arm.cjs');
 const { escapeForRegExp } = require('../lib/text.cjs');
 
 const VERSION = 1;
@@ -11,7 +11,7 @@ const FLOWS = Object.freeze(['implement', 'review']);
 
 const NEEDS = Object.freeze(['approve', 'retrigger', 'manual', 'none']);
 
-const WHERE = Object.freeze(['pr', 'issue']);
+const WHERE = Object.freeze(['pr', 'issue', 'jira']);
 
 const KIND_TABLE = Object.freeze(
   Object.assign(Object.create(null), {
@@ -29,8 +29,8 @@ const KIND_TABLE = Object.freeze(
     'phase-released': { needs: 'none', said: 'Phase released', mark: 'done', next: 'the first step of the next phase runs' },
     'last-phase-released': { needs: 'none', said: 'Last phase released', mark: 'done', next: 'the pull request opens for review' },
     'run-finished': { needs: 'none', said: 'Finished', mark: 'done', next: '' },
-    'run-failed': { needs: 'retrigger', said: 'Failed', mark: 'failed', next: '', answers: 'implement' },
-    'run-stopped': { needs: 'retrigger', said: 'Stopped', mark: 'stopped', next: '', answers: 'implement' },
+    'run-failed': { needs: 'retrigger', said: 'Failed', mark: 'failed', next: '', answers: 'implement', again: true },
+    'run-stopped': { needs: 'retrigger', said: 'Stopped', mark: 'stopped', next: '', answers: 'implement', again: true },
     'run-paused': { needs: 'retrigger', said: 'Paused', mark: 'stopped', next: '', answers: 'resume' },
     'chain-stopped': { needs: 'retrigger', said: 'Stopped', mark: 'stopped', next: '', answers: 'implement' },
     notice: { needs: 'manual', said: 'Nothing ran', mark: 'failed', next: '' },
@@ -39,6 +39,7 @@ const KIND_TABLE = Object.freeze(
     'fix-answered': { needs: 'none', said: 'Review threads answered', mark: 'done', next: '' },
     'revise-answered': { needs: 'none', said: 'Plan revised', mark: 'done', next: 'an approver releases the plan, and its tasks start' },
     'do-reported': { needs: 'none', said: 'Change made', mark: 'done', next: '' },
+    'do-unverified': { needs: 'manual', said: 'Not verified', mark: 'failed', next: '' },
     'thread-agreed': { needs: 'none', said: 'Thread answered', mark: 'done', next: '' },
     'thread-unclear': { needs: 'none', said: 'Thread unclear', mark: 'waiting', next: '' },
     'thread-locked': { needs: 'manual', said: 'Thread locked', mark: 'waiting', next: '' },
@@ -105,18 +106,38 @@ function surfacePageFor(answers) {
   return page;
 }
 
-function resolve({ kind = null, needs = null, where = null, reason = null } = {}) {
+function pageOf({ kind, command, issue, pr, jira }) {
+  const row = KIND_TABLE[kind];
+  const asked = canonicalCommand(command);
+  const answers = row.again && SURFACE[asked] ? asked : row.answers;
+  const surface = SURFACE[answers];
+  if (surface === ANY_SURFACE) return positive(pr) !== null && [null, positive(pr)].includes(positive(issue)) ? 'pr' : 'issue';
+  if (String(jira ?? '').trim() !== '' && surface === 'issue') return 'jira';
+  return surfacePageFor(answers);
+}
+
+function resolve({ kind = null, needs = null, where = null, reason = null, command = null, issue = null, pr = null, jira = null } = {}) {
   if (!KINDS.includes(kind)) throw new Error(`\`${String(kind)}\` is not a ksai comment kind`);
   const dead = DEAD_REASON.includes(String(reason ?? ''));
   const declared = NEEDS.includes(needs) ? needs : KIND_TABLE[kind].needs;
   const wanted = dead ? 'manual' : (declared ?? 'manual');
-  const answers = KIND_TABLE[kind]?.answers;
-  const at = WHERE.includes(where) ? where : surfacePageFor(answers);
+  const at = WHERE.includes(where) ? where : pageOf({ kind, command, issue, pr, jira });
   return { needs: wanted, where: at ?? null };
 }
 
-function payloadOf({ kind = null, flow = null, issue = null, pr = null, run = null, needs = null, where = null, reason = null } = {}) {
-  const answer = resolve({ kind, needs, where, reason });
+function payloadOf({
+  kind = null,
+  flow = null,
+  issue = null,
+  pr = null,
+  run = null,
+  needs = null,
+  where = null,
+  reason = null,
+  command = null,
+  jira = null,
+} = {}) {
+  const answer = resolve({ kind, needs, where, reason, command, issue, pr, jira });
   const payload = { v: VERSION, kind, needs: answer.needs };
   if (answer.where) payload.where = answer.where;
   if (FLOWS.includes(flow)) payload.flow = flow;
@@ -197,6 +218,7 @@ function payloadFor(env, extra) {
     issue: env.ISSUE_NUM,
     pr: env.PR_NUMBER,
     run: env.RUN_ID,
+    jira: env.JIRA_KEY,
     ...extra,
   };
 }
