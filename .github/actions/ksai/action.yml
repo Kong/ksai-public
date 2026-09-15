@@ -1007,6 +1007,7 @@ runs:
     - name: Resolve the review engine
       id: engine
       shell: bash
+      working-directory: ${{ runner.temp }}
       env:
         ENGINE: ${{ inputs.engine }}
         FLOW: ${{ inputs.flow }}
@@ -1017,6 +1018,7 @@ runs:
         REVIEW_STRATEGY: ${{ inputs.review_strategy }}
         OPENCODE_PTY: ${{ inputs.opencode_pty }}
         OPENCODE_VERSION: ${{ inputs.opencode_version }}
+        PTY_LOCK: ${{ github.action_path }}/../../scripts/vendor/opencode-pty/package-lock.json
       run: |
         set -euo pipefail
         if [[ -n "${ENGINE}" && "${FLOW}" == "test-publish" ]]; then
@@ -1073,8 +1075,9 @@ runs:
               echo "::error::opencode_pty: true is limited to implement and test flows"
               exit 1
             fi
-            if [[ "${OPENCODE_VERSION}" != "1.18.30" ]]; then
-              echo "::error::opencode_pty: true requires the audited opencode_version 1.18.30"
+            audited="$(node -p 'require(process.env.PTY_LOCK).packages["node_modules/@opencode-ai/plugin"].version')"
+            if [[ "${OPENCODE_VERSION}" != "${audited}" ]]; then
+              echo "::error::opencode_pty: true requires the audited opencode_version ${audited}"
               exit 1
             fi
             ;;

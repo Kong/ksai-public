@@ -101,7 +101,8 @@ const CODE_SUBCOMMANDS = Object.freeze({
   bun: new Set(['build', 'run', 'test', 'x']),
   deno: new Set(['bench', 'compile', 'eval', 'jupyter', 'repl', 'run', 'serve', 'task', 'test']),
 });
-const PTY_RUNTIME_LOCK_SHA256 = 'a444206b053bd955482432dc5d275fa3acf567bd4c53234e8a66c5e71dd053bc';
+export const PTY_OPENCODE_VERSION = '1.18.31';
+const PTY_RUNTIME_LOCK_SHA256 = '31636115ee6238df77d3124c3b2d928d8d60916788824bb21b265c92afe7e519';
 
 const executableName = (command) => command.replace(/\/+$/, '').split('/').at(-1).toLowerCase();
 const carriesEval = (args, short, long = []) => args.some((arg) =>
@@ -471,7 +472,7 @@ export function pinnedRuntime(manifest, lock) {
     manifest?.dependencies?.['opencode-pty'] === '0.3.6' && root['opencode-pty'] === '0.3.6' &&
     packages['node_modules/opencode-pty']?.version === '0.3.6' &&
     packages['node_modules/bun-pty']?.version === '0.4.10' &&
-    packages['node_modules/@opencode-ai/plugin']?.version === '1.18.30' &&
-    packages['node_modules/@opencode-ai/sdk']?.version === '1.18.30' &&
+    packages['node_modules/@opencode-ai/plugin']?.version === PTY_OPENCODE_VERSION &&
+    packages['node_modules/@opencode-ai/sdk']?.version === PTY_OPENCODE_VERSION &&
     packages['node_modules/open']?.version === '11.0.0';
 }
