@@ -120,6 +120,12 @@ const GATEWAY_UNAVAILABLE = /^Unexpected server error\b/;
 export function streamFailure(events) {
   const last = events.at(-1);
   const sessions = new Set(events.map((event) => event.sessionID).filter(Boolean));
+  if (last?.type === 'step_finish') {
+    const opened = events.at(-2);
+    const spent = last.part?.reason === 'stop' && last.part?.tokens?.output > 0;
+    const unanswered = opened?.type === 'step_start' && opened.sessionID === last.sessionID;
+    return spent && unanswered && sessions.size === 1 && /^ses_[a-zA-Z0-9]+$/.test(last.sessionID ?? '') ? { kind: 'empty-turn', session_id: last.sessionID } : null;
+  }
   const named = last?.error?.name;
   if (last?.type !== 'error' || (named !== 'UnknownError' && named !== 'APIError') || last.error?.data?.statusCode !== undefined || sessions.size !== 1 || !/^ses_[a-zA-Z0-9]+$/.test(last.sessionID ?? '')) return null;
   let message = last.error?.data?.message;
@@ -134,7 +140,7 @@ export function streamFailure(events) {
   return null;
 }
 
-const RECOVERABLE = Object.freeze(['missing-text-part', 'transport-closed', 'gateway-unavailable']);
+const RECOVERABLE = Object.freeze(['missing-text-part', 'transport-closed', 'gateway-unavailable', 'empty-turn']);
 
 const QUOTA_HEADERS = new Set(['retry-after', 'retry-after-ms', 'x-ai-ratelimit-reset', 'x-ai-ratelimit-retry-after', 'x-ai-ratelimit-query-cost', 'x-ratelimit-limit-tokens', 'x-ratelimit-remaining-tokens', 'x-ratelimit-reset-tokens', 'x-ratelimit-limit-requests', 'x-ratelimit-remaining-requests', 'x-ratelimit-reset-requests', 'ratelimit-limit', 'ratelimit-remaining', 'ratelimit-reset']);
 
@@ -161,9 +167,12 @@ export async function recoverReview({ flow, prompt, timeoutMs, invoke, budget = 
   const attempts = [attempt(first)];
   if (first.submission?.status === 'accepted') return { ...first, code: 0, attempts };
   const remaining = deadline - now();
-  if (flow !== 'review' || first.code !== 1 || !RECOVERABLE.includes(first.failure?.kind) || first.session_id !== first.failure.session_id || !/^ses_[a-zA-Z0-9]+$/.test(first.session_id ?? '') || budget.remaining < 1 || !Number.isFinite(remaining) || remaining < 5000) return { ...first, attempts };
+  const empty = first.failure?.kind === 'empty-turn';
+  if (empty && !first.submission && typeof first.text === 'string' && extractReviewJson(first.text)) return { ...first, attempts };
+  if (flow !== 'review' || first.code !== (empty ? 0 : 1) || !RECOVERABLE.includes(first.failure?.kind) || first.session_id !== first.failure.session_id || !/^ses_[a-zA-Z0-9]+$/.test(first.session_id ?? '') || budget.remaining < 1 || !Number.isFinite(remaining) || remaining < 5000) return { ...first, attempts };
   budget.remaining -= 1;
-  const second = await invoke({ ...options, prompt: 'The previous response ended with a transport stream error. Continue the original assigned review from completed evidence in this history. Discard the unfinished response fragment. Preserve the original scope, permissions, evidence requirements and output contract. Unfinished investigation remains incomplete; do not infer a clean result from the interruption.', timeoutMs: remaining, resumeSession: first.session_id });
+  const lost = empty ? 'The previous turn ended without any text or tool call reaching this session.' : 'The previous response ended with a transport stream error.';
+  const second = await invoke({ ...options, prompt: `${lost} Continue the original assigned review from completed evidence in this history. Discard the unfinished response fragment. Preserve the original scope, permissions, evidence requirements and output contract. Unfinished investigation remains incomplete; do not infer a clean result from the interruption.`, timeoutMs: remaining, resumeSession: first.session_id });
   attempts.push(attempt(second));
   const usage = first.usage && second.usage ? Object.fromEntries([...new Set([...Object.keys(first.usage), ...Object.keys(second.usage)])].map((key) => [key, (first.usage[key] ?? 0) + (second.usage[key] ?? 0)])) : null;
   const code = second.code === 0 && (typeof second.text !== 'string' || !second.text.trim()) ? 1 : second.code;

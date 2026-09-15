@@ -148,6 +148,12 @@ if (streamFailure(events)?.kind === 'gateway-unavailable') {
       "gateway's own logs",
   );
 }
+if (streamFailure(events)?.kind === 'empty-turn') {
+  console.log(
+    '::warning::the last model turn spent output tokens and delivered no text and no tool call, which is ' +
+      'the response lost between the model and opencode rather than the model finishing',
+  );
+}
 if (answer(events) === null) {
   console.log(`::warning::${events.length} opencode events carried no text, so this run posts no review`);
 }
