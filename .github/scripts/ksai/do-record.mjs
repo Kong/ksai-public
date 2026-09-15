@@ -42,6 +42,7 @@ export function mergeSubject({ baseRef = null, conflicted = 0 } = {}) {
 
 export function renderReport({
   summary = null,
+  difference = null,
   sha = null,
   commentId = null,
   trigger = null,
@@ -53,10 +54,12 @@ export function renderReport({
 } = {}) {
   const marker = renderDoMarker(commentId);
   if (!marker && !unaskedRun({ trigger, commentId })) return '';
-  const modelSummary = verification?.status === 'unverified'
+  const changed = field(difference).trim();
+  const account = changed ? `Changed approach: ${changed}` : '';
+  const report = verification?.status === 'unverified'
     ? 'The targeted check was not reproduced. This result is not verified.'
-    : field(summary);
-  const retargeted = retargetPermalinks(scrub(modelSummary, { triggerPhrase }), { repo, from: localSha, to: sha });
+    : [account, field(summary)].filter(Boolean).join('\n\n');
+  const retargeted = retargetPermalinks(scrub(report, { triggerPhrase }), { repo, from: localSha, to: sha });
   const said = cap(retargeted.trim(), MAX_REPORT_CHARS);
   const footer = renderReportFooter({ sha, triggerPhrase, merged });
   return [footer, ...(said ? ['', said] : []), ...(marker ? ['', marker] : [])].join('\n');
@@ -86,6 +89,7 @@ export function recordDo({
   changeScopePath = null,
   recordScope = writeScopeResult,
   secrets = [],
+  retry = false,
   run = runCommand,
 } = {}) {
   const block = blockerFor(manifestPath);
@@ -113,6 +117,11 @@ export function recordDo({
   }
   if (status !== 'done' && status !== 'answered') {
     return blocked(`The run reported an unrecognized status: ${safeEcho(shown(manifest?.status))}`);
+  }
+
+  const difference = field(manifest?.difference).trim();
+  if (retry && !difference) {
+    return blocked('The run did not say how its approach differs from the failed attempt, so nothing was pushed.');
   }
 
   if (!renderDoMarker(commentId) && !unaskedRun({ trigger, commentId })) {
@@ -275,6 +284,7 @@ export function recordDo({
     commitSha: sha || null,
     message: renderReport({
       summary: manifest?.summary,
+      difference: retry ? difference : '',
       sha,
       commentId,
       trigger,
@@ -315,6 +325,7 @@ export function main(env = process.env, { run = runCommand } = {}) {
     verificationPath: verificationFile,
     changeScopePath: env.CHANGE_SCOPE_FILE,
     secrets: commandSecrets(env),
+    retry: String(env.RETRY_FILE ?? '').trim() !== '',
     run,
   });
 

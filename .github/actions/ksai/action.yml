@@ -2095,6 +2095,7 @@ runs:
         COMMENT_ID: ${{ steps.context.outputs.comment_id }}
         AUTHZ_WHY: ${{ steps.authz.outputs.why }}
         CHECKS_FILE: ${{ runner.temp }}/ksai-checks.json
+        RETRY_FILE: ${{ runner.temp }}/ksai-retry.json
         EVIDENCE_TOKEN: ${{ inputs.ci_evidence_github_token }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:
@@ -3619,6 +3620,7 @@ runs:
         TOTAL: ${{ steps.read_plan.outputs.total }}
         THREADS_FILE: ${{ steps.phase.outputs.threads_file }}
         CHECKS_FILE: ${{ steps.phase.outputs.checks_file }}
+        RETRY_FILE: ${{ steps.phase.outputs.retry_file }}
         DEFERRED: ${{ steps.phase.outputs.deferred }}
         THREAD_ROOT_ID: ${{ steps.context.outputs.thread_root_id }}
         BASE_DIFF_REF: ${{ steps.fetch_base.outputs.ref }}
@@ -4831,6 +4833,7 @@ runs:
         CO_AUTHOR: ${{ steps.identity.outputs.coauthor }}
         JIRA_KEY: ${{ steps.jira_ref.outputs.step_key || steps.jira_ref.outputs.plan_key }}
         CHECKS_FILE: ${{ steps.phase.outputs.checks_file }}
+        RETRY_FILE: ${{ steps.phase.outputs.retry_file }}
         OPENCODE_EVENTS_FILE: ${{ steps.opencode.outputs.events_file }}
         VERIFICATION_FILE: ${{ runner.temp }}/ksai-fix-verification.json
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
