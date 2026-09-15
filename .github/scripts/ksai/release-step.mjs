@@ -1,9 +1,8 @@
-import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 
-import { runCommand } from './run.mjs';
+import { editPullBody, readPullBody, runCommand } from './run.mjs';
 
 const require = createRequire(import.meta.url);
 const { withRelease } = require('./plan.cjs');
@@ -19,16 +18,15 @@ export function main(env = process.env, { run = runCommand } = {}) {
   }
   const repo = String(env.REPO ?? '');
 
-  const view = run('gh', ['pr', 'view', prNumber, '--repo', repo, '--json', 'body', '--jq', '.body']);
-  if (!view.ok) return { error: 'the pull request body could not be read, so the release cannot be recorded' };
+  const body = readPullBody({ repo, number: prNumber, run });
+  if (body === null) return { error: 'the pull request body could not be read, so the release cannot be recorded' };
 
-  const next = withRelease(view.stdout, ref, { url: env.APPROVAL_URL });
+  const next = withRelease(body, ref, { url: env.APPROVAL_URL });
   if (next === null) return { error: 'the reference the approval gate resolved is not one this may write' };
   if (next.changed === false) return { recorded: true };
 
-  const file = path.join(env.RUNNER_TEMP || '/tmp', 'ksai-release-body.md');
-  writeFileSync(file, next.body);
-  if (!run('gh', ['pr', 'edit', prNumber, '--repo', repo, '--body-file', file]).ok) {
+  const bodyFile = path.join(env.RUNNER_TEMP || '/tmp', 'ksai-release-body.md');
+  if (!editPullBody({ repo, number: prNumber, bodyFile, body: next.body, run })) {
     return { error: 'the pull request body could not be updated, so the release cannot be recorded' };
   }
   return { recorded: true };

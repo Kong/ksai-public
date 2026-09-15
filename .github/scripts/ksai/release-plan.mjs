@@ -7,28 +7,27 @@ const require = createRequire(import.meta.url);
 const { payloadFor, marked } = require('./marker.cjs');
 const {
   carryRecords,
-  linked,
   motivationOf,
-  planDocsIn,
+  parseBody,
   parsePlanDocument,
   planFileIn,
   planFilePathFor,
-  pullUrl,
+  releaseOf,
   renderBody,
   renderShape,
   requesterOf,
   scrub,
-  shapesIn,
   stepDigest,
-  shortenedNote,
+  withRelease,
 } = require('./plan.cjs');
 const { NUMBER_SHAPE } = require('./context.cjs');
 const { safeEcho } = require('./verify-chunk.cjs');
-const { FOREIGN, ownState, vouchedOwn, withLastEdits } = require('./approval.cjs');
-import { runCommand } from './run.mjs';
+const { FOREIGN, ownState, planRecords, withLastEdits } = require('./approval.cjs');
+import { editPullBody, filesLinked, readPullBody, runCommand } from './run.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
 
 const MAX_DOC_BYTES = 256 * 1024;
+const COMMIT_SHAPE = /^[0-9a-f]{40}$/;
 
 const graphqlOver = (run) => async (query, variables) => {
   const asked = run('gh', ['api', 'graphql', '--input', '-'], { input: JSON.stringify({ query, variables }), stderr: 'ignore' });
@@ -62,23 +61,18 @@ async function recordedBy({ repo, prNumber, botLogin, run }) {
     .filter((comment) => ownState(comment, login) !== FOREIGN && comment.body !== '')
     .sort((left, right) => String(left.created_at).localeCompare(String(right.created_at)));
   const read = await withLastEdits(comments, { graphql: graphqlOver(run) }).catch(() => comments);
-  let found = null;
-  const docs = [];
-  for (const comment of read) {
-    const offered = planDocsIn(comment.body);
-    if (offered.length) docs.length = 0;
-    if (!vouchedOwn(comment, login)) continue;
-    const shape = shapesIn(comment.body).at(-1);
-    if (shape?.requestedBy) found = shape.requestedBy;
-    docs.push(...offered);
-  }
-  return { requester: found, docs, readable: true };
+  const seen = planRecords(read, { botLogin: login });
+  return { requester: seen.requester, docs: seen.offeredDocs, offeredAt: seen.offeredAt, readable: true };
 }
 
 export async function releasePlan({
   prNumber = null,
   issueNumber = null,
   branch = null,
+  approvedAt = null,
+  approvedHead = null,
+  releasedBy = null,
+  approvalUrl = null,
   repo = null,
   triggerPhrase = null,
   jira = null,
@@ -95,10 +89,17 @@ export async function releasePlan({
   if (!NUMBER_SHAPE.test(number)) {
     return block(`There is no pull request to release a plan in (got \`${safeEcho(number)}\`).`);
   }
+  const approved = Date.parse(String(approvedAt ?? ''));
+  const head = String(approvedHead ?? '').trim();
+  if (!Number.isFinite(approved) || !COMMIT_SHAPE.test(head)) {
+    return block(
+      'The approval gate did not say when this plan was approved or which commit it read, so there is nothing ' +
+        'to check the document against and no plan was released. Approve again to release it.',
+    );
+  }
 
-  const view = run('gh', ['pr', 'view', number, '--repo', repo, '--json', 'body', '--jq', '.body']);
-  if (!view.ok) return block('I could not read the pull request body, so no plan was released.');
-  const body = String(view.stdout);
+  const body = readPullBody({ repo, number, run });
+  if (body === null) return block('I could not read the pull request body, so no plan was released.');
 
   const planFile = planFileIn(body);
   if (!planFile) {
@@ -114,12 +115,12 @@ export async function releasePlan({
 
   const read = run('gh', [
     'api',
-    `repos/${repo}/contents/${planFile}?ref=${encodeURIComponent(String(branch ?? ''))}`,
+    `repos/${repo}/contents/${planFile}?ref=${head}`,
     '--jq',
     '[.sha, (.content | gsub("\\n"; ""))] | @tsv',
   ]);
   if (!read.ok) {
-    return block(`I could not read \`${planFile}\` on \`${safeEcho(String(branch ?? ''))}\`, so no plan was released.`);
+    return block(`I could not read \`${planFile}\` at \`${head}\`, the commit the approval gate read, so no plan was released.`);
   }
   const [blob, held] = String(read.stdout).trim().split('\t');
   const encoded = String(held ?? '').replace(/\s+/g, '');
@@ -152,6 +153,28 @@ export async function releasePlan({
         'published in answer.',
     );
   }
+  const offeredAt = Date.parse(String(recorded.offeredAt ?? ''));
+  if (!Number.isFinite(offeredAt)) {
+    return block(`I could not tell when \`${planFile}\` was last offered for approval, so no plan was released.`);
+  }
+  if (offeredAt >= approved) {
+    return block(
+      `\`${planFile}\` was offered for approval again after the approval this run found, so that approval is for ` +
+        'the document it replaced and no plan was released. Read the plan again, and approve the version that is ' +
+        'published now.',
+    );
+  }
+  const tip = run('gh', ['api', `repos/${repo}/pulls/${number}`, '--jq', '.head.sha']);
+  if (!tip.ok) {
+    return block('I could not read which commit this pull request is at, so no plan was released.');
+  }
+  if (String(tip.stdout).trim() !== head) {
+    return block(
+      'This pull request moved to another commit after the approval gate read it, so the approval may be for a ' +
+        'document that is no longer on the branch and no plan was released. Approve again to release the plan as ' +
+        'it is now.',
+    );
+  }
 
   const asked = requesterOf(body) ?? requestedBy;
   const trusted = recorded.requester;
@@ -171,10 +194,15 @@ export async function releasePlan({
     );
   }
 
-  const digest = stepDigest(rendered.body);
+  const digest = stepDigest(parseBody(rendered.body));
   const shape = renderShape(rendered.checkpoints, trusted, { sealedWith: digest });
   if (!shape || !digest) {
     return block(`The plan holds ${String(rendered.checkpoints)} phase boundaries, which cannot be recorded.`);
+  }
+  const unreleased = body.split('\n').filter((line) => releaseOf(line) === null).join('\n');
+  const next = withRelease(carryRecords(unreleased, rendered.body), releasedBy, { url: approvalUrl });
+  if (next === null) {
+    return block('The approval gate named no approver this release can record, so no plan was released.');
   }
   const said = marked(
     scrub(
@@ -189,27 +217,17 @@ export async function releasePlan({
     return block('The plan could not have its phase count recorded, so nothing was released.');
   }
 
-  writeFileSync(bodyFile, carryRecords(body, rendered.body));
-  if (!run('gh', ['pr', 'edit', number, '--repo', repo, '--body-file', bodyFile]).ok) {
+  if (!editPullBody({ repo, number, bodyFile, body: next.body, run })) {
     return block('The phase count is recorded and the pull request would not take the task list - see the workflow run.');
   }
 
-  const remaining = rendered.steps;
-  const prUrl = pullUrl({ serverUrl, repository: repo, prNumber: number });
-  return {
-    status: 'released',
-    planFile,
-    remaining,
-    message: linked(
-      scrub(
-        'Released the plan in [the plan document](LINK). The tasks in this body are the run state now, and ' +
-          'each one lands as its own commit here' +
-          shortenedNote(rendered.shortened, rendered.summaryShortened),
-        { triggerPhrase },
-      ),
-      prUrl === '' ? '' : `${prUrl}/files`,
-    ),
-  };
+  const { message } = filesLinked(
+    'Released the plan in [the plan document](LINK). The tasks in this body are the run state now, and ' +
+      'each one lands as its own commit here',
+    rendered,
+    { serverUrl, repo, number, triggerPhrase },
+  );
+  return { status: 'released', planFile, remaining: rendered.steps, message };
 }
 
 export async function main(env = process.env, { run = runCommand } = {}) {
@@ -220,6 +238,10 @@ export async function main(env = process.env, { run = runCommand } = {}) {
     prNumber: env.PR_NUMBER,
     issueNumber: env.ISSUE_NUM,
     branch: env.BRANCH,
+    approvedAt: env.APPROVED_AT,
+    approvedHead: env.APPROVED_HEAD,
+    releasedBy: env.RELEASE_REF,
+    approvalUrl: env.APPROVAL_URL,
     repo: env.REPO,
     triggerPhrase: env.TRIGGER,
     jira: env.JIRA_KEY ? { key: env.JIRA_KEY, site: env.JIRA_SITE } : null,

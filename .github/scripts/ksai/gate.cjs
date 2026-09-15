@@ -64,50 +64,51 @@ async function readNativeApprovals({
   eventReview,
   already,
   acknowledgments,
+  readPull,
 }) {
   const pulls = github?.rest?.pulls;
   if (typeof pulls?.get !== 'function' || typeof pulls?.listReviews !== 'function' || typeof github?.paginate !== 'function') {
-    return { approvals: [], unreadable: null };
+    return { approvals: [], unreadable: null, head: '' };
   }
   try {
     const [{ data: pull }, listed] = await Promise.all([
-      pulls.get({ owner, repo, pull_number: Number(prNumber) }),
+      readPull(),
       github.paginate(pulls.listReviews, { owner, repo, pull_number: Number(prNumber), per_page: 100 }),
     ]);
+    const head = String(pull?.head?.sha ?? '').trim().toLowerCase();
     if (pull?.draft !== true || !isOwnLogin(pull?.user?.login, botLogin)) {
-      return { approvals: [], unreadable: null };
+      return { approvals: [], unreadable: null, head };
     }
     const reviews = [...(Array.isArray(listed) ? listed : [])];
     if (eventReview?.id) reviews.push(eventReview);
-    const head = String(pull?.head?.sha ?? '').trim().toLowerCase();
     const approvals = latestNativeApprovals(reviews).filter((candidate) => {
       if (candidate.commitId === head) return true;
-      if (already?.kind !== 'github' || candidate.login !== already.login) return false;
+      if (candidate.login !== already?.login) return false;
       return findAcknowledgment(acknowledgments, {
         botLogin,
         approvalRef: candidate.approvalRef,
       }).acknowledged === true;
     });
-    return { approvals, unreadable: null };
+    return { approvals, unreadable: null, head };
   } catch (error) {
     return {
       approvals: [],
       unreadable:
         `could not read native reviews on #${String(prNumber)}: ${error.message}. ` +
         'The approval gate reads them with `authorization_github_token`, which needs pull-requests:read.',
+      head: '',
     };
   }
 }
 
 async function readControlPlaneApprovals({
   github,
-  owner,
-  repo,
   prNumber,
   botLogin,
   asked,
   already,
   acknowledgments,
+  readPull,
 }) {
   const recorded = [];
   for (const comment of acknowledgments ?? []) {
@@ -130,14 +131,14 @@ async function readControlPlaneApprovals({
     return { approvals: [], unreadable: null };
   }
   try {
-    const { data: pull } = await pulls.get({ owner, repo, pull_number: Number(prNumber) });
+    const { data: pull } = await readPull();
     if (pull?.draft !== true || !isOwnLogin(pull?.user?.login, botLogin)) {
       return { approvals: [], unreadable: null };
     }
     const head = String(pull?.head?.sha ?? '').trim().toLowerCase();
     const proven = (one) =>
       readControlPlaneApprovalRef(one.approvalRef)?.commitId === head ||
-      (already?.kind === 'github' && one.login === already.login);
+      one.login === already?.login;
     const approvals = recorded.filter((one) => proven(one)).map((one) => ({ ...one, forced: false, association: '' }));
     if (fresh && readControlPlaneApprovalRef(askedRef)?.commitId === head) {
       approvals.push({
@@ -168,7 +169,9 @@ function adopt(found, approvals, thread) {
       found.push({ ...approval, thread });
       continue;
     }
-    if (approval.at > held.at) Object.assign(held, approval, { thread, forced: held.forced });
+    const forced = held.forced || approval.forced;
+    if (approval.at > held.at) Object.assign(held, approval, { thread });
+    held.forced = forced;
   }
 }
 
@@ -349,20 +352,13 @@ async function resolveApproval({
     }
     const conversation = mergeByArrival(comments ?? [], (reviewComments ?? []).filter((one) => one?.user?.type !== 'Bot'));
     byThread.set(thread, comments ?? []);
-    const batch = findApprovals(conversation, { trigger, commandAliases });
-    for (const approval of batch) {
-      const held = found.find((seen) => seen.login === approval.login);
-      if (!held) {
-        found.push({ ...approval, thread });
-        continue;
-      }
-      const forced = held.forced || approval.forced;
-      if (approval.at > held.at) Object.assign(held, approval, { thread });
-      held.forced = forced;
-    }
+    adopt(found, findApprovals(conversation, { trigger, commandAliases }), thread);
   }
 
   const acknowledgments = byThread.get(Number(prNumber)) ?? [];
+
+  let pullRead = null;
+  const readPull = () => (pullRead ??= github.rest.pulls.get({ owner, repo, pull_number: Number(prNumber) }));
 
   const native = await readNativeApprovals({
     github,
@@ -373,30 +369,30 @@ async function resolveApproval({
     eventReview: nativeReview,
     already,
     acknowledgments,
+    readPull,
   });
   if (native.unreadable !== null) unreadable.push(native.unreadable);
   adopt(found, native.approvals, Number(prNumber));
 
   const approvedInJira = await readControlPlaneApprovals({
     github,
-    owner,
-    repo,
     prNumber,
     botLogin,
     asked: controlPlaneApproval,
     already,
     acknowledgments,
+    readPull,
   });
   if (approvedInJira.unreadable !== null) unreadable.push(approvedInJira.unreadable);
   adopt(found, approvedInJira.approvals, Number(prNumber));
 
   const ownScanned = threads.includes(Number(prNumber));
   const reworked = lastRework([...(ownReplies ?? []), ...(ownComments ?? [])], { botLogin });
-  const confirmed = already?.kind === 'github' ? found.filter((one) => one.login === already.login) : found;
+  const confirmed = already !== null ? found.filter((one) => one.login === already.login) : found;
 
   if (confirmed.length === 0) {
     if (unreadable.length > 0) return { required: true, blocked: true, reason: unreadable[0] };
-    if (already?.kind === 'github') {
+    if (already !== null) {
       return {
         required: true,
         blocked: true,
@@ -512,11 +508,13 @@ async function resolveApproval({
         url: candidate.url,
         thread: candidate.thread,
         approvalRef: candidate.approvalRef ?? '',
+        at: candidate.at,
+        headSha: native.head,
       },
-      release: { kind: 'github', login: candidate.login },
+      release: { login: candidate.login },
       releaseRef: releaseRef({ login: candidate.login }),
-      released: already?.kind === 'github',
-      acknowledged: ack.acknowledged === true || already?.kind === 'github',
+      released: already !== null,
+      acknowledged: ack.acknowledged === true || already !== null,
       overrode,
     };
   }

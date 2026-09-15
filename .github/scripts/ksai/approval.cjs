@@ -1,10 +1,14 @@
 
 const { parseOptions, DEFAULT_COMMAND } = require('../lib/select-arm.cjs');
-const { nativeApprovalOf, readNativeApprovalRef } = require('./native-approval-ref.cjs');
-const { controlPlaneApprovalsIn, readControlPlaneApprovalRef } = require('./control-plane-approval.cjs');
+const { nativeApprovalMarker, nativeApprovalOf, readNativeApprovalRef } = require('./native-approval-ref.cjs');
+const {
+  controlPlaneApprovalMarker,
+  controlPlaneApprovalsIn,
+  readControlPlaneApprovalRef,
+} = require('./control-plane-approval.cjs');
 const { triggerAlternation } = require('../lib/text.cjs');
-const { markerOf } = require('./marker.cjs');
-const { planDocsIn } = require('./plan.cjs');
+const { markerOf, marked } = require('./marker.cjs');
+const { planDocsIn, releasesIn, shapesIn } = require('./plan.cjs');
 
 function requestOf(body, { trigger = null, commandAliases = null } = {}) {
   const text = String(body ?? '');
@@ -139,26 +143,94 @@ function offersPlan(comment) {
   return planDocsIn(comment?.body).length > 0;
 }
 
-function lastRework(comments, { botLogin = null } = {}) {
+function planRecords(comments, { botLogin = null } = {}) {
   const known = String(botLogin ?? '').trim();
-  if (known === '') return null;
-  let newest = null;
+  const seen = {
+    offeredAt: null,
+    offeredDocs: [],
+    reworkedAt: null,
+    shape: null,
+    sealed: null,
+    requester: null,
+    releases: [],
+    editedShape: false,
+    editedRelease: false,
+  };
+  if (known === '') return seen;
   for (const comment of comments ?? []) {
-    if (ownState(comment, known) === FOREIGN) continue;
-    if (!offersPlan(comment)) continue;
-    const at = Date.parse(String(comment.created_at ?? ''));
-    if (!Number.isFinite(at)) continue;
-    if (newest === null || at > newest) newest = at;
+    const state = ownState(comment, known);
+    if (state === FOREIGN) continue;
+    const offered = planDocsIn(comment?.body);
+    if (offered.length > 0) {
+      seen.offeredDocs = [];
+      seen.offeredAt = comment.created_at;
+    }
+    if (offersPlan(comment)) {
+      seen.sealed = null;
+      const at = Date.parse(String(comment.created_at ?? ''));
+      if (Number.isFinite(at) && (seen.reworkedAt === null || at > seen.reworkedAt)) seen.reworkedAt = at;
+    }
+    if (state !== UNEDITED) {
+      if (shapesIn(comment?.body).length > 0) seen.editedShape = true;
+      if (releasesIn(comment?.body).length > 0) seen.editedRelease = true;
+      continue;
+    }
+    const release = releasesIn(comment.body).at(-1);
+    if (release !== undefined) seen.releases.push(release);
+    const shape = shapesIn(comment.body).at(-1);
+    if (shape !== undefined) {
+      seen.shape = shape;
+      if (shape.requestedBy) seen.requester = shape.requestedBy;
+      if (shape.digest !== '') seen.sealed = shape;
+    }
+    seen.offeredDocs.push(...offered);
   }
-  return newest;
+  return seen;
+}
+
+function lastRework(comments, { botLogin = null } = {}) {
+  return planRecords(comments, { botLogin }).reworkedAt;
+}
+
+function renderApprovalReceipt({
+  triggerPhrase = null,
+  issueNumber = null,
+  prNumber = null,
+  runId = null,
+  approvalRef = null,
+  approver = null,
+} = {}) {
+  const inJira = String(approvalRef ?? '').startsWith('cp/');
+  const recorded = inJira ? controlPlaneApprovalMarker(approvalRef, approver) : nativeApprovalMarker(approvalRef);
+  if (recorded === null) {
+    throw new Error(
+      inJira
+        ? 'a readable control plane approval reference and approver are required'
+        : 'a readable native approval reference is required',
+    );
+  }
+  const said = inJira
+    ? `Recorded the plan approval \`${String(approver).trim()}\` gave in Jira before changing the pull request head`
+    : 'Recorded this GitHub approval before changing the pull request head';
+  return marked(`${said}\n\n${recorded}`, {
+    kind: 'plan-approved',
+    flow: 'implement',
+    command: 'approve',
+    issue: issueNumber,
+    pr: prNumber,
+    run: runId,
+    triggerPhrase,
+  });
 }
 
 module.exports = {
   commandOf,
+  renderApprovalReceipt,
   findApprovals,
   findAcknowledgment,
   lastRework,
   offersPlan,
+  planRecords,
   editState,
   wasEdited,
   withLastEdits,

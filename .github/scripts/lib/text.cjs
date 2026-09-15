@@ -73,8 +73,36 @@ function describe(value) {
   return `${/^[aeiou]/.test(type) ? 'an' : 'a'} ${type}`;
 }
 
+const MARKER_SHAPES = new Map();
+
+function markerShape(prefix) {
+  const held = MARKER_SHAPES.get(prefix);
+  if (held !== undefined) return held;
+  const name = String(prefix).replace(/^<!--\s*/, '');
+  const shape = new RegExp(`^\\s*<!--\\s*${escapeForRegExp(name)}([^\\n]*)-->\\s*$`);
+  MARKER_SHAPES.set(prefix, shape);
+  return shape;
+}
+
+function markerValues(body, prefix, read) {
+  const shape = markerShape(prefix);
+  const found = [];
+  for (const line of String(body ?? '').split('\n')) {
+    const matched = line.match(shape);
+    const answer = matched ? read(matched[1].trim()) : null;
+    if (answer) found.push(answer);
+  }
+  return found;
+}
+
+function markerValue(body, prefix, read) {
+  return markerValues(body, prefix, read)[0] ?? null;
+}
+
 module.exports = {
   annotation,
+  markerValue,
+  markerValues,
   describe,
   locate,
   safeText,

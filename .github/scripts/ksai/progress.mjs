@@ -514,6 +514,10 @@ const movedAt = (path) => {
   }
 };
 
+export function transcriptRoot(env = process.env) {
+  return env.TRANSCRIPT_ROOT || join(env.HOME ?? '', '.claude', 'projects');
+}
+
 /**
  * read answers the streams this run wrote: the session transcript and one per subagent.
  *
@@ -524,9 +528,8 @@ const movedAt = (path) => {
  * more harshly than a running one. The timeline wants the whole run, so it passes no bound.
  */
 export function read({ moving = 0 } = {}) {
-  const root = process.env.TRANSCRIPT_ROOT || join(process.env.HOME ?? '', '.claude', 'projects');
   const path = findTranscript(
-    root,
+    transcriptRoot(),
     process.env.SESSION_ID,
     Number(process.env.TRANSCRIPT_SINCE),
     process.env.TRIM_PREFIX,

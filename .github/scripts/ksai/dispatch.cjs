@@ -313,7 +313,7 @@ async function nextStep({ github = null, owner = null, repo = null, prNumber = n
       errorKind: 'edited-plan',
     };
   }
-  if (seen.sealed.digest !== stepDigest(body)) {
+  if (seen.sealed.digest !== stepDigest(plan)) {
     return {
       error:
         'the step titles in this body are not the ones an approver released. A title is the task this flow ' +
@@ -322,11 +322,12 @@ async function nextStep({ github = null, owner = null, repo = null, prNumber = n
       errorKind: 'edited-steps',
     };
   }
-  if (ticked > seen.tokens.size) {
+  const released = new Set(seen.bound.map((release) => release.token)).size;
+  if (ticked > released) {
     return {
       error:
         `${counted(ticked, 'checkpoint')} ${plural(ticked, 'is', 'are')} ticked and ` +
-        `${counted(seen.tokens.size, 'release')} ${plural(seen.tokens.size, 'accounts', 'account')} for that` +
+        `${counted(released, 'release')} ${plural(released, 'accounts', 'account')} for that` +
         (seen.editedRelease
           ? ', and a comment of mine recording a release has been edited, so what it published is no longer ' +
             'evidence that a phase was released'
@@ -357,7 +358,7 @@ async function nextStep({ github = null, owner = null, repo = null, prNumber = n
     atCheckpoint: isCheckpoint(next),
     criteria: criteriaOf(body),
     releasedRef: releaseRef(releaseOf(body) ?? {}) ?? '',
-    requestedBy: seen.shape?.requestedBy ?? '',
+    requestedBy: seen.shape.requestedBy ?? '',
   };
 }
 

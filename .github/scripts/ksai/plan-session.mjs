@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { encodeProject, findTranscript } from './progress.mjs';
+import { encodeProject, findTranscript, transcriptRoot } from './progress.mjs';
 
 const SESSION_SHAPE = /^[0-9a-zA-Z][0-9a-zA-Z._-]{0,120}$/;
 
@@ -21,10 +21,6 @@ export const carriedSession = (artifacts) =>
 export function retentionDays(allowed) {
   const capped = Number(allowed);
   return Number.isSafeInteger(capped) && capped > 0 ? Math.min(RETENTION_DAYS, capped) : RETENTION_DAYS;
-}
-
-function transcriptRoot(env) {
-  return env.TRANSCRIPT_ROOT || join(env.HOME ?? '', '.claude', 'projects');
 }
 
 const OPENCODE_FILE = 'opencode-session.json';

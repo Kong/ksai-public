@@ -17,7 +17,7 @@ const { renderAwaiting, awaitingKind } = require('./gate.cjs');
 const { workRefFor } = require('./context.cjs');
 const { KINDS, KIND_TABLE, payloadFor, marked } = require('./marker.cjs');
 const { decideFinish } = require('./phase.cjs');
-const { checkStep, creditOf, parseBody, scrub } = require('./plan.cjs');
+const { checkStep, creditOf, scrub } = require('./plan.cjs');
 const { asAlert } = require('../lib/select-arm.cjs');
 const { renderClassifierFooter } = require('./classify.cjs');
 
@@ -264,9 +264,8 @@ async function releaseCheckpoint({ github, core, owner, repo, env }) {
     return { outputs, notices: [], failure: 'the release this checkpoint took is not one this may record' };
   }
 
-  const after = parseBody(spent.body);
-  const left = after.error ? null : after.steps.filter((step) => !step.done).length;
-  if (left !== null) outputs.remaining = String(left);
+  const left = flipped.remaining;
+  outputs.remaining = String(left);
   await github.rest.issues.createComment({
     owner,
     repo,
@@ -276,16 +275,14 @@ async function releaseCheckpoint({ github, core, owner, repo, env }) {
         approvedBy: env.APPROVED_BY,
         commentId: env.COMMENT_ID,
         triggerPhrase: env.TRIGGER,
-        remaining: env.REMAINING,
+        remaining: left + 1,
         at,
       }),
-      payloadFor(env, { kind: releaseKind(env.REMAINING), pr: pull_number }),
+      payloadFor(env, { kind: releaseKind(left + 1), pr: pull_number }),
     ),
   });
   await github.rest.pulls.update({ owner, repo, pull_number, body: spent.body });
-  core?.info?.(
-    `released the phase behind \`${env.STEP_TITLE}\`, ${left ?? 'an unreadable number of'} ${plural(left, 'box', 'boxes')} left`,
-  );
+  core?.info?.(`released the phase behind \`${env.STEP_TITLE}\`, ${left} ${plural(left, 'box', 'boxes')} left`);
   return { outputs, notices: [], failure: null };
 }
 

@@ -10,6 +10,7 @@
 const { parseHunks } = require('../lib/hunks.cjs');
 const { readReviewOutput, REPAIRED } = require('../lib/review-output.cjs');
 const { applySuppression } = require('./suppress.cjs');
+const { RESERVED_COMMENT } = require('../ksai/plan.cjs');
 
 const SUCCESS = 'success';
 
@@ -134,12 +135,17 @@ const idMarker = (f) =>
  */
 const HTML_COMMENT = /<!--[\s\S]*?-->/g;
 const PUBLISHER_COMMENT = /kreview-(?:ids|finding|feedback)/;
+const KSAI_COMMENT = /<!--\s*ksai/i;
 const ANY_FOLDED_HEADING = /#{1,6}\s*Additional findings \(not anchored to the diff\)/g;
+
+const reserved = (comment) =>
+  PUBLISHER_COMMENT.test(comment) || RESERVED_COMMENT.test(comment) || KSAI_COMMENT.test(comment);
 
 const fromModel = (text) =>
   String(text ?? '')
-    .replace(HTML_COMMENT, (comment) => (PUBLISHER_COMMENT.test(comment) ? '' : comment))
-    .replace(ANY_FOLDED_HEADING, '');
+    .replace(HTML_COMMENT, (comment) => (reserved(comment) ? '' : comment))
+    .replace(ANY_FOLDED_HEADING, '')
+    .replace(HTML_COMMENT, (comment) => (reserved(comment) ? comment.replaceAll('<!--', '&lt;!--') : comment));
 
 const FENCE_LINE = /^( {0,3})(`{3,}|~{3,})[ \t]*(.*)$/;
 
@@ -208,8 +214,7 @@ function balanceFences(body) {
 const modelMarkdown = (text) => balanceFences(fromModel(text).trim());
 
 const oneLine = (text) =>
-  fromModel(text)
-    .replace(/[`*]/g, '')
+  fromModel(String(text ?? '').replace(/[`*]/g, ''))
     .replace(/\s+/g, ' ')
     .trim();
 

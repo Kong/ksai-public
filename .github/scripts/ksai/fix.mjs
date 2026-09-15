@@ -6,13 +6,12 @@ import { pathToFileURL } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const { marked } = require('./marker.cjs');
-const { cap, planDirOf, planDocMarker, planFilePathFor, scrub, retargetPermalinks, POSITIVE_ID_SHAPE } =
-  require('./plan.cjs');
+const { cap, planDirOf, planFilePathFor, scrub, retargetPermalinks, POSITIVE_ID_SHAPE } = require('./plan.cjs');
 const { safeEcho, soleWritable, verifyChunk, gitVia, noChangeLeftBehind } = require('./verify-chunk.cjs');
 const { readScope, writeScopeResult } = require('./change-scope.cjs');
 const { MAX_ANSWERABLE: MAX_REPLIES, MAX_REPLY_CHARS } = require('./threads.cjs');
 const { counted } = require('../lib/text.cjs');
-import { blockerFor, field, readManifest, reasonOf, runCommand, shown } from './run.mjs';
+import { blockerFor, field, offerPlanDoc, readManifest, reasonOf, runCommand, shown } from './run.mjs';
 import { publishCommit } from './signed-push.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
 
@@ -220,21 +219,26 @@ export function recordFix({
     }
 
     if (onlyPath) {
-      const blob = gitVia(run, cwd)(['rev-parse', `${verified.sha}:${onlyPath}`]);
-      const doc = blob.ok ? planDocMarker(String(blob.stdout).trim()) : null;
-      if (!doc) {
+      const offer = offerPlanDoc({
+        git: gitVia(run, cwd),
+        run,
+        repo,
+        prNumber,
+        sha: verified.sha,
+        path: onlyPath,
+        lead:
+          'This comment records the exact content of the plan document now being offered. An approval is only ' +
+          'honoured while the document still reads as it does here.',
+        fields: marker,
+        flow: marker.flow,
+        command: phase,
+        triggerPhrase,
+      });
+      if (!offer.doc) {
         return block(`I could not name the content of \`${onlyPath}\` that was pushed, so it was not offered for approval.`);
       }
-      offeredDoc = doc;
-      const offer = marked(
-        scrub(
-          'This comment records the exact content of the plan document now being offered. An approval is only ' +
-            'honoured while the document still reads as it does here.',
-          { triggerPhrase },
-        ) + `\n\n${doc}`,
-        { ...marker, command: phase, kind: 'plan-published' },
-      );
-      if (!run('gh', ['pr', 'comment', String(prNumber), '--repo', repo, '--body', offer]).ok) {
+      offeredDoc = offer.doc;
+      if (!offer.posted) {
         return block(
           `\`${onlyPath}\` is on the branch and which content was offered could not be recorded, so an approval ` +
             'would have nothing to check against - see the workflow run. Re-request and I will offer it again.',

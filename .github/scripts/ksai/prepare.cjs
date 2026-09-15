@@ -41,7 +41,7 @@ const {
 } = require('./context.cjs');
 const { classifyTarget, nextStep, resolveRequest } = require('./dispatch.cjs');
 const { approvalApplies, describeApproval, resolveApproval } = require('./gate.cjs');
-const { alreadyReleased, needsReleaseRead, decideCheckpoint, releaseTokenFor } = require('./checkpoint.cjs');
+const { alreadyReleased, needsReleaseRead, decideCheckpoint, pendingSince, releaseTokenFor } = require('./checkpoint.cjs');
 const {
   renderClosed,
   renderPhaseNotice,
@@ -631,6 +631,7 @@ async function resolveRunContext({ github, context, env }) {
     comment_id: out.commentId == null ? '' : String(out.commentId),
     comment_body: out.commentBody,
     comment_edited: out.commentEdited ?? '',
+    comment_created_at: out.commentCreatedAt ?? '',
     label: rested?.label ?? '',
     label_head: rested?.headSha ?? '',
     label_review: scopedReview ? 'true' : '',
@@ -699,21 +700,30 @@ async function resolveCheckpoint({ github, owner, repo, env }) {
     writeAccessCommands: env.WRITE_ACCESS_COMMANDS,
     disabledCommands: env.DISABLED_COMMANDS,
     commentEdited: env.COMMENT_EDITED,
+    requestedAt: String(env.COMMENT_ID ?? '').trim() === '' ? env.REVIEW_SUBMITTED_AT : env.COMMENT_CREATED_AT,
   };
-  const seen = needsReleaseRead(asked)
-    ? await alreadyReleased({
-        github,
-        owner,
-        repo,
-        prNumber: env.PR_NUMBER,
-        botLogin: env.BOT_LOGIN,
-        commentId: token,
-      })
-    : { released: false, unreadable: null };
+  const [seen, dated] = needsReleaseRead(asked)
+    ? await Promise.all([
+        alreadyReleased({
+          github,
+          owner,
+          repo,
+          prNumber: env.PR_NUMBER,
+          botLogin: env.BOT_LOGIN,
+          commentId: token,
+        }),
+        pendingSince({ github, owner, repo, prNumber: env.PR_NUMBER, botLogin: env.BOT_LOGIN }),
+      ])
+    : [{ released: false, unreadable: null }, { at: null, unreadable: null }];
 
-  const out = decideCheckpoint({ ...asked, released: seen.released, unreadable: seen.unreadable });
+  const out = decideCheckpoint({
+    ...asked,
+    released: seen.released,
+    unreadable: seen.unreadable,
+    pendingSince: dated.at,
+  });
 
-  const detail = String(seen.unreadable ?? '');
+  const detail = String((out.reason === 'undated-request' ? dated.unreadable : seen.unreadable) ?? '');
   const outputs = {
     release: out.release ? 'true' : 'false',
     waiting: out.waiting ? 'true' : 'false',
@@ -1201,7 +1211,7 @@ function requesterFor(env) {
   const recorded = String(env.RECORDED_REQUESTER ?? '');
   if (LOGIN.test(recorded)) return recorded;
   const released = readRelease(String(env.RELEASE_REF ?? ''));
-  return released?.kind === 'github' && LOGIN.test(released.login) ? released.login : '';
+  return released !== null && LOGIN.test(released.login) ? released.login : '';
 }
 
 async function resolveIdentities({ github, core, env }) {
@@ -1608,6 +1618,8 @@ async function resolveApprovalGate({ github, core, owner, repo, env, authorize, 
     approval_thread: '',
     approval_ref: '',
     approval_login: '',
+    approved_at: '',
+    approved_head: '',
     needs_ack: 'false',
     release_ref: '',
     released_by: '',
@@ -1673,6 +1685,8 @@ async function resolveApprovalGate({ github, core, owner, repo, env, authorize, 
     approval_thread: out.approval?.thread == null ? '' : String(out.approval.thread),
     approval_ref: out.approval?.approvalRef ?? '',
     approval_login: out.approval?.login ?? '',
+    approved_at: out.blocked === false && out.approval?.at > 0 ? new Date(out.approval.at).toISOString() : '',
+    approved_head: out.blocked === false ? (out.approval?.headSha ?? '') : '',
     needs_ack: out.blocked === false && out.acknowledged === false ? 'true' : 'false',
     release_ref: out.blocked === false && out.released !== true ? (out.releaseRef ?? '') : '',
     released_by: out.blocked === false ? (out.releaseRef ?? '') : '',

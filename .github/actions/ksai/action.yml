@@ -6,7 +6,7 @@ description: >-
   ANTHROPIC_API_KEY secret is needed. By default Kong AI Gateway validates that token directly; a caller may
   instead use Anthropic federation through a route that serves the token exchange.
 
-  Claude never holds a GitHub token. A trusted step fetches what the model reads, the model writes a JSON
+  The model never holds a GitHub token. A trusted step fetches what the model reads, the model writes a JSON
   manifest, and a trusted step validates and publishes. See docs/federated-claude.md, and
   docs/decisions/action-consolidation.md for why this is one action rather than two.
 
@@ -147,13 +147,14 @@ inputs:
     default: ""
   anthropic_auth:
     description: >-
-      how Claude-engine model calls authenticate to anthropic_base_url. "oidc-bearer"
-      hands the gateway a GitHub OIDC token in both the Authorization and x-api-key headers, for a
-      gateway that validates the JWT itself; the token lives five minutes and a run lives thirty, so
-      an apiKeyHelper mints a fresh one every four minutes and again on any 401. "federation" leaves
-      the exchange to base-action, which needs the origin to serve /v1/oauth/token - Kong AI Gateway
-      does not, so that value is only for a team whose own route proxies it. The opencode engine
-      reads the same value and renews the same way, through a plugin rather than an apiKeyHelper.
+      how every model call this action makes authenticates to anthropic_base_url - the opencode run and
+      each one-turn classification alike. "oidc-bearer" hands the gateway the job's GitHub OIDC token,
+      minted for that origin, in both the Authorization and x-api-key headers, for a gateway that validates
+      the JWT itself. "federation" trades that token at the origin's /v1/oauth/token, on the team's
+      federation rule, for an Anthropic access token, which needs the origin to serve that exchange. Kong AI
+      Gateway does not, so that value is only for a team whose own route proxies it. A bearer lives minutes
+      and a review may run for thirty, so a plugin renews the opencode run's bearer ahead of expiry on
+      either value. The live status summary asks the model on "oidc-bearer" only.
     required: false
     default: "oidc-bearer"
   trigger_phrase:
@@ -335,7 +336,7 @@ inputs:
     required: false
     default: "false"
   model:
-    description: "model id or catalog alias for the run. Exposed as an input so one value feeds both the CLI and any later record; `--model` stays forbidden in extra_claude_args."
+    description: "model id or catalog alias for the run. Exposed as an input so one value feeds both the CLI and any later record."
     required: false
     default: "flagship"
   dials_arm:
@@ -570,13 +571,14 @@ inputs:
     description: >-
       the calling job's own `timeout-minutes`. A watchdog stops the CLI one minute before GitHub would cancel
       the job, which is the difference between a run that reports what happened and one that vanishes: a
-      cancellation never lets base-action write its execution log, so the artifact, the cost record, the eval
-      record and the notice are lost together. This takes no default, because an action cannot read its
-      caller's `timeout-minutes` and with a numeric default a caller that agreed with 35 and a caller that
-      never looked were the same run. Leaving it unset still arms the watchdog at an assumed 35, so a
-      consumer that changed nothing keeps its salvage path, and the run carries a warning annotation naming
-      the assumption. Set it to 0 to disable the watchdog entirely. It cannot help a `cancel-in-progress`
-      cancellation, which GitHub delivers with no warning.
+      cancellation kills the model run before it reduces its event stream to the execution log, and the
+      artifact, the cost record, the eval record and the notice are all read off that log, so they are lost
+      together. This takes no default, because an action cannot read its caller's `timeout-minutes` and with
+      a numeric default a caller that agreed with 35 and a caller that never looked were the same run. Leaving
+      it unset still arms the watchdog at an assumed 35, so a consumer that changed nothing keeps its salvage
+      path, and the run carries a warning annotation naming the assumption. Set it to 0 to disable the
+      watchdog entirely. It cannot help a `cancel-in-progress` cancellation, which GitHub delivers with no
+      warning.
     required: false
     default: ""
   max_consecutive_tool_failures:
@@ -691,9 +693,11 @@ inputs:
     description: >-
       newline- or comma-separated paths any implementation write may not commit, added to the push gate's own
       floor rather than replacing it. The default covers the instruction files, and that is a security default
-      rather than a style one: the CLI loads a root `CLAUDE.md` as project instructions before any prompt of
-      this action runs, so a write able to commit one would be writing the instructions the *next* run starts
-      from. The cost is real and bounded: the flow cannot edit its own convention files.
+      rather than a style one: later phases read the root `CLAUDE.md`, `AGENTS.md` and `CONTRIBUTING.md` for
+      the conventions and gate commands they work to, and a coding agent on any later checkout loads them,
+      `.claude` and `.mcp.json` as its instructions and configuration, so a write able to commit one would be
+      writing the instructions the *next* run starts from. The cost is real and bounded: the flow cannot edit
+      its own convention files.
     required: false
     default: |
       CLAUDE.md
@@ -2269,9 +2273,11 @@ runs:
         BOT_LOGIN: ${{ inputs.bot_login }}
         COMMENT_ID: ${{ steps.context.outputs.comment_id }}
         COMMENT_EDITED: ${{ steps.context.outputs.comment_edited }}
+        COMMENT_CREATED_AT: ${{ steps.context.outputs.comment_created_at }}
         THREAD_ROOT_ID: ${{ steps.context.outputs.thread_root_id }}
         DISPATCHED: ${{ steps.context.outputs.dispatched }}
         REVIEW_ID: ${{ steps.context.outputs.review_id }}
+        REVIEW_SUBMITTED_AT: ${{ steps.context.outputs.review_submitted_at }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:
         github-token: ${{ inputs.source_org_github_token }}
@@ -2296,7 +2302,6 @@ runs:
         ISSUE_NUM: ${{ steps.subject.outputs.number }}
         RUN_ID: ${{ github.run_id }}
         STEP_TITLE: ${{ steps.read_plan.outputs.step_title }}
-        REMAINING: ${{ steps.read_plan.outputs.remaining }}
         APPROVED_BY: ${{ steps.context.outputs.commenter }}
         COMMENT_ID: ${{ steps.checkpoint.outputs.release_token }}
         COMMAND: ${{ steps.select.outputs.command }}
@@ -2414,27 +2419,26 @@ runs:
       with:
         github-token: ${{ inputs.source_org_github_token }}
         script: |
-          const { renderControlPlaneApprovalReceipt, renderNativeApprovalReceipt } = require(`${process.env.SCRIPTS}/ksai/plan.cjs`);
-          const receipt = {
-            triggerPhrase: process.env.TRIGGER,
-            issueNumber: process.env.ISSUE_NUM,
-            prNumber: process.env.PR_NUMBER,
-            runId: process.env.RUN_ID,
-            approvalRef: process.env.APPROVAL_REF,
-          };
+          const { renderApprovalReceipt } = require(`${process.env.SCRIPTS}/ksai/approval.cjs`);
           await github.rest.issues.createComment({
             owner: context.repo.owner,
             repo: context.repo.repo,
             issue_number: Number(process.env.THREAD),
-            body: process.env.APPROVAL_REF.startsWith('cp/')
-              ? renderControlPlaneApprovalReceipt({ ...receipt, approver: process.env.APPROVER })
-              : renderNativeApprovalReceipt(receipt),
+            body: renderApprovalReceipt({
+              triggerPhrase: process.env.TRIGGER,
+              issueNumber: process.env.ISSUE_NUM,
+              prNumber: process.env.PR_NUMBER,
+              runId: process.env.RUN_ID,
+              approvalRef: process.env.APPROVAL_REF,
+              approver: process.env.APPROVER,
+            }),
           });
 
     - name: Record the release in the plan
       id: record_release
       if: >-
         ${{ steps.approval.outputs.release_ref != '' && inputs.dry_run == 'false' &&
+        steps.phase.outputs.phase != 'plan-review' &&
         steps.phase.outputs.pr_number != '' && (steps.approval.outputs.approval_ref == '' ||
         steps.approval.outputs.needs_ack != 'true' || steps.acknowledge_native.outcome == 'success') }}
       shell: bash
@@ -2898,6 +2902,7 @@ runs:
       id: release_plan
       if: >-
         ${{ inputs.dry_run == 'false' && steps.phase.outputs.phase == 'plan-review' &&
+        steps.holder.outputs.held_by == '' &&
         steps.approval.outputs.blocked != 'true' && (steps.approval.outputs.approval_ref == '' ||
         steps.approval.outputs.needs_ack != 'true' || steps.acknowledge_native.outcome == 'success') }}
       shell: bash
@@ -2907,6 +2912,10 @@ runs:
         PR_NUMBER: ${{ steps.phase.outputs.pr_number }}
         ISSUE_NUM: ${{ steps.subject.outputs.issue }}
         BRANCH: ${{ steps.phase.outputs.ref }}
+        APPROVED_AT: ${{ steps.approval.outputs.approved_at }}
+        APPROVED_HEAD: ${{ steps.approval.outputs.approved_head }}
+        RELEASE_REF: ${{ steps.approval.outputs.released_by }}
+        APPROVAL_URL: ${{ steps.approval.outputs.approval_url }}
         PLAN_DIR: ${{ inputs.plan_file_path }}
         BOT_LOGIN: ${{ inputs.bot_login }}
         JIRA_KEY: ${{ steps.subject.outputs.jira_key || steps.fetch_jira.outputs.key }}
@@ -3911,6 +3920,7 @@ runs:
         ATTEMPT_ID: ${{ github.run_id }}-${{ github.run_attempt }}
         ACTOR: ${{ steps.context.outputs.commenter || github.actor }}
         STATUS_HISTORY: ${{ steps.status_gate.outputs.history }}
+        BOT_LOGIN: ${{ inputs.bot_login }}
         RECOVER_DIR: ${{ runner.temp }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:

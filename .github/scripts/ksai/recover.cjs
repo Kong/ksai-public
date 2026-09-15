@@ -9,6 +9,7 @@ const { STATE_SHAPE } = require('./write-report.cjs');
 const { MAX_CELLS, RECOVER_FILE, RECOVER_VERSION } = require('./run-start.cjs');
 const { dispatchSuccessor } = require('./continue.cjs');
 const { probeComments } = require('./pages.cjs');
+const { isOwnLogin } = require('./approval.cjs');
 const {
   LOGIN_SHAPE,
   POSITIVE_ID_SHAPE,
@@ -142,6 +143,7 @@ function readRecord(dir, { read = readFileSync } = {}) {
     comment_id: String(parsed.comment_id ?? ''),
     pr: String(parsed.pr ?? ''),
     in_body: parsed.in_body === true,
+    bot_login: String(parsed.bot_login ?? '').trim(),
   };
   if (!POSITIVE_ID_SHAPE.test(record.run) || !Object.hasOwn(SAID, record.flow)) return null;
   if (!POSITIVE_ID_SHAPE.test(record.comment_id) && !record.in_body) return null;
@@ -254,7 +256,7 @@ async function writeSurface({ github, owner, repo, record, body }) {
 }
 
 async function recoveredBefore({ github, owner, repo, record }) {
-  if (!POSITIVE_ID_SHAPE.test(record.number)) return null;
+  if (!POSITIVE_ID_SHAPE.test(record.number) || !record.bot_login) return null;
   let found = false;
   const { unreadable } = await probeComments({
     github,
@@ -262,7 +264,7 @@ async function recoveredBefore({ github, owner, repo, record }) {
     repo,
     prNumber: record.number,
     take: (comment) => {
-      found = found || recoveredIn(comment?.body, record.flow);
+      found = found || (isOwnLogin(comment?.user?.login, record.bot_login) && recoveredIn(comment?.body, record.flow));
     },
     cannot: 'run cannot say whether it has already started a replacement',
   });

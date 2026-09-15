@@ -1,10 +1,8 @@
 
 const { createHash } = require('node:crypto');
-const { escapeForRegExp, triggerPhrases, DEFAULT_TRIGGER_PHRASE } = require('../lib/text.cjs');
+const { escapeForRegExp, markerValue, markerValues, triggerPhrases, DEFAULT_TRIGGER_PHRASE } = require('../lib/text.cjs');
 const { asAlert, JIRA_KEY_SHAPE } = require('../lib/select-arm.cjs');
-const { SITE, aboutLink, marked } = require('./marker.cjs');
-const { nativeApprovalMarker } = require('./native-approval-ref.cjs');
-const { controlPlaneApprovalMarker } = require('./control-plane-approval.cjs');
+const { SITE, aboutLink } = require('./marker.cjs');
 const { COMMIT_TYPES, BRANCH_SHAPE, FLOW_BRANCH_SHAPE, JIRA_BRANCH_SHAPE, safeEcho } = require('./verify-chunk.cjs');
 
 const REGION_BEGIN = '<!-- ksai-plan:begin -->';
@@ -297,7 +295,6 @@ function mention(login, options) {
 
 function storedTitle(title, options) {
   let held = oneLine(title, options);
-  if (Array.from(held).length <= MAX_TITLE_CHARS) return held;
   for (let pass = 0; pass < MAX_CUT_PASSES && Array.from(held).length > MAX_TITLE_CHARS; pass += 1) {
     held = oneLine(cap(held, MAX_TITLE_CHARS - 1), options);
   }
@@ -414,14 +411,6 @@ function provisionalTitle({ issueNumber = null, title = null, triggerPhrase = nu
   return `${type}${scope}: plan the work described in ${key}`;
 }
 
-function issueUrl({ issueNumber = null, repository = null } = {}) {
-  const issue = Number(issueNumber);
-  const [owner, name, ...rest] = String(repository ?? '').split('/');
-  if (!Number.isInteger(issue) || issue <= 0 || rest.length || !owner || !name) return '';
-  const url = `https://github.com/${owner}/${name}/issues/${issue}`;
-  return URL_SHAPE.test(url) ? url : '';
-}
-
 function askedLine(who, where) {
   return `- ${where ? `[Requested](${where})` : 'Requested'} by ${who}`;
 }
@@ -431,7 +420,10 @@ function creditBlock({ issueNumber = null, requestedBy = null, repository = null
   const browse = jiraBrowseUrl(jira);
   const issue = Number(issueNumber);
   const below = ['', CREDIT_HEADING, ''];
-  if (who) below.push(askedLine(who, issueUrl({ issueNumber, repository }) || browse));
+  if (who) {
+    const asked = githubUrl({ serverUrl: 'https://github.com', repository, number: issue, path: 'issues' });
+    below.push(askedLine(who, asked || browse));
+  }
   if (browse) below.push(`- Implements Jira ticket [${jira.key}](${browse})`);
   below.push(`- ${aboutLink()}`);
   if (Number.isInteger(issue) && issue > 0) below.push(`- Closes #${issue}`);
@@ -857,7 +849,7 @@ function parsePlanDocument(text) {
 function motivationLines(summary, options) {
   const said = String(summary ?? '');
   const summaryLength = Array.from(said).length;
-  const prose = scrub(summaryLength > MAX_SUMMARY_CHARS ? cap(said, MAX_SUMMARY_CHARS) : said, options).trim();
+  const prose = scrub(cap(said, MAX_SUMMARY_CHARS), options).trim();
   const lines = prose ? ['## Motivation', '', unended(prose), ''] : [];
   return summaryLength > MAX_SUMMARY_CHARS ? { lines, shortened: summaryLength } : { lines };
 }
@@ -1032,23 +1024,18 @@ const SHAPE_SHAPE = new RegExp(
   `^([1-9][0-9]{0,3})(?:\\/(${LOGIN_SHAPE.source.slice(1, -1)})?(?:\\/([0-9a-f]{${DIGEST_CHARS}}))?)?$`,
 );
 
-function stepDigest(body) {
-  const plan = parseBody(body);
+function stepDigest(plan) {
   if (plan.error) return null;
   const titles = plan.steps.map((step) => step.title).join('\n');
   return createHash('sha256').update(titles, 'utf8').digest('hex').slice(0, DIGEST_CHARS);
 }
 
 function renderShape(checkpoints, requestedBy = null, { sealedWith = null } = {}) {
-  const count = String(checkpoints ?? '');
   const who = String(requestedBy ?? '').trim();
   const sum = String(sealedWith ?? '').trim();
-  const named = LOGIN_SHAPE.test(who) ? who : '';
-  const sealed = `${count}/${named}/${sum}`;
-  if (DIGEST_SHAPE.test(sum) && SHAPE_SHAPE.test(sealed)) return `${SHAPE_MARKER_PREFIX} ${sealed} -->`;
-  const credited = `${count}/${named}`;
-  if (named && SHAPE_SHAPE.test(credited)) return `${SHAPE_MARKER_PREFIX} ${credited} -->`;
-  return SHAPE_SHAPE.test(count) ? `${SHAPE_MARKER_PREFIX} ${count} -->` : null;
+  const fields = [String(checkpoints ?? ''), LOGIN_SHAPE.test(who) ? who : '', DIGEST_SHAPE.test(sum) ? sum : ''];
+  const shape = fields.join('/').replace(/\/+$/, '');
+  return SHAPE_SHAPE.test(shape) ? `${SHAPE_MARKER_PREFIX} ${shape} -->` : null;
 }
 
 function shapesIn(body) {
@@ -1058,25 +1045,18 @@ function shapesIn(body) {
   });
 }
 
+function jiraRefOf(jira) {
+  const ref = `${String(jira?.site ?? '')}/${String(jira?.key ?? '')}`;
+  return JIRA_REF_SHAPE.test(ref) ? ref : null;
+}
+
 function jiraBrowseUrl(jira) {
-  const site = String(jira?.site ?? '');
-  const key = String(jira?.key ?? '');
-  if (!site || !key || !JIRA_REF_SHAPE.test(`${site}/${key}`)) return null;
-  return `https://${site}/browse/${key}`;
+  return jiraRefOf(jira) ? `https://${jira.site}/browse/${jira.key}` : null;
 }
 
 function criteriaRef({ issueNumber = null, repository = null, jira = null } = {}) {
-  const site = String(jira?.site ?? '');
-  const key = String(jira?.key ?? '');
-  if (site && key) {
-    const ref = `${site}/${key}`;
-    return JIRA_REF_SHAPE.test(ref) ? ref : null;
-  }
-  const issue = Number(issueNumber);
-  if (!Number.isInteger(issue) || issue <= 0) return null;
-  const [owner, name, ...rest] = String(repository ?? '').split('/');
-  if (rest.length || !owner || !name) return null;
-  const ref = `${owner}/${name}#${issue}`;
+  if (jira?.site && jira?.key) return jiraRefOf(jira);
+  const ref = `${String(repository ?? '')}#${Number(issueNumber)}`;
   return CRITERIA_REF_SHAPE.test(ref) ? ref : null;
 }
 
@@ -1093,33 +1073,7 @@ function releaseRef({ login = null } = {}) {
 
 function readRelease(value) {
   const github = GITHUB_RELEASE_SHAPE.exec(String(value ?? ''));
-  return github ? { kind: 'github', login: github[1] } : null;
-}
-
-const MARKER_SHAPES = new Map();
-
-function markerShape(prefix) {
-  const held = MARKER_SHAPES.get(prefix);
-  if (held !== undefined) return held;
-  const name = String(prefix).replace(/^<!--\s*/, '');
-  const shape = new RegExp(`^\\s*<!--\\s*${escapeForRegExp(name)}\\s*(\\S+)\\s*-->\\s*$`);
-  MARKER_SHAPES.set(prefix, shape);
-  return shape;
-}
-
-function markerValues(body, prefix, read) {
-  const shape = markerShape(prefix);
-  const found = [];
-  for (const line of String(body ?? '').split('\n')) {
-    const matched = line.match(shape);
-    const answer = matched ? read(matched[1]) : null;
-    if (answer) found.push(answer);
-  }
-  return found;
-}
-
-function markerValue(body, prefix, read) {
-  return markerValues(body, prefix, read)[0] ?? null;
+  return github ? { login: github[1] } : null;
 }
 
 const appended = (body, record) => `${String(body ?? '').replace(/\s+$/, '')}\n\n${record}\n`;
@@ -1130,7 +1084,10 @@ function releaseOf(body) {
 
 const CREDIT_HEADING = '## Additional information';
 
-const ASKED_SHAPE = /^- (?:\[Requested\]\((?<where>[^)\s]+)\)|Requested) by (?<who>@[A-Za-z0-9-]+|`[^`\n]+`)\.?$/;
+const creditVerb = (word, group = null) =>
+  `(?:\\[${word}\\]\\(${group === null ? '[^)\\s]+' : `(?<${group}>[^)\\s]+)`}\\)|${word})`;
+
+const ASKED_SHAPE = new RegExp(`^- ${creditVerb('Requested', 'where')} by (?<who>@[A-Za-z0-9-]+|\`[^\`\\n]+\`)\\.?$`);
 
 function approverOf(ref) {
   const read = readRelease(String(ref ?? ''));
@@ -1148,7 +1105,12 @@ function creditLine(ref, { url = null, asked = null } = {}) {
   return `${asked.head} by ${asked.who}, ${verb} by ${who}`;
 }
 
-const APPROVED_SHAPE = /(?:^-? ?|, |and )(?:\[approved\]\((?<where>[^)\s]+)\)|approved) by (?<who>@[A-Za-z0-9-]+)$/im;
+const APPROVED_SHAPE = new RegExp(`(?:^-? ?|, |and )${creditVerb('approved', 'where')} by (?<who>@[A-Za-z0-9-]+)$`, 'im');
+
+const REQUESTER_SHAPE = new RegExp(
+  `^-? ?${creditVerb('Requested')}(?: and ${creditVerb('approved')})? by @([A-Za-z0-9-]+)(?:\\.?$|, ${creditVerb('approved')} by )`,
+  'm',
+);
 
 function approvalIn(body) {
   const found = APPROVED_SHAPE.exec(creditSpan(String(body ?? '')).said);
@@ -1175,7 +1137,7 @@ function creditSpan(text) {
   const cut = end === -1 ? 0 : end + fence.end.length;
   const status = text.indexOf(STATUS_BEGIN, cut);
   const stop = status === -1 ? text.length : status;
-  return { above: text.slice(0, cut), said: text.slice(cut, stop), below: text.slice(stop) };
+  return { above: text.slice(0, cut), said: text.slice(cut, stop), below: text.slice(stop), error };
 }
 
 function withCredit(body, line, asked) {
@@ -1302,15 +1264,11 @@ function criteriaOf(body) {
 }
 
 function requesterOf(body) {
-  const text = String(body ?? '');
-  const { error } = fenceOf(text);
+  const { said: below, error } = creditSpan(String(body ?? ''));
   if (error) return null;
-  const below = creditSpan(text).said;
   const at = below.lastIndexOf(`\n${CREDIT_HEADING}`);
   const said = at === -1 ? below : below.slice(at);
-  const found = said.match(
-    /^-? ?(?:\[Requested\]\([^)\s]+\)|Requested)(?: and (?:\[approved\]\([^)\s]+\)|approved))? by @([A-Za-z0-9-]+)(?:\.?$|, (?:\[approved\]\([^)\s]+\)|approved) by )/m,
-  );
+  const found = REQUESTER_SHAPE.exec(said);
   if (!found) return null;
   return LOGIN_SHAPE.test(found[1]) ? found[1] : null;
 }
@@ -1319,7 +1277,7 @@ function creditOf(body) {
   const requested = requesterOf(body);
   if (requested) return requested;
   const released = releaseOf(body);
-  return released?.kind === 'github' ? released.login : null;
+  return released?.login ?? null;
 }
 
 function regionBetween(text, fence, named) {
@@ -1393,18 +1351,6 @@ function firstUnchecked(parsed) {
   return next ? next.title : null;
 }
 
-function pendingBoundary(parsed) {
-  if (!parsed || parsed.error || !Array.isArray(parsed.steps)) return 0;
-  let seen = 0;
-  for (const step of parsed.steps) {
-    const boundary = isCheckpoint(step.title);
-    if (boundary) seen += 1;
-    if (step.done) continue;
-    return boundary ? seen : 0;
-  }
-  return 0;
-}
-
 function checkStep(body, stepTitle, options = {}) {
   const text = String(body ?? '');
   const parsed = parseBody(text);
@@ -1419,6 +1365,7 @@ function checkStep(body, stepTitle, options = {}) {
   }
 
   const { region } = parsed;
+  const left = parsed.steps.filter((step) => !step.done).length;
   const lines = text.slice(region.start, region.end).split('\n');
   let seen = 0;
   for (let i = 0; i < lines.length; i += 1) {
@@ -1433,55 +1380,29 @@ function checkStep(body, stepTitle, options = {}) {
       body: text.slice(0, region.start) + lines.join('\n') + text.slice(region.end),
       changed: true,
       at: boundary ? seen : 0,
+      remaining: left - 1,
     };
   }
 
-  return { body: text, changed: false, at: 0 };
-}
-
-function renderNativeApprovalReceipt({
-  triggerPhrase = null,
-  issueNumber = null,
-  prNumber = null,
-  runId = null,
-  approvalRef = null,
-} = {}) {
-  const native = nativeApprovalMarker(approvalRef);
-  if (native === null) throw new Error('a readable native approval reference is required');
-  return marked(`Recorded this GitHub approval before changing the pull request head\n\n${native}`, {
-    kind: 'plan-approved',
-    flow: 'implement',
-    command: 'approve',
-    issue: issueNumber,
-    pr: prNumber,
-    run: runId,
-    triggerPhrase,
-  });
-}
-
-function renderControlPlaneApprovalReceipt({
-  triggerPhrase = null,
-  issueNumber = null,
-  prNumber = null,
-  runId = null,
-  approvalRef = null,
-  approver = null,
-} = {}) {
-  const recorded = controlPlaneApprovalMarker(approvalRef, approver);
-  if (recorded === null) throw new Error('a readable control plane approval reference and approver are required');
-  const by = String(approver).trim();
-  return marked(`Recorded the plan approval \`${by}\` gave in Jira before changing the pull request head\n\n${recorded}`, {
-    kind: 'plan-approved',
-    flow: 'implement',
-    command: 'approve',
-    issue: issueNumber,
-    pr: prNumber,
-    run: runId,
-    triggerPhrase,
-  });
+  return { body: text, changed: false, at: 0, remaining: left };
 }
 
 const POSITIVE_ID_SHAPE = /^[1-9][0-9]{0,18}$/;
+
+const COMMENT_SPACES = Object.freeze(['issue', 'thread', 'review', 'dispatch']);
+
+const ID_CORE = POSITIVE_ID_SHAPE.source.slice(1, -1);
+
+const RELEASE_TOKEN_CORE = `(?:${COMMENT_SPACES.join('|')})\\/${ID_CORE}|${ID_CORE}`;
+
+const RELEASE_VALUE_SHAPE = new RegExp(`^(${RELEASE_TOKEN_CORE})(?::([1-9][0-9]{0,2}))?$`);
+
+function releasesIn(body) {
+  return markerValues(body, PHASE_MARKER_PREFIX, (value) => {
+    const found = RELEASE_VALUE_SHAPE.exec(value);
+    return found === null ? null : { token: found[1], at: found[2] === undefined ? 0 : Number(found[2]) };
+  });
+}
 
 const SERVER_SHAPE = /^https?:\/\/[A-Za-z0-9.-]+(?::[0-9]{1,5})?$/;
 
@@ -1514,6 +1435,8 @@ module.exports = {
   releaseOf,
   carryRecords,
   PHASE_MARKER_PREFIX,
+  RELEASE_TOKEN_CORE,
+  releasesIn,
   linked,
   readRelease,
   releaseRef,
@@ -1539,6 +1462,7 @@ module.exports = {
   MAX_ACTOR_CHARS,
   cap,
   scrub,
+  RESERVED_COMMENT,
   oneLine,
   renderBody,
   renderDirectBody,
@@ -1567,13 +1491,10 @@ module.exports = {
   isCheckpoint,
   parseBody,
   firstUnchecked,
-  pendingBoundary,
   requesterOf,
   creditOf,
   runUrl,
   pullUrl,
   POSITIVE_ID_SHAPE,
   checkStep,
-  renderNativeApprovalReceipt,
-  renderControlPlaneApprovalReceipt,
 };

@@ -1,5 +1,7 @@
 'use strict';
 
+const { markerValues } = require('./text.cjs');
+
 const PLAN_BEGIN = '<!-- ksai-plan-begin -->';
 const PLAN_END = '<!-- ksai-plan-end -->';
 const TITLE_MARKER = 'ksai-plan-title';
@@ -9,8 +11,6 @@ const MAX_PLAN_BYTES = 60 * 1024;
 const MAX_PLAN_LINES = 5000;
 const MAX_FIELD_CHARS = 500;
 const MAX_FIELD_LINE = 1024;
-
-const FIELD_SHAPE = (name) => new RegExp(`^<!--\\s*${name}:\\s*([^\\n]*?)\\s*-->$`);
 
 const PLAN_SPAN = new RegExp(`${PLAN_BEGIN}[\\s\\S]*?${PLAN_END}`, 'g');
 
@@ -36,14 +36,8 @@ function markerLines(lines, marker) {
 }
 
 function fieldFrom(lines, name) {
-  const shape = FIELD_SHAPE(name);
-  const found = [];
-  for (const line of lines) {
-    const at = line.trim();
-    if (at.length > MAX_FIELD_LINE) continue;
-    const match = at.match(shape);
-    if (match) found.push(match[1]);
-  }
+  const fitting = lines.filter((line) => line.trim().length <= MAX_FIELD_LINE).join('\n');
+  const found = markerValues(fitting, `<!-- ${name}:`, (value) => ({ value }));
   const noun = NAMED[name] ?? name;
   if (found.length === 0) {
     return { error: `the comment carries no \`<!-- ${name}: ... -->\` line, so the plan has no ${noun}` };
@@ -51,7 +45,7 @@ function fieldFrom(lines, name) {
   if (found.length > 1) {
     return { error: `the comment carries ${found.length} \`<!-- ${name}: ... -->\` lines, so which ${noun} it means is not decided here` };
   }
-  const value = found[0].trim();
+  const { value } = found[0];
   if (value === '') return { error: `the \`<!-- ${name}: ... -->\` line is empty, so the plan has no ${noun}` };
   if (value.length > MAX_FIELD_CHARS) {
     return { error: `the ${noun} runs to ${value.length} characters, over the limit of ${MAX_FIELD_CHARS}` };

@@ -5,7 +5,7 @@ const { finalResult } = require('./classify.cjs');
 const { doRequestOf, renderDoMarker } = require('./do.cjs');
 const { KIND_TABLE, href, marker, positive } = require('./marker.cjs');
 const { STATUS_BEGIN, STATUS_END, URL_SHAPE, locateStatus, oneLine, scrub, spliceStatus } = require('./plan.cjs');
-const { pagedProbe } = require('./pages.cjs');
+const { probeComments } = require('./pages.cjs');
 const { withIssueLock } = require('./write-lock.cjs');
 const { neutralize } = require('../lib/prompt-text.cjs');
 const {
@@ -47,7 +47,6 @@ const { counted, safeText } = require('../lib/text.cjs');
 const { STATUS_TABLE } = require('./publish.cjs');
 
 const MAX_PAGES = 20;
-const PER_PAGE = 100;
 const MAX_CURRENT_CHARS = 7_000;
 const MAX_STATUS_RUNS = 200;
 const PLAN_KINDS = Object.freeze(['implement', 'revise']);
@@ -824,20 +823,18 @@ async function reportContext({ github, owner, repo, identity, botLogin }) {
 async function findReport({ github, owner, repo, identity, logins, thread }) {
   const matches = [];
   const exact = identityMarker(identity);
-  const probe = await pagedProbe({
-    perPage: PER_PAGE,
+  const { unreadable } = await probeComments({
+    github,
+    owner,
+    repo,
+    prNumber: thread,
     maxPages: MAX_PAGES,
-    fetchPage: async (page) => {
-      const response = await github.rest.issues.listComments({ owner, repo, issue_number: thread, per_page: PER_PAGE, page });
-      return response?.data;
-    },
+    cannot: 'write-report lookup cannot be trusted',
     take: (comment) => {
       if (trusted(comment, logins) && hasExactMarker(comment?.body, exact)) matches.push(comment);
     },
   });
-  if (probe.threw) return { error: `write-report lookup failed on page ${probe.page} (${probe.failed})` };
-  if (!probe.listed) return { error: `write-report lookup returned no comment list on page ${probe.page}` };
-  if (!probe.complete) return { error: `write-report lookup exceeded ${MAX_PAGES * PER_PAGE} comments` };
+  if (unreadable) return { error: unreadable };
   if (matches.length > 1) return { error: `write-report lookup found ${matches.length} trusted comments for one logical unit` };
   return { comment: matches[0] ?? null };
 }

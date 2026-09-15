@@ -1,5 +1,7 @@
 'use strict';
 
+const { setTimeout: wait } = require('node:timers/promises');
+
 const { NUMBER_SHAPE } = require('./context.cjs');
 const { heldBy } = require('./plan.cjs');
 const { matchesBranchGrammar } = require('./verify-chunk.cjs');
@@ -9,11 +11,6 @@ const DEFAULT_NOUN = 'branch to work on';
 const MERGEABLE_TRIES = 6;
 
 const MERGEABLE_WAIT_MS = 3000;
-
-const wait = (ms) =>
-  new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 
 async function resolvePullTarget({
   github = null,

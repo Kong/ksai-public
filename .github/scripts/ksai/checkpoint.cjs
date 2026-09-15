@@ -10,39 +10,22 @@ const {
 const {
   LOGIN_SHAPE,
   PHASE_MARKER_PREFIX,
-  POSITIVE_ID_SHAPE,
+  RELEASE_TOKEN_CORE,
   appended,
-  markerValues,
+  releasesIn,
   scrub,
-  shapesIn,
 } = require('./plan.cjs');
 const { PAGE_SIZE: RELEASE_PER_PAGE, probeComments } = require('./pages.cjs');
-const { offersPlan, ownState, EDITED, FOREIGN, UNEDITED } = require('./approval.cjs');
+const { isOwnLogin, planRecords, EDITED, UNEDITED } = require('./approval.cjs');
 const { counted, plural } = require('../lib/text.cjs');
 
-const RELEASE_MARKER_PREFIX = PHASE_MARKER_PREFIX;
-const COMMENT_SPACES = Object.freeze(['issue', 'thread', 'review', 'dispatch']);
-
-const ID_CORE = POSITIVE_ID_SHAPE.source.slice(1, -1);
-
-const RELEASE_TOKEN_CORE = `(?:${COMMENT_SPACES.join('|')})\\/${ID_CORE}|${ID_CORE}`;
-
 const RELEASE_TOKEN_SHAPE = new RegExp(`^(?:${RELEASE_TOKEN_CORE})$`);
-
-const RELEASE_VALUE_SHAPE = new RegExp(`^(${RELEASE_TOKEN_CORE})(?::([1-9][0-9]{0,2}))?$`);
 
 const MAX_RELEASE_PAGES = 5;
 
 function releaseMarker(token, at = 0) {
   const bound = Number(at) > 0 ? `:${String(Number(at))}` : '';
-  return `${RELEASE_MARKER_PREFIX}${String(token)}${bound} -->`;
-}
-
-function releasesIn(body) {
-  return markerValues(body, RELEASE_MARKER_PREFIX, (value) => {
-    const found = RELEASE_VALUE_SHAPE.exec(value);
-    return found === null ? null : { token: found[1], at: found[2] === undefined ? 0 : Number(found[2]) };
-  });
+  return `${PHASE_MARKER_PREFIX}${String(token)}${bound} -->`;
 }
 
 function withPhaseRelease(body, token, at = 0) {
@@ -57,7 +40,6 @@ async function releasedTokens({ github = null, owner = null, repo = null, prNumb
   const known = String(botLogin ?? '').trim();
   if (!known) {
     return {
-      tokens: new Set(),
       bound: [],
       shape: null,
       sealed: null,
@@ -66,12 +48,7 @@ async function releasedTokens({ github = null, owner = null, repo = null, prNumb
     };
   }
 
-  const tokens = new Set();
-  const bound = [];
-  let shape = null;
-  let sealed = null;
-  let editedShape = false;
-  let editedRelease = false;
+  const comments = [];
   const { unreadable } = await probeComments({
     github,
     owner,
@@ -80,30 +57,14 @@ async function releasedTokens({ github = null, owner = null, repo = null, prNumb
     maxPages: MAX_RELEASE_PAGES,
     cannot: 'cannot tell whether the checkpoint was already released',
     take: (comment) => {
-      const state = ownState(comment, known);
-      if (state === FOREIGN) return;
-      if (offersPlan(comment)) sealed = null;
-      if (state !== UNEDITED) {
-        if (shapesIn(comment?.body).length > 0) editedShape = true;
-        if (releasesIn(comment?.body).length > 0) editedRelease = true;
-        return;
-      }
-      const release = releasesIn(comment.body).at(-1);
-      if (release !== undefined) {
-        tokens.add(release.token);
-        bound.push(release);
-      }
-      const found = shapesIn(comment.body).at(-1);
-      if (found !== undefined) {
-        shape = found;
-        if (found.digest !== '') sealed = found;
-      }
+      comments.push(comment);
     },
   });
 
-  const answer = { tokens, bound, shape, sealed, editedRelease };
+  const seen = planRecords(comments, { botLogin: known });
+  const answer = { bound: seen.releases, shape: seen.shape, sealed: seen.sealed, editedRelease: seen.editedRelease };
   if (unreadable) return { ...answer, unreadable };
-  if (editedShape) {
+  if (seen.editedShape) {
     return {
       ...answer,
       unreadable:
@@ -139,7 +100,7 @@ async function alreadyReleased({
   if (releasesIn(body).some((release) => release.token === wanted)) return { released: true, unreadable: null };
 
   const seen = await releasedTokens({ github, owner, repo, prNumber, botLogin });
-  if (seen.tokens.has(wanted)) return { released: true, unreadable: null };
+  if (seen.bound.some((release) => release.token === wanted)) return { released: true, unreadable: null };
   return { released: false, unreadable: seen.unreadable };
 }
 
@@ -198,11 +159,42 @@ function needsReleaseRead(env) {
   return withoutRelease(env) === null;
 }
 
-function decideCheckpoint({ released = null, unreadable = null, ...asked } = {}) {
+const EDIT_PAGE = 100;
+
+const BODY_EDITS_QUERY =
+  'query ($owner: String!, $repo: String!, $number: Int!, $page: Int!) { ' +
+  'repository(owner: $owner, name: $repo) { pullRequest(number: $number) { ' +
+  'userContentEdits(first: $page) { nodes { editedAt editor { login } } } } } }';
+
+async function pendingSince({ github = null, owner = null, repo = null, prNumber = null, botLogin = null } = {}) {
+  const known = String(botLogin ?? '').trim();
+  if (!known) return { at: null, unreadable: "No bot login was given to tell this flow's own edits apart." };
+  let edits;
+  try {
+    const data = await github.graphql(BODY_EDITS_QUERY, { owner, repo, number: Number(prNumber), page: EDIT_PAGE });
+    edits = data?.repository?.pullRequest?.userContentEdits?.nodes;
+  } catch (error) {
+    return { at: null, unreadable: `Could not read the edit history of #${String(prNumber)}: ${error?.message}.` };
+  }
+  const at = (Array.isArray(edits) ? edits : []).find((edit) => isOwnLogin(edit?.editor?.login, known))?.editedAt;
+  if (typeof at === 'string' && Number.isFinite(Date.parse(at))) return { at, unreadable: null };
+  return {
+    at: null,
+    unreadable: `None of the newest ${EDIT_PAGE} edits to the description of #${String(prNumber)} was made by this flow.`,
+  };
+}
+
+function decideCheckpoint({ released = null, unreadable = null, requestedAt = null, pendingSince: since = null, ...asked } = {}) {
   const settled = withoutRelease(asked);
   if (settled) return settled;
   if (unreadable) return { release: false, waiting: true, reason: 'unreadable' };
   if (released === true) return { release: false, waiting: true, reason: 'already-released' };
+  const requested = Date.parse(String(requestedAt ?? ''));
+  const pending = Date.parse(String(since ?? ''));
+  if (!Number.isFinite(requested) || !Number.isFinite(pending)) {
+    return { release: false, waiting: true, reason: 'undated-request' };
+  }
+  if (requested <= pending) return { release: false, waiting: true, reason: 'stale-request' };
   return { release: true, waiting: false, reason: 'released' };
 }
 
@@ -244,6 +236,27 @@ const WAITING = Object.freeze(
         outstanding +
         ' A release is only ever read off a comment nobody has touched, and that could not be established here: ' +
         'post a new comment asking for it',
+    }),
+    'stale-request': Object.freeze({
+      kind: 'phase-waiting',
+      level: 'WARNING',
+      say: ({ outstanding }) =>
+        'This phase of the plan is done and the request asking to release it is older than the last change this ' +
+        "flow made to this pull request's description, so it released nothing." +
+        outstanding +
+        ' A step lands by ticking its box there, so an older request was given before the commits it would ' +
+        'release: read the commits above, then post a new comment asking for it',
+    }),
+    'undated-request': Object.freeze({
+      kind: 'phase-waiting',
+      level: 'WARNING',
+      say: ({ outstanding, detail }) =>
+        'This phase of the plan is done and this run could not tell whether the request asking to release it ' +
+        "came after the last change this flow made to this pull request's description, so it released nothing " +
+        'rather than guessing.' +
+        (detail === '' ? '' : ` ${detail}`) +
+        outstanding +
+        ' A release is only ever read off a request newer than the step it covers: post a new comment asking for it',
     }),
     'approve-disabled': Object.freeze({
       kind: 'phase-waiting',
@@ -322,7 +335,6 @@ function renderReleased({ approvedBy = null, commentId = null, triggerPhrase = n
 }
 
 module.exports = {
-  RELEASE_MARKER_PREFIX,
   MAX_RELEASE_PAGES,
   RELEASE_PER_PAGE,
   releaseMarker,
@@ -330,6 +342,7 @@ module.exports = {
   releasedTokens,
   withPhaseRelease,
   alreadyReleased,
+  pendingSince,
   needsReleaseRead,
   releaseTokenFor,
   decideCheckpoint,

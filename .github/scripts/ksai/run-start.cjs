@@ -117,6 +117,7 @@ function recoverRecord(env, commentId) {
     comment_id: String(commentId ?? ''),
     pr: String(env.PR_NUMBER ?? ''),
     in_body: storesInBody(identityOf(env).identity),
+    bot_login: String(env.BOT_LOGIN ?? '').trim(),
   };
 }
 

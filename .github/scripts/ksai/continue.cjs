@@ -1,5 +1,7 @@
 'use strict';
 
+const { setTimeout: pauseFor } = require('node:timers/promises');
+
 const { scrub } = require('./plan.cjs');
 const { asAlert } = require('../lib/select-arm.cjs');
 const { counted, plural } = require('../lib/text.cjs');
@@ -245,8 +247,6 @@ const CONTINUE_ATTEMPTS = 3;
 const CONTINUE_TIMEOUT = 30000;
 
 const CONTINUE_HOLD = 25000;
-
-const pauseFor = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 
 function bareEndpoint(endpoint) {
   let url;

@@ -15,11 +15,22 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync, rmSync, statSync } from 'node:fs';
+import { readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { cap, oneLine, MAX_PR_TITLE_CHARS, SUBJECT_SHAPE } = require('./plan.cjs');
+const {
+  cap,
+  linked,
+  oneLine,
+  planDocMarker,
+  pullUrl,
+  scrub,
+  shortenedNote,
+  MAX_PR_TITLE_CHARS,
+  SUBJECT_SHAPE,
+} = require('./plan.cjs');
+const { marked } = require('./marker.cjs');
 const { NUMBER_SHAPE } = require('./context.cjs');
 const { COMMIT_TYPES, safeEcho } = require('./verify-chunk.cjs');
 
@@ -175,6 +186,53 @@ export function readManifest(manifestPath, { noun = null, triggerPhrase = null }
     const detail = said === '' ? '' : ` ${said}`;
     return { message: `${noun} produced a manifest that is not valid JSON.${detail}` };
   }
+}
+
+export function offerPlanDoc({
+  git,
+  run,
+  repo,
+  prNumber,
+  sha,
+  path,
+  lead,
+  extra = '',
+  fields = null,
+  flow,
+  command,
+  triggerPhrase = null,
+}) {
+  const blob = git(['rev-parse', `${sha}:${path}`]);
+  const doc = blob.ok ? planDocMarker(String(blob.stdout).trim()) : null;
+  if (!doc) return { doc: null, posted: false };
+  const said = marked(`${scrub(lead, { triggerPhrase })}\n\n${extra === '' ? '' : `${extra}\n`}${doc}`, {
+    ...fields,
+    flow,
+    command,
+    kind: 'plan-published',
+    ...(triggerPhrase === null ? {} : { triggerPhrase }),
+  });
+  return { doc, posted: run('gh', ['pr', 'comment', String(prNumber), '--repo', repo, '--body', said]).ok };
+}
+
+export function readPullBody({ repo = null, number = null, run = runCommand } = {}) {
+  const view = run('gh', ['pr', 'view', String(number), '--repo', repo, '--json', 'body', '--jq', '.body']);
+  return view.ok ? String(view.stdout) : null;
+}
+
+export function editPullBody({ repo = null, number = null, body = '', bodyFile = null, title = null, run = runCommand } = {}) {
+  writeFileSync(bodyFile, body);
+  const titled = title === null ? [] : ['--title', title];
+  return run('gh', ['pr', 'edit', String(number), '--repo', repo, ...titled, '--body-file', bodyFile]).ok;
+}
+
+export function filesLinked(lead, rendered, { serverUrl = null, repo = null, number = null, triggerPhrase = null } = {}) {
+  const prUrl = pullUrl({ serverUrl, repository: repo, prNumber: number });
+  const message = linked(
+    scrub(lead + shortenedNote(rendered.shortened, rendered.summaryShortened), { triggerPhrase }),
+    prUrl === '' ? '' : `${prUrl}/files`,
+  );
+  return { prUrl, message };
 }
 
 export function createPull({

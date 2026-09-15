@@ -4,26 +4,34 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const require = createRequire(import.meta.url);
-const { payloadFor, marked } = require('./marker.cjs');
+const { payloadFor } = require('./marker.cjs');
 const {
   carryRecords,
-  linked,
   oneLine,
   parsePlanDocument,
   planFilePathFor,
-  pullUrl,
   renderBody,
-  planDocMarker,
   renderPlanWaiting,
   renderShape,
   requesterOf,
-  scrub,
-  shortenedNote,
 } = require('./plan.cjs');
 const { NUMBER_SHAPE } = require('./context.cjs');
 const { gitVia, safeEcho, verifyChunk } = require('./verify-chunk.cjs');
 const { stagePaths } = require('./stage.cjs');
-import { blockerFor, field, readManifest, reasonOf, runCommand, shown, subjectFrom, TITLE_KEY_POSITIONS } from './run.mjs';
+import {
+  blockerFor,
+  editPullBody,
+  field,
+  filesLinked,
+  offerPlanDoc,
+  readManifest,
+  readPullBody,
+  reasonOf,
+  runCommand,
+  shown,
+  subjectFrom,
+  TITLE_KEY_POSITIONS,
+} from './run.mjs';
 import { alignToBranch, publishCommit } from './signed-push.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
 
@@ -71,11 +79,11 @@ export function publishPlan({
   }
   if (status !== 'ready') return block(`${noun} produced an unrecognized status: ${safeEcho(status)}`);
 
-  const current = run('gh', ['pr', 'view', number, '--repo', repo, '--json', 'body', '--jq', '.body']);
-  if (!current.ok) {
+  const current = readPullBody({ repo, number, run });
+  if (current === null) {
     return block('I could not read the pull request body, so nothing was published rather than overwrite what it records.');
   }
-  const recorded = requesterOf(String(current.stdout));
+  const recorded = requesterOf(current);
 
   const planPath = planFilePathFor({ branch, dir: planDir });
   if (!planPath) {
@@ -170,9 +178,7 @@ export function publishPlan({
   }
   recordPushed(published.sha);
 
-  writeFileSync(bodyFile, carryRecords(String(current.stdout), waiting.body));
-  const edited = run('gh', ['pr', 'edit', number, '--repo', repo, '--title', title, '--body-file', bodyFile]);
-  if (!edited.ok) {
+  if (!editPullBody({ repo, number, title, bodyFile, body: carryRecords(current, waiting.body), run })) {
     return block('The plan document is on the branch and the pull request would not take its body - see the workflow run.');
   }
 
@@ -180,40 +186,37 @@ export function publishPlan({
   if (!shape) {
     return block(`The plan holds ${String(runnable.checkpoints)} phase boundaries, which cannot be recorded.`);
   }
-  const blob = git(['rev-parse', `${verified.sha}:${planPath}`]);
-  const doc = blob.ok ? planDocMarker(String(blob.stdout).trim()) : null;
-  if (!doc) {
+  const offer = offerPlanDoc({
+    git,
+    run,
+    repo,
+    prNumber: number,
+    sha: verified.sha,
+    path: planPath,
+    lead:
+      'This comment records who asked for this work, how many phase boundaries the plan was written with, and ' +
+      'the exact content of the plan document being offered. Approving the plan records the count it is ' +
+      'released with beside it, and an approval is only honoured while the document still reads as it does now.',
+    extra: shape,
+    fields: marker,
+    flow: marker?.flow,
+    command: marker?.command,
+    triggerPhrase,
+  });
+  if (!offer.doc) {
     return block(`I could not name the content of \`${planPath}\` that was pushed, so the plan was not offered for approval.`);
   }
-  const said = marked(
-    scrub(
-      'This comment records who asked for this work, how many phase boundaries the plan was written with, and ' +
-        'the exact content of the plan document being offered. Approving the plan records the count it is ' +
-        'released with beside it, and an approval is only honoured while the document still reads as it does now.',
-      { triggerPhrase },
-    ) + `\n\n${shape}\n${doc}`,
-    { ...marker, kind: 'plan-published', triggerPhrase },
-  );
-  if (!run('gh', ['pr', 'comment', number, '--repo', repo, '--body', said]).ok) {
+  if (!offer.posted) {
     return block('The plan document is on the branch and who asked for it could not be recorded - see the workflow run.');
   }
 
-  const prUrl = pullUrl({ serverUrl, repository: repo, prNumber: number });
-  return {
-    status: 'planned',
-    pushedSha: published.sha,
-    planFile: planPath,
-    prUrl,
-    message: linked(
-      scrub(
-        'The plan is [the plan document](LINK). Review it there and approve it, and it becomes the task list ' +
-          'that drives the work - one commit per step. Nothing is implemented until then' +
-          shortenedNote(runnable.shortened, runnable.summaryShortened),
-        { triggerPhrase },
-      ),
-      prUrl === '' ? '' : `${prUrl}/files`,
-    ),
-  };
+  const { prUrl, message } = filesLinked(
+    'The plan is [the plan document](LINK). Review it there and approve it, and it becomes the task list ' +
+      'that drives the work - one commit per step. Nothing is implemented until then',
+    runnable,
+    { serverUrl, repo, number, triggerPhrase },
+  );
+  return { status: 'planned', pushedSha: published.sha, planFile: planPath, prUrl, message };
 }
 
 export function main(env = process.env, { run = runCommand } = {}) {
