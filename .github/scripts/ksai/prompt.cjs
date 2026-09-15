@@ -81,6 +81,50 @@ const TOOLCHAIN_NOTE = Object.freeze([
   'stops looking.',
 ]);
 
+function migrationNote({ ambiguous = false, majorBump = false, summary = null, omitted = 0 } = {}) {
+  const found = majorBump === true || String(majorBump) === 'true';
+  const uncertain = ambiguous === true || String(ambiguous) === 'true';
+  if (!found && !uncertain) return [];
+  const hidden = Number.parseInt(String(omitted), 10);
+  const omittedCount = Number.isSafeInteger(hidden) && hidden > 0 ? hidden : 0;
+  return [
+    ...(found
+      ? [
+          'A trusted diff scan found dependency changes crossing a major version boundary:',
+          `  ${neutralCut(summary, 2_000)}`,
+        ]
+      : []),
+    ...(uncertain
+      ? [
+          'A trusted diff scan found duplicate dependency version changes that could not be paired',
+          'exactly and may cross a major version boundary. Before editing any file, inspect the trusted',
+          'base-to-head diff and enumerate EVERY dependency version change, with its dependency identity',
+          'and exact old-to-new range. Do not edit or report done unless that enumeration is complete.',
+        ]
+      : []),
+    ...(omittedCount > 0
+      ? [
+          `The bounded list omits ${omittedCount} additional dependency ranges. Before editing, inspect the`,
+          'trusted base-to-head diff and enumerate every omitted dependency identity and exact old-to-new',
+          'range. Do not edit or report done unless that enumeration is complete.',
+        ]
+      : []),
+    'Before editing any file, read release-note or migration-guide text that covers every old-to-new',
+    'range listed above or found by the required enumeration. Use text already in the pull request or',
+    'issue JSON below, or in this repository.',
+    'A link by itself is not the note, and this sandbox has no network with which to open one. If no',
+    'available note covers a range, make no edit and report "blocked" naming what is missing.',
+    'For every listed or enumerated range, cite the exact note and version range reviewed',
+    'in the final report summary, even when it required no configuration change; include its URL when supplied.',
+    'The `.ksai-manifest.json` report summary must list EACH migration-driven configuration change',
+    'separately, with the exact note and version-range citation directly behind that change. One citation',
+    'per dependency or range does not cover multiple configuration changes.',
+    'If the manifest/report bound cannot carry every range citation and every per-change citation,',
+    'make no edit and report "blocked".',
+    '',
+  ];
+}
+
 const TOOLCHAIN_ANCHOR = `  ${TOOLCHAIN_NOTE.at(-1)}\n`;
 const PACKAGE_NOTE_START = 'NODE DEPENDENCIES ARE AN EXCEPTION to the toolchain paragraph above.';
 
@@ -417,6 +461,10 @@ function renderDirectPrompt({
   jiraKey = null,
   denied = null,
   maxCommits = null,
+  majorBump = false,
+  majorBumpSummary = null,
+  majorBumpOmitted = 0,
+  majorBumpAmbiguous = false,
   budgetMinutes = null,
   channelNonce = null,
 } = {}) {
@@ -448,6 +496,7 @@ function renderDirectPrompt({
     'Follow the `ksai-build` skill (plugin root: $CLAUDE_PLUGIN_ROOT, or',
     '_ksai/plugins/ksai-implement for subagents that do not inherit it).',
     '',
+    ...migrationNote({ ambiguous: majorBumpAmbiguous, majorBump, summary: majorBumpSummary, omitted: majorBumpOmitted }),
     'If the work turns out to be larger than it looked - more than one area, a decision',
     'somebody else has to make, or more than the commits above allow - report "blocked"',
     'and say so. It is then planned instead, which is the outcome that was sized away,',
@@ -519,6 +568,10 @@ function renderStepPrompt({
   jiraJson = null,
   jiraKey = null,
   denied = null,
+  majorBump = false,
+  majorBumpSummary = null,
+  majorBumpOmitted = 0,
+  majorBumpAmbiguous = false,
   budgetMinutes = null,
   channelNonce = null,
 } = {}) {
@@ -550,6 +603,7 @@ function renderStepPrompt({
     'Follow the `ksai-step` skill (plugin root: $CLAUDE_PLUGIN_ROOT, or',
     '_ksai/plugins/ksai-implement for subagents that do not inherit it).',
     '',
+    ...migrationNote({ ambiguous: majorBumpAmbiguous, majorBump, summary: majorBumpSummary, omitted: majorBumpOmitted }),
     'The one step to implement now, quoted verbatim from the plan:',
     '',
     `  ${neutralize(stepTitle)}`,
@@ -650,6 +704,10 @@ function renderFixPrompt({
   issueJson = null,
   denied = null,
   allowed = null,
+  majorBump = false,
+  majorBumpSummary = null,
+  majorBumpOmitted = 0,
+  majorBumpAmbiguous = false,
   saw = null,
   budgetMinutes = null,
   channelNonce = null,
@@ -729,6 +787,7 @@ function renderFixPrompt({
     'Follow the `ksai-fix` skill (plugin root: $CLAUDE_PLUGIN_ROOT, or',
     '_ksai/plugins/ksai-implement for subagents that do not inherit it).',
     '',
+    ...migrationNote({ ambiguous: majorBumpAmbiguous, majorBump, summary: majorBumpSummary, omitted: majorBumpOmitted }),
     `The pull request already contains work, and ${text(baseSha)} is its head as this run checked it out.`,
     'The full history is in the clone, so `git log` and `git show` answer why a line is the way it is -',
     'which the review often assumes you know. You are changing that work, not starting it.',
@@ -1234,6 +1293,10 @@ function renderDoPrompt({
   mergedRef = null,
   mergedSha = null,
   conflicted = null,
+  majorBump = false,
+  majorBumpSummary = null,
+  majorBumpOmitted = 0,
+  majorBumpAmbiguous = false,
   saw = null,
   budgetMinutes = null,
   channelNonce = null,
@@ -1303,6 +1366,7 @@ function renderDoPrompt({
     'Follow the `ksai-do` skill (plugin root: $CLAUDE_PLUGIN_ROOT, or',
     '_ksai/plugins/ksai-implement for subagents that do not inherit it).',
     '',
+    ...migrationNote({ ambiguous: majorBumpAmbiguous, majorBump, summary: majorBumpSummary, omitted: majorBumpOmitted }),
     `The pull request already contains work, and ${text(baseSha)} is its head as this run checked it out.`,
     'The full history is in the clone, so `git log` and `git show` answer why a line is the way it is.',
     'You are changing that work, not starting it.',
