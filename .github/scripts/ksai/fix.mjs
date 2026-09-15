@@ -9,6 +9,7 @@ const { marked } = require('./marker.cjs');
 const { cap, planDirOf, planDocMarker, planFilePathFor, scrub, retargetPermalinks, POSITIVE_ID_SHAPE } =
   require('./plan.cjs');
 const { safeEcho, soleWritable, verifyChunk, gitVia, noChangeLeftBehind } = require('./verify-chunk.cjs');
+const { readScope, writeScopeResult } = require('./change-scope.cjs');
 const { MAX_ANSWERABLE: MAX_REPLIES, MAX_REPLY_CHARS } = require('./threads.cjs');
 const { counted } = require('../lib/text.cjs');
 import { blockerFor, field, readManifest, reasonOf, runCommand, shown } from './run.mjs';
@@ -111,6 +112,8 @@ export function recordFix({
   triggerPhrase = null,
   bodyFile = null,
   commitFile = null,
+  changeScopePath = null,
+  recordScope = writeScopeResult,
   run = runCommand,
 } = {}) {
   const pass = PASS[String(phase ?? '')];
@@ -118,6 +121,10 @@ export function recordFix({
     return { status: 'blocked', message: `\`${safeEcho(shown(phase))}\` is not a phase this write path records` };
   }
   const block = blockerFor(manifestPath);
+  const scoped = phase === 'fix'
+    ? readScope(changeScopePath, { repo, pr: String(prNumber ?? ''), phase: 'fix', head: remoteSha })
+    : { ok: true, scope: null };
+  if (!scoped.ok) return block(`I did not run the review push gate: ${scoped.reason}. Nothing was pushed.`);
 
   const read = readManifest(manifestPath, { noun: pass.noun, triggerPhrase });
   if (read.message) return block(read.message);
@@ -152,8 +159,21 @@ export function recordFix({
       planDir,
       onlyPath,
       branchGrammar: 'human-named',
+      changeScope: scoped.scope,
     });
-    if (!verified.ok) return block(`I did not push ${pass.work}: ${verified.reason}`);
+    if (!verified.ok) {
+      if (scoped.scope) {
+        const recorded = recordScope(changeScopePath, scoped.scope, { outcome: 'refused', reason: verified.reason });
+        if (!recorded.ok) {
+          return block(`I did not push ${pass.work}: ${verified.reason} The outcome record failed: ${recorded.reason}.`);
+        }
+      }
+      return block(`I did not push ${pass.work}: ${verified.reason}`);
+    }
+    if (scoped.scope) {
+      const recorded = recordScope(changeScopePath, scoped.scope, { outcome: 'verified', tree: verified.tree });
+      if (!recorded.ok) return block(`I did not push ${pass.work}: ${recorded.reason}.`);
+    }
 
     const published = publishCommit({
       cwd,
@@ -167,6 +187,18 @@ export function recordFix({
       bodyFile: commitFile ?? undefined,
     });
     if (!published.ok) {
+      if (scoped.scope) {
+        const recorded = recordScope(changeScopePath, scoped.scope, {
+          outcome: 'refused',
+          tree: verified.tree,
+          reason: published.reason,
+        });
+        if (!recorded.ok) {
+          return block(
+            `I did not put ${pass.work} on the branch: ${published.reason}. The outcome record failed: ${recorded.reason}.`,
+          );
+        }
+      }
       return block(
         `I did not put ${pass.work} on the branch: ${published.reason}. No thread was answered, so a later ` +
           'run retries them.',
@@ -174,6 +206,12 @@ export function recordFix({
     }
     localSha = verified.sha;
     sha = published.sha;
+    if (scoped.scope) {
+      const recorded = recordScope(changeScopePath, scoped.scope, { outcome: 'published', tree: verified.tree });
+      if (!recorded.ok) {
+        return { ...block(`I pushed ${pass.work}, but the outcome record failed: ${recorded.reason}.`), pushed: true };
+      }
+    }
 
     if (onlyPath) {
       const blob = gitVia(run, cwd)(['rev-parse', `${verified.sha}:${onlyPath}`]);
@@ -188,7 +226,7 @@ export function recordFix({
             'honoured while the document still reads as it does here.',
           { triggerPhrase },
         ) + `\n\n${doc}`,
-        { ...marker, kind: 'plan-published' },
+        { ...marker, command: phase, kind: 'plan-published' },
       );
       if (!run('gh', ['pr', 'comment', String(prNumber), '--repo', repo, '--body', offer]).ok) {
         return block(
@@ -207,6 +245,13 @@ export function recordFix({
             'contradicting the tree, so nothing was pushed and no thread was answered. Re-request and it will ' +
             'start from a clean checkout.',
       );
+    }
+    if (scoped.scope) {
+      const git = gitVia(run, cwd);
+      const tree = git(['rev-parse', `${remoteSha}^{tree}`]);
+      const treeSha = tree.ok ? String(tree.stdout ?? '').trim() : '';
+      const recorded = recordScope(changeScopePath, scoped.scope, { outcome: 'unchanged', tree: treeSha });
+      if (!recorded.ok) return block(`I did not record the review result: ${recorded.reason}.`);
     }
   }
 
@@ -315,6 +360,7 @@ export function main(env = process.env, { run = runCommand } = {}) {
     triggerPhrase: env.TRIGGER,
     bodyFile: path.join(tmp, 'ksai-reply.json'),
     commitFile: path.join(tmp, 'ksai-commit.json'),
+    changeScopePath: env.CHANGE_SCOPE_FILE,
     run,
   });
 

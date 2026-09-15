@@ -246,6 +246,7 @@ export function opencodePermissions(policy, scopes = []) {
 export const RUNTIME_CONFIG = Object.freeze({
   $schema: 'https://opencode.ai/config.json',
   autoupdate: false,
+  formatter: false,
   snapshot: false,
   share: 'disabled',
   compaction: Object.freeze({ auto: true, prune: true }),
@@ -376,6 +377,10 @@ export const REVIEW_RESULT_PLUGIN = fileURLToPath(new URL('../kreview/opencode-r
 
 export const PTY_PLUGIN = fileURLToPath(new URL('../kreview/opencode-pty.mjs', import.meta.url));
 
+export const ISOLATED_TOOL_PHASES = Object.freeze(new Set(Object.keys(claudeArgs.TOOL_POLICY)));
+
+export const isolatedToolPhase = (phase) => ISOLATED_TOOL_PHASES.has(String(phase ?? '').trim());
+
 const asFileUrl = (path) => (path.startsWith('file://') ? path : `file://${path}`);
 
 /**
@@ -389,6 +394,8 @@ const asFileUrl = (path) => (path.startsWith('file://') ? path : `file://${path}
 export function runtimeConfig({
   plugin = AUTH_PLUGIN,
   plugins = [],
+  shell = '',
+  brokered = false,
   channel = '',
   agents = {},
   skills = [],
@@ -400,6 +407,7 @@ export function runtimeConfig({
   const loadedPlugins = [plugin, channel, ...plugins].filter(Boolean).map((one) => asFileUrl(one));
   return {
     ...RUNTIME_CONFIG,
+    ...(shell ? { shell } : {}),
     ...(permission ? { permission } : {}),
     provider: {
       anthropic: {
@@ -407,7 +415,7 @@ export function runtimeConfig({
         options: {
           apiKey: 'unused-the-authorization-header-answers-every-request',
           ...(baseUrl ? { baseURL: baseUrl } : {}),
-          headers: { ...attribution, ...authHeaders(BEARER, { ANTHROPIC_AUTH: auth }) },
+          headers: brokered ? { ...attribution } : { ...attribution, ...authHeaders(BEARER, { ANTHROPIC_AUTH: auth }) },
         },
       },
     },

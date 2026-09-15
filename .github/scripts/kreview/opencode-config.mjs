@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import modelCatalog from '../lib/model-catalog.json' with { type: 'json' };
 import { counted } from '../lib/text.cjs';
@@ -8,6 +9,7 @@ import { LIMITS } from './review-pipeline.cjs';
 import { LSP_ARM, lspConfig } from './opencode-lsp.mjs';
 import {
   CHANNEL_PLUGIN,
+  AUTH_PLUGIN,
   PTY_PLUGIN,
   COMPACTION_PLUGIN,
   PROVIDER_POLICY_CONFIG,
@@ -15,6 +17,7 @@ import {
   REVIEW_RESULT_PLUGIN,
   agentEntry,
   headerLines,
+  isolatedToolPhase,
   mergedDenials,
   opencodePermissions,
   phaseDenials,
@@ -27,6 +30,10 @@ import {
   validateProviderPolicyVersion,
 } from '../lib/opencode.mjs';
 import { ptyPilotEnabled } from './opencode-pty-core.mjs';
+
+const TOOL_GUARD_PLUGIN = fileURLToPath(new URL('./opencode-tool-guard.mjs', import.meta.url));
+const CHILD_TOOLS_PLUGIN = fileURLToPath(new URL('./opencode-child-tools.mjs', import.meta.url));
+const TOOL_SHELL = fileURLToPath(new URL('./opencode-tool-shell.mjs', import.meta.url));
 
 const destination = process.env.OPENCODE_CONFIG;
 if (!destination) {
@@ -72,6 +79,7 @@ const allowed = String(process.env.ALLOWED_MODELS ?? '')
   .filter(Boolean);
 
 const phase = String(process.env.OPENCODE_PHASE ?? '').trim();
+const isolatedTools = isolatedToolPhase(phase);
 const stated = String(process.env.OPENCODE_ALLOWED ?? '').trim();
 const policy = { allowed: stated, disallowed: process.env.OPENCODE_DISALLOWED };
 for (const { name, key, granted } of stated ? mergedDenials(policy) : phaseDenials(phase)) {
@@ -195,8 +203,17 @@ if (staged) {
     options: { thinking: { type: 'enabled', budgetTokens: LIMITS.finalizeThinkingTokens }, effort: 'low' }, prompt: finishPrompt };
 }
 const channel = String(process.env.KSAI_CHANNEL_NONCE ?? '').trim() === '' ? '' : CHANNEL_PLUGIN;
-const config = runtimeConfig({ channel, agents, skills, permission, baseUrl, auth, attribution,
-  plugins: [COMPACTION_PLUGIN, ...(pty ? [PTY_PLUGIN] : []), ...(resultTransport === 'tool' ? [REVIEW_RESULT_PLUGIN] : [])],
+const config = runtimeConfig({ channel, agents, skills, permission, auth, attribution,
+  plugin: isolatedTools ? '' : AUTH_PLUGIN,
+  brokered: isolatedTools,
+  shell: isolatedTools ? TOOL_SHELL : '',
+  baseUrl: isolatedTools ? '{env:KSAI_PROVIDER_RELAY}/v1' : baseUrl,
+  plugins: [
+    ...(isolatedTools ? [TOOL_GUARD_PLUGIN, CHILD_TOOLS_PLUGIN] : []),
+    COMPACTION_PLUGIN,
+    ...(pty ? [PTY_PLUGIN] : []),
+    ...(resultTransport === 'tool' ? [REVIEW_RESULT_PLUGIN] : []),
+  ],
 });
 if (lsp) config.lsp = lsp;
 if (staged) config.default_agent = 'ksai-review-stage';
@@ -220,7 +237,11 @@ console.log(
     ? 'the run channel is registered, so this run can be told something and asked to stop'
     : missing('this run drew no channel token, so nothing can be delivered to it and a stop cannot be honoured'),
 );
-console.log(config.plugin ? `the renewing auth plugin is ${config.plugin[0]}` : '::warning::no auth plugin, so this run lasts one token');
+console.log(
+  isolatedTools
+    ? 'the trusted parent relay owns provider authentication and renewal'
+    : config.plugin ? `the renewing auth plugin is ${config.plugin[0]}` : '::warning::no auth plugin, so this run lasts one token',
+);
 console.log(`review results use the ${resultTransport} transport`);
 console.log(pty ? `the audited PTY pilot is enabled for ${phase}` : `the PTY pilot is not loaded for ${phase || '(empty)'}`);
 console.log(lsp

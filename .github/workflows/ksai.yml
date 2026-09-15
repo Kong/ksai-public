@@ -82,6 +82,32 @@ on:
         required: false
         type: string
         default: "oidc-bearer"
+      harden_runner_allowed_endpoints:
+        description: >-
+          explicit host:port allowlist enforced across the autofix job. Keep the provider, telemetry,
+          package registries, GitHub APIs, and runner bootstrap endpoints this repository needs.
+        required: false
+        type: string
+        default: |-
+          api.github.com:443
+          github.com:443
+          *.githubusercontent.com:443
+          *.actions.githubusercontent.com:443
+          *.blob.core.windows.net:443
+
+          *.datadoghq.com:443
+          archive.ubuntu.com:80
+          azure.archive.ubuntu.com:80
+          security.ubuntu.com:80
+          registry.npmjs.org:443
+          proxy.golang.org:443
+          sum.golang.org:443
+          storage.googleapis.com:443
+          pypi.org:443
+          files.pythonhosted.org:443
+          crates.io:443
+          index.crates.io:443
+          static.crates.io:443
       go_module_owners:
         description: >-
           space-separated GitHub owners whose PRIVATE Go modules this repository imports, at most two.
@@ -954,7 +980,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-help
           repository: Kong/ksai-public
-          ref: v3.78.0
+          ref: v3.78.1
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1396,7 +1422,7 @@ jobs:
         with:
           token: ${{ github.token }}
           repository: Kong/ksai-public
-          ref: v3.78.0
+          ref: v3.78.1
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1546,7 +1572,9 @@ jobs:
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
-          egress-policy: audit
+          egress-policy: block
+          allowed-endpoints: ${{ inputs.harden_runner_allowed_endpoints }}
+          disable-telemetry: true
 
       - name: Refuse a call that names no federation
         env:
@@ -1862,7 +1890,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-recover
           repository: Kong/ksai-public
-          ref: v3.78.0
+          ref: v3.78.1
           sparse-checkout: |
             .github/scripts
           persist-credentials: false

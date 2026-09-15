@@ -1,4 +1,5 @@
 import { constants, copyFileSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -11,6 +12,7 @@ const { planDirOf } = require('./plan.cjs');
 const { ANY_DEPTH_FLOOR, DENIED_PREFIX_FLOOR, deniedFor, gitVia } = require('./verify-chunk.cjs');
 const { stageAllowed } = require('./stage.cjs');
 const { lfsObjectsFromIndex, validLfsObject } = require('./trusted-git.cjs');
+const { readScope } = require('./change-scope.cjs');
 
 const SHA_SHAPE = /^[0-9a-f]{40}$/;
 
@@ -101,7 +103,7 @@ function recoveryGuide(hasLfs, hasRemoteLfs) {
     '# Recover refused KSAI work',
     '',
     '1. Check out the base commit named in `recovery.json`.',
-    '2. Run `git apply refused.diff` from the repository root.',
+    '2. Run `git apply --index refused.diff` from the repository root.',
   ];
   let step = 3;
   if (hasLfs) {
@@ -112,8 +114,17 @@ function recoveryGuide(hasLfs, hasRemoteLfs) {
     lines.push(`${step}. Run \`git lfs pull\` to fetch the base-resident objects listed in \`recovery.json\`.`);
     step += 1;
   }
-  if (hasLfs || hasRemoteLfs) lines.push(`${step}. Run \`git lfs checkout\` to replace the pointers with their payloads.`);
-  lines.push('', 'Paths listed in `excluded.txt` were deliberately not preserved.', '');
+  if (hasLfs || hasRemoteLfs) {
+    lines.push(`${step}. Run \`git lfs checkout\` to replace the pointers with their payloads.`);
+    step += 1;
+  }
+  lines.push(
+    `${step}. Run \`git write-tree\` and compare it with \`candidateTree\` in \`recovery.json\`.`,
+    `${step + 1}. Review that exact tree before committing or pushing it. Any tree change requires a new review.`,
+    '',
+    'Paths listed in `excluded.txt` were deliberately not preserved.',
+    '',
+  );
   return lines.join('\n');
 }
 
@@ -149,6 +160,7 @@ export function preserveRefused({
   deniedPaths = null,
   planDir = null,
   mergedSha = null,
+  changeScopePath = null,
   run = runCommand,
   write = writeFileSync,
   makeDir = mkdirSync,
@@ -192,6 +204,8 @@ export function preserveRefused({
     ...(manifestRel && !manifestRel.startsWith('..') ? [`:(exclude,top,literal)${manifestRel}`] : []),
   ];
 
+  const reset = git(['reset', '--mixed', '--no-refresh', '--quiet', base]);
+  if (!reset.ok) return { ...empty, reason: 'the recovery index could not be rebuilt from the recorded base' };
   const staged = stageAllowed(git, exclusions);
   if (!staged.ok) return { ...empty, reason: staged.reason };
   const diff = git(['diff', '--cached', '--binary', '--no-ext-diff', base, '--', ...exclusions]);
@@ -200,6 +214,19 @@ export function preserveRefused({
   if (patch.trim() === '') return { ...empty, reason: 'the run left nothing behind to keep' };
   const lfs = lfsObjectsFromIndex({ git, from: base, pathspec: exclusions });
   if (!lfs.ok) return { ...empty, reason: lfs.reason };
+  const written = git(['write-tree']);
+  const candidateTree = String(written.stdout ?? '').trim();
+  if (!written.ok || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(candidateTree)) {
+    return { ...empty, reason: 'the refused tree could not be recorded' };
+  }
+  const scopeRead = String(changeScopePath ?? '').trim() === ''
+    ? { ok: true, scope: null }
+    : readScope(changeScopePath, { head: base });
+  const changeScope = scopeRead.ok ? scopeRead.scope : null;
+  const patchSha256 = createHash('sha256').update(patch).digest('hex');
+  const approvalToken = createHash('sha256')
+    .update(`${candidateTree}\n${patchSha256}\n${changeScope?.digest ?? ''}\n`)
+    .digest('hex');
   const objects = lfs.objects.map(({ oid, size, source }) => ({
     oid,
     size,
@@ -222,9 +249,21 @@ export function preserveRefused({
       path.join(at, RECOVERY_METADATA),
       `${JSON.stringify(
         {
-          version: 1,
+          version: 2,
           base,
           patch: PATCH_FILE,
+          patchSha256,
+          candidateTree,
+          approvalToken,
+          refusal: 'push-gate-refused',
+          changeScope: changeScope
+            ? {
+                digest: changeScope.digest,
+                intent: changeScope.intent,
+                seeds: changeScope.seeds,
+                allowed: changeScope.allowed,
+              }
+            : null,
           lfsObjects: objects.map(({ oid, size, artifact }) => ({ oid, size, artifact })),
           lfsRemoteObjects: lfs.remoteObjects,
         },
@@ -258,6 +297,7 @@ export function main(env = process.env, { run = runCommand } = {}) {
     deniedPaths: env.DENIED_PATHS,
     planDir: planDirOf(env.PLAN_DIR),
     mergedSha: env.MERGED_SHA,
+    changeScopePath: env.CHANGE_SCOPE_FILE,
     run,
   });
 

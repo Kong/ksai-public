@@ -7,6 +7,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { cap, MAX_PR_TITLE_CHARS, planDirOf, scrub, retargetPermalinks } = require('./plan.cjs');
 const { safeEcho, verifyChunk, verifyMerge, gitVia, noChangeLeftBehind } = require('./verify-chunk.cjs');
+const { readScope, writeScopeResult } = require('./change-scope.cjs');
 const { renderDoMarker, unaskedRun, MAX_REPORT_CHARS } = require('./do.cjs');
 import { blockerFor, field, readManifest, reasonOf, runCommand, shown } from './run.mjs';
 import { publishCommit } from './signed-push.mjs';
@@ -63,6 +64,7 @@ export function recordDo({
   branch = null,
   remoteSha = null,
   repo = null,
+  prNumber = null,
   pushUrl = null,
   deniedPaths = null,
   planDir = null,
@@ -77,11 +79,21 @@ export function recordDo({
   checksPath = null,
   eventsPath = null,
   verificationPath = null,
+  changeScopePath = null,
+  recordScope = writeScopeResult,
   run = runCommand,
 } = {}) {
   const block = blockerFor(manifestPath);
   const blocked = (message) => ({ ...block(message), pushed: false });
   const merging = String(mergedSha ?? '').trim() !== '';
+  const boundScope = readScope(changeScopePath, {
+    repo,
+    pr: String(prNumber ?? ''),
+    phase: 'do',
+    head: remoteSha,
+  });
+  if (!boundScope.ok) return blocked(`I did not run the push gate: ${boundScope.reason}. Nothing was pushed.`);
+  const recordOutcome = (outcome) => recordScope(changeScopePath, boundScope.scope, outcome);
 
   const read = readManifest(manifestPath, { noun: 'The run', triggerPhrase });
   if (read.message) return blocked(read.message);
@@ -126,8 +138,23 @@ export function recordDo({
     let verifiedTree = '';
 
     if (merging) {
-      const verified = verifyMerge({ cwd, branch, remoteSha, mergedSha, manifestPath, deniedPaths, planDir });
-      if (!verified.ok) return blocked(`I did not push the merge: ${verified.reason}`);
+      const verified = verifyMerge({
+        cwd,
+        branch,
+        remoteSha,
+        mergedSha,
+        manifestPath,
+        deniedPaths,
+        planDir,
+        changeScope: boundScope.scope,
+      });
+      if (!verified.ok) {
+        const recorded = recordOutcome({ outcome: 'refused', reason: verified.reason });
+        if (!recorded.ok) {
+          return blocked(`I did not push the merge: ${verified.reason} The outcome record failed: ${recorded.reason}.`);
+        }
+        return blocked(`I did not push the merge: ${verified.reason}`);
+      }
       verifiedTree = verified.tree;
 
       if (!mergeMessageFile) {
@@ -146,10 +173,21 @@ export function recordDo({
         deniedPaths,
         planDir,
         branchGrammar: 'human-named',
+        changeScope: boundScope.scope,
       });
-      if (!verified.ok) return blocked(`I did not push the work: ${verified.reason}`);
+      if (!verified.ok) {
+        const recorded = recordOutcome({ outcome: 'refused', reason: verified.reason });
+        if (!recorded.ok) {
+          return blocked(`I did not push the work: ${verified.reason} The outcome record failed: ${recorded.reason}.`);
+        }
+        return blocked(`I did not push the work: ${verified.reason}`);
+      }
       verifiedSha = verified.sha;
+      verifiedTree = verified.tree;
     }
+
+    const verifiedRecord = recordOutcome({ outcome: 'verified', tree: verifiedTree });
+    if (!verifiedRecord.ok) return blocked(`I did not push the ${noun}: ${verifiedRecord.reason}.`);
 
     const git = gitVia(run, cwd);
     if (merging) {
@@ -189,6 +227,12 @@ export function recordDo({
       remoteLfsRefs: merging ? [mergedSha] : [],
     });
     if (!published.ok) {
+      const recorded = recordOutcome({ outcome: 'refused', tree: verifiedTree, reason: published.reason });
+      if (!recorded.ok) {
+        return blocked(
+          `I did not put the ${noun} on the branch: ${published.reason}. The outcome record failed: ${recorded.reason}.`,
+        );
+      }
       return blocked(
         `I did not put the ${noun} on the branch: ${published.reason}. Nothing was recorded, so a later request ` +
           'retries it.',
@@ -196,6 +240,10 @@ export function recordDo({
     }
     localSha = verifiedSha;
     sha = published.sha;
+    const publishedRecord = recordOutcome({ outcome: 'published', tree: verifiedTree });
+    if (!publishedRecord.ok) {
+      return { ...block(`I pushed the ${noun}, but the outcome record failed: ${publishedRecord.reason}.`), pushed: true };
+    }
   } else {
     const left = noChangeLeftBehind({ from: remoteSha, git: gitVia(run, cwd) });
     if (!left.ok) {
@@ -207,6 +255,11 @@ export function recordDo({
             'checkout.',
       );
     }
+    const git = gitVia(run, cwd);
+    const tree = git(['rev-parse', `${remoteSha}^{tree}`]);
+    const treeSha = tree.ok ? String(tree.stdout ?? '').trim() : '';
+    const recorded = recordOutcome({ outcome: 'unchanged', tree: treeSha });
+    if (!recorded.ok) return blocked(`I did not record the run result: ${recorded.reason}.`);
   }
 
   return {
@@ -236,6 +289,7 @@ export function main(env = process.env, { run = runCommand } = {}) {
     branch: env.BRANCH,
     remoteSha: env.REMOTE_SHA,
     repo: env.REPO,
+    prNumber: env.PR_NUMBER,
     pushUrl: env.PUSH_URL,
     deniedPaths: env.DENIED_PATHS,
     planDir: planDirOf(env.PLAN_DIR),
@@ -250,6 +304,7 @@ export function main(env = process.env, { run = runCommand } = {}) {
     checksPath: env.CHECKS_FILE,
     eventsPath: env.OPENCODE_EVENTS_FILE,
     verificationPath: verificationFile,
+    changeScopePath: env.CHANGE_SCOPE_FILE,
     run,
   });
 

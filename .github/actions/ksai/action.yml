@@ -3809,9 +3809,9 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        if [[ ! -x /usr/bin/bwrap || ! -x /usr/bin/socat ]]; then
+        if [[ ! -x /usr/bin/bwrap || ! -x /usr/bin/socat || ! -x /usr/bin/rg ]]; then
           sudo apt-get update
-          sudo apt-get install -y bubblewrap socat
+          sudo apt-get install -y bubblewrap socat ripgrep
         else
           echo "Reusing installed sandbox packages"
         fi
@@ -4062,6 +4062,7 @@ runs:
         KSAI_STAGE_INPUTS: ${{ steps.workflow_stage.outputs.inputs }}
         OPENCODE_PTY: ${{ inputs.opencode_pty }}
         OPENCODE_PHASE: test
+        OPENCODE_SKILLS: ""
         OPENCODE_RESUME_SESSION: ${{ steps.plan_session.outputs.session_id }}
         SUBPROCESS_ENV_SCRUB: "1"
         KSAI_JOB_INDEX: ${{ strategy.job-index || 0 }}
@@ -4409,6 +4410,7 @@ runs:
         KSAI_CHANNEL_WARN: ${{ steps.halt.outputs.warn || '0' }}
         OPENCODE_PTY: ${{ inputs.opencode_pty }}
         OPENCODE_PHASE: ${{ inputs.flow == 'review' && 'review' || steps.size.outputs.phase }}
+        OPENCODE_SKILLS: ${{ inputs.flow == 'implement' && format('{0}/_ksai/plugins/ksai-implement/skills', github.workspace) || '' }}
         OPENCODE_RESUME_SESSION: ${{ steps.plan_session.outputs.session_id }}
         SUBPROCESS_ENV_SCRUB: "1"
         KSAI_JOB_INDEX: ${{ strategy.job-index || 0 }}
@@ -4543,6 +4545,8 @@ runs:
         BRANCH: ${{ steps.open_draft.outputs.branch || steps.open_branch.outputs.branch || steps.phase.outputs.ref }}
         BASE_SHA: ${{ steps.checkout_source.outputs.commit }}
         MANIFEST: ${{ github.workspace }}/.ksai-manifest.json
+        PR_NUMBER: ${{ steps.phase.outputs.pr_number || steps.open_draft.outputs.pr_number }}
+        CHANGE_SCOPE_FILE: ${{ steps.build_implement.outputs.change_scope_file }}
         REPO: ${{ github.repository }}
         PUSH_URL: https://x-access-token:${{ inputs.source_org_github_token }}@github.com/${{ github.repository }}.git
         DENIED_PATHS: ${{ inputs.denied_paths }}
@@ -4785,6 +4789,7 @@ runs:
         PLAN_FILE: ${{ steps.phase.outputs.plan_file }}
         RESUMED_SESSION: ${{ steps.plan_session.outputs.resumed }}
         MANIFEST: ${{ github.workspace }}/.ksai-manifest.json
+        CHANGE_SCOPE_FILE: ${{ steps.build_implement.outputs.change_scope_file }}
         KSAI_GIT_AUTHOR_NAME: ${{ steps.identity.outputs.author_name }}
         KSAI_GIT_AUTHOR_EMAIL: ${{ steps.identity.outputs.author_email }}
         KSAI_GIT_FILEMODE: ${{ steps.configure_git.outputs.filemode }}
@@ -4817,6 +4822,7 @@ runs:
         PLAN_DIR: ${{ inputs.plan_file_path }}
         MANIFEST: ${{ github.workspace }}/.ksai-manifest.json
         MERGED_SHA: ${{ steps.merge_base.outputs.merged_sha }}
+        CHANGE_SCOPE_FILE: ${{ steps.build_implement.outputs.change_scope_file }}
         MERGED_REF: ${{ steps.merge_base.outputs.merged_ref }}
         MERGE_CONFLICTED: ${{ steps.merge_base.outputs.conflicted }}
         KSAI_GIT_AUTHOR_NAME: ${{ steps.identity.outputs.author_name }}
@@ -4850,6 +4856,7 @@ runs:
         DENIED_PATHS: ${{ inputs.denied_paths }}
         PLAN_DIR: ${{ inputs.plan_file_path }}
         MERGED_SHA: ${{ steps.merge_base.outputs.merged_sha }}
+        CHANGE_SCOPE_FILE: ${{ steps.build_implement.outputs.change_scope_file }}
         KSAI_GIT_FILEMODE: ${{ steps.configure_git.outputs.filemode }}
         MESSAGE_FILE: >-
           ${{ steps.publish.outputs.message_file || steps.publish_direct.outputs.message_file ||
@@ -4868,6 +4875,17 @@ runs:
         path: ${{ steps.preserve_refused.outputs.tree }}
         retention-days: ${{ inputs.artifact_retention_days }}
         if-no-files-found: ignore
+
+    - name: Upload the autofix change record
+      if: >-
+        ${{ always() && inputs.flow == 'implement' &&
+        steps.build_implement.outputs.change_scope_file != '' }}
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: ksai-change-scope-${{ steps.phase.outputs.pr_number || steps.open_draft.outputs.pr_number || 'none' }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index || 0 }}
+        path: ${{ runner.temp }}/ksai-change-scope
+        retention-days: ${{ inputs.artifact_retention_days }}
+        if-no-files-found: error
 
     - name: Decide whether the plan is finished
       id: finished

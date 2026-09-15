@@ -4,6 +4,8 @@ import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
+import { isolatedToolCommand } from './opencode-tool-sandbox.mjs';
+
 export const PTY_BUFFER_BYTES = 65_536;
 export const PTY_BUFFER_CODE_UNITS = Math.floor(PTY_BUFFER_BYTES / 3);
 export const PTY_DEFAULT_TIMEOUT_SECONDS = 600;
@@ -453,17 +455,10 @@ export function prunablePtyRecords(records, targetSize) {
 
 /** isolatedPtyCommand keeps every Linux session inside its own killable PID namespace. */
 export function isolatedPtyCommand(command, args, workdir, linux = process.platform === 'linux') {
-  if (!linux) return { command, args };
-  return {
-    command: 'bwrap',
-    args: [
-      '--bind', '/', '/',
-      '--proc', '/proc',
-      '--unshare-user', '--unshare-pid', '--new-session', '--die-with-parent',
-      '--chdir', workdir,
-      '--', command, ...args,
-    ],
-  };
+  return isolatedToolCommand(command, args, workdir, linux, {
+    ...process.env,
+    GITHUB_WORKSPACE: process.env.GITHUB_WORKSPACE || workdir,
+  });
 }
 
 /** pinnedRuntime refuses a dependency graph that differs from the exact audited lock. */

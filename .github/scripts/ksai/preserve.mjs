@@ -13,6 +13,7 @@ const { MAX_DIRECT_COMMITS, deniedFor, gitVia, grammarFor, safeEcho, soleWritabl
   require('./verify-chunk.cjs');
 const { planFilePathFor } = require('./plan.cjs');
 const { stageAll } = require('./stage.cjs');
+const { readScope, writeScopeResult } = require('./change-scope.cjs');
 
 const MAX_SUBJECT_CHARS = 72;
 
@@ -37,7 +38,7 @@ export function stopRecord(text) {
   return { stopped: held.text.trim() !== '', hard: held.hard, hold: held.hold };
 }
 
-export function main(env = process.env, run = runCommand, read = readFileSync) {
+export function main(env = process.env, run = runCommand, read = readFileSync, recordScope = writeScopeResult) {
   const outputs = { preserved: '', reason: '', tree: '' };
   let held = stopRecord('');
   try {
@@ -57,6 +58,21 @@ export function main(env = process.env, run = runCommand, read = readFileSync) {
 
   const cwd = String(env.WORKSPACE ?? '');
   const branch = String(env.BRANCH ?? '');
+  const phase = String(env.PHASE ?? '');
+  const scoped = ['fix', 'do'].includes(phase)
+    ? readScope(env.CHANGE_SCOPE_FILE, {
+        repo: env.REPO,
+        pr: String(env.PR_NUMBER ?? ''),
+        phase,
+        head: env.BASE_SHA,
+      })
+    : { ok: true, scope: null };
+  if (!scoped.ok) {
+    outputs.reason = `${scoped.reason}, so only the artifact holds the remaining work`;
+    outputs.tree = cwd;
+    writeOutputs(env.GITHUB_OUTPUT, outputs);
+    return 0;
+  }
   const git = gitVia(run, cwd);
   if (git(['rev-parse', '--verify', '--quiet', 'MERGE_HEAD']).ok) {
     outputs.reason =
@@ -101,12 +117,31 @@ export function main(env = process.env, run = runCommand, read = readFileSync) {
     onlyPath,
     branchGrammar: grammarFor(env.PHASE),
     maxCommits: MAX_DIRECT_COMMITS,
+    changeScope: scoped.scope,
   });
   if (!verified.ok) {
+    if (scoped.scope) {
+      const recorded = recordScope(env.CHANGE_SCOPE_FILE, scoped.scope, { outcome: 'refused', reason: verified.reason });
+      if (!recorded.ok) {
+        outputs.reason = `${verified.reason}; the outcome record failed (${recorded.reason}), so only the artifact holds the remaining work`;
+        outputs.tree = cwd;
+        writeOutputs(env.GITHUB_OUTPUT, outputs);
+        return 0;
+      }
+    }
     outputs.reason = `the remaining work touches a path this flow may not push (${verified.reason}), so only the artifact holds it`;
     outputs.tree = cwd;
     writeOutputs(env.GITHUB_OUTPUT, outputs);
     return 0;
+  }
+  if (scoped.scope) {
+    const recorded = recordScope(env.CHANGE_SCOPE_FILE, scoped.scope, { outcome: 'verified', tree: verified.tree });
+    if (!recorded.ok) {
+      outputs.reason = `${recorded.reason}, so only the artifact holds the remaining work`;
+      outputs.tree = cwd;
+      writeOutputs(env.GITHUB_OUTPUT, outputs);
+      return 0;
+    }
   }
 
   const published = publishCommit({
@@ -122,6 +157,16 @@ export function main(env = process.env, run = runCommand, read = readFileSync) {
   });
   outputs.preserved = published.ok ? (nothingStaged ? 'committed' : 'pushed') : '';
   outputs.reason = published.ok ? '' : `the remaining work did not reach the branch: ${safeEcho(published.reason)}`;
+  if (scoped.scope) {
+    const recorded = recordScope(env.CHANGE_SCOPE_FILE, scoped.scope, {
+      outcome: published.ok ? 'published' : 'refused',
+      tree: verified.tree,
+      reason: published.ok ? '' : published.reason,
+    });
+    if (!recorded.ok) {
+      outputs.reason = `${outputs.reason ? `${outputs.reason}; ` : ''}the outcome record failed: ${recorded.reason}`;
+    }
+  }
   outputs.tree = cwd;
   writeOutputs(env.GITHUB_OUTPUT, outputs);
   return 0;

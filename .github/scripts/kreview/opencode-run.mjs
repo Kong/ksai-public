@@ -32,6 +32,7 @@ import {
   spending,
   validateProviderPolicyConfig,
   validateProviderPolicyVersion,
+  isolatedToolPhase,
   MASKED_HOMES,
 } from '../lib/opencode.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
@@ -39,8 +40,10 @@ import { bearer, heldExpiry } from '../lib/opencode-token.mjs';
 import { completeFinal, completeStage, LIMITS, readExport, recordChildren, recordedCompletion, recoverReview, reviewAnswer, reviewSession, streamFailure } from './opencode-review.mjs';
 import { compactionSample, mcpServerCount, supportsCompaction, toolTiming, traceObserver } from './opencode-runtime.mjs';
 import { startRelay } from './otel-relay.mjs';
+import { startProviderRelay } from './opencode-provider-relay.mjs';
 import resultProtocol from './review-result.cjs';
 import { isolatedPtyCommand, ptyPilotEnabled } from './opencode-pty-core.mjs';
+import { TOOL_INJECTION_ENV, toolIsolationProbe } from './opencode-tool-sandbox.mjs';
 
 const { structuredSubmission, submitted } = resultProtocol;
 
@@ -56,8 +59,8 @@ export { listed, main };
  * derivation existed because a name dropped from a list nothing checks is a credential silently
  * handed back to a write phase's shell.
  *
- * `ANTHROPIC_FEDERATED_TOKEN` is deliberately absent and cannot join them - opencode expands it
- * in-process, so hiding the bearer from a tool call hides it from the run.
+ * Write phases keep the Anthropic bearer in this trusted broker process. Read-only phases retain
+ * the older in-process renewal path, where the model has no write-capable shell.
  */
 export const DENIED_CREDENTIALS = Object.freeze([
   // The OTLP auth header, which is a write credential for the fleet's telemetry
@@ -80,13 +83,13 @@ export const DENIED_MINTS = Object.freeze([
   'ACTIONS_RUNTIME_TOKEN',
 ]);
 
-const UNSET = [...DENIED_CREDENTIALS, ...DENIED_MINTS, 'OPENCODE_CONFIG_CONTENT', 'KSAI_PTY_LIVE_FIXTURE'];
+const UNSET = [...DENIED_CREDENTIALS, ...DENIED_MINTS, ...TOOL_INJECTION_ENV, 'OPENCODE_CONFIG_CONTENT', 'KSAI_PTY_LIVE_FIXTURE'];
 
 const EXPORTER_ENDPOINT = 'OTEL_EXPORTER_OTLP_ENDPOINT';
 
 const PROBE_TIMEOUT_MS = 60_000;
-
 const SCRUBBED = ['GITHUB_TOKEN', 'GH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'];
+const BROKERED = ['ANTHROPIC_FEDERATED_TOKEN', 'ANTHROPIC_FEDERATED_TOKEN_EXPIRES_AT'];
 
 export const scrubbing = (env) => String(env.SUBPROCESS_ENV_SCRUB ?? '1').trim() !== '0';
 
@@ -579,6 +582,7 @@ export function sandboxArgs(
   const workspace = String(env.GITHUB_WORKSPACE ?? '');
   const temp = String(env.RUNNER_TEMP ?? '');
   const opencodeHome = String(env.OPENCODE_HOME ?? '');
+  const isolatedTools = isolatedToolPhase(env.OPENCODE_PHASE);
   const providerPolicyDir = providerPolicyDirectory(opencodeHome);
   const args = [
     '--ro-bind',
@@ -660,7 +664,7 @@ export function sandboxArgs(
   }
 
   const tokenDir = String(env.KSAI_TOKEN_DIR ?? '');
-  if (tokenDir && exists(tokenDir)) {
+  if (!isolatedTools && tokenDir && exists(tokenDir)) {
     args.push('--ro-bind', tokenDir, tokenDir, '--setenv', 'KSAI_TOKEN_FILE', String(env.KSAI_TOKEN_FILE ?? ''));
   }
 
@@ -691,13 +695,20 @@ export function sandboxArgs(
   if (compactionFile) args.push('--setenv', 'KSAI_COMPACTION_FILE', compactionFile);
   const relay = String(env.KSAI_OTEL_RELAY ?? '').trim();
   if (relay) args.push('--setenv', EXPORTER_ENDPOINT, relay);
+  const providerRelay = String(env.KSAI_PROVIDER_RELAY ?? '').trim();
+  if (isolatedTools) {
+    if (!/^http:\/\/127\.0\.0\.1:[0-9]+$/.test(providerRelay)) {
+      throw new Error('write-phase provider relay is not a loopback origin');
+    }
+    args.push('--setenv', 'KSAI_PROVIDER_RELAY', providerRelay);
+  }
   if (env.OPENCODE_LSP_TOOL === 'native') {
     args.push(
       '--setenv', 'OPENCODE_EXPERIMENTAL_LSP_TOOL', 'true',
       '--setenv', 'OPENCODE_DISABLE_LSP_DOWNLOAD', 'true',
     );
   }
-  const scrubbed = scrubbing(env) ? SCRUBBED : [];
+  const scrubbed = isolatedTools ? [...SCRUBBED, ...BROKERED] : scrubbing(env) ? SCRUBBED : [];
   const denied = listed(env.SANDBOX_DENY_ENV);
   if (relay && denied.includes(EXPORTER_ENDPOINT)) {
     console.log(
@@ -711,6 +722,15 @@ export function sandboxArgs(
   args.push(
     '--setenv',
     'OPENCODE_DISABLE_PROJECT_CONFIG',
+    '1',
+    '--setenv',
+    'OPENCODE_DISABLE_EXTERNAL_SKILLS',
+    '1',
+    '--setenv',
+    'OPENCODE_DISABLE_CLAUDE_CODE',
+    '1',
+    '--setenv',
+    'OPENCODE_DISABLE_DEFAULT_PLUGINS',
     '1',
     '--setenv',
     'OPENCODE_CONFIG_DIR',
@@ -814,7 +834,10 @@ export async function broker(at, env, write = writeToken) {
  * sandbox that never started, every tool call died at exec, and the empty event stream was
  * published as a reviewer that wrote nothing.
  */
-async function main(env = process.env, { probe: probeWith = spawnSync } = {}) {
+async function main(env = process.env, {
+  probe: probeWith = spawnSync,
+  startProvider = startProviderRelay,
+} = {}) {
   const home = String(env.OPENCODE_HOME ?? '');
   for (const name of ['config', 'cache', 'state']) mkdirSync(join(home, name), { recursive: true });
   const events = String(env.EVENTS_FILE ?? '');
@@ -824,7 +847,8 @@ async function main(env = process.env, { probe: probeWith = spawnSync } = {}) {
     execution_file: execution,
   });
 
-  const tokenDir = String(env.RUNNER_TEMP ?? '') ? join(String(env.RUNNER_TEMP), 'ksai-token') : '';
+  const isolatedTools = isolatedToolPhase(env.OPENCODE_PHASE);
+  const tokenDir = !isolatedTools && String(env.RUNNER_TEMP ?? '') ? join(String(env.RUNNER_TEMP), 'ksai-token') : '';
   const tokenFile = tokenDir ? join(tokenDir, 'token.json') : '';
   if (tokenDir) mkdirSync(tokenDir, { recursive: true });
 
@@ -876,19 +900,34 @@ async function main(env = process.env, { probe: probeWith = spawnSync } = {}) {
   }
   const traces = traceObserver();
   let relay = null;
+  let providerRelay = null;
   try {
     relay = await startRelay({ env, observe: traces.observe });
   } catch (error) {
     console.log(`::warning::runtime telemetry could not start (${error?.message}), so span timings are unavailable`);
   }
-  const sandbox = sandboxArgs({
+  if (isolatedTools) {
+    try {
+      providerRelay = await startProvider({ env });
+    } catch (error) {
+      console.log(`::error::the trusted provider relay could not start: ${error?.message ?? error}`);
+      await relay?.close();
+      if (resultDir) rmSync(resultDir, { recursive: true, force: true });
+      if (compactionDir) rmSync(compactionDir, { recursive: true, force: true });
+      removePtyMetrics();
+      return 1;
+    }
+  }
+  const sandboxEnv = {
     ...env,
     KSAI_TOKEN_DIR: tokenDir,
     KSAI_TOKEN_FILE: tokenFile,
     KSAI_REVIEW_RESULT_DIR: resultDir,
     KSAI_OTEL_RELAY: relay?.url ?? '',
+    KSAI_PROVIDER_RELAY: providerRelay?.url ?? '',
     KSAI_COMPACTION_FILE: '',
-  });
+  };
+  const sandbox = sandboxArgs(sandboxEnv);
   const quiet = withoutExporter(sandbox);
   const probe = probeWith('bwrap', [...quiet, 'opencode', '--version'], { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
   if (probe.status !== 0) {
@@ -897,18 +936,44 @@ async function main(env = process.env, { probe: probeWith = spawnSync } = {}) {
       `::error::opencode cannot start inside the sandbox on runner ${env.RUNNER_NAME ?? 'unknown'}, so no run was attempted: ${said}`,
     );
     await relay?.close();
+    await providerRelay?.close();
     if (resultDir) rmSync(resultDir, { recursive: true, force: true });
     if (compactionDir) rmSync(compactionDir, { recursive: true, force: true });
     removePtyMetrics();
     return 1;
   }
-  if (ptyPilotEnabled(env)) {
+  if (isolatedTools) {
+    let isolated;
+    try {
+      isolated = toolIsolationProbe(sandboxEnv);
+    } catch (error) {
+      console.log(`::error::tool isolation could not be described: ${error.message}`);
+      await relay?.close();
+      await providerRelay?.close();
+      if (resultDir) rmSync(resultDir, { recursive: true, force: true });
+      if (compactionDir) rmSync(compactionDir, { recursive: true, force: true });
+      removePtyMetrics();
+      return 1;
+    }
+    const nested = probeWith('bwrap', [...quiet, isolated.command, ...isolated.args], { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
+    if (nested.status !== 0) {
+      const said = `${nested.stdout ?? ''}${nested.stderr ?? ''}`.trim() || String(nested.error?.message ?? 'no output');
+      console.log(`::error::write-phase tools cannot enter their credential-free network namespace: ${said}`);
+      await relay?.close();
+      await providerRelay?.close();
+      if (resultDir) rmSync(resultDir, { recursive: true, force: true });
+      if (compactionDir) rmSync(compactionDir, { recursive: true, force: true });
+      removePtyMetrics();
+      return 1;
+    }
+  } else if (ptyPilotEnabled(env)) {
     const isolated = isolatedPtyCommand('true', [], String(env.GITHUB_WORKSPACE ?? ''), true);
     const nested = probeWith('bwrap', [...quiet, isolated.command, ...isolated.args], { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
     if (nested.status !== 0) {
       const said = `${nested.stdout ?? ''}${nested.stderr ?? ''}`.trim() || String(nested.error?.message ?? 'no output');
-      console.log(`::error::the PTY pilot cannot create its per-session PID namespace: ${said}`);
+      console.log(`::error::the PTY pilot cannot create its per-session namespace: ${said}`);
       await relay?.close();
+      await providerRelay?.close();
       if (resultDir) rmSync(resultDir, { recursive: true, force: true });
       if (compactionDir) rmSync(compactionDir, { recursive: true, force: true });
       removePtyMetrics();
@@ -992,6 +1057,7 @@ async function main(env = process.env, { probe: probeWith = spawnSync } = {}) {
         KSAI_TOKEN_FILE: tokenFile,
         KSAI_REVIEW_RESULT_DIR: resultDir,
         KSAI_OTEL_RELAY: relay?.url ?? '',
+        KSAI_PROVIDER_RELAY: providerRelay?.url ?? '',
         KSAI_COMPACTION_FILE: compactionFile,
       }) : sandbox;
       const nativeRuntime = env.OPENCODE_LSP_TOOL === 'native';
@@ -1143,6 +1209,7 @@ async function main(env = process.env, { probe: probeWith = spawnSync } = {}) {
     }
   }
   await relay?.close();
+  await providerRelay?.close();
   const reduced = spawnSync(process.execPath, [join(String(env.SCRIPTS ?? ''), 'kreview/opencode-log.mjs')], {
     env: {
       ...env,

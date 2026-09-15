@@ -62,6 +62,7 @@ const {
   stripOwnComments,
 } = require('./prompt.cjs');
 const { MAX_DIRECT_COMMITS, deniedFor, soleWritable } = require('./verify-chunk.cjs');
+const { createScope, renderAllowed } = require('./change-scope.cjs');
 const { plansWork } = require('./write-triage.cjs');
 
 function refusedByBar({ command, bar, undecided }, { outputs, notices }) {
@@ -1373,7 +1374,7 @@ const PHASES = Object.freeze(
     fix: {
       file: 'ksai-fix-prompt.txt',
       writes: true,
-      build: ({ env, issueJson, denied }) =>
+      build: ({ env, issueJson, denied, allowed }) =>
         renderFixPrompt({
           repo: env.REPO,
           prNumber: env.ISSUE_NUM,
@@ -1386,6 +1387,7 @@ const PHASES = Object.freeze(
           saw: sawFrom(env),
           baseDiffRef: env.BASE_DIFF_REF,
           denied,
+          allowed,
           issueJson,
           budgetMinutes: ceilingMinutes(env.JOB_TIMEOUT_MINUTES),
           channelNonce: env.CHANNEL_NONCE,
@@ -1394,7 +1396,7 @@ const PHASES = Object.freeze(
     do: {
       file: 'ksai-do-prompt.txt',
       writes: true,
-      build: ({ env, issueJson, denied }) =>
+      build: ({ env, issueJson, denied, allowed }) =>
         renderDoPrompt({
           repo: env.REPO,
           prNumber: env.ISSUE_NUM,
@@ -1409,6 +1411,7 @@ const PHASES = Object.freeze(
           conflicted: env.MERGE_CONFLICTED,
           saw: sawFrom(env),
           denied,
+          allowed,
           issueJson,
           budgetMinutes: ceilingMinutes(env.JOB_TIMEOUT_MINUTES),
           channelNonce: env.CHANNEL_NONCE,
@@ -1424,6 +1427,7 @@ function buildPrompt({ env }) {
     file: '',
     allowed_tools: '',
     disallowed_tools: '',
+    change_scope_file: '',
   };
 
   const phase = String(env.PHASE ?? '');
@@ -1471,6 +1475,32 @@ function buildPrompt({ env }) {
     denied = rule.stated;
   }
 
+  let changeScope = null;
+  if (phase === 'fix' || phase === 'do') {
+    const threads = String(env.THREADS_FILE ?? '') === '' ? null : readJson(env.THREADS_FILE);
+    const checks = String(env.CHECKS_FILE ?? '') === '' ? null : readJson(env.CHECKS_FILE);
+    const scoped = createScope({
+      cwd: env.GITHUB_WORKSPACE,
+      phase,
+      headSha: env.BASE_SHA,
+      baseRef: env.BASE_DIFF_REF,
+      repo: env.REPO,
+      pr: env.PR_NUMBER,
+      threads,
+      checks,
+      merging: merging(env),
+      outFile: path.join(env.PROMPT_DIR, 'ksai-change-scope', 'scope.json'),
+    });
+    if (!scoped.ok) {
+      return {
+        outputs,
+        failure: `the trusted autofix change scope could not be created: ${scoped.reason}. Nothing was run`,
+      };
+    }
+    changeScope = scoped.scope;
+    outputs.change_scope_file = scoped.file;
+  }
+
   let planDocument = '';
   if (phase === 'revise') {
     try {
@@ -1493,6 +1523,7 @@ function buildPrompt({ env }) {
     jiraJson: readIfSet(env.JIRA_FILE),
     planDocument,
     denied,
+    allowed: changeScope ? renderAllowed(changeScope) : null,
   });
   fs.writeFileSync(at, prompt);
 

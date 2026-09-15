@@ -649,6 +649,7 @@ function renderFixPrompt({
   threadScoped = false,
   issueJson = null,
   denied = null,
+  allowed = null,
   saw = null,
   budgetMinutes = null,
   channelNonce = null,
@@ -787,6 +788,15 @@ function renderFixPrompt({
     ...COMMIT_MESSAGE_NOTE.map((line) => `  ${line}`),
     '  Do NOT `git add` the manifest - it is already excluded.',
     '',
+    ...(Array.isArray(allowed)
+      ? [
+          'Paths this pass MAY commit. Exact paths and base-owned policy patterns are listed; a',
+          'trusted step refuses the whole push if any changed path falls outside them:',
+          '',
+          ...allowed,
+          '',
+        ]
+      : []),
     'Paths this pass may NOT commit, enforced after you finish by a trusted step that',
     'refuses the whole push rather than part of it:',
     '',
@@ -1219,6 +1229,7 @@ function renderDoPrompt({
   threads = null,
   issueJson = null,
   denied = null,
+  allowed = null,
   mergedRef = null,
   mergedSha = null,
   conflicted = null,
@@ -1424,6 +1435,15 @@ function renderDoPrompt({
     ...(merging ? MERGE_COMMIT_NOTE : COMMIT_MESSAGE_NOTE).map((line) => `  ${line}`),
     '  Do NOT `git add` the manifest - it is already excluded.',
     '',
+    ...(Array.isArray(allowed)
+      ? [
+          'Paths this run MAY commit. Exact paths and base-owned policy patterns are listed; a',
+          'trusted step refuses the whole push if any changed path falls outside them:',
+          '',
+          ...allowed,
+          '',
+        ]
+      : []),
     'Paths this run may NOT commit, enforced after you finish by a trusted step that',
     'refuses the whole push rather than part of it:',
     '',

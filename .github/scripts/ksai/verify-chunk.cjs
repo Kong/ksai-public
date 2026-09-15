@@ -6,6 +6,7 @@ const { MAX_FILES: MAX_INSTRUCTION_FILES, expandDenied } = require('./instructio
 const { GIT_CONFIG_OVERRIDES, directGit, gitArgs, gitEnv, gitVia } = require('./trusted-git.cjs');
 const { stageMerge } = require('./stage.cjs');
 const { counted } = require('../lib/text.cjs');
+const { validateScope, verifyScopedPath } = require('./change-scope.cjs');
 
 const COMMIT_TYPES = Object.freeze(['feat', 'fix', 'chore', 'docs', 'refactor', 'perf', 'test', 'ci', 'build', 'style', 'revert']);
 
@@ -296,6 +297,7 @@ function verifyMerge({
   manifestPath = null,
   deniedPaths = null,
   planDir = null,
+  changeScope = null,
 } = {}) {
   const opened = openTree({ cwd, branch, branchGrammar: 'human-named', manifestPath });
   if (!opened.ok) return opened;
@@ -311,6 +313,8 @@ function verifyMerge({
         'this flow resolves is committed by a trusted step, so the run must leave the branch where it found it.',
     );
   }
+  const scoped = changeScope === null ? null : validateScope(changeScope, { phase: 'do', head: base });
+  if (scoped && !scoped.ok) return deny(`${scoped.reason}.`);
 
   const at = git(['rev-parse', '--git-path', 'MERGE_HEAD']);
   let recorded = [];
@@ -397,6 +401,18 @@ function verifyMerge({
   for (const file of files) {
     const hit = deniedMatch(file, expanded.denied);
     if (hit) return deny(`the resolution changes \`${safeEcho(file)}\`, which this flow may not touch.`);
+    if (scoped) {
+      const allowed = verifyScopedPath({
+        scope: scoped.scope,
+        file,
+        git,
+        baseSha: scoped.scope.head,
+        treeish: resolvedTree,
+      });
+      if (!allowed.ok) {
+        return deny(`the resolution changes a path the change scope refuses (${allowed.reason}); nothing was pushed.`);
+      }
+    }
   }
 
   const swept = new Set([...conflicted, ...files]);
@@ -425,6 +441,7 @@ function verifyChunk({
   onlyPath = null,
   branchGrammar = DEFAULT_BRANCH_GRAMMAR,
   maxCommits = 1,
+  changeScope = null,
 } = {}) {
   const opened = openTree({ cwd, branch, branchGrammar, manifestPath });
   if (!opened.ok) return opened;
@@ -503,6 +520,8 @@ function verifyChunk({
 
   const sole = String(onlyPath ?? '').trim();
   if (onlyPath !== null && sole === '') return deny('the one path this commit may change was given as empty.');
+  const scoped = changeScope === null ? null : validateScope(changeScope, { head: baseSha });
+  if (scoped && !scoped.ok) return deny(`${scoped.reason}.`);
 
   const walked = git(['rev-list', '--reverse', `${baseSha}..${tipSha}`]);
   if (!walked.ok) return deny(`git could not list the commits on \`${branchName}\`.`);
@@ -519,6 +538,18 @@ function verifyChunk({
       }
       const hit = deniedMatch(file, expanded.denied);
       if (hit) return deny(`the commit changes \`${safeEcho(file)}\`, which this flow may not touch.`);
+      if (scoped) {
+        const scopedPath = verifyScopedPath({
+          scope: scoped.scope,
+          file,
+          git,
+          baseSha: scoped.scope.head,
+          treeish: commit,
+        });
+        if (!scopedPath.ok) {
+          return deny(`the commit changes a path the change scope refuses (${scopedPath.reason}); refusing the whole push.`);
+        }
+      }
     }
     from = commit;
   }
@@ -537,7 +568,10 @@ function verifyChunk({
     return deny(`the workspace still has an uncommitted new file \`${safeEcho(file)}\`.`);
   }
 
-  return { ok: true, sha: tipSha };
+  const tree = git(['rev-parse', `${tipSha}^{tree}`]);
+  const treeSha = String(tree.stdout ?? '').trim();
+  if (!tree.ok || !SHA_SHAPE.test(treeSha)) return deny('the commit tree could not be read.');
+  return { ok: true, sha: tipSha, tree: treeSha };
 }
 
 module.exports = {
