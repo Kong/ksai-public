@@ -13,9 +13,47 @@ description: >-
 inputs:
   flow:
     description: >-
-      `review`, `implement`, `test`, or `test-publish`. It bounds which commands this run may answer and which
+      `review`, `implement`, `test`, `test-publish`, or `run`. It bounds which commands this run may answer and which
       steps may spend or write. `test-publish` is the trusted publisher half of `test`, not a comment command.
+      `run` answers no comment: it runs the caller's own prompt under a named `profile`, for a job the caller
+      triggers and whose results a trusted step of its own publishes.
     required: true
+  profile:
+    description: >-
+      flow: run only. What the run may touch: `reviewer` holds no write tool, though an allowed read command
+      such as `find` can still change the tree; `fixer` writes the tree and runs whatever build, lint and test
+      tooling it carries under the sandbox; `isolated` holds no tools and posts one message of at most 4096
+      output tokens, failing a longer answer. Every profile denies `gh`, because this flow hands the model no
+      GitHub token. The run can write `.git`, so a trusted step reading the tree afterwards runs git with
+      `core.hooksPath=/dev/null` and `core.fsmonitor=false`.
+    required: false
+    default: ""
+  prompt_file:
+    description: >-
+      flow: run only. Path to the assembled prompt. A trusted step in the calling job writes it, outside the
+      tree the run can edit.
+    required: false
+    default: ""
+  extra_allowed_tools:
+    description: "flow: run only. Comma-separated tool patterns added to the profile's allow list"
+    required: false
+    default: ""
+  extra_disallowed_tools:
+    description: "flow: run only. Comma-separated tool patterns added to the profile's deny list; a denial beats a grant"
+    required: false
+    default: ""
+  sandbox_allow_write:
+    description: "flow: run only. Newline- or comma-separated paths the sandbox may write outside the working directory, e.g. a scratch directory or a module cache"
+    required: false
+    default: ""
+  sandbox_deny_write:
+    description: "flow: run only. Newline- or comma-separated paths the sandbox may not write"
+    required: false
+    default: ""
+  sandbox_deny_env:
+    description: "flow: run only. Newline- or comma-separated environment variable names kept out of the sandbox, for a secret a tool subprocess must not read"
+    required: false
+    default: ""
   source_org_github_token:
     description: >-
       github token for the source repo. A review needs contents:read and pull-requests:write, plus issues:write
@@ -827,6 +865,14 @@ outputs:
   outcome:
     description: "flow: test-publish only. Published verdict outcome, or 'rejected' when validation fails"
     value: ${{ steps.post_test.outputs.outcome }}
+  conclusion:
+    description: >-
+      `success` or `failure`, from the model run; empty when no model ran. A `flow: run` caller reads it,
+      because nothing in that flow publishes the result for it.
+    value: ${{ steps.model_run.outputs.conclusion }}
+  execution_file:
+    description: "path to the model run's execution log, for a `flow: run` caller that reads the result itself; empty when no model ran"
+    value: ${{ steps.model_run.outputs.execution_file }}
 
 runs:
   using: composite
@@ -857,12 +903,27 @@ runs:
       shell: bash
       env:
         FLOW: ${{ inputs.flow }}
+        PROFILE: ${{ inputs.profile }}
+        PROMPT_FILE: ${{ inputs.prompt_file }}
+        EXTRA_ALLOWED_TOOLS: ${{ inputs.extra_allowed_tools }}
+        EXTRA_DISALLOWED_TOOLS: ${{ inputs.extra_disallowed_tools }}
+        SANDBOX_ALLOW_WRITE: ${{ inputs.sandbox_allow_write }}
+        SANDBOX_DENY_WRITE: ${{ inputs.sandbox_deny_write }}
+        SANDBOX_DENY_ENV: ${{ inputs.sandbox_deny_env }}
       run: |
         set -euo pipefail
         case "${FLOW}" in
-          review|implement|test|test-publish) ;;
-          *) echo "::error::flow must be one of review, implement, test, test-publish, got: ${FLOW}"; exit 1 ;;
+          review|implement|test|test-publish|run) ;;
+          *) echo "::error::flow must be one of review, implement, test, test-publish, run, got: ${FLOW}"; exit 1 ;;
         esac
+        if [[ "${FLOW}" != "run" ]]; then
+          for name in PROFILE PROMPT_FILE EXTRA_ALLOWED_TOOLS EXTRA_DISALLOWED_TOOLS SANDBOX_ALLOW_WRITE SANDBOX_DENY_WRITE SANDBOX_DENY_ENV; do
+            if [[ -n "${!name:-}" ]]; then
+              echo "::error::${name,,}: only flow: run reads it, so on flow: ${FLOW} it would bound nothing. Drop it"
+              exit 1
+            fi
+          done
+        fi
 
     - name: Validate pull request test inputs
       id: validate_test_inputs
@@ -1116,7 +1177,7 @@ runs:
       if: >-
         ${{ steps.checkout_authz.outcome == 'success' && inputs.anthropic_auth == 'oidc-bearer' &&
         inputs.dry_run == 'false' && inputs.publish == 'true' &&
-        inputs.flow != 'test' && inputs.flow != 'test-publish' }}
+        inputs.flow != 'test' && inputs.flow != 'test-publish' && inputs.flow != 'run' }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         BASE_URL: ${{ inputs.anthropic_base_url }}
@@ -1138,7 +1199,9 @@ runs:
 
     - name: Resolve the run context
       id: context
-      if: ${{ steps.checkout_authz.outcome == 'success' && inputs.flow != 'test-publish' }}
+      if: >-
+        ${{ steps.checkout_authz.outcome == 'success' && inputs.flow != 'test-publish' &&
+        inputs.flow != 'run' }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         IN_BOT_LOGIN: ${{ inputs.bot_login }}
@@ -1303,7 +1366,9 @@ runs:
 
     - name: Compute telemetry tag
       id: telemetry
-      if: ${{ inputs.dry_run == 'false' && steps.prompt.outputs.has_trigger == 'true' }}
+      if: >-
+        ${{ inputs.dry_run == 'false' &&
+        (steps.prompt.outputs.has_trigger == 'true' || inputs.flow == 'run') }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         TEAM: ${{ inputs.team }}
@@ -3568,6 +3633,23 @@ runs:
         github-token: ${{ inputs.ci_evidence_github_token }}
         path: ${{ runner.temp }}/ksai-plan-session
 
+    - name: Resolve what the caller's prompt may touch
+      id: build_run
+      if: ${{ inputs.flow == 'run' && steps.staged_scripts.outcome == 'success' }}
+      shell: bash
+      env:
+        PROFILE: ${{ inputs.profile }}
+        PROMPT_FILE: ${{ inputs.prompt_file }}
+        MODEL: ${{ inputs.model }}
+        EFFORT: ${{ inputs.effort }}
+        EXTRA_ALLOWED: ${{ inputs.extra_allowed_tools }}
+        EXTRA_DISALLOWED: ${{ inputs.extra_disallowed_tools }}
+        SANDBOX_ALLOW_WRITE: ${{ inputs.sandbox_allow_write }}
+        SANDBOX_DENY_WRITE: ${{ inputs.sandbox_deny_write }}
+        SANDBOX_DENY_ENV: ${{ inputs.sandbox_deny_env }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      run: node "${SCRIPTS}/ksai/run-flow.mjs"
+
     - name: Install opencode
       id: opencode_install
       if: >-
@@ -3578,7 +3660,8 @@ runs:
         (steps.select.outputs.plan_given != 'true' || steps.size.outputs.phase != 'plan')) ||
         (inputs.flow == 'test' && steps.test_tools.outcome == 'success') ||
         (inputs.flow == 'review' && steps.validate_args.outcome == 'success' &&
-        steps.diff.outcome == 'success' && steps.triage.outputs.skip != 'true')) }}
+        steps.diff.outcome == 'success' && steps.triage.outputs.skip != 'true') ||
+        (inputs.flow == 'run' && steps.build_run.outputs.agent == 'true')) }}
       shell: bash
       working-directory: ${{ runner.temp }}
       env:
@@ -3860,7 +3943,7 @@ runs:
       if: >-
         ${{ inputs.dry_run == 'false' &&
         (steps.build_implement.outcome == 'success' || steps.build_review.outcome == 'success' ||
-        steps.build_test.outcome == 'success') }}
+        steps.build_test.outcome == 'success' || steps.build_run.outputs.agent == 'true') }}
       shell: bash
       run: |
         set -euo pipefail
@@ -3945,7 +4028,7 @@ runs:
       if: >-
         ${{ inputs.dry_run == 'false' &&
         (steps.build_implement.outcome == 'success' || steps.build_review.outcome == 'success' ||
-        steps.build_test.outcome == 'success') }}
+        steps.build_test.outcome == 'success' || steps.build_run.outcome == 'success') }}
       shell: bash
       env:
         REPO: ${{ github.repository }}
@@ -3957,13 +4040,13 @@ runs:
         ACTOR: ${{ steps.context.outputs.commenter || github.actor }}
         ACTION: >-
           ksai:${{ inputs.flow == 'review' && 'review' || inputs.flow == 'test' && 'test' ||
-          steps.size.outputs.phase }}
+          inputs.flow == 'run' && format('run-{0}', steps.build_run.outputs.profile) || steps.size.outputs.phase }}
         MODEL: >-
           ${{ steps.write_arm.outputs.model || steps.select_arm.outputs.model ||
-          steps.select_test.outputs.model }}
+          steps.select_test.outputs.model || steps.build_run.outputs.model }}
         EFFORT: >-
           ${{ steps.write_arm.outputs.effort || steps.select_arm.outputs.effort ||
-          steps.select_test.outputs.effort }}
+          steps.select_test.outputs.effort || steps.build_run.outputs.effort }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: |
         set -euo pipefail
@@ -4003,28 +4086,30 @@ runs:
       shell: bash
       env:
         REVIEW_STRATEGY: ${{ inputs.review_strategy }}
-        REVIEW_RESULT_TRANSPORT: ${{ steps.build_review.outputs.result_transport }}
+        REVIEW_RESULT_TRANSPORT: ${{ steps.build_review.outputs.result_transport || steps.build_run.outputs.result_transport }}
         OPENCODE_LSP_TOOL: ${{ steps.build_review.outputs.lsp_tool }}
         OPENCODE_LSP_ROOT: ${{ steps.opencode_lsp.outputs.root }}
         OPENCODE_CONFIG: ${{ runner.temp }}/opencode-runtime.json
         OPENCODE_HOME: ${{ runner.temp }}/opencode-home
         OPENCODE_VERSION: ${{ steps.opencode_install.outputs.version }}
-        KREVIEW_PLUGIN_ROOT: ${{ github.workspace }}/_ksai/plugins/kreview
-        OPENCODE_MODEL: ${{ steps.write_arm.outputs.model || steps.select_test.outputs.model || steps.select_arm.outputs.model }}
-        OPENCODE_PHASE: ${{ inputs.flow == 'review' && 'review' || inputs.flow == 'test' && 'test' || steps.size.outputs.phase }}
+        KREVIEW_PLUGIN_ROOT: ${{ inputs.flow != 'run' && format('{0}/_ksai/plugins/kreview', github.workspace) || '' }}
+        OPENCODE_MODEL: ${{ steps.write_arm.outputs.model || steps.select_test.outputs.model || steps.select_arm.outputs.model || steps.build_run.outputs.model }}
+        OPENCODE_PHASE: ${{ inputs.flow == 'review' && 'review' || inputs.flow == 'test' && 'test' || steps.size.outputs.phase || steps.build_run.outputs.phase }}
         OPENCODE_PTY: ${{ inputs.opencode_pty }}
         OPENCODE_ALLOWED: >-
           ${{ steps.build_implement.outputs.allowed_tools || steps.test_tools.outputs.allowed_tools ||
-          steps.build_review.outputs.allowed_tools }}
+          steps.build_review.outputs.allowed_tools || steps.build_run.outputs.allowed_tools }}
         OPENCODE_DISALLOWED: >-
           ${{ steps.build_implement.outputs.disallowed_tools || steps.test_tools.outputs.disallowed_tools ||
-          steps.build_review.outputs.disallowed_tools }}
+          steps.build_review.outputs.disallowed_tools || steps.build_run.outputs.disallowed_tools }}
         OPENCODE_SKILLS: ${{ inputs.flow == 'implement' && format('{0}/_ksai/plugins/ksai-implement/skills', github.workspace) || '' }}
         KSAI_CHANNEL_NONCE: ${{ steps.channel.outputs.nonce }}
         ALLOWED_MODELS: ${{ inputs.allowed_models }}
         ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
         ANTHROPIC_AUTH: ${{ inputs.anthropic_auth }}
         ATTRIBUTION_HEADERS: ${{ steps.model_headers.outputs.value }}
+        SANDBOX_ALLOW_WRITE: ${{ inputs.sandbox_allow_write }}
+        SANDBOX_DENY_WRITE: ${{ inputs.sandbox_deny_write }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       working-directory: ${{ runner.temp }}
       run: |
@@ -4055,7 +4140,7 @@ runs:
       if: >-
         ${{ inputs.dry_run == 'false' && inputs.job_timeout_minutes != '0' &&
         (steps.build_implement.outcome == 'success' || steps.build_review.outcome == 'success' ||
-        steps.build_test.outcome == 'success') }}
+        steps.build_test.outcome == 'success' || steps.build_run.outputs.agent == 'true') }}
       shell: bash
       env:
         JOB_TIMEOUT_MINUTES: ${{ inputs.job_timeout_minutes }}
@@ -4428,19 +4513,54 @@ runs:
         echo "Courier watching ${REPO}#${THREAD_NUM} for what is written while this run works"
 
 
+    - name: Ask once, for a run that holds no tools
+      id: run_once
+      if: >-
+        ${{ inputs.flow == 'run' && steps.build_run.outputs.agent == 'false' &&
+        steps.model_headers.outcome == 'success' }}
+      shell: bash
+      env:
+        MODEL: ${{ steps.build_run.outputs.model }}
+        EFFORT: ${{ steps.build_run.outputs.effort }}
+        PROMPT_FILE: ${{ steps.build_run.outputs.file }}
+        EXECUTION_FILE: ${{ runner.temp }}/ksai-run-execution.json
+        ATTRIBUTION_HEADERS: ${{ steps.model_headers.outputs.value }}
+        ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
+        ANTHROPIC_AUTH: ${{ inputs.anthropic_auth }}
+        ANTHROPIC_FEDERATION_RULE_ID: ${{ inputs.federation_rule_id }}
+        ANTHROPIC_ORGANIZATION_ID: ${{ inputs.organization_id }}
+        ANTHROPIC_SERVICE_ACCOUNT_ID: ${{ inputs.service_account_id }}
+        ANTHROPIC_WORKSPACE_ID: ${{ inputs.workspace_id }}
+        OTEL_EXPORTER_OTLP_ENDPOINT: ${{ inputs.otel_endpoint }}
+        OTEL_EXPORTER_OTLP_HEADERS: ${{ inputs.otel_headers }}
+        OTEL_RESOURCE_ATTRIBUTES: >-
+          team=${{ steps.telemetry.outputs.team }},repo=${{ github.repository }},workflow=${{
+          steps.telemetry.outputs.workflow }}${{ inputs.otel_extra_attributes != '' &&
+          format(',{0}', inputs.otel_extra_attributes) || '' }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      run: |
+        set -uo pipefail
+        echo "execution_file=${EXECUTION_FILE}" >> "$GITHUB_OUTPUT"
+        if node "${SCRIPTS}/ksai/ask-once.mjs"; then
+          echo "conclusion=success" >> "$GITHUB_OUTPUT"
+        else
+          echo "conclusion=failure" >> "$GITHUB_OUTPUT"
+        fi
+
     - name: Run opencode
       id: opencode
       if: >-
         ${{ steps.mint.outcome == 'success' &&
         ((inputs.flow == 'implement' && steps.build_implement.outcome == 'success') ||
-        (inputs.flow == 'review' && steps.build_review.outcome == 'success')) }}
+        (inputs.flow == 'review' && steps.build_review.outcome == 'success') ||
+        (inputs.flow == 'run' && steps.build_run.outputs.agent == 'true')) }}
       shell: bash
       env:
         REVIEW_STRATEGY: ${{ inputs.review_strategy }}
-        REVIEW_RESULT_TRANSPORT: ${{ steps.build_review.outputs.result_transport }}
-        PROMPT_FILE: ${{ steps.build_implement.outputs.file || steps.build_test.outputs.file || steps.build_review.outputs.file }}
-        MODEL: ${{ steps.write_arm.outputs.model || steps.select_test.outputs.model || steps.select_arm.outputs.model }}
-        VARIANT: ${{ steps.write_arm.outputs.effort || steps.select_test.outputs.effort || steps.select_arm.outputs.effort }}
+        REVIEW_RESULT_TRANSPORT: ${{ steps.build_review.outputs.result_transport || steps.build_run.outputs.result_transport }}
+        PROMPT_FILE: ${{ steps.build_implement.outputs.file || steps.build_test.outputs.file || steps.build_review.outputs.file || steps.build_run.outputs.file }}
+        MODEL: ${{ steps.write_arm.outputs.model || steps.select_test.outputs.model || steps.select_arm.outputs.model || steps.build_run.outputs.model }}
+        VARIANT: ${{ steps.write_arm.outputs.effort || steps.select_test.outputs.effort || steps.select_arm.outputs.effort || steps.build_run.outputs.effort }}
         OPENCODE_CONFIG: ${{ steps.opencode_config.outputs.file }}
         OPENCODE_HOME: ${{ runner.temp }}/opencode-home
         OPENCODE_VERSION: ${{ steps.opencode_install.outputs.version }}
@@ -4464,10 +4584,13 @@ runs:
         KSAI_CHANNEL_NONCE: ${{ steps.channel.outputs.nonce || 'none' }}
         KSAI_CHANNEL_WARN: ${{ steps.halt.outputs.warn || '0' }}
         OPENCODE_PTY: ${{ inputs.opencode_pty }}
-        OPENCODE_PHASE: ${{ inputs.flow == 'review' && 'review' || steps.size.outputs.phase }}
+        OPENCODE_PHASE: ${{ inputs.flow == 'review' && 'review' || steps.size.outputs.phase || steps.build_run.outputs.phase }}
         OPENCODE_SKILLS: ${{ inputs.flow == 'implement' && format('{0}/_ksai/plugins/ksai-implement/skills', github.workspace) || '' }}
         OPENCODE_RESUME_SESSION: ${{ steps.plan_session.outputs.session_id }}
         SUBPROCESS_ENV_SCRUB: "1"
+        SANDBOX_ALLOW_WRITE: ${{ inputs.sandbox_allow_write }}
+        SANDBOX_DENY_WRITE: ${{ inputs.sandbox_deny_write }}
+        SANDBOX_DENY_ENV: ${{ inputs.sandbox_deny_env }}
         KSAI_JOB_INDEX: ${{ strategy.job-index || 0 }}
         OTEL_EXPORTER_OTLP_ENDPOINT: ${{ inputs.otel_endpoint }}
         OTEL_EXPORTER_OTLP_HEADERS: ${{ inputs.otel_headers }}
@@ -4486,14 +4609,19 @@ runs:
       id: model_run
       if: >-
         ${{ always() && (steps.opencode.outcome != 'skipped' ||
-        steps.opencode_test.outcome != 'skipped') }}
+        steps.opencode_test.outcome != 'skipped' || steps.run_once.outcome != 'skipped') }}
       shell: bash
       env:
-        CONCLUSION: ${{ steps.opencode.outputs.conclusion || steps.opencode_test.outputs.conclusion }}
+        CONCLUSION: >-
+          ${{ steps.opencode.outputs.conclusion || steps.opencode_test.outputs.conclusion ||
+          steps.run_once.outputs.conclusion }}
         OUTCOME: >-
           ${{ steps.opencode.outcome != 'skipped' && steps.opencode.outcome ||
-          steps.opencode_test.outcome != 'skipped' && steps.opencode_test.outcome || '' }}
-        EXECUTION: ${{ steps.opencode.outputs.execution_file || steps.opencode_test.outputs.execution_file }}
+          steps.opencode_test.outcome != 'skipped' && steps.opencode_test.outcome ||
+          steps.run_once.outcome != 'skipped' && steps.run_once.outcome || '' }}
+        EXECUTION: >-
+          ${{ steps.opencode.outputs.execution_file || steps.opencode_test.outputs.execution_file ||
+          steps.run_once.outputs.execution_file }}
       run: |
         set -euo pipefail
         echo "conclusion=${CONCLUSION}" >> "$GITHUB_OUTPUT"
@@ -5285,7 +5413,7 @@ runs:
     - name: Generate report
       id: report
       if: >-
-        ${{ always() && inputs.flow == 'review' &&
+        ${{ always() && (inputs.flow == 'review' || inputs.flow == 'run') &&
         steps.model_run.outputs.execution_file != '' }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
@@ -5308,7 +5436,7 @@ runs:
     - name: Load suppression rules
       id: suppressions
       if: >-
-        ${{ always() && steps.report.outputs.has_output == 'true' &&
+        ${{ always() && inputs.flow == 'review' && steps.report.outputs.has_output == 'true' &&
         inputs.suppressions_app_id != '' && inputs.suppressions_private_key != '' }}
       continue-on-error: true
       shell: bash
@@ -5327,7 +5455,7 @@ runs:
 
     - name: Post review (Claude result)
       id: comment_result
-      if: ${{ always() && steps.report.outputs.has_output == 'true' }}
+      if: ${{ always() && inputs.flow == 'review' && steps.report.outputs.has_output == 'true' }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         RUN_RESULT: ${{ steps.report.outputs.run_result }}
@@ -5397,18 +5525,23 @@ runs:
     - name: Write eval run record
       id: eval_record
       if: >-
-        ${{ always() && inputs.flow == 'review' && (steps.report.outcome == 'success' ||
+        ${{ always() && ((inputs.flow == 'run' && steps.report.outcome == 'success') ||
+        (inputs.flow == 'review' && (steps.report.outcome == 'success' ||
         steps.repo_rules.outcome == 'failure' ||
         steps.select_arm.outputs.stand_down_notice != '' ||
         (steps.triage.outputs.skip == 'true' && inputs.dry_run == 'false' &&
         steps.validate_args.outcome == 'success' &&
-        steps.select_arm.outputs.error == '')) }}
+        steps.select_arm.outputs.error == '')))) }}
       shell: bash
       working-directory: ${{ runner.temp }}
       env:
         PUBLISHED: ${{ steps.comment_result.outputs.published }}
+        FLOW: ${{ inputs.flow }}
+        PROFILE: ${{ steps.build_run.outputs.profile }}
         MODEL: ${{ steps.select_arm.outputs.model }}
         EFFORT: ${{ steps.select_arm.outputs.effort }}
+        RUN_MODEL: ${{ steps.build_run.outputs.model }}
+        RUN_EFFORT: ${{ steps.build_run.outputs.effort }}
         ENGINE: ${{ steps.engine.outputs.name }}
         SELECTED_BY: ${{ steps.select_arm.outputs.selected_by }}
         DIALS_ARM: ${{ inputs.dials_arm }}
@@ -5425,7 +5558,7 @@ runs:
         REPO_RULES_MODE: ${{ steps.repo_rules.outputs.mode }}
         PLUGIN_REF: ${{ steps.plugin_ref.outputs.ref }}
         PR_NUMBER: ${{ steps.context.outputs.issue_number }}
-        COMMIT_ID: ${{ steps.checkout_pr.outputs.commit }}
+        COMMIT_ID: ${{ steps.checkout_pr.outputs.commit || (inputs.flow == 'run' && github.sha || '') }}
         BASE_REF: ${{ steps.base.outputs.ref }}
         CONCLUSION: >-
           ${{ steps.repo_rules.outcome == 'failure' && 'rules_rejected' ||
@@ -5523,7 +5656,9 @@ runs:
 
     - name: Comment PR (run report)
       id: comment_report
-      if: ${{ inputs.publish == 'true' && always() && steps.report.outcome == 'success' }}
+      if: >-
+        ${{ inputs.publish == 'true' && always() && inputs.flow == 'review' &&
+        steps.report.outcome == 'success' }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         PR_NUMBER: ${{ steps.context.outputs.issue_number }}
@@ -5691,8 +5826,8 @@ runs:
         OPENCODE_CHILDREN_FILE: ${{ steps.opencode.outputs.children_file }}
         ENGINE: ${{ steps.engine.outputs.name }}
         FLOW: ${{ inputs.flow }}
-        MODEL: ${{ steps.write_arm.outputs.model || steps.select_test.outputs.model || steps.select_arm.outputs.model }}
-        VARIANT: ${{ steps.write_arm.outputs.effort || steps.select_test.outputs.effort || steps.select_arm.outputs.effort }}
+        MODEL: ${{ steps.write_arm.outputs.model || steps.select_test.outputs.model || steps.select_arm.outputs.model || steps.build_run.outputs.model }}
+        VARIANT: ${{ steps.write_arm.outputs.effort || steps.select_test.outputs.effort || steps.select_arm.outputs.effort || steps.build_run.outputs.effort }}
         KSAI_JOB_INDEX: ${{ strategy.job-index || 0 }}
         OTEL_EXPORTER_OTLP_ENDPOINT: ${{ inputs.otel_endpoint }}
         OTEL_EXPORTER_OTLP_HEADERS: ${{ inputs.otel_headers }}
@@ -5714,8 +5849,8 @@ runs:
         ENGINE: ${{ steps.engine.outputs.name }}
         FLOW: ${{ inputs.flow }}
         KSAI_JOB_INDEX: ${{ strategy.job-index || 0 }}
-        MODEL: ${{ steps.write_arm.outputs.model || steps.select_test.outputs.model || steps.select_arm.outputs.model }}
-        VARIANT: ${{ steps.write_arm.outputs.effort || steps.select_test.outputs.effort || steps.select_arm.outputs.effort }}
+        MODEL: ${{ steps.write_arm.outputs.model || steps.select_test.outputs.model || steps.select_arm.outputs.model || steps.build_run.outputs.model }}
+        VARIANT: ${{ steps.write_arm.outputs.effort || steps.select_test.outputs.effort || steps.select_arm.outputs.effort || steps.build_run.outputs.effort }}
         SPEND_COST: >-
           ${{ steps.write_report.outputs.spend_usd || steps.write_progress.outputs.spend_usd ||
           steps.write_comment.outputs.spend_usd || steps.eval_record.outputs.spend_usd ||
@@ -5746,8 +5881,8 @@ runs:
         ENGINE: ${{ steps.engine.outputs.name }}
         FLOW: ${{ inputs.flow }}
         KSAI_JOB_INDEX: ${{ strategy.job-index || 0 }}
-        MODEL: ${{ steps.write_arm.outputs.model || steps.select_test.outputs.model || steps.select_arm.outputs.model }}
-        VARIANT: ${{ steps.write_arm.outputs.effort || steps.select_test.outputs.effort || steps.select_arm.outputs.effort }}
+        MODEL: ${{ steps.write_arm.outputs.model || steps.select_test.outputs.model || steps.select_arm.outputs.model || steps.build_run.outputs.model }}
+        VARIANT: ${{ steps.write_arm.outputs.effort || steps.select_test.outputs.effort || steps.select_arm.outputs.effort || steps.build_run.outputs.effort }}
         OTEL_EXPORTER_OTLP_ENDPOINT: ${{ inputs.otel_endpoint }}
         OTEL_EXPORTER_OTLP_HEADERS: ${{ inputs.otel_headers }}
         OTEL_RESOURCE_ATTRIBUTES: >-
