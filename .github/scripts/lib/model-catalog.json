@@ -19,6 +19,12 @@
     "balanced": "zai-org/GLM-5.3-Flash",
     "flagship": "zai-org/GLM-5.3-Flash"
   },
+  "modelTiers": {
+    "claude-haiku-4-5": "fast",
+    "zai-org/GLM-5.3-Flash": "balanced",
+    "claude-sonnet-5": "balanced",
+    "claude-opus-5": "flagship"
+  },
   "vendorAliases": {
     "opus": "claude-opus-5",
     "sonnet": "claude-sonnet-5",

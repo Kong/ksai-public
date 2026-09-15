@@ -43,7 +43,7 @@ const {
   writeStateMarker,
 } = require('../lib/write-record.cjs');
 const { DIALS_ARM_SHAPE, armLabel, asAlert } = require('../lib/select-arm.cjs');
-const { counted } = require('../lib/text.cjs');
+const { counted, safeText } = require('../lib/text.cjs');
 const { STATUS_TABLE } = require('./publish.cjs');
 
 const MAX_PAGES = 20;
@@ -107,16 +107,16 @@ function identityMarker(identity) {
 }
 
 const SHAPES = Object.freeze([
-  { linkRuns: true, withArms: true, notes: null, withWhy: true },
-  { linkRuns: false, withArms: true, notes: null, withWhy: true },
-  { linkRuns: true, withArms: false, notes: null, withWhy: true },
-  { linkRuns: false, withArms: false, notes: null, withWhy: true },
-  { linkRuns: false, withArms: false, notes: 4, withWhy: true },
-  { linkRuns: false, withArms: false, notes: 1, withWhy: true },
-  { linkRuns: false, withArms: false, notes: 0, withWhy: true },
-  { linkRuns: false, withArms: false, notes: 0, withWhy: false },
-  { linkRuns: false, withArms: false, notes: 0, withWhy: false, withoutOldVerificationCommands: true },
-  { linkRuns: false, withArms: false, notes: 0, withWhy: false, withoutOldVerification: true },
+  { linkRuns: true, withArms: true, notes: null, withHistoricalSelections: true },
+  { linkRuns: true, withArms: true, notes: null, withHistoricalSelections: false },
+  { linkRuns: false, withArms: true, notes: null, withHistoricalSelections: false },
+  { linkRuns: true, withArms: false, notes: null, withHistoricalSelections: false },
+  { linkRuns: false, withArms: false, notes: null, withHistoricalSelections: false },
+  { linkRuns: false, withArms: false, notes: 4, withHistoricalSelections: false },
+  { linkRuns: false, withArms: false, notes: 1, withHistoricalSelections: false },
+  { linkRuns: false, withArms: false, notes: 0, withHistoricalSelections: false },
+  { linkRuns: false, withArms: false, notes: 0, withHistoricalSelections: false, withoutOldVerificationCommands: true },
+  { linkRuns: false, withArms: false, notes: 0, withHistoricalSelections: false, withoutOldVerification: true },
 ]);
 
 function historyOf(state, triggerPhrase = null) {
@@ -719,7 +719,7 @@ function renderWriteReport({
     linkRuns,
     withArms,
     notes,
-    withWhy = true,
+    withHistoricalSelections = true,
     withoutOldVerificationCommands = false,
     withoutOldVerification = false,
   ) => {
@@ -728,7 +728,7 @@ function renderWriteReport({
     const leaner = (attempt, index) => ({
       ...attempt,
       ...(withArms ? {} : { arms: [] }),
-      ...(withWhy ? {} : { selection: '' }),
+      ...(withHistoricalSelections || index === trimmed.attempts.length - 1 ? {} : { selection: '' }),
       ...(index < trimmed.attempts.length - 1 && attempt.verification
         ? withoutOldVerification
           ? { verification: null }
@@ -737,10 +737,11 @@ function renderWriteReport({
             : {}
         : {}),
     });
-    const held = withArms && withWhy && !withoutOldVerificationCommands && !withoutOldVerification
+    const held = withArms && withHistoricalSelections && !withoutOldVerificationCommands && !withoutOldVerification
       ? trimmed
       : { ...trimmed, attempts: trimmed.attempts.map(leaner) };
     const unverified = unverifiedReport(held);
+    const selection = safeText(held.attempts.at(-1)?.selection);
     const lines = unverified ? [] : historyLines(STAGED(history), historyMode);
     const said = unverified
       ? [UNVERIFIED_SUMMARY]
@@ -754,6 +755,7 @@ function renderWriteReport({
       ...said,
       ...commands,
       ...(counters === '' ? [] : ['', counters]),
+      ...(selection === '' ? [] : ['', `Selection: ${selection}`]),
       '',
       '---',
       '',
@@ -778,7 +780,7 @@ function renderWriteReport({
       shape.linkRuns,
       shape.withArms,
       shape.notes,
-      shape.withWhy,
+      shape.withHistoricalSelections,
       shape.withoutOldVerificationCommands,
       shape.withoutOldVerification,
     );

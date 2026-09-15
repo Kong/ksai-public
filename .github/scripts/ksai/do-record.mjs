@@ -90,10 +90,11 @@ export function recordDo({
   recordScope = writeScopeResult,
   secrets = [],
   retry = false,
+  recordPushed = (_sha) => {},
   run = runCommand,
 } = {}) {
   const block = blockerFor(manifestPath);
-  const blocked = (message) => ({ ...block(message), pushed: false, commitSha: null });
+  const blocked = (message) => ({ ...block(message), pushed: false, commitSha: null, pushedSha: '' });
   const merging = String(mergedSha ?? '').trim() !== '';
   const boundScope = readScope(changeScopePath, {
     repo,
@@ -252,12 +253,14 @@ export function recordDo({
     }
     localSha = verifiedSha;
     sha = published.sha;
+    recordPushed(sha);
     const publishedRecord = recordOutcome({ outcome: 'published', tree: verifiedTree });
     if (!publishedRecord.ok) {
       return {
         ...block(`I pushed the ${noun}, but the outcome record failed: ${publishedRecord.reason}.`),
         pushed: true,
         commitSha: sha || null,
+        pushedSha: sha,
       };
     }
   } else {
@@ -282,6 +285,7 @@ export function recordDo({
     status: pushing ? 'changed' : 'unchanged',
     pushed: pushing,
     commitSha: sha || null,
+    pushedSha: sha,
     message: renderReport({
       summary: manifest?.summary,
       difference: retry ? difference : '',
@@ -326,6 +330,10 @@ export function main(env = process.env, { run = runCommand } = {}) {
     changeScopePath: env.CHANGE_SCOPE_FILE,
     secrets: commandSecrets(env),
     retry: String(env.RETRY_FILE ?? '').trim() !== '',
+    recordPushed: (sha) => writeOutputs(env.GITHUB_OUTPUT, {
+      pushed_sha: sha,
+      pr_number: env.PR_NUMBER,
+    }),
     run,
   });
 

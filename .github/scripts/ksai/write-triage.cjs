@@ -2,12 +2,13 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const MODEL_CATALOG = require('../lib/model-catalog.json');
 const { classifierModel, finalResult } = require('./classify.cjs');
 const { spendFromExecution } = require('./write-report.cjs');
 const {
-  ALIASES,
   ALLOWED_EFFORTS,
   DEFAULT_MIN_EFFORT,
+  KNOWN_MODELS,
   MODEL_SHAPE,
   MODEL_TIERS,
   parseAllowedModels,
@@ -73,6 +74,16 @@ function contextOf(env) {
   ].join('\n');
 }
 
+function previousAttemptRed(file) {
+  const named = String(file ?? '').trim();
+  if (named === '') return false;
+  try {
+    return JSON.parse(fs.readFileSync(named, 'utf8'))?.previousAttemptRed === true;
+  } catch {
+    return false;
+  }
+}
+
 function criticalMatch(context) {
   const matched = CRITICAL_RULES.find((rule) => rule.pattern.test(context));
   return matched?.name ?? '';
@@ -121,6 +132,7 @@ function planWriteTriage(env = process.env) {
     file: '',
     model: '',
     sizing: sizing ? 'true' : 'false',
+    prior_red: previousAttemptRed(env.CHECKS_FILE) ? 'true' : 'false',
   };
   if (env.TRIAGE === 'off') {
     return { outputs: { ...outputs, verdict: 'off', reason: 'write triage is off' }, warnings: [] };
@@ -243,24 +255,64 @@ function readWriteTriage(env = process.env, readFile = (file) => fs.readFileSync
   return { ...sized(semanticVerdict(raw, sizing), sizing), spend: spendFromExecution(raw, true) };
 }
 
+const MODEL_TIER_BY_ID = new Map(
+  Object.entries(MODEL_CATALOG.modelTiers ?? {}).map(([model, tier]) => [model.toLowerCase(), tier]),
+);
+
 function tierOf(model) {
-  return MODEL_TIERS.find((tier) => ALIASES[tier] === model) ?? '';
+  return MODEL_TIER_BY_ID.get(String(model ?? '').trim().toLowerCase()) ?? '';
 }
 
-function automaticModel({ target, ceiling, allowed }) {
-  const ceilingTier = tierOf(ceiling);
-  if (ceilingTier === '') return { model: ceiling, applied: false };
+function configuredTier(value) {
+  const named = String(value ?? '').trim().toLowerCase();
+  return MODEL_TIERS.includes(named) ? named : tierOf(resolveModel(value));
+}
+
+function canonicalModel(value) {
+  const named = String(value ?? '').trim();
+  return KNOWN_MODELS.find((model) => model.toLowerCase() === named.toLowerCase()) ?? named;
+}
+
+function automaticModel({ target, ceiling, allowed, current }) {
+  const ceilingTier = configuredTier(ceiling);
+  const currentTier = tierOf(current);
+  if (ceilingTier === '') return { model: current, tier: currentTier, applied: false, limited: true };
   const ceilingIndex = MODEL_TIERS.indexOf(ceilingTier);
   const targetIndex = MODEL_TIERS.indexOf(target);
-  const candidates = MODEL_TIERS.filter((tier, index) => tier !== 'fast' && index <= ceilingIndex && allowed.includes(ALIASES[tier]));
-  if (candidates.length === 0) return { model: ceiling, applied: false };
+  const currentIndex = MODEL_TIERS.indexOf(currentTier);
+  if (currentIndex < 0) return { model: current, tier: currentTier, applied: false, limited: true };
+  const candidates = [...new Set(allowed.map((model) => canonicalModel(model)))]
+    .map((model, order) => ({ model, order, tier: tierOf(model) }))
+    .filter(({ model, tier }) =>
+      MODEL_SHAPE.test(model) && MODEL_TIERS.includes(tier) && tier !== 'fast' &&
+      MODEL_TIERS.indexOf(tier) >= currentIndex && MODEL_TIERS.indexOf(tier) <= ceilingIndex &&
+      MODEL_TIERS.indexOf(tier) <= targetIndex,
+    );
+  if (candidates.length === 0) {
+    return { model: current, tier: currentTier, applied: false, limited: currentTier !== target };
+  }
   candidates.sort((left, right) => {
-    const leftIndex = MODEL_TIERS.indexOf(left);
-    const rightIndex = MODEL_TIERS.indexOf(right);
-    return Math.abs(leftIndex - targetIndex) - Math.abs(rightIndex - targetIndex) || rightIndex - leftIndex;
+    const leftIndex = MODEL_TIERS.indexOf(left.tier);
+    const rightIndex = MODEL_TIERS.indexOf(right.tier);
+    return Math.abs(leftIndex - targetIndex) - Math.abs(rightIndex - targetIndex)
+      || rightIndex - leftIndex
+      || left.order - right.order;
   });
-  const selected = ALIASES[candidates[0]];
-  return { model: selected, applied: selected !== ceiling };
+  const picked = candidates[0];
+  const currentAllowed = candidates.some(({ model }) => model.toLowerCase() === String(current).toLowerCase());
+  const selected = picked.tier === currentTier && currentAllowed ? current : picked.model;
+  const tier = tierOf(selected);
+  return { model: selected, tier, applied: selected !== current, limited: tier !== target };
+}
+
+function raisedTier(tier) {
+  const at = MODEL_TIERS.indexOf(tier);
+  return at < 0 ? tier : MODEL_TIERS[Math.min(MODEL_TIERS.length - 1, at + 1)];
+}
+
+function selectionOf(tier, reason) {
+  const named = tier === '' ? 'configured model' : `tier ${tier}`;
+  return `${named}: ${String(reason ?? '').trim()}`;
 }
 
 function effortBounds({ fallback, max, min }) {
@@ -289,8 +341,7 @@ function selectWriteArm(env = process.env) {
     effort: '',
     model_source: '',
     effort_source: '',
-    reason: '',
-    profile: '',
+    selection: '',
   };
   const model = String(env.EARLY_MODEL ?? '').trim();
   const effort = String(env.EARLY_EFFORT ?? '').trim();
@@ -300,13 +351,13 @@ function selectWriteArm(env = process.env) {
     return { error: 'the early write arm was not resolved', outputs };
   }
   if (env.VERDICT === 'off' || env.VERDICT === 'explicit') {
+    const tier = tierOf(model);
     Object.assign(outputs, {
       model,
       effort,
       model_source: modelSource,
       effort_source: effortSource,
-      reason: env.REASON,
-      profile: env.VERDICT,
+      selection: selectionOf(tier, env.REASON),
     });
     return { outputs };
   }
@@ -317,15 +368,24 @@ function selectWriteArm(env = process.env) {
   let selectedEffort = effort;
   let selectedModelSource = modelSource;
   let automaticModelApplied = false;
+  const retry = isTrue(env.PRIOR_RED) && modelSource !== 'comment';
+  const hard = profileName === 'uncertain' || profileName === 'critical';
+  let selectedTier = tierOf(model);
+  const targetTier = retry ? raisedTier(selectedTier) : profile.model;
+  let limited = false;
+  const retryAtCeiling = retry && targetTier === selectedTier;
 
-  if (modelSource !== 'comment') {
+  if (modelSource !== 'comment' && profileName !== 'planning' && (hard || retry)) {
     const resolved = automaticModel({
-      target: profile.model,
-      ceiling: resolveModel(env.DEFAULT_MODEL ?? model),
-      allowed: parseAllowedModels(env.ALLOWED_MODELS).map((entry) => entry.toLowerCase()),
+      target: targetTier,
+      ceiling: env.DEFAULT_MODEL ?? model,
+      allowed: parseAllowedModels(env.ALLOWED_MODELS),
+      current: model,
     });
     selectedModel = resolved.model;
+    selectedTier = resolved.tier;
     automaticModelApplied = resolved.applied;
+    limited = resolved.limited || retryAtCeiling;
     if (automaticModelApplied) selectedModelSource = 'triage';
   }
   if (effortSource !== 'comment') {
@@ -338,17 +398,22 @@ function selectWriteArm(env = process.env) {
     if (resolved.error) return { error: resolved.error, outputs };
     selectedEffort = resolved.effort;
   }
-  if (automaticModelApplied && selectedModel === ALIASES.fast) {
+  if (automaticModelApplied && selectedTier === 'fast') {
     return { error: 'automatic write triage may not select Haiku for the main write run', outputs };
   }
 
+  const retryReason = retry
+    ? `previous KSAI attempt stayed red; ${env.REASON}`
+    : String(env.REASON ?? '');
+  const reason = limited && selectedTier !== ''
+    ? `bounded at ${selectedTier}; ${retryReason}`
+    : retryReason;
   Object.assign(outputs, {
     model: selectedModel,
     effort: selectedEffort,
     model_source: selectedModelSource,
     effort_source: effortSource === 'comment' ? 'comment' : 'triage',
-    reason: env.REASON,
-    profile: profileName,
+    selection: selectionOf(selectedTier, reason),
   });
   return { outputs };
 }
@@ -363,4 +428,5 @@ module.exports = {
   selectWriteArm,
   semanticVerdict,
   sizingApplies,
+  previousAttemptRed,
 };

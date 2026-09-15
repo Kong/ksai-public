@@ -114,6 +114,7 @@ export function recordFix({
   commitFile = null,
   changeScopePath = null,
   recordScope = writeScopeResult,
+  recordPushed = (_sha) => {},
   run = runCommand,
 } = {}) {
   const pass = PASS[String(phase ?? '')];
@@ -206,10 +207,15 @@ export function recordFix({
     }
     localSha = verified.sha;
     sha = published.sha;
+    recordPushed(sha);
     if (scoped.scope) {
       const recorded = recordScope(changeScopePath, scoped.scope, { outcome: 'published', tree: verified.tree });
       if (!recorded.ok) {
-        return { ...block(`I pushed ${pass.work}, but the outcome record failed: ${recorded.reason}.`), pushed: true };
+        return {
+          ...block(`I pushed ${pass.work}, but the outcome record failed: ${recorded.reason}.`),
+          pushed: true,
+          pushedSha: sha,
+        };
       }
     }
 
@@ -291,6 +297,7 @@ export function recordFix({
           `reply on \`${safeEcho(failure)}\` - see the workflow run. Re-request and I will pick up the rest.`,
       ),
       pushed: pushing,
+      pushedSha: sha,
       answered: answered.length,
     };
   }
@@ -306,6 +313,7 @@ export function recordFix({
   return {
     status: pushing ? 'fixed' : 'answered',
     pushed: pushing,
+    pushedSha: sha,
     answered: answered.length,
     remaining,
     message: summary ? `${headline}\n\n${summary}` : headline,
@@ -361,6 +369,10 @@ export function main(env = process.env, { run = runCommand } = {}) {
     bodyFile: path.join(tmp, 'ksai-reply.json'),
     commitFile: path.join(tmp, 'ksai-commit.json'),
     changeScopePath: env.CHANGE_SCOPE_FILE,
+    recordPushed: (sha) => writeOutputs(env.GITHUB_OUTPUT, {
+      pushed_sha: sha,
+      pr_number: env.PR_NUMBER,
+    }),
     run,
   });
 

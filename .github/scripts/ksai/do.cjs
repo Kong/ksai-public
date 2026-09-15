@@ -45,6 +45,7 @@ const MAX_REPORT_CHARS = 6000;
  * shared prefix would make a forged plan marker and a forged request marker the same forgery.
  */
 const DO_MARKER_PREFIX = '<!-- ksai-do:';
+const PUSHED_MARKER_PREFIX = '<!-- ksai-pushed:';
 
 /*
  * The same prefix under the name this flow shipped with, read but never written.
@@ -334,6 +335,18 @@ function doRequestOf(body) {
   return null;
 }
 
+function renderPushedMarker(sha) {
+  const commit = String(sha ?? '').trim().toLowerCase();
+  return /^[0-9a-f]{40}$/.test(commit) ? `${PUSHED_MARKER_PREFIX}${commit} -->` : '';
+}
+
+function pushedShaOf(body) {
+  return markerValue(body, PUSHED_MARKER_PREFIX, (value) => {
+    const commit = String(value ?? '').trim().toLowerCase();
+    return /^[0-9a-f]{40}$/.test(commit) ? commit : null;
+  });
+}
+
 /**
  * Whether this flow has already reported on this request.
  *
@@ -421,6 +434,111 @@ async function alreadyReported({
 
   if (answered) return { answered: true, unreadable: null };
   return { answered: false, unreadable };
+}
+
+async function reportedPushedHead({ github, core, owner, repo, prNumber, sha, botLogin }) {
+  let found = false;
+  const { unreadable } = await probeComments({
+    github,
+    owner,
+    repo,
+    prNumber,
+    maxPages: MAX_REPORT_PAGES,
+    cannot: 'cannot attribute this unsigned head to a KSAI receipt',
+    stop: (comment) => {
+      const configured = String(botLogin ?? '').trim().toLowerCase().replace(/\[bot\]$/, '');
+      const author = String(comment?.user?.login ?? '').trim().toLowerCase();
+      found =
+        configured !== '' &&
+        author === `${configured}[bot]` &&
+        comment?.user?.type === 'Bot' &&
+        vouchedOwn(comment, botLogin) &&
+        pushedShaOf(comment?.body) === String(sha).toLowerCase();
+      return found;
+    },
+  });
+  if (unreadable) {
+    core?.warning?.(`${unreadable}, so write triage will not treat this unsigned head as a failed KSAI attempt.`);
+  }
+  return found;
+}
+
+async function createPushedReceipt({
+  github = null,
+  core = null,
+  owner = null,
+  repo = null,
+  prNumber = null,
+  sha = null,
+} = {}) {
+  const body = renderPushedMarker(sha);
+  const number = Number(prNumber);
+  if (body === '' || !Number.isSafeInteger(number) || number <= 0) {
+    core?.warning?.('The pushed head could not be recorded immutably, so a later red run will not treat it as a retry.');
+    return { recorded: false };
+  }
+  try {
+    await github.rest.issues.createComment({ owner, repo, issue_number: number, body });
+    return { recorded: true };
+  } catch (error) {
+    core?.warning?.(
+      `The pushed head could not be recorded immutably (${error?.message ?? error}), so a later red run will not ` +
+        'treat it as a retry.',
+    );
+    return { recorded: false };
+  }
+}
+
+async function botAuthoredHead({ github, core, owner, repo, prNumber, sha, botLogin }) {
+  if (String(botLogin ?? '').trim() === '' || !/^[0-9a-f]{40}$/i.test(String(sha ?? ''))) return false;
+  try {
+    const commit = (await github.rest.repos.getCommit({ owner, repo, ref: sha })).data;
+    if (!isOwnLogin(commit?.author?.login, botLogin) || commit?.author?.type !== 'Bot') return false;
+    const ownBotCommitter =
+      isOwnLogin(commit?.committer?.login, botLogin) && commit?.committer?.type === 'Bot';
+    const webFlowCommitter =
+      String(commit?.committer?.login ?? '').toLowerCase() === 'web-flow' && commit?.committer?.type === 'User';
+    const verification = commit?.commit?.verification;
+    if (verification?.verified === true && verification?.reason === 'valid' &&
+      (webFlowCommitter || ownBotCommitter)) return true;
+    if (verification?.verified !== false || verification?.reason !== 'unsigned' || !ownBotCommitter) return false;
+    return reportedPushedHead({ github, core, owner, repo, prNumber, sha, botLogin });
+  } catch (error) {
+    core?.warning?.(
+      `Could not attribute the red head ${String(sha)} (${error?.message ?? error}), so write triage will not ` +
+        'treat it as a failed KSAI attempt.',
+    );
+    return false;
+  }
+}
+
+async function recordCheckEvidence({
+  evidence = null,
+  github = null,
+  core = null,
+  owner = null,
+  repo = null,
+  prNumber = null,
+  sha = null,
+  botLogin = null,
+  checksFile = null,
+  writeFile = (at, body) => require('node:fs').writeFileSync(at, body),
+} = {}) {
+  if (evidence === null) return { evidence: null, failing: 0, checksFile: '' };
+  if (!checksFile) return { error: 'no path was given to write the CI evidence to' };
+  const failing = evidence.failingTotal + evidence.statusesTotal;
+  const previousAttemptRed = failing > 0 && await botAuthoredHead({
+    github,
+    core,
+    owner,
+    repo,
+    prNumber,
+    sha,
+    botLogin,
+  });
+  const recorded = { ...evidence, previousAttemptRed };
+  writeFile(checksFile, JSON.stringify(recorded));
+  return { evidence: recorded, failing, checksFile };
 }
 
 /* The phase a request that already has a report resolves to; action-wiring.test.mjs pins the run-failed notice to it. */
@@ -585,7 +703,24 @@ async function resolveDoPhase({
     return { phase: 'do', ref, baseRef, prNumber: target.prNumber, pending: 0, conflicting: false };
   }
 
-  if (evidence !== null && !checksFile) return { error: 'no path was given to write the CI evidence to' };
+  /*
+   * Written whole, including the counts and the flags, because the prompt renderer states every bound it hit. A
+   * caller handed only the failing list would have to re-derive what was withheld, and the renderer is the one
+   * place that turns those numbers into sentences.
+   */
+  const recorded = await recordCheckEvidence({
+    evidence,
+    github,
+    core,
+    owner,
+    repo,
+    prNumber: number,
+    sha: reportedHeadSha,
+    botLogin,
+    checksFile,
+    writeFile,
+  });
+  if (recorded.error) return { error: recorded.error };
   const retry = failing > 0 && unasked
     ? await readFailedAttempt({
       github,
@@ -599,12 +734,6 @@ async function resolveDoPhase({
     })
     : null;
   if (retry !== null && !retryFile) return { error: 'no path was given to write the failed attempt to' };
-  /*
-   * Written whole, including the counts and the flags, because the prompt renderer states every bound it hit. A
-   * caller handed only the failing list would have to re-derive what was withheld, and the renderer is the one
-   * place that turns those numbers into sentences.
-   */
-  if (evidence !== null) writeFile(checksFile, JSON.stringify(evidence));
   if (retry !== null) writeFile(retryFile, JSON.stringify(retry));
   if (thread) writeFile(threadsFile, JSON.stringify([thread]));
 
@@ -621,7 +750,7 @@ async function resolveDoPhase({
     held: target.held,
     prNumber: target.prNumber,
     pending: 1,
-    checksFile: evidence === null ? '' : checksFile,
+    checksFile: recorded.checksFile,
     retryFile: retry === null ? '' : retryFile,
     threadsFile: thread ? threadsFile : '',
     conflicting,
@@ -637,11 +766,16 @@ module.exports = {
    */
   renderDoMarker,
   doRequestOf,
+  renderPushedMarker,
+  pushedShaOf,
   alreadyReported,
   boundedFiles,
   publishedReport,
   readFailedAttempt,
   renderFailedAttempt,
+  botAuthoredHead,
+  createPushedReceipt,
+  recordCheckEvidence,
   resolveDoPhase,
   unaskedRun,
   UNASKED_TRIGGERS,

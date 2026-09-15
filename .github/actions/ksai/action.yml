@@ -23,10 +23,10 @@ inputs:
       open the draft pull request, plus issues:write to comment and react. A test run needs contents:read,
       pull-requests:read and issues:read. Test publication needs pull-requests:write.
 
-      When `ci_evidence_github_token` is empty, the `do` phase also reads CI evidence on this token and needs
-      three read scopes. Without `checks:read`, the check-run list answers 403 and the reader may see no failing
-      checks. `statuses:read` covers the older statuses API. `actions:read` lets KSAI read a failing job's log
-      tail.
+      When `ci_evidence_github_token` is empty, pull-request write phases also read CI evidence on this token and
+      need three read scopes. Without `checks:read`, the check-run list answers 403 and the reader may see no
+      failing checks. `statuses:read` covers the older statuses API. `actions:read` lets KSAI read a failing
+      job's log tail.
     required: true
   authorization_github_token:
     description: >-
@@ -46,8 +46,8 @@ inputs:
     default: ""
   ci_evidence_github_token:
     description: >-
-      read-only token the `do` phase reads its CI evidence on: checks:read, statuses:read and actions:read.
-      Empty keeps the evidence on `source_org_github_token`.
+      read-only token pull-request write phases read their CI evidence on: checks:read, statuses:read and
+      actions:read. Empty keeps the evidence on `source_org_github_token`.
 
       It exists because those three scopes cannot always be added to the push token. They are App-installation
       configuration, and an installation that does not hold them answers `422 The permissions requested are not
@@ -3036,12 +3036,15 @@ runs:
         MIN_EFFORT: ${{ inputs.min_effort }}
         VERDICT: ${{ steps.write_triage_verdict.outputs.verdict }}
         REASON: ${{ steps.write_triage_verdict.outputs.reason }}
+        PRIOR_RED: ${{ steps.prepare_write_triage.outputs.prior_red }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:
         script: |
           const { selectWriteArm } = require(`${process.env.SCRIPTS}/ksai/write-triage.cjs`);
           const { outputs, error } = selectWriteArm(process.env);
-          for (const [name, value] of Object.entries(outputs)) core.setOutput(name, value);
+          for (const name of ['model', 'effort', 'model_source', 'effort_source', 'selection']) {
+            core.setOutput(name, outputs[name]);
+          }
           if (error) core.setFailed(error);
 
     - name: Decide whether this run plans first or builds directly
@@ -3410,8 +3413,7 @@ runs:
         MODEL_SOURCE: ${{ steps.write_arm.outputs.model_source }}
         EFFORT_SOURCE: ${{ steps.write_arm.outputs.effort_source }}
         DIALS_ARM: ${{ inputs.dials_arm }}
-        SELECTION: >-
-          ${{ format('{0}: {1}', steps.write_arm.outputs.profile, steps.write_arm.outputs.reason) }}
+        SELECTION: ${{ steps.write_arm.outputs.selection }}
         ROUTE_COMMAND: ${{ steps.select.outputs.command }}
         ROUTE_SURFACE: ${{ steps.select.outputs.route_surface }}
         ROUTE_SOURCE: ${{ steps.select.outputs.route_source }}
@@ -4842,6 +4844,37 @@ runs:
         PUSH_URL="https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" \
           node "${SCRIPTS}/ksai/do-record.mjs"
 
+    - name: Record the pushed head immutably
+      id: pushed_receipt
+      if: >-
+        ${{ always() && inputs.flow == 'implement' && inputs.dry_run == 'false' &&
+        (steps.publish.outputs.pushed_sha != '' || steps.publish_direct.outputs.pushed_sha != '' ||
+        steps.record.outputs.pushed_sha != '' || steps.record_fix.outputs.pushed_sha != '' ||
+        steps.record_do.outputs.pushed_sha != '') }}
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        PR_NUMBER: >-
+          ${{ steps.publish.outputs.pr_number || steps.publish_direct.outputs.pr_number ||
+          steps.record.outputs.pr_number || steps.record_fix.outputs.pr_number ||
+          steps.record_do.outputs.pr_number }}
+        PUSHED_SHA: >-
+          ${{ steps.publish.outputs.pushed_sha || steps.publish_direct.outputs.pushed_sha ||
+          steps.record.outputs.pushed_sha || steps.record_fix.outputs.pushed_sha ||
+          steps.record_do.outputs.pushed_sha }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      with:
+        github-token: ${{ inputs.source_org_github_token }}
+        script: |
+          const { createPushedReceipt } = require(`${process.env.SCRIPTS}/ksai/do.cjs`);
+          await createPushedReceipt({
+            github,
+            core,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            prNumber: process.env.PR_NUMBER,
+            sha: process.env.PUSHED_SHA,
+          });
+
     - name: Keep the work a push gate refused
       id: preserve_refused
       if: >-
@@ -5033,9 +5066,7 @@ runs:
         EFFORT_SOURCE: ${{ steps.write_arm.outputs.effort_source || steps.select.outputs.effort_source }}
         DIALS_ARM: ${{ inputs.dials_arm }}
         SELECTION: >-
-          ${{ steps.write_arm.outputs.profile != '' &&
-          format('{0}: {1}', steps.write_arm.outputs.profile, steps.write_arm.outputs.reason) ||
-          'write selection did not complete' }}
+          ${{ steps.write_arm.outputs.selection || 'write selection did not complete' }}
         ROUTE_COMMAND: ${{ steps.select.outputs.command }}
         ROUTE_SURFACE: ${{ steps.select.outputs.route_surface }}
         ROUTE_SOURCE: ${{ steps.select.outputs.route_source }}

@@ -29,6 +29,7 @@ export function recordStep({
   triggerPhrase = null,
   bodyFile = null,
   commitFile = null,
+  recordPushed = (_sha) => {},
   run = runCommand,
 } = {}) {
   const block = blockerFor(manifestPath);
@@ -49,6 +50,7 @@ export function recordStep({
 
   const status = field(manifest?.status);
   let pushed;
+  let pushedSha = '';
 
   if (status === 'blocked') {
     return block(`Stopped on "${quoted}": ${scrub(reasonOf(manifest), { triggerPhrase }).trim()}`);
@@ -90,13 +92,15 @@ export function recordStep({
       );
     }
     pushed = true;
+    pushedSha = published.sha;
+    recordPushed(pushedSha);
   } else {
     return block(`The step reported an unrecognized status: ${safeEcho(shown(manifest?.status))}`);
   }
 
   const view = run('gh', ['pr', 'view', String(prNumber), '--repo', repo, '--json', 'body', '-q', '.body']);
   if (!view.ok) {
-    return { fatal: 'could not read the pull request body, so no box was ticked.', pushed };
+    return { fatal: 'could not read the pull request body, so no box was ticked.', pushed, pushedSha };
   }
 
   const flipped = checkStep(view.stdout, stepTitle, { triggerPhrase });
@@ -127,6 +131,7 @@ export function recordStep({
   return {
     status: 'stepped',
     pushed,
+    pushedSha,
     remaining: remainingAfter,
     boundary: stepsLeft === 0 && remainingAfter > 0,
     message: finishedMessage({ quoted, remainingAfter, stepsLeft }),
@@ -164,6 +169,10 @@ export function main(env = process.env, { run = runCommand } = {}) {
     triggerPhrase: env.TRIGGER,
     bodyFile: path.join(tmp, 'ksai-pr-body.md'),
     commitFile: path.join(tmp, 'ksai-commit.json'),
+    recordPushed: (sha) => writeOutputs(env.GITHUB_OUTPUT, {
+      pushed_sha: sha,
+      pr_number: env.PR_NUMBER,
+    }),
     run,
   });
 

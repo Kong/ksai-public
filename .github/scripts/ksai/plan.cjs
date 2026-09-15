@@ -164,7 +164,7 @@ const TASK_ROW = /(^|[\s>])((?:[-*+]|\d{1,9}[.)])[ \t]*)\[([ \t]*[xX]?[ \t]*)\]/
 
 const HTML_COMMENT = /<!--[\s\S]*?-->/g;
 
-const RESERVED_COMMENT = /(?:ksai|muthur)-(?:plan|do|phase)|kreview-(?:ids|finding)|ksai-(?:criteria|released|boundaries|write|status|paused)|ksai:/;
+const RESERVED_COMMENT = /(?:ksai|muthur)-(?:plan|do|phase)|kreview-(?:ids|finding)|ksai-(?:criteria|released|boundaries|write|status|paused|pushed)|ksai:/;
 
 const CRITERIA_MARKER_PREFIX = '<!-- ksai-criteria:';
 

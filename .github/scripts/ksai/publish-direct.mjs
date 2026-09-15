@@ -34,6 +34,8 @@ export function publishDirect({
   deniedPaths = null,
   planDir = null,
   commitFile = null,
+  recordPushed = (_sha) => {},
+  recordPull = (_number) => {},
   run = runCommand,
 } = {}) {
   const block = blockerFor(manifestPath);
@@ -94,6 +96,7 @@ export function publishDirect({
   if (!published.ok) {
     return block(`The work did not reach the remote: ${published.reason} - see the workflow run.`);
   }
+  recordPushed(published.sha);
 
   writeFileSync(bodyFile, rendered.body);
   const created = createPull({ repo, base: defaultBranch, head: branch, title, bodyFile, run });
@@ -104,10 +107,12 @@ export function publishDirect({
   if (!prNumber) {
     return block(`The pull request was opened but its number could not be read back from \`${safeEcho(prUrl)}\`.`);
   }
+  recordPull(prNumber);
 
   const at = pullUrl({ serverUrl, repository: repo, prNumber });
   return {
     status: 'built',
+    pushedSha: published.sha,
     prUrl: at || prUrl,
     prNumber,
     message: linked(
@@ -141,6 +146,12 @@ export function main(env = process.env, { run = runCommand } = {}) {
     pushUrl: env.PUSH_URL,
     deniedPaths: env.DENIED_PATHS,
     planDir: planDirOf(env.PLAN_DIR),
+    recordPushed: (sha) => writeOutputs(env.GITHUB_OUTPUT, {
+      pushed_sha: sha,
+    }),
+    recordPull: (number) => writeOutputs(env.GITHUB_OUTPUT, {
+      pr_number: number,
+    }),
     run,
   });
 

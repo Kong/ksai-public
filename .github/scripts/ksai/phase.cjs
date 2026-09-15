@@ -498,6 +498,28 @@ async function resolvePhase({
       const { phase, ref, prNumber, pending, threads, deferred, disputed, baseRef, held, target, total } = out;
       known = target ?? null;
       if (scoped || pending.length > 0 || total > 0) {
+        const evidence = admits.builds
+          ? await require('./checks.cjs').readFailingChecks({
+            github: checksGithub ?? github,
+            core,
+            owner,
+            repo,
+            sha: known?.reportedHeadSha,
+          })
+          : null;
+        const recorded = await require('./do.cjs').recordCheckEvidence({
+          evidence,
+          github,
+          core,
+          owner,
+          repo,
+          prNumber,
+          sha: known?.reportedHeadSha,
+          botLogin,
+          checksFile,
+          writeFile,
+        });
+        if (recorded.error) return refuse(recorded.error);
         writeFile(threadsFile, JSON.stringify(pending));
         writeFile(threadStateFile, JSON.stringify(threads));
         return normalize({
@@ -510,6 +532,7 @@ async function resolvePhase({
           deferred,
           baseRef,
           held: standingHold(held),
+          checksFile: recorded.checksFile,
           threadsFile,
           threadStateFile,
           onBranch,

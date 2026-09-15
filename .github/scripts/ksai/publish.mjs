@@ -46,6 +46,7 @@ export function publishPlan({
   planDir = null,
   commitFile = null,
   noun = 'Planning',
+  recordPushed = (_sha) => {},
   run = runCommand,
 } = {}) {
   const block = blockerFor(manifestPath);
@@ -167,6 +168,7 @@ export function publishPlan({
   if (!published.ok) {
     return block(`The plan document did not reach the branch: ${published.reason} - see the workflow run.`);
   }
+  recordPushed(published.sha);
 
   writeFileSync(bodyFile, carryRecords(String(current.stdout), waiting.body));
   const edited = run('gh', ['pr', 'edit', number, '--repo', repo, '--title', title, '--body-file', bodyFile]);
@@ -199,6 +201,7 @@ export function publishPlan({
   const prUrl = pullUrl({ serverUrl, repository: repo, prNumber: number });
   return {
     status: 'planned',
+    pushedSha: published.sha,
     planFile: planPath,
     prUrl,
     message: linked(
@@ -236,6 +239,10 @@ export function main(env = process.env, { run = runCommand } = {}) {
     deniedPaths: env.DENIED_PATHS,
     planDir: env.PLAN_DIR,
     noun: env.PLAN_GIVEN === 'true' ? 'The requester' : 'Planning',
+    recordPushed: (sha) => writeOutputs(env.GITHUB_OUTPUT, {
+      pushed_sha: sha,
+      pr_number: env.PR_NUMBER,
+    }),
     run,
   });
 
