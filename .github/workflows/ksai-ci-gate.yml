@@ -1,0 +1,67 @@
+name: KSAI privileged CI gate
+
+on:
+  workflow_call:
+    inputs:
+      runs_on:
+        description: Runner label, or labels as a JSON array
+        required: false
+        type: string
+        default: ubuntu-latest
+      app_login:
+        description: Login of the App this repository runs KSAI as
+        required: false
+        type: string
+        default: the App this repository runs KSAI as
+      pr_number:
+        description: Pull request number from the default-branch-owned caller
+        required: true
+        type: number
+      head_sha:
+        description: Pull request head SHA from the default-branch-owned caller
+        required: true
+        type: string
+    outputs:
+      generated:
+        description: Whether the pull request contains a verified KSAI commit
+        value: ${{ jobs.gate.outputs.generated }}
+      privileged:
+        description: Whether the exact head may enter privileged CI
+        value: ${{ jobs.gate.outputs.privileged }}
+      head_sha:
+        description: Exact approved pull request head
+        value: ${{ jobs.gate.outputs.head_sha }}
+      approved_by:
+        description: Trusted reviewers who approved the exact head
+        value: ${{ jobs.gate.outputs.approved_by }}
+
+permissions: {}
+cache-mode: none
+
+jobs:
+  gate:
+    runs-on: ${{ startsWith(inputs.runs_on, '[') && fromJSON(inputs.runs_on) || inputs.runs_on }}
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    outputs:
+      generated: ${{ steps.approval.outputs.generated }}
+      privileged: ${{ steps.approval.outputs.privileged }}
+      head_sha: ${{ steps.approval.outputs.head-sha }}
+      approved_by: ${{ steps.approval.outputs.approved-by }}
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      - id: approval
+        name: Bind privileged CI to the reviewed head
+        uses: $/.github/actions/require-independent-approval
+        with:
+          github-token: ${{ github.token }}
+          pr-number: ${{ inputs.pr_number }}
+          head-sha: ${{ inputs.head_sha }}
+          bot-login: ${{ inputs.app_login }}
+          mode: privileged-ci

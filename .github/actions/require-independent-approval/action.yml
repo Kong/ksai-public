@@ -1,46 +1,61 @@
 name: Require Independent Approval
 description: >
-  Holds a pull request until the approvals its base branch requires come from
-  somebody who did not contribute to it. A contributor is the pull request's
-  author, any commit author on it, or any login named by a `Co-authored-by:`
-  trailer. GitHub only refuses an approval from the pull request's author, so a
-  branch a bot opened on a person's behalf can be approved by that same person.
-  Reports a commit status to make required, and dismisses a contributor's own
-  approval so GitHub recounts without it. A pull request carrying no
-  `Co-authored-by:` trailer on a commit an App published is reported green and
-  nothing on it is dismissed - GitHub's own rules already describe it.
+  Requires approval from somebody who did not contribute to a pull request.
+  Hold mode reports the merge status and dismisses contributor approvals.
+  Privileged-CI mode is read-only and releases only an exact, currently approved
+  head to a downstream credentialed job.
 
 inputs:
   github-token:
-    description: "token to read the pull request, its commits, its reviews and the base branch rules (contents:read, metadata:read), write the commit status (statuses:write) and dismiss a contributor's approval (pull-requests:write)"
+    description: "token to read the pull request, commits and reviews. Hold mode also needs pull-requests:write and statuses:write; privileged-ci also needs actions:read for publisher provenance"
     required: true
   pr-number:
-    description: "pull request to hold"
+    description: "pull request to inspect"
     required: true
   head-sha:
-    description: "head commit of that pull request, from the event payload, so a failure can be reported on it even when the pull request itself cannot be read"
+    description: "head commit from the event payload; privileged-ci requires it to equal the live and reviewed head"
     required: true
   bot-login:
-    description: "login of the App this flow publishes as, with or without the `[bot]` suffix. Only a commit that App or `github-actions[bot]` published turns the hold on. An empty value holds any App-published trailer instead, since a commit of this flow's lands on pull requests other bots opened"
+    description: "login of the App this flow publishes as, with or without `[bot]`; empty recognizes trusted KSAI attribution from any App"
     required: false
     default: ""
+  mode:
+    description: "hold writes the merge status and dismisses contributor approvals; privileged-ci reads only and releases an exact reviewed head to a privileged job"
+    required: false
+    default: hold
+
+outputs:
+  generated:
+    description: "true when a verified KSAI publisher commit is present"
+    value: ${{ steps.gate.outputs.generated }}
+  privileged:
+    description: "true only when privileged-ci mode accepts the exact head"
+    value: ${{ steps.gate.outputs.privileged }}
+  head-sha:
+    description: "exact pull request head inspected by privileged-ci mode"
+    value: ${{ steps.gate.outputs.head-sha }}
+  approved-by:
+    description: "comma-separated trusted reviewers who approved the exact head"
+    value: ${{ steps.gate.outputs.approved-by }}
 
 runs:
   using: composite
   steps:
-    - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+    - id: gate
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         INDEPENDENT_ACTION_PATH: ${{ github.action_path }}
         INDEPENDENT_PR: ${{ inputs.pr-number }}
         INDEPENDENT_HEAD_SHA: ${{ inputs.head-sha }}
         INDEPENDENT_BOT_LOGIN: ${{ inputs.bot-login }}
+        INDEPENDENT_MODE: ${{ inputs.mode }}
         INDEPENDENT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       with:
         github-token: ${{ inputs.github-token }}
         retries: 3
         script: |
-          const { run } = require(`${process.env.INDEPENDENT_ACTION_PATH}/independent.cjs`);
-          await run({
+          const gate = require(`${process.env.INDEPENDENT_ACTION_PATH}/independent.cjs`);
+          const common = {
             github,
             core,
             owner: context.repo.owner,
@@ -49,4 +64,7 @@ runs:
             headSha: process.env.INDEPENDENT_HEAD_SHA,
             targetUrl: process.env.INDEPENDENT_RUN_URL,
             botLogin: process.env.INDEPENDENT_BOT_LOGIN,
-          });
+          };
+          if (process.env.INDEPENDENT_MODE === 'hold') await gate.run(common);
+          else if (process.env.INDEPENDENT_MODE === 'privileged-ci') await gate.runPrivileged(common);
+          else core.setFailed(`unknown independent-approval mode: ${process.env.INDEPENDENT_MODE}`);
