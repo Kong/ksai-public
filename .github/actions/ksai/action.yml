@@ -5062,6 +5062,7 @@ runs:
         MAIN_EXECUTION: ${{ steps.model_run.outputs.execution_file }}
         MAIN_CALLED: ${{ steps.model_run.outputs.outcome }}
         VERIFICATION_FILE: ${{ steps.record_do.outputs.verification_file }}
+        COMMIT_SHA: ${{ steps.record_do.outputs.commit_sha }}
         STATUS_MODEL: ${{ steps.status_gate.outputs.model }}
         STATUS_EFFORT: ${{ steps.status_gate.outputs.model && 'low' || '' }}
         STATUS: ${{ steps.status_report.outputs.record }}

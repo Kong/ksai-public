@@ -61,6 +61,7 @@ const ATTEMPT_FIELDS = Object.freeze([
   'reason',
   'dials_arm',
   'verification',
+  'commit_sha',
 ]);
 
 const VERIFICATION_STATUSES = Object.freeze(['verified', 'failed', 'unverified', 'not-applicable']);
@@ -133,6 +134,7 @@ function validAttempt(attempt) {
   if (attempt.reason !== null && !shaped(attempt.reason, REASON_SHAPE)) return false;
   if (attempt.dials_arm !== null && !shaped(attempt.dials_arm, DIALS_ARM_SHAPE)) return false;
   if (!validVerification(attempt.verification)) return false;
+  if (attempt.commit_sha !== null && attempt.commit_sha !== undefined && !shaped(attempt.commit_sha, /^[a-f0-9]{40}$/)) return false;
   return typeof attempt.selection === 'string' && attempt.selection.length <= 80;
 }
 

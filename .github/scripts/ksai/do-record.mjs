@@ -84,7 +84,7 @@ export function recordDo({
   run = runCommand,
 } = {}) {
   const block = blockerFor(manifestPath);
-  const blocked = (message) => ({ ...block(message), pushed: false });
+  const blocked = (message) => ({ ...block(message), pushed: false, commitSha: null });
   const merging = String(mergedSha ?? '').trim() !== '';
   const boundScope = readScope(changeScopePath, {
     repo,
@@ -242,7 +242,11 @@ export function recordDo({
     sha = published.sha;
     const publishedRecord = recordOutcome({ outcome: 'published', tree: verifiedTree });
     if (!publishedRecord.ok) {
-      return { ...block(`I pushed the ${noun}, but the outcome record failed: ${publishedRecord.reason}.`), pushed: true };
+      return {
+        ...block(`I pushed the ${noun}, but the outcome record failed: ${publishedRecord.reason}.`),
+        pushed: true,
+        commitSha: sha || null,
+      };
     }
   } else {
     const left = noChangeLeftBehind({ from: remoteSha, git: gitVia(run, cwd) });
@@ -265,6 +269,7 @@ export function recordDo({
   return {
     status: pushing ? 'changed' : 'unchanged',
     pushed: pushing,
+    commitSha: sha || null,
     message: renderReport({
       summary: manifest?.summary,
       sha,
@@ -315,6 +320,7 @@ export function main(env = process.env, { run = runCommand } = {}) {
     status: result.status,
     message_file: messageFile,
     verification_file: verificationFile,
+    commit_sha: result.commitSha ?? '',
   });
   process.stdout.write(`${result.message}\n`);
   return 0;

@@ -433,6 +433,7 @@ function attemptOf(env = process.env, now = Date.now()) {
     reason: reasonToken(env.REASON),
     dials_arm: dialsArm(env.DIALS_ARM),
     verification: verificationOfEnv(env),
+    commit_sha: /^[a-f0-9]{40}$/.test(String(env.COMMIT_SHA ?? '')) ? String(env.COMMIT_SHA) : null,
     ...spendOfEnv(env),
   };
   return validAttempt(attempt) ? { attempt, run_base: runBase } : { error: 'this run attempt is not valid write-report state' };
