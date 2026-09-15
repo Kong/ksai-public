@@ -1130,6 +1130,22 @@ runs:
         cp -R -- "${GITHUB_WORKSPACE}/_ksai/.github/actions/dispatch-record" "${DEST}/dispatch-record"
         find "$DEST" -name '*.test.mjs' -delete
 
+    - name: Keep the trusted checkout out of the caller's commits
+      id: exclude_ksai
+      if: ${{ inputs.flow == 'run' && steps.checkout_authz.outcome == 'success' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        git_dir="${GITHUB_WORKSPACE}/.git"
+        if [[ ! -d "${git_dir}" || -L "${git_dir}" || -L "${git_dir}/info" ]]; then
+          echo "The workspace root is not a repository, so no commit of the caller's can stage _ksai"
+          exit 0
+        fi
+        mkdir -p "${git_dir}/info"
+        if ! grep -qxF '_ksai/' "${git_dir}/info/exclude" 2>/dev/null; then
+          echo '_ksai/' >> "${git_dir}/info/exclude"
+        fi
+
     - name: Resolve the status arm
       id: status_gate
       if: >-
