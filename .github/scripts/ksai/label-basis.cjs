@@ -3,7 +3,7 @@ const { sameRepo } = require('../lib/repo.cjs');
 
 const LABEL_COMMANDS = Object.freeze(['fix']);
 
-const AUTOFIX_LABEL = 'ksai-autofix';
+const AUTOFIX_LABEL = 'ksai:autofix';
 
 const PR_SHAPE = /^[1-9][0-9]{0,9}$/;
 
