@@ -136,10 +136,7 @@ if (failure) {
   console.log(`::warning::the opencode stream recorded ${scrub(failure, secrets)}`);
 }
 /*
- * Said separately because the line above reads as the model having failed. A
- * gateway that cannot reach what it proxies to answers a server error carrying
- * no status and no body, and the run ends with nothing sent and nothing billed -
- * so whoever reads this is looking for a fault in the wrong place.
+ * A gateway failure to reach its upstream is not a model failure: the run ends with a server error, nothing sent and nothing billed.
  */
 if (streamFailure(events)?.kind === 'gateway-unavailable') {
   console.log(

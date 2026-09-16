@@ -109,11 +109,7 @@ const MISSING_TEXT_PART = /^text part [0-9]{1,6} not found$/;
 const TRANSPORT_CLOSED = /^Cannot connect to API\b|\bsocket connection was closed unexpectedly\b/;
 
 /*
- * What the gateway answers when it could not reach what it proxies to. opencode
- * renders a 5xx carrying no JSON body as an UnknownError with this text and no
- * statusCode, so it reads as the model having failed when the request never got
- * as far as a model: nothing was sent, nothing was billed, and the reason is on
- * the other side of the endpoint.
+ * Gateway answers when it cannot reach the proxied endpoint: a bodyless 5xx arrives as an UnknownError with this text and no statusCode, one with a body as an APIError with a 5xx statusCode. A model cannot mint a 5xx, so the status is authoritative; 4xx answers for the caller and stays unclassified.
  */
 const GATEWAY_UNAVAILABLE = /^Unexpected server error\b/;
 
@@ -127,7 +123,12 @@ export function streamFailure(events) {
     return spent && unanswered && sessions.size === 1 && /^ses_[a-zA-Z0-9]+$/.test(last.sessionID ?? '') ? { kind: 'empty-turn', session_id: last.sessionID } : null;
   }
   const named = last?.error?.name;
-  if (last?.type !== 'error' || (named !== 'UnknownError' && named !== 'APIError') || last.error?.data?.statusCode !== undefined || sessions.size !== 1 || !/^ses_[a-zA-Z0-9]+$/.test(last.sessionID ?? '')) return null;
+  if (last?.type !== 'error' || (named !== 'UnknownError' && named !== 'APIError') || sessions.size !== 1 || !/^ses_[a-zA-Z0-9]+$/.test(last.sessionID ?? '')) return null;
+  const statusCode = last.error?.data?.statusCode;
+  if (statusCode !== undefined) {
+    if (!Number.isInteger(statusCode) || statusCode < 400 || statusCode > 599) return null;
+    return statusCode >= 500 ? { kind: 'gateway-unavailable', session_id: last.sessionID } : null;
+  }
   let message = last.error?.data?.message;
   if (typeof message !== 'string') return null;
   if (message.startsWith('"')) {
