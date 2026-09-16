@@ -696,6 +696,31 @@ jobs:
     secrets:
       ksai_private_key: ${{ secrets.ksai_private_key }}
 
+  control_plane:
+    if: inputs.fleet_dials_endpoint != ''
+    runs-on: ${{ startsWith(inputs.runs_on, '[') && fromJSON(inputs.runs_on) || inputs.runs_on }}
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      endpoint: ${{ steps.control_plane.outputs.endpoint }}
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      - name: Say the host a job that blocks its egress reaches the control plane at
+        id: control_plane
+        env:
+          ENDPOINT: ${{ inputs.fleet_dials_endpoint }}
+        run: |
+          set -euo pipefail
+
+          host="${ENDPOINT#*://}"
+          host="${host%%/*}"
+          host="${host//[[:space:]]/}"
+          case "${host}" in ''|*:[0-9]*) ;; *) host="${host}:443" ;; esac
+          echo "endpoint=${host}" >>"${GITHUB_OUTPUT}"
+
   gate:
     if: >-
       !(github.event_name == 'pull_request' && github.event.action == 'review_requested') &&
@@ -985,7 +1010,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-help
           repository: Kong/ksai-public
-          ref: v3.83.10
+          ref: v3.83.11
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1427,7 +1452,7 @@ jobs:
         with:
           token: ${{ github.token }}
           repository: Kong/ksai-public
-          ref: v3.83.10
+          ref: v3.83.11
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1546,7 +1571,7 @@ jobs:
           suppressions_private_key: ${{ secrets.suppressions_private_key }}
 
   implement:
-    needs: gate
+    needs: [gate, control_plane]
     if: >-
       !cancelled() && !(github.event_name == 'pull_request' && github.event.action == 'review_requested') &&
       ((github.event_name == 'workflow_dispatch' && inputs.comment_kind == '' &&
@@ -1578,7 +1603,9 @@ jobs:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: block
-          allowed-endpoints: ${{ inputs.harden_runner_allowed_endpoints }}
+          allowed-endpoints: >-
+            ${{ inputs.harden_runner_allowed_endpoints }}
+            ${{ needs.control_plane.outputs.endpoint }}
           disable-telemetry: true
 
       - name: Refuse a call that names no federation
@@ -1646,6 +1673,26 @@ jobs:
             echo "::error::an identifier has the wrong shape for:${misshaped} - federation_rule_id starts with fdrl_, service_account_id with svac_, workspace_id with wrkspc_, and organization_id is a UUID; they come from federations/<team>.yaml in the ksai source repository"
           fi
           if [ -n "${missing}${placeholder}${misshaped}" ]; then
+            exit 1
+          fi
+
+      - name: Refuse a call that blocks every destination and names none
+        env:
+          ALLOWED: ${{ inputs.harden_runner_allowed_endpoints }}
+          ENDPOINT: ${{ inputs.fleet_dials_endpoint }}
+          DESTINATION: ${{ needs.control_plane.outputs.endpoint }}
+        run: |
+          set -euo pipefail
+
+          case "${ALLOWED}" in
+            *[0-9A-Za-z]*) ;;
+            *)
+              echo "::error::harden_runner_allowed_endpoints is empty, and an empty list configures no rule at all rather than the strictest one, so this job would write code with nothing bounding where its runner may talk to. Name the destinations this repository needs"
+              exit 1 ;;
+          esac
+
+          if [ -n "${ENDPOINT}" ] && [ -z "${DESTINATION}" ]; then
+            echo "::error::this call names a control plane and the job that reads it handed back no host, so the monitor is blocking the record this run was sent to read. Read the control_plane job"
             exit 1
           fi
 
@@ -1896,7 +1943,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-recover
           repository: Kong/ksai-public
-          ref: v3.83.10
+          ref: v3.83.11
           sparse-checkout: |
             .github/scripts
           persist-credentials: false

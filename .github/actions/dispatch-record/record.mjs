@@ -185,6 +185,19 @@ function waitAsked(answer) {
 }
 
 /**
+ * because names what a throw said, so a line about a failure carries its reason and not only the fact
+ * of it. A network error keeps the reason in its cause, where the code is the part worth reading.
+ *
+ * @param {unknown} thrown
+ */
+function because(thrown) {
+  const cause = thrown instanceof Error && thrown.cause instanceof Error ? thrown.cause : null;
+  const coded = /** @type {{ code?: unknown }} */ (cause ?? {}).code;
+  const said = (typeof coded === 'string' && coded) || cause?.message || (thrown instanceof Error ? thrown.message : '');
+  return said || 'it said nothing';
+}
+
+/**
  * attempt makes one read. It answers the served body, or the reason a failure that can pass gave and
  * the wait the control plane asked for, and throws on a refusal that would answer the same again. A
  * response it does not read is released first, so a retry does not hold its connection open.
@@ -203,8 +216,8 @@ async function attempt({ url, audience, mint, secret, fetch, timeout }) {
   let token = '';
   try {
     token = await mint(audience);
-  } catch {
-    return { retry: 'the OIDC token could not be minted', asked: null };
+  } catch (refused) {
+    return { retry: `the OIDC token could not be minted: ${because(refused)}`, asked: null };
   }
   if (typeof token !== 'string' || token === '') {
     return { retry: 'the OIDC token endpoint answered with no token', asked: null };
@@ -217,8 +230,8 @@ async function attempt({ url, audience, mint, secret, fetch, timeout }) {
       headers: { authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(timeout),
     });
-  } catch {
-    return { retry: 'the control plane could not be reached', asked: null };
+  } catch (unreached) {
+    return { retry: `the control plane could not be reached: ${because(unreached)}`, asked: null };
   }
 
   const why = WHY_STATUS[/** @type {401|404|503} */ (answer.status)] ?? `the control plane answered ${answer.status}`;
@@ -233,8 +246,8 @@ async function attempt({ url, audience, mint, secret, fetch, timeout }) {
 
   try {
     return { served: await answer.json() };
-  } catch {
-    return { retry: 'the control plane answered with a body that did not parse', asked: null };
+  } catch (unparsed) {
+    return { retry: `the control plane answered with a body that did not parse: ${because(unparsed)}`, asked: null };
   }
 }
 

@@ -84,8 +84,8 @@ export async function reportSpend({
         body,
         signal: AbortSignal.timeout(timeout),
       });
-    } catch {
-      last = 'the control plane could not be reached';
+    } catch (unreached) {
+      last = `the control plane could not be reached: ${unreached?.cause?.code || unreached?.message || 'it said nothing'}`;
       continue;
     }
 
