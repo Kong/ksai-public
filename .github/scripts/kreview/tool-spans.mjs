@@ -140,7 +140,6 @@ export function spansFrom({ events, children = [], context, env = process.env, s
     const made = callSpan({ event, context: run, env, parents });
     if (made) calls.push(made.span);
   }
-  if (calls.length === 0) return null;
   if (calls.length > MAX_SPANS) {
     say(`::notice::${calls.length - MAX_SPANS} tool calls are not in this run's exported timeline, which holds ${MAX_SPANS}`);
   }
@@ -150,8 +149,11 @@ export function spansFrom({ events, children = [], context, env = process.env, s
     .map((one) => stamp(one?.timestamp))
     .filter(Boolean)
     .map(BigInt);
-  const began = [...calls.map((one) => BigInt(one.startTimeUnixNano)), ...marks].reduce((low, at) => (at < low ? at : low));
-  const ended = [...calls.map((one) => BigInt(one.endTimeUnixNano)), ...marks].reduce((high, at) => (at > high ? at : high));
+  const bounds = [...calls.map((one) => BigInt(one.startTimeUnixNano)), ...calls.map((one) => BigInt(one.endTimeUnixNano)), ...marks];
+  if (bounds.length === 0) return null;
+  const began = bounds.reduce((low, at) => (at < low ? at : low));
+  const ended = bounds.reduce((high, at) => (at > high ? at : high));
+  const failed = String(env.RUN_OUTCOME ?? '').trim() === 'failure' || events.some((one) => one?.type === 'error');
   const root = {
     traceId: run.traceId,
     spanId: run.runSpanId,
@@ -160,6 +162,7 @@ export function spansFrom({ events, children = [], context, env = process.env, s
     kind: 1,
     startTimeUnixNano: String(began),
     endTimeUnixNano: String(ended),
+    ...(failed ? { status: { code: ERROR, message: OUTCOMES.error } } : {}),
   };
   return [root, ...calls.slice(0, MAX_SPANS)];
 }

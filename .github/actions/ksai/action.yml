@@ -5905,6 +5905,7 @@ runs:
       env:
         EVENTS_FILE: ${{ steps.opencode.outputs.events_file || steps.opencode_test.outputs.events_file }}
         OPENCODE_CHILDREN_FILE: ${{ steps.opencode.outputs.children_file }}
+        RUN_OUTCOME: ${{ steps.opencode.outcome == 'failure' && 'failure' || steps.opencode_test.outcome == 'failure' && 'failure' || '' }}
         ENGINE: ${{ steps.engine.outputs.name }}
         FLOW: ${{ inputs.flow }}
         MODEL: ${{ steps.write_arm.outputs.model || steps.select_test.outputs.model || steps.select_arm.outputs.model || steps.build_run.outputs.model }}
