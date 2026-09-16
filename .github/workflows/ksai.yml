@@ -1010,7 +1010,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-help
           repository: Kong/ksai-public
-          ref: v3.83.11
+          ref: v3.83.12
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1452,7 +1452,7 @@ jobs:
         with:
           token: ${{ github.token }}
           repository: Kong/ksai-public
-          ref: v3.83.11
+          ref: v3.83.12
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1603,7 +1603,7 @@ jobs:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: block
-          allowed-endpoints: >-
+          allowed-endpoints: |-
             ${{ inputs.harden_runner_allowed_endpoints }}
             ${{ needs.control_plane.outputs.endpoint }}
           disable-telemetry: true
@@ -1943,7 +1943,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-recover
           repository: Kong/ksai-public
-          ref: v3.83.11
+          ref: v3.83.12
           sparse-checkout: |
             .github/scripts
           persist-credentials: false
