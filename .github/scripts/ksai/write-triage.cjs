@@ -2955,21 +2955,34 @@ function automaticEffort({ target, fallback, max, min }) {
   return { effort: ALLOWED_EFFORTS[Math.min(ceiling, Math.max(floor, wanted))] };
 }
 
+function withinEffortBounds(effort, { fallback, max, min, model }) {
+  const bounds = effortBounds({
+    fallback: String(fallback ?? '').trim() || defaultEffortFor(model),
+    max,
+    min,
+  });
+  const at = ALLOWED_EFFORTS.indexOf(effort);
+  if (!bounds || at < 0) return false;
+
+  return at >= ALLOWED_EFFORTS.indexOf(bounds.floor) && at <= ALLOWED_EFFORTS.indexOf(bounds.ceiling);
+}
+
+function offeredModel(model, allowed) {
+  return allowed.length === 0 || allowed.some((one) => one.toLowerCase() === String(model).toLowerCase());
+}
+
 function controlPlaneArm(env, early) {
   const model = String(env.CP_MODEL ?? '').trim();
   const effort = String(env.CP_EFFORT ?? '').trim();
   if (model === '' && effort === '') return null;
 
-  const allowed = parseAllowedModels(env.ALLOWED_MODELS);
-  const bounds = effortBounds({
-    fallback: String(env.DEFAULT_EFFORT ?? early.effort).trim() || defaultEffortFor(model),
+  const within = withinEffortBounds(effort, {
+    fallback: String(env.DEFAULT_EFFORT ?? early.effort).trim(),
     max: env.MAX_EFFORT,
     min: env.MIN_EFFORT,
+    model,
   });
-  const within = bounds !== null
-    && ALLOWED_EFFORTS.indexOf(effort) >= ALLOWED_EFFORTS.indexOf(bounds.floor)
-    && ALLOWED_EFFORTS.indexOf(effort) <= ALLOWED_EFFORTS.indexOf(bounds.ceiling);
-  const offered = allowed.length === 0 || allowed.some((one) => one.toLowerCase() === model.toLowerCase());
+  const offered = offeredModel(model, parseAllowedModels(env.ALLOWED_MODELS));
   if (!MODEL_SHAPE.test(model) || !ALLOWED_EFFORTS.includes(effort) || !offered || !within) return null;
 
   return {
@@ -3068,6 +3081,7 @@ function selectWriteArm(env = process.env) {
 
 module.exports = {
   PROFILES,
+  SIZING_VERDICTS,
   VERDICTS,
   cargoMajorBumps,
   composerMajorBumps,
@@ -3075,6 +3089,7 @@ module.exports = {
   detectMajorBumps,
   effortBounds,
   inspectMajorBumps,
+  withinEffortBounds,
   majorBumpDetails,
   packageMajorBumps,
   pipfileMajorBumps,

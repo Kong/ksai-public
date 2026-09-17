@@ -6,6 +6,7 @@ const { scrub } = require('./plan.cjs');
 const { asAlert } = require('../lib/select-arm.cjs');
 const { counted, plural } = require('../lib/text.cjs');
 const { MAX_ATTEMPTS } = require('../lib/write-record.cjs');
+const { bareEndpoint } = require('./control-plane.cjs');
 
 const MAX_STALL = 3;
 
@@ -247,17 +248,6 @@ const CONTINUE_ATTEMPTS = 3;
 const CONTINUE_TIMEOUT = 30000;
 
 const CONTINUE_HOLD = 25000;
-
-function bareEndpoint(endpoint) {
-  let url;
-  try {
-    url = new URL(endpoint);
-  } catch {
-    return false;
-  }
-  return url.protocol === 'https:' && url.hostname !== '' && url.search === '' && url.hash === ''
-    && url.username === '' && url.password === '';
-}
 
 async function continueThroughControlPlane({
   endpoint = '',

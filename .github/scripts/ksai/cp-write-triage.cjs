@@ -1,12 +1,18 @@
 'use strict';
 
-const { effortBounds, writeEvidence } = require('./write-triage.cjs');
+const {
+  SIZING_VERDICTS,
+  VERDICTS: WRITE_VERDICTS,
+  withinEffortBounds,
+  writeEvidence,
+} = require('./write-triage.cjs');
 const {
   ALLOWED_EFFORTS,
   MODEL_SHAPE,
   parseAllowedModels,
   defaultEffortFor,
 } = require('../lib/select-arm.cjs');
+const { bareEndpoint } = require('./control-plane.cjs');
 
 const API_VERSION = 'triage/v1';
 
@@ -31,7 +37,7 @@ const TEXT_FIELDS = Object.freeze([
 
 const MAX_REASON_BYTES = 1024;
 
-const VERDICTS = Object.freeze(['routine', 'uncertain', 'critical', 'small', 'planned']);
+const VERDICTS = Object.freeze([...WRITE_VERDICTS, ...SIZING_VERDICTS]);
 
 const PLAN_MODES = Object.freeze(['auto', 'always', 'never']);
 
@@ -40,17 +46,6 @@ const SOURCES = Object.freeze(['input', 'comment', 'triage', 'fallback']);
 const RUNNER_VERDICT = Object.freeze(
   Object.assign(Object.create(null), { planned: 'planning' }),
 );
-
-function bare(endpoint) {
-  let url;
-  try {
-    url = new URL(endpoint);
-  } catch {
-    return false;
-  }
-  return url.protocol === 'https:' && url.hostname !== '' && url.search === '' && url.hash === ''
-    && url.username === '' && url.password === '';
-}
 
 function holds(models, one) {
   const wanted = String(one ?? '').trim().toLowerCase();
@@ -156,14 +151,12 @@ function writeTriageRequest(env = process.env) {
  * decided a write the run went on to decide itself.
  */
 function withinBounds(effort, bounds, model) {
-  const checked = effortBounds({
-    fallback: String(bounds?.fallback ?? '').trim() || defaultEffortFor(model),
+  return withinEffortBounds(effort, {
+    fallback: bounds?.fallback,
     max: bounds?.max,
     min: bounds?.min,
+    model,
   });
-  const at = ALLOWED_EFFORTS.indexOf(effort);
-  if (!checked || at < 0) return false;
-  return at >= ALLOWED_EFFORTS.indexOf(checked.floor) && at <= ALLOWED_EFFORTS.indexOf(checked.ceiling);
 }
 
 /**
@@ -249,7 +242,7 @@ async function decideWrite({
   if (String(env.TRIAGE_WRITE ?? '').trim() !== 'cp') return kept('');
   const endpoint = String(env.ENDPOINT ?? '').trim();
   if (endpoint === '') return kept('no control plane serves this repository');
-  if (!bare(endpoint)) return kept('the control plane endpoint is not a bare https URL');
+  if (!bareEndpoint(endpoint)) return kept('the control plane endpoint is not a bare https URL');
   if (!env.ACTIONS_ID_TOKEN_REQUEST_URL || !env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) {
     return kept('this job holds no id-token: write, so it cannot say which repository it is');
   }

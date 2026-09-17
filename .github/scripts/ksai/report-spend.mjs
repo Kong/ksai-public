@@ -1,6 +1,8 @@
 import { createRequire } from 'node:module';
 
-const { ATTEMPT_ID_SHAPE, compactJob } = createRequire(import.meta.url)('../lib/write-record.cjs');
+const require = createRequire(import.meta.url);
+const { ATTEMPT_ID_SHAPE, compactJob } = require('../lib/write-record.cjs');
+const { bareEndpoint } = require('./control-plane.cjs');
 
 function attemptOf(raw) {
   const parts = String(raw).trim().split(':');
@@ -18,17 +20,6 @@ export const TIMEOUT = 10000;
 
 const wait = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 
-function bare(endpoint) {
-  let url;
-  try {
-    url = new URL(endpoint);
-  } catch {
-    return false;
-  }
-  return url.protocol === 'https:' && url.hostname !== '' && url.search === '' && url.hash === ''
-    && url.username === '' && url.password === '';
-}
-
 export async function reportSpend({
   endpoint = '',
   audience = 'ksai-cp',
@@ -43,7 +34,7 @@ export async function reportSpend({
 } = {}) {
   const named = String(endpoint).trim();
   if (named === '') return { reported: false, why: '' };
-  if (!bare(named)) return { reported: false, why: 'the endpoint is not a bare https URL' };
+  if (!bareEndpoint(named)) return { reported: false, why: 'the endpoint is not a bare https URL' };
 
   const piece = attemptOf(attempt);
   if (piece === '') {
