@@ -773,6 +773,7 @@ jobs:
       job_timeout_minutes: ${{ steps.dials.outputs.job_timeout_minutes }}
       max_consecutive_tool_failures: ${{ steps.dials.outputs.max_consecutive_tool_failures }}
       max_repeated_tool_calls: ${{ steps.dials.outputs.max_repeated_tool_calls }}
+      triage_write: ${{ steps.dials.outputs.triage_write }}
       dials_arm: ${{ !(inputs.dials_override && inputs.model != 'flagship') && (steps.record.outputs.model == '' && steps.dials.outputs.arm || '') || '' }}
       record_command: ${{ steps.record.outputs.command }}
       record_comment_id: ${{ steps.record.outputs.comment_id }}
@@ -1021,7 +1022,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-help
           repository: Kong/ksai-public
-          ref: v3.84.5
+          ref: v3.85.0
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1201,6 +1202,7 @@ jobs:
           status_history: ${{ inputs.status_history }}
           status_model: ${{ inputs.status_model }}
           triage: ${{ inputs.triage }}
+          triage_write: ${{ needs.gate.outputs.triage_write }}
           engine: ${{ inputs.engine }}
           opencode_version: ${{ inputs.opencode_version }}
           repo_rules: ${{ inputs.repo_rules }}
@@ -1465,7 +1467,7 @@ jobs:
         with:
           token: ${{ github.token }}
           repository: Kong/ksai-public
-          ref: v3.84.5
+          ref: v3.85.0
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1566,6 +1568,7 @@ jobs:
           status_history: ${{ inputs.status_history }}
           status_model: ${{ inputs.status_model }}
           triage: ${{ inputs.triage }}
+          triage_write: ${{ needs.gate.outputs.triage_write }}
           opencode_version: ${{ inputs.opencode_version }}
           repo_rules: ${{ inputs.repo_rules }}
           repo_rules_max_bytes: ${{ inputs.repo_rules_max_bytes }}
@@ -1863,6 +1866,7 @@ jobs:
           classifier_model: ${{ inputs.classifier_model }}
           write_triage_model: ${{ inputs.write_triage_model }}
           triage: ${{ inputs.triage }}
+          triage_write: ${{ needs.gate.outputs.triage_write }}
           status_updates: ${{ inputs.status_updates }}
           status_history: ${{ inputs.status_history }}
           status_model: ${{ inputs.status_model }}
@@ -1967,7 +1971,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-recover
           repository: Kong/ksai-public
-          ref: v3.84.5
+          ref: v3.85.0
           sparse-checkout: |
             .github/scripts
           persist-credentials: false

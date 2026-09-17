@@ -490,6 +490,18 @@ inputs:
       ceilings. `allowed_models` bounds both.
     required: false
     default: "auto"
+  triage_write:
+    description: >-
+      who decides the model and effort a write run spends. `cp` asks the control plane named by
+      `fleet_dials_endpoint`, over this job's own OIDC token, and acts on what it answers. Anything else,
+      which is every repository the control plane has not moved, keeps the decision on this runner.
+
+      The control plane serves this dial; a caller does not pin it. Whatever it says, this action still checks
+      the answer against `allowed_models`, `min_effort` and `max_effort` before acting on it, and a control
+      plane that is down, slow, stale or answering something this action will not act on costs the run nothing
+      but the profile it would have chosen on its own.
+    required: false
+    default: ""
   repo_rules:
     description: >-
       `auto` to read `.ksai/review-rules.md`, `.ksai/review-rules.json` and `.ksai/review-rules/` from the
@@ -3105,10 +3117,71 @@ runs:
           for (const line of warnings) core.warning(line);
           if (failure) core.setFailed(failure);
 
+    - name: Ask the control plane for this write profile
+      id: cp_write_triage
+      if: >-
+        ${{ inputs.flow == 'implement' && inputs.triage_write == 'cp' &&
+        inputs.fleet_dials_endpoint != '' && steps.prepare_write_triage.outcome == 'success' }}
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        TRIAGE: ${{ inputs.triage }}
+        TRIAGE_WRITE: ${{ inputs.triage_write }}
+        ENDPOINT: ${{ inputs.fleet_dials_endpoint }}
+        RECORD_ID: ${{ inputs.record_id }}
+        RUN_HEAD_SHA: ${{ github.sha }}
+        HEAD_SHA: ${{ steps.phase.outputs.pr_number != '' && steps.dispatch_record.outputs.head_sha || github.sha }}
+        DEFAULT_MODEL: ${{ inputs.model }}
+        DEFAULT_EFFORT: ${{ inputs.effort }}
+        ALLOWED_MODELS: ${{ inputs.allowed_models }}
+        MAX_EFFORT: ${{ inputs.max_effort }}
+        MIN_EFFORT: ${{ inputs.min_effort }}
+        EARLY_MODEL: ${{ steps.select.outputs.model }}
+        EARLY_EFFORT: ${{ steps.select.outputs.effort }}
+        MODEL_SOURCE: ${{ steps.select.outputs.model_source }}
+        EFFORT_SOURCE: ${{ steps.select.outputs.effort_source }}
+        COMMAND: ${{ steps.select.outputs.command }}
+        PHASE: ${{ steps.phase.outputs.phase }}
+        PLAN_MODE: ${{ steps.select.outputs.plan_mode }}
+        REQUIRE_APPROVAL: ${{ inputs.require_plan_approval }}
+        KSAI_ASK: ${{ inputs.ask }}
+        JIRA_KEY: ${{ steps.subject.outputs.jira_key || steps.fetch_jira.outputs.key }}
+        PR_NUMBER: ${{ steps.phase.outputs.pr_number }}
+        ISSUE_NUMBER: ${{ steps.subject.outputs.number }}
+        REQUEST: ${{ steps.prompt.outputs.prompt_content_raw }}
+        STEP_TITLE: ${{ steps.read_plan.outputs.step_title }}
+        CONVERSATION_FILE: ${{ steps.conversation.outputs.file }}
+        THREADS_FILE: ${{ steps.phase.outputs.threads_file }}
+        CHECKS_FILE: ${{ steps.phase.outputs.checks_file }}
+        MAJOR_BUMP: ${{ steps.major_bump.outputs.major }}
+        MAJOR_BUMP_SUMMARY: ${{ steps.major_bump.outputs.summary }}
+        MAJOR_BUMP_UNREADABLE: ${{ steps.major_bump.outputs.unreadable }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      with:
+        script: |
+          const { decideWrite } = require(`${process.env.SCRIPTS}/ksai/cp-write-triage.cjs`);
+          const answer = await decideWrite({
+            env: process.env,
+            mint: (audience) => core.getIDToken(audience),
+            secret: (token) => core.setSecret(token),
+          });
+          core.setOutput('decided', answer.decided ? 'true' : 'false');
+          core.setOutput('verdict', answer.verdict ?? '');
+          core.setOutput('reason', answer.reason ?? '');
+          core.setOutput('model', answer.model ?? '');
+          core.setOutput('effort', answer.effort ?? '');
+          core.setOutput('model_source', answer.model_source ?? '');
+          core.setOutput('effort_source', answer.effort_source ?? '');
+          if (answer.decided) {
+            core.notice(`the control plane decided this write: ${answer.model}, ${answer.effort}, ${answer.reason}`);
+          } else if (answer.why) {
+            core.notice(`ksai decided this write on the runner: ${answer.why}`);
+          }
+
     - name: Name what write triage costs
       id: write_triage_headers
       if: >-
         ${{ inputs.flow == 'implement' && steps.prepare_write_triage.outcome == 'success' &&
+        steps.cp_write_triage.outputs.decided != 'true' &&
         steps.prepare_write_triage.outputs.call == 'true' }}
       shell: bash
       env:
@@ -3131,7 +3204,8 @@ runs:
       id: write_triage_run
       if: >-
         ${{ inputs.flow == 'implement' && inputs.dry_run == 'false' &&
-        steps.prepare_write_triage.outcome == 'success' && steps.prepare_write_triage.outputs.call == 'true' }}
+        steps.prepare_write_triage.outcome == 'success' && steps.cp_write_triage.outputs.decided != 'true' &&
+        steps.prepare_write_triage.outputs.call == 'true' }}
       continue-on-error: true
       shell: bash
       env:
@@ -3164,8 +3238,12 @@ runs:
         ${{ always() && inputs.flow == 'implement' && steps.prepare_write_triage.outcome == 'success' }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
-        PLANNED_VERDICT: ${{ steps.prepare_write_triage.outputs.verdict }}
-        PLANNED_REASON: ${{ steps.prepare_write_triage.outputs.reason }}
+        PLANNED_VERDICT: >-
+          ${{ steps.cp_write_triage.outputs.decided == 'true' && steps.cp_write_triage.outputs.verdict ||
+          steps.prepare_write_triage.outputs.verdict }}
+        PLANNED_REASON: >-
+          ${{ steps.cp_write_triage.outputs.decided == 'true' && steps.cp_write_triage.outputs.reason ||
+          steps.prepare_write_triage.outputs.reason }}
         SIZING: ${{ steps.prepare_write_triage.outputs.sizing }}
         EXECUTION_FILE: ${{ steps.write_triage_run.outputs.execution_file }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
@@ -3200,6 +3278,10 @@ runs:
         VERDICT: ${{ steps.write_triage_verdict.outputs.verdict }}
         REASON: ${{ steps.write_triage_verdict.outputs.reason }}
         PRIOR_RED: ${{ steps.prepare_write_triage.outputs.prior_red }}
+        CP_MODEL: ${{ steps.cp_write_triage.outputs.decided == 'true' && steps.cp_write_triage.outputs.model || '' }}
+        CP_EFFORT: ${{ steps.cp_write_triage.outputs.decided == 'true' && steps.cp_write_triage.outputs.effort || '' }}
+        CP_MODEL_SOURCE: ${{ steps.cp_write_triage.outputs.model_source }}
+        CP_EFFORT_SOURCE: ${{ steps.cp_write_triage.outputs.effort_source }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:
         script: |

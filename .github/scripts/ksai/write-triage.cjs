@@ -2632,6 +2632,37 @@ function contextOf(env) {
   ].join('\n');
 }
 
+function writeEvidence(env = process.env) {
+  const bump = isTrue(env.MAJOR_BUMP_UNREADABLE)
+    ? 'unreadable'
+    : (isTrue(env.MAJOR_BUMP) ? 'present' : 'none');
+  const whole = (value) => {
+    const named = String(value ?? '').trim();
+    return /^[1-9][0-9]{0,8}$/.test(named) ? Number(named) : 0;
+  };
+  const jira = neutralCut(env.JIRA_KEY, 128);
+  return {
+    pull_request: whole(env.PR_NUMBER),
+    issue_number: whole(env.PR_NUMBER) === 0 ? whole(env.ISSUE_NUMBER) : 0,
+    work_ref: jira === '' ? '' : `jira/${jira}`,
+    command: neutralCut(env.COMMAND, 256),
+    phase: neutralCut(env.PHASE, 256),
+    plan_mode: asked(env.PLAN_MODE) === '' ? 'auto' : asked(env.PLAN_MODE),
+    require_plan_approval: isTrue(env.REQUIRE_APPROVAL),
+    request: neutralCut(env.REQUEST, 8_000),
+    ask: neutralCut(env.KSAI_ASK, 8_000),
+    jira_key: jira,
+    plan_step: neutralCut(env.STEP_TITLE, 2_000),
+    conversation: readContext(env.CONVERSATION_FILE),
+    threads: readContext(env.THREADS_FILE, 8_000),
+    checks: readContext(env.CHECKS_FILE, 8_000),
+    model_source: neutralCut(env.MODEL_SOURCE, 128),
+    effort_source: neutralCut(env.EFFORT_SOURCE, 128),
+    prior_red: previousAttemptRed(env.CHECKS_FILE),
+    major_bump: { state: bump, summary: neutralCut(env.MAJOR_BUMP_SUMMARY, 2_000) },
+  };
+}
+
 function previousAttemptRed(file) {
   const named = String(file ?? '').trim();
   if (named === '') return false;
@@ -2924,6 +2955,32 @@ function automaticEffort({ target, fallback, max, min }) {
   return { effort: ALLOWED_EFFORTS[Math.min(ceiling, Math.max(floor, wanted))] };
 }
 
+function controlPlaneArm(env, early) {
+  const model = String(env.CP_MODEL ?? '').trim();
+  const effort = String(env.CP_EFFORT ?? '').trim();
+  if (model === '' && effort === '') return null;
+
+  const allowed = parseAllowedModels(env.ALLOWED_MODELS);
+  const bounds = effortBounds({
+    fallback: String(env.DEFAULT_EFFORT ?? early.effort).trim() || defaultEffortFor(model),
+    max: env.MAX_EFFORT,
+    min: env.MIN_EFFORT,
+  });
+  const within = bounds !== null
+    && ALLOWED_EFFORTS.indexOf(effort) >= ALLOWED_EFFORTS.indexOf(bounds.floor)
+    && ALLOWED_EFFORTS.indexOf(effort) <= ALLOWED_EFFORTS.indexOf(bounds.ceiling);
+  const offered = allowed.length === 0 || allowed.some((one) => one.toLowerCase() === model.toLowerCase());
+  if (!MODEL_SHAPE.test(model) || !ALLOWED_EFFORTS.includes(effort) || !offered || !within) return null;
+
+  return {
+    model,
+    effort,
+    model_source: String(env.CP_MODEL_SOURCE ?? '').trim() || early.modelSource,
+    effort_source: String(env.CP_EFFORT_SOURCE ?? '').trim() || early.effortSource,
+    selection: selectionOf(tierOf(model), env.REASON),
+  };
+}
+
 function selectWriteArm(env = process.env) {
   const outputs = {
     model: '',
@@ -2939,6 +2996,8 @@ function selectWriteArm(env = process.env) {
   if (!MODEL_SHAPE.test(model) || !ALLOWED_EFFORTS.includes(effort)) {
     return { error: 'the early write arm was not resolved', outputs };
   }
+  const decided = controlPlaneArm(env, { model, effort, modelSource, effortSource });
+  if (decided) return { outputs: Object.assign(outputs, decided) };
   if (env.VERDICT === 'off' || env.VERDICT === 'explicit') {
     const tier = tierOf(model);
     Object.assign(outputs, {
@@ -3014,6 +3073,7 @@ module.exports = {
   composerMajorBumps,
   criticalMatch,
   detectMajorBumps,
+  effortBounds,
   inspectMajorBumps,
   majorBumpDetails,
   packageMajorBumps,
@@ -3024,6 +3084,7 @@ module.exports = {
   readWriteTriage,
   selectWriteArm,
   semanticVerdict,
+  writeEvidence,
   sizingApplies,
   previousAttemptRed,
   summarizeMajorBumps,

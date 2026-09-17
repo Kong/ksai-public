@@ -123,6 +123,13 @@ outputs:
   max_repeated_tool_calls:
     description: how many times one call may repeat before the watchdog stops the run
     value: ${{ steps.dials.outputs.max_repeated_tool_calls }}
+  triage_write:
+    description: >-
+      who decides the model and effort a write run spends: `cp` is the control
+      plane, and anything else is this workflow, which is where every repository
+      starts. Nothing is pinned here, because a repository moves onto control-plane
+      decisions by being served this dial rather than by editing its own caller.
+    value: ${{ steps.dials.outputs.triage_write }}
 
 runs:
   using: composite

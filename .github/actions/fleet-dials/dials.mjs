@@ -32,6 +32,7 @@ export const PINNED = {
   max_consecutive_tool_failures: between(0, 100000),
   max_repeated_tool_calls: (/** @type {string} */ value) =>
     between(0, 100000)(value) && Number(value) !== 1,
+  triage_write: (/** @type {string} */ value) => value === 'off' || value === 'cp',
 };
 
 /**
