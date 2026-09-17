@@ -6,7 +6,7 @@ const { DIALS_ARM_SHAPE, MODEL_TIERS, armLabel } = require('../lib/select-arm.cj
 const { renderClassifierFooter } = require('../ksai/classify.cjs');
 const { href: markerHref } = require('../ksai/marker.cjs');
 const { scrub } = require('../ksai/plan.cjs');
-const { movedHead, watchdogDetail } = require('../lib/watchdog.cjs');
+const { watchdogDetail } = require('../lib/watchdog.cjs');
 const { collectSecrets, scrub: scrubSecrets } = require('./secrets.cjs');
 const { counted } = require('../lib/text.cjs');
 
@@ -472,7 +472,7 @@ function renderRunReport(env) {
   ].join('\n');
 }
 
-const CARRIED_NOTICE = Object.freeze(['failed', 'head_moved']);
+const CARRIED_NOTICE = Object.freeze(['failed']);
 
 function carriedKind(env) {
   if (String(env.CANCELLED ?? '') === 'true') return null;
@@ -487,12 +487,11 @@ function reviewPointer(env) {
 function reviewHeading(env, status, kind) {
   const pointer = reviewPointer(env);
   if (kind === null && !endedBadly(env)) return runHeading('review', status?.stage, true, env.COMMAND, env.TRIGGER, pointer);
-  const moved = kind === 'head_moved';
   return ksaiHeading({
     command: env.COMMAND,
     flow: 'review',
-    said: moved ? 'Stopped' : 'Failed',
-    mark: moved ? 'stopped' : 'failed',
+    said: 'Failed',
+    mark: 'failed',
     href: pointer,
     triggerPhrase: env.TRIGGER,
   });
@@ -503,7 +502,6 @@ function decideReviewNotice(env) {
   if (env.BUILD_ERROR) return 'unbuildable';
   if (env.STAND_DOWN !== '') return 'stood_down';
   if (env.RULES_NOTICE) return 'rules';
-  if (String(env.HEAD_MOVED ?? '') !== '' || env.WATCHDOG_CAUSE === 'head_moved') return 'head_moved';
   const live = env.DRY_RUN === 'false';
   if (live && env.VALIDATE_OUTCOME === 'success' && env.TRIAGE_SKIP === 'true') return 'skipped';
   if (
@@ -549,15 +547,6 @@ function renderReviewNotice(kind, env, { headed = true } = {}) {
       ...opened('Skipped', 'stopped'),
       `Triage found nothing to review: ${env.TRIAGE_SKIP_REASON}. Push a change to reviewable code and ask ` +
         'again to run a full review',
-    ].join('\n');
-  }
-  if (kind === 'head_moved') {
-    const head = movedHead(env.HEAD_MOVED);
-    const now = head === '' ? '' : ` (the head is now \`${head.slice(0, 7)}\`)`;
-    return [
-      ...opened('Stopped', 'stopped'),
-      `A commit was pushed while this review ran${now}, so its findings were not posted against code that has ` +
-        'since changed. Ask for a review again to review the new head',
     ].join('\n');
   }
   const halted =

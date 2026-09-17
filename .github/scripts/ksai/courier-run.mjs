@@ -1,18 +1,15 @@
-import { appendFileSync, existsSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 
 import { streams as opencodeStreams } from '../kreview/opencode-progress.mjs';
-import { POLL_SECONDS, deliver, octokitOver, pullHead, sweep } from './courier.mjs';
+import { POLL_SECONDS, deliver, octokitOver, sweep } from './courier.mjs';
 import { read as claudeStreams } from './progress.mjs';
 import { armed as reporting, tick } from './status.mjs';
 
 const require = createRequire(import.meta.url);
-const { movedHead } = require('../lib/watchdog.cjs');
-
-const HEAD_POLL_MS = 60_000;
 
 const wait = (seconds, signal) => delay(seconds * 1000, undefined, { signal }).catch(() => {});
 
@@ -70,19 +67,6 @@ export function authorizerOver({ github, owner, repo, load = loadAuthorize, writ
   };
 }
 
-async function headMoved({ repo, number, token, apiUrl, fetchImpl, expected, file, stateDir }) {
-  try {
-    const head = movedHead(await pullHead({ repo, number, token, apiUrl, fetchImpl }));
-    if (head === '' || head === expected) return false;
-    writeFileSync(file, `${head}\n`);
-    say(stateDir, `the pull request moved to ${head} while this run reviewed ${expected}, so the watchdog stops it`);
-    return true;
-  } catch (error) {
-    say(stateDir, `the pull request head could not be read: ${error}`);
-    return false;
-  }
-}
-
 /**
  * readerFor answers the streams the status is measured from, by name and never through a variable
  * holding a module path.
@@ -135,10 +119,6 @@ export async function main(
     say(stateDir, 'this run has no channel, so nothing is carried in and the status is all that goes out');
   }
   if (reporting(env)) say(stateDir, 'reporting this run’s status onto the comment it opened with');
-  const expectedHead = movedHead(env.EXPECTED_HEAD);
-  const headFile = String(env.HEAD_MOVED_FILE ?? '');
-  let watchingHead = expectedHead !== '' && headFile !== '';
-  let headReadAt = 0;
   const stopping = stopLatch(signals);
   let status = {};
   let statusTask = null;
@@ -187,19 +167,6 @@ export async function main(
       for (const login of swept.refused) say(stateDir, `refused a comment: ${login} owns nothing here`);
       for (const login of swept.unresolved) {
         say(stateDir, `could not tell whether ${login} may steer this run, so their comment was left where it was`);
-      }
-      if (watchingHead && Date.now() - headReadAt >= HEAD_POLL_MS) {
-        headReadAt = Date.now();
-        watchingHead = !(await headMoved({
-          repo,
-          number,
-          token: sourceToken,
-          apiUrl,
-          fetchImpl,
-          expected: expectedHead,
-          file: headFile,
-          stateDir,
-        }));
       }
       const runningStatus = startStatus();
       if (once) {

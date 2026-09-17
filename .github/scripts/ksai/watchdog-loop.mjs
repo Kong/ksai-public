@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { setTimeout as wait } from 'node:timers/promises';
@@ -9,14 +9,9 @@ import { TRIPPED } from './progress.mjs';
 import { main as stopDue } from './stop-due.mjs';
 
 const require = createRequire(import.meta.url);
-const { movedHead, wholeNumber } = require('../lib/watchdog.cjs');
+const { wholeNumber } = require('../lib/watchdog.cjs');
 
 const numberIn = (value) => wholeNumber(value) ?? 0;
-
-function headMoved(env) {
-  const at = String(env.HEAD_MOVED_FILE ?? '');
-  return at === '' ? '' : movedHead(readFileSync(at, 'utf-8'));
-}
 
 function stalled(env) {
   if (numberIn(env.MAX_CONSECUTIVE_FAILURES) <= 0 && numberIn(env.MAX_REPEATED_CALLS) <= 0) return '';
@@ -67,8 +62,6 @@ export function trip(env) {
   }
   const halt = bestEffort(() => stopDue(env));
   if (halt) return { reason: halt, cause: 'halt' };
-  const moved = bestEffort(() => headMoved(env));
-  if (moved) return { reason: `the pull request moved to ${moved} while this run reviewed an earlier commit`, cause: 'head_moved' };
   const stall = bestEffort(() => stalled(env));
   if (stall) return { reason: stall, cause: 'progress' };
   return null;

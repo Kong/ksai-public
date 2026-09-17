@@ -14,14 +14,6 @@ const { RESERVED_COMMENT } = require('../ksai/plan.cjs');
 
 const SUCCESS = 'success';
 
-class HeadMoved extends Error {
-  constructor(head) {
-    super('PR head moved; this review was not published');
-    this.name = 'HeadMoved';
-    this.head = String(head ?? '');
-  }
-}
-
 /*
  * A run that ended in error publishes no text of its own, whatever it happened to be saying.
  *
@@ -222,9 +214,10 @@ function renderBody(f) {
   return `${sevLabel(f)}${tagLabel(f)}\n\n${modelMarkdown(f.body)}\n\n${FEEDBACK_FOOTER}\n\n${MARKER}${idMarker(f)}`;
 }
 
-function renderSummary(summary, folded) {
+function renderSummary(summary, folded, note = '') {
   // The model writes this too, and it is the one string with no per-finding scrub of its own.
   let out = modelMarkdown(summary) || '_Review complete._';
+  if (note) out += `\n\n${note}`;
   if (folded.length) {
     out += `\n\n${FOLDED_HEADING}\n`;
     for (const f of folded) {
@@ -234,6 +227,39 @@ function renderSummary(summary, folded) {
   }
   // Marker so a later run's fetch-prior recognizes this as one of the bot's own reviews.
   return `${out}\n\n${MARKER}`;
+}
+
+const shortSha = (sha) => `\`${String(sha).slice(0, 7)}\``;
+
+function movedNote(reviewed, head) {
+  const now = head ? ` to ${shortSha(head)}` : '';
+  return (
+    `_This review read ${shortSha(reviewed)}. The pull request has moved${now} since, so a comment on a ` +
+    'line changed after that commit shows as outdated._'
+  );
+}
+
+// Raw model text can end inside a construct that would swallow the note: a fence renders it as code,
+// an unterminated HTML comment hides it.
+const withNote = (text, note) => {
+  if (!note) return text;
+  const closed = text.lastIndexOf('<!--') > text.lastIndexOf('-->') ? `${text}\n-->` : text;
+  return `${closed}\n\n${note}`;
+};
+
+/*
+ * The files of the reviewed commit, compared from the merge base the way a pull request diff is, so a
+ * finding anchors to the lines the reviewer read rather than to a newer head's. The compare answers at
+ * most 300 files; a finding on a file past that folds into the body like any other unanchorable one.
+ */
+async function reviewedFiles({ github, owner, repo, base, commitId }) {
+  if (!base) throw new Error('the pull request names no base commit');
+  const { data } = await github.rest.repos.compareCommitsWithBasehead({
+    owner,
+    repo,
+    basehead: `${base}...${commitId}`,
+  });
+  return data?.files ?? [];
 }
 
 /*
@@ -269,16 +295,17 @@ module.exports = async ({
   protocol = null,
 }) => {
   if (!['baseline', 'evidence', 'dual'].includes(reviewStrategy)) throw new Error('unknown trusted review strategy');
-  const current = async () => {
-    const response = await github.rest.pulls.get({ owner, repo, pull_number: prNumber });
-    const head = response.data?.head?.sha;
-    if (head !== commitId) throw new HeadMoved(head);
-  };
-  const postComment = async (args) => {
-    await current();
-    return github.rest.issues.createComment(args);
-  };
-  if (publish) await current();
+  /*
+   * A commit pushed while the review ran does not stop it publishing. The review is pinned to the
+   * commit it read through `commit_id`, anchored against that commit's diff rather than the pull
+   * request's current one, and says so in its body; GitHub shows a comment on a line changed since as
+   * outdated. An unreadable pull request still refuses: a transport failure says nothing about the head.
+   */
+  const pull = publish ? (await github.rest.pulls.get({ owner, repo, pull_number: prNumber })).data : null;
+  const head = String(pull?.head?.sha ?? '');
+  const moved = publish && head !== commitId;
+  const note = moved ? movedNote(commitId, head) : '';
+  const postComment = (args) => github.rest.issues.createComment(args);
   const { review: parsed, reason: parseReason } = readReviewOutput(runResult);
   if (reviewStrategy !== 'baseline' && parsed) {
     const { findingProblem } = require('./review-pipeline.cjs');
@@ -298,7 +325,7 @@ module.exports = async ({
         owner,
         repo,
         issue_number: prNumber,
-        body: ended(conclusion) ? FAILED_NOTICE : fromModel(runResult).trim() || '_The reviewer produced no output._',
+        body: withNote(ended(conclusion) ? FAILED_NOTICE : balanceFences(fromModel(runResult).trim()) || '_The reviewer produced no output._', note),
       });
     }
     return {
@@ -352,12 +379,14 @@ module.exports = async ({
 
   let files;
   try {
-    files = await github.paginate(github.rest.pulls.listFiles, {
-      owner,
-      repo,
-      pull_number: prNumber,
-      per_page: 100,
-    });
+    files = moved
+      ? await reviewedFiles({ github, owner, repo, base: pull?.base?.sha, commitId })
+      : await github.paginate(github.rest.pulls.listFiles, {
+          owner,
+          repo,
+          pull_number: prNumber,
+          per_page: 100,
+        });
   } catch (e) {
     core.warning(`Could not list PR files (${e.status ?? '?'}): ${e.message}. Posting body-only comment.`);
     if (publish) {
@@ -365,7 +394,7 @@ module.exports = async ({
         owner,
         repo,
         issue_number: prNumber,
-        body: renderSummary(parsed.summary, findings),
+        body: renderSummary(parsed.summary, findings, note),
       });
     }
     return {
@@ -411,11 +440,10 @@ module.exports = async ({
     inline.push(comment);
   }
 
-  const body = renderSummary(parsed.summary, folded);
+  const body = renderSummary(parsed.summary, folded, note);
 
-  const postReview = async (reviewBody, comments) => {
-    await current();
-    return github.rest.pulls.createReview({
+  const postReview = (reviewBody, comments) =>
+    github.rest.pulls.createReview({
       owner,
       repo,
       pull_number: prNumber,
@@ -424,7 +452,6 @@ module.exports = async ({
       body: reviewBody,
       ...(comments ? { comments } : {}),
     });
-  };
 
   // findings_total counts what reached the PR, so it stays comparable with what the eval
   // extractor can reconstruct from posted comments. A withheld finding is counted by
@@ -471,7 +498,12 @@ module.exports = async ({
       return summarize({ review_id: res?.data?.id ?? null, retried: 'single-line' });
     } catch (e2) {
       core.warning(`Single-line retry failed (${e2.status ?? '?'}): ${e2.message}. Body only.`);
-      const wholeBody = renderSummary(parsed.summary, findings);
+      // An unmoved review anchored against the pull request's diff as it was read; a push since then
+      // is why GitHub refused every anchor, so the body says so.
+      const later = moved
+        ? head
+        : await github.rest.pulls.get({ owner, repo, pull_number: prNumber }).then((r) => String(r.data?.head?.sha ?? '')).catch(() => '');
+      const wholeBody = renderSummary(parsed.summary, findings, later && later !== commitId ? movedNote(commitId, later) : note);
       try {
         const res = await postReview(wholeBody);
         return summarize({ inline: 0, folded: findings.length, review_id: res?.data?.id ?? null, retried: 'body-only' });
@@ -488,5 +520,3 @@ module.exports = async ({
     }
   }
 };
-
-module.exports.HeadMoved = HeadMoved;

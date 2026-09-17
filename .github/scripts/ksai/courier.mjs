@@ -113,20 +113,6 @@ export function octokitOver(token, fetchImpl = fetch, apiUrl = DEFAULT_API_URL) 
   };
 }
 
-export async function pullHead({ repo, number, token, apiUrl = DEFAULT_API_URL, fetchImpl = fetch }) {
-  const baseUrl = String(apiUrl).replace(/\/+$/, '');
-  const response = await fetchImpl(`${baseUrl}/repos/${repo}/pulls/${number}`, {
-    headers: {
-      accept: 'application/vnd.github+json',
-      authorization: `Bearer ${token}`,
-      'x-github-api-version': '2022-11-28',
-    },
-  });
-  if (!response.ok) return '';
-  const pull = /** @type {{ head?: { sha?: unknown } } | null} */ (await response.json());
-  return String(pull?.head?.sha ?? '');
-}
-
 const listing = (repo, kind, number, since, page) =>
   kind === REVIEW_KIND
     ? `/repos/${repo}/pulls/${number}/comments?since=${encodeURIComponent(since)}&per_page=${PAGE_SIZE}&page=${page}`

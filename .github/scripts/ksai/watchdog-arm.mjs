@@ -101,7 +101,7 @@ export function main(env = process.env, say = console.log, start = spawn) {
   if (armed === null) return 1;
   if (armed === WATCHDOG_OFF) return 0;
 
-  for (const file of [env.FIRED_FILE, env.REASON_FILE, env.CAUSE_FILE, env.MISSED_FILE, env.HEAD_MOVED_FILE].filter(Boolean)) {
+  for (const file of [env.FIRED_FILE, env.REASON_FILE, env.CAUSE_FILE, env.MISSED_FILE].filter(Boolean)) {
     rmSync(file, { force: true });
   }
 

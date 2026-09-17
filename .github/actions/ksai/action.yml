@@ -4227,7 +4227,6 @@ runs:
         POLL_SECONDS: "20"
         STAMPED_AT_MS: ${{ steps.plugin_ref.outputs.started_at_ms }}
         MISSED_FILE: ${{ runner.temp }}/ksai-watchdog.missed
-        HEAD_MOVED_FILE: ${{ runner.temp }}/ksai-head-moved
       run: node "${SCRIPTS}/ksai/watchdog-arm.mjs"
 
 
@@ -4572,8 +4571,6 @@ runs:
         STATUS_BASE_URL: ${{ inputs.anthropic_base_url }}
         TRIM_PREFIX: ${{ github.workspace }}
         TRANSCRIPT_SINCE: ${{ steps.watchdog.outputs.armed_at_ms || steps.plugin_ref.outputs.started_at_ms }}
-        EXPECTED_HEAD: ${{ inputs.flow == 'review' && steps.checkout_pr.outputs.commit || '' }}
-        HEAD_MOVED_FILE: ${{ runner.temp }}/ksai-head-moved
       run: |
         set -euo pipefail
         nohup node "${SCRIPTS}/ksai/courier-run.mjs" >/dev/null 2>&1 &
@@ -5561,32 +5558,24 @@ runs:
           const postReview = require(`${process.env.SCRIPTS}/kreview/post-review.cjs`);
           const { loadSuppressionRules, asJsonl, splitPublished } = require(`${process.env.SCRIPTS}/kreview/publish.cjs`);
 
-          let published;
-          try {
-            published = await postReview({
-              github,
-              core,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              prNumber: Number(process.env.PR_NUMBER),
-              commitId: process.env.COMMIT_ID,
-              runResult: process.env.RUN_RESULT ?? '',
-              conclusion: process.env.RUN_CONCLUSION ?? '',
-              reviewStrategy: process.env.REVIEW_STRATEGY,
-              protocol: JSON.parse(process.env.REVIEW_PROTOCOL || 'null'),
-              publish: process.env.PUBLISH !== 'false',
-              suppression: {
-                rules: loadSuppressionRules({ bundlePath: process.env.SUPPRESSION_BUNDLE, core, fs }),
-                reviewerId: process.env.REVIEWER_ID,
-                runId: process.env.RUN_ID,
-              },
-            });
-          } catch (error) {
-            if (!(error instanceof postReview.HeadMoved)) throw error;
-            core.notice(`The pull request moved to ${error.head || 'another commit'} while ${process.env.COMMIT_ID} was reviewed, so nothing was published`);
-            core.setOutput('head_moved', error.head || 'unknown');
-            return;
-          }
+          const published = await postReview({
+            github,
+            core,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            prNumber: Number(process.env.PR_NUMBER),
+            commitId: process.env.COMMIT_ID,
+            runResult: process.env.RUN_RESULT ?? '',
+            conclusion: process.env.RUN_CONCLUSION ?? '',
+            reviewStrategy: process.env.REVIEW_STRATEGY,
+            protocol: JSON.parse(process.env.REVIEW_PROTOCOL || 'null'),
+            publish: process.env.PUBLISH !== 'false',
+            suppression: {
+              rules: loadSuppressionRules({ bundlePath: process.env.SUPPRESSION_BUNDLE, core, fs }),
+              reviewerId: process.env.REVIEWER_ID,
+              runId: process.env.RUN_ID,
+            },
+          });
 
           const { fires, records, summary } = splitPublished(published);
           const dir = process.env.RECORD_DIR;
@@ -5647,7 +5636,6 @@ runs:
           ${{ steps.repo_rules.outcome == 'failure' && 'rules_rejected' ||
           steps.select_arm.outputs.stand_down_notice != '' && 'stood_down' ||
           steps.triage.outputs.skip == 'true' && 'triage_skipped' ||
-          (steps.comment_result.outputs.head_moved != '' || steps.disarm_watchdog.outputs.cause == 'head_moved') && 'head_moved' ||
           steps.report.outputs.conclusion }}
         COST: ${{ steps.report.outputs.total_cost }}
         REVIEW_PROTOCOL: ${{ steps.report.outputs.review_protocol }}
@@ -5719,7 +5707,7 @@ runs:
       id: react_review
       if: >-
         ${{ always() && inputs.publish == 'true' && inputs.flow == 'review' &&
-        steps.comment_result.outcome == 'success' && steps.comment_result.outputs.head_moved == '' }}
+        steps.comment_result.outcome == 'success' }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         COMMENT_ID: ${{ steps.context.outputs.comment_id }}
@@ -5761,7 +5749,6 @@ runs:
         SELECT_OUTCOME: ${{ steps.select_arm.outcome }}
         SELECT_SKIPPED: ${{ steps.select_arm.outputs.skipped }}
         RESULT_OUTCOME: ${{ steps.comment_result.outcome }}
-        HEAD_MOVED: ${{ steps.comment_result.outputs.head_moved }}
         WATCHDOG_FIRED: ${{ steps.disarm_watchdog.outputs.fired }}
         WATCHDOG_CAUSE: ${{ steps.disarm_watchdog.outputs.cause }}
         WATCHDOG_REASON: ${{ steps.disarm_watchdog.outputs.reason }}
@@ -5849,7 +5836,6 @@ runs:
         SELECT_OUTCOME: ${{ steps.select_arm.outcome }}
         SELECT_SKIPPED: ${{ steps.select_arm.outputs.skipped }}
         RESULT_OUTCOME: ${{ steps.comment_result.outcome }}
-        HEAD_MOVED: ${{ steps.comment_result.outputs.head_moved }}
         WATCHDOG_FIRED: ${{ steps.disarm_watchdog.outputs.fired }}
         WATCHDOG_CAUSE: ${{ steps.disarm_watchdog.outputs.cause }}
         WATCHDOG_REASON: ${{ steps.disarm_watchdog.outputs.reason }}

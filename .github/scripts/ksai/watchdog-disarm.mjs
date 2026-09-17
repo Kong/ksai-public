@@ -9,7 +9,7 @@ import { writeOutputs } from '../lib/outputs.mjs';
 const require = createRequire(import.meta.url);
 const { warningFor } = require('./warn.cjs');
 
-const CAUSES = new Set(['progress', 'halt', 'head_moved']);
+const CAUSES = new Set(['progress', 'halt']);
 
 const SETTLE_MS = 3000;
 const LOOK_MS = 50;
