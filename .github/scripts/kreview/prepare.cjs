@@ -18,7 +18,7 @@ const {
 } = require('../lib/select-arm.cjs');
 const { ASSIGNED_SOURCE, receiptOf, sourceOf } = require('../lib/request-intent.cjs');
 const { ceilingMinutes } = require('../lib/watchdog.cjs');
-const { skipsAuthor, triage } = require('../triage/policy.cjs');
+const { skipsAuthor, stackManifests, triage } = require('../triage/policy.cjs');
 const { renderReviewPrompt, renderPipelineContext } = require('./prompt.cjs');
 const { STRATEGIES, experimentOf, promptDigest } = require('./review-pipeline.cjs');
 const { materializeScopes } = require('./review-scopes.cjs');
@@ -51,10 +51,28 @@ async function commitAuthorsOf({ github, core, owner, repo, pull_number }) {
   }
 }
 
+const STACK_MANIFEST_BYTES = 256 * 1024;
+
+async function readStackManifests({ github, core, owner, repo }) {
+  const manifests = {};
+  for (const path of stackManifests()) {
+    try {
+      const { data } = await github.rest.repos.getContent({ owner, repo, path });
+      if (data?.encoding !== 'base64' || typeof data.content !== 'string') continue;
+      if (typeof data.size === 'number' && data.size > STACK_MANIFEST_BYTES) continue;
+      manifests[path] = Buffer.from(data.content, 'base64').toString('utf-8');
+    } catch (error) {
+      if (error?.status !== 404) core?.info?.(`Could not read \`${path}\`, so the stack renames nothing: ${error?.message}`);
+    }
+  }
+  return manifests;
+}
+
 async function runTriage({ github, core, owner, repo, prNumber }) {
   let result = NO_TRIAGE;
   try {
     const pull_number = Number(prNumber);
+    const manifests = readStackManifests({ github, core, owner, repo });
     const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number });
     const files = await github.paginate(github.rest.pulls.listFiles, { owner, repo, pull_number, per_page: 100 });
     const author = pr.user?.login;
@@ -66,6 +84,7 @@ async function runTriage({ github, core, owner, repo, prNumber }) {
       commitAuthors,
       commitCount: pr.commits,
       changedFiles: pr.changed_files,
+      manifests: await manifests,
       files: files.map((f) => ({ path: f.filename, additions: f.additions, deletions: f.deletions })),
     });
   } catch (error) {

@@ -58,6 +58,7 @@ const EMPTY_RULES = Object.freeze({
   apiSurface: Object.freeze([]),
   skillsByExtension: Object.freeze([]),
   skillsByPath: Object.freeze([]),
+  stacks: Object.freeze([]),
   skipAuthors: Object.freeze([]),
   nonReviewableExtensions: Object.freeze([]),
   nonReviewableBasenames: Object.freeze([]),
@@ -83,6 +84,8 @@ const compilePatterns = (list) =>
       skill: entry?.skill,
     }))
     .filter((rule) => rule.re !== null);
+
+const READABLE_MANIFESTS = new Set(['package.json']);
 
 /**
  * Reads the raw rules file into the shape the policy runs on.
@@ -114,6 +117,19 @@ function compileRules(raw) {
       .filter((rule) => isPlainString(rule?.ext) && isPlainString(rule?.skill))
       .map((rule) => ({ ext: rule.ext.toLowerCase(), skill: rule.skill })),
     skillsByPath: compilePatterns(raw.skillsByPath).filter((rule) => isPlainString(rule.skill)),
+    stacks: (Array.isArray(raw.stacks) ? raw.stacks : [])
+      .map((rule) => ({
+        manifest: isPlainString(rule?.manifest) ? rule.manifest.toLowerCase() : '',
+        requires: (Array.isArray(rule?.requires) ? rule.requires : [])
+          .filter((name) => isPlainString(name)).map((name) => name.toLowerCase()),
+        remap: Object.fromEntries(
+          Object.entries(rule?.remap && typeof rule.remap === 'object' ? rule.remap : {})
+            .filter(([from, to]) => isPlainString(from) && isPlainString(to)),
+        ),
+        why: isPlainString(rule?.why) ? rule.why : '',
+      }))
+      .filter((rule) => READABLE_MANIFESTS.has(rule.manifest) && rule.requires.length > 0
+        && Object.keys(rule.remap).length > 0),
     skipAuthors: (Array.isArray(raw.skipAuthors) ? raw.skipAuthors : [])
       .filter((rule) => isPlainString(rule?.login))
       .map((rule) => rule.login.toLowerCase()),
@@ -161,6 +177,7 @@ const SKILLS = Object.freeze(
     'default-code-review',
     ...DEFAULT_RULES.skillsByExtension.map((rule) => rule.skill),
     ...DEFAULT_RULES.skillsByPath.map((rule) => rule.skill),
+    ...DEFAULT_RULES.stacks.flatMap((rule) => Object.values(rule.remap)),
   ])].sort(),
 );
 
@@ -204,6 +221,44 @@ function skillFor(path, rules = DEFAULT_RULES) {
   return rules.skillsByExtension.find((rule) => rule.ext === ext)?.skill ?? null;
 }
 
+function stackManifests(rules = DEFAULT_RULES) {
+  return [...new Set((rules.stacks ?? []).map((rule) => rule.manifest))];
+}
+
+const DEPENDENCY_FIELDS = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'];
+
+function dependencyNames(text) {
+  let parsed;
+  try {
+    parsed = JSON.parse(String(text ?? ''));
+  } catch {
+    return new Set();
+  }
+  if (!parsed || typeof parsed !== 'object') return new Set();
+  const names = new Set();
+  for (const field of DEPENDENCY_FIELDS) {
+    const block = parsed[field];
+    if (!block || typeof block !== 'object') continue;
+    for (const name of Object.keys(block)) names.add(name.toLowerCase());
+  }
+  return names;
+}
+
+function remapFor(manifests, rules = DEFAULT_RULES) {
+  const remap = Object.create(null);
+  const matched = [];
+  const read = manifests && typeof manifests === 'object' ? manifests : {};
+  for (const rule of rules.stacks ?? []) {
+    const text = read[rule.manifest];
+    if (typeof text !== 'string' || text === '') continue;
+    const names = dependencyNames(text);
+    if (!rule.requires.some((name) => names.has(name))) continue;
+    for (const [from, to] of Object.entries(rule.remap)) remap[from] = to;
+    matched.push(rule);
+  }
+  return { remap, matched };
+}
+
 /**
  * Reads the changed-file list into the facts the policy runs on.
  *
@@ -211,7 +266,7 @@ function skillFor(path, rules = DEFAULT_RULES) {
  * missing path, a non-numeric line count and a null entry are all tolerated rather than thrown on,
  * because a single odd record must not cost the run its whole review.
  */
-function summarize(files, rules = DEFAULT_RULES) {
+function summarize(files, rules = DEFAULT_RULES, remap = null) {
   const facts = {
     reviewableFiles: 0,
     reviewableLines: 0,
@@ -223,6 +278,7 @@ function summarize(files, rules = DEFAULT_RULES) {
     apiSurface: false,
     byLanguage: Object.create(null),
     uncoveredLines: 0,
+    renamedFrom: new Set(),
     reasons: [],
   };
 
@@ -266,7 +322,9 @@ function summarize(files, rules = DEFAULT_RULES) {
       facts.manifests.add(basename(path));
     }
 
-    const skill = skillFor(path, rules);
+    const claimed = skillFor(path, rules);
+    const skill = claimed === null ? null : (remap?.[claimed] ?? claimed);
+    if (skill !== claimed) facts.renamedFrom.add(claimed);
     if (skill) facts.byLanguage[skill] = (facts.byLanguage[skill] ?? 0) + lines;
     else facts.uncoveredLines += lines;
   }
@@ -392,6 +450,7 @@ function triage({
   author = null,
   commitAuthors = null,
   commitCount = null,
+  manifests = null,
   rules = DEFAULT_RULES,
 } = {}) {
   const inert = { tier: null, effort: null, skills: [], skip: null, apiSurface: false, facts: null };
@@ -418,7 +477,12 @@ function triage({
   const total = Number.isFinite(changedFiles) ? changedFiles : files.length;
   if (files.length < total) return inert;
 
-  const facts = summarize(files, rules);
+  const { remap, matched } = remapFor(manifests, rules);
+  const facts = summarize(files, rules, remap);
+  for (const rule of matched) {
+    if (!rule.why || facts.reasons.includes(rule.why)) continue;
+    if (Object.keys(rule.remap).some((from) => facts.renamedFrom.has(from))) facts.reasons.push(rule.why);
+  }
 
   // Nothing in the diff a reviewer can read. Skipping is where the saving is: today this spends a
   // full run to report that a documentation change is a documentation change. A ruleset naming no
@@ -462,11 +526,14 @@ module.exports = {
   ALLOWED_EFFORTS,
   compileRules,
   triage,
+  stackManifests,
   skipsAuthor,
   // Exported for the tests, which pin the classification rules directly rather than inferring them
   // from a whole-diff verdict.
   isReviewable,
   skillFor,
+  dependencyNames,
+  remapFor,
   extension,
   summarize,
   route,
