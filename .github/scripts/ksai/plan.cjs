@@ -742,9 +742,9 @@ function parsePlanDocument(text) {
       return {
         error:
           `line ${i + 1} of the plan document starts with ${describeInvisible(hiddenHeading[1])} before its ` +
-          'heading, so CommonMark reads the line as paragraph text and the heading is not one. GitHub shows ' +
-          'it as a heading all the same, which is why this names the line rather than the phase or step list ' +
-          'that goes missing below it - delete the character and leave the `#` first on the line',
+          'heading, so CommonMark reads the line as paragraph text and the heading is not one. The character ' +
+          'is invisible, which is why this names the line rather than the phase or step list that goes ' +
+          'missing below it - delete the character and leave the `#` first on the line',
       };
     }
     const heading = PHASE_HEADING.exec(line);

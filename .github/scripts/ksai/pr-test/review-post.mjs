@@ -57,21 +57,31 @@ export function reviewToPost({ body = '', rendered = '', tested = noRefs(), curr
   const label = (value) => value || 'unknown';
   const testedHead = `Tested head: \`${label(tested.head)}\`.`;
   const testedBase = `Tested base: \`${label(tested.base)}\` at \`${label(tested.baseSha)}\`.`;
+  const currentHead = `Current head: \`${label(current.head)}\`.`;
+  const currentBase = `Current base: \`${label(current.base)}\` at \`${label(current.baseSha)}\`.`;
   let posted = body;
   let outcome = rendered || 'rejected';
 
+  const known = Boolean(tested.head && tested.base && tested.baseSha);
+  const moved =
+    known &&
+    (tested.head !== current.head || tested.base !== current.base || tested.baseSha !== current.baseSha);
+
   if (posted === '') {
-    posted = lines(HEADING, '', 'The run failed before it produced a verdict.', '', testedHead, testedBase);
+    posted = known
+      ? lines(HEADING, '', 'The run failed before it produced a verdict.', '', testedHead, testedBase)
+      : lines(
+          HEADING,
+          '',
+          'The run failed before it produced a verdict, and left no complete record of the head and base ' +
+            'it tested. Its log says why.',
+          '',
+          currentHead,
+          currentBase,
+        );
     outcome = 'rejected';
   }
 
-  const moved =
-    !tested.head ||
-    !tested.base ||
-    !tested.baseSha ||
-    tested.head !== current.head ||
-    tested.base !== current.base ||
-    tested.baseSha !== current.baseSha;
   if (moved) {
     posted = lines(
       HEADING,
@@ -79,9 +89,20 @@ export function reviewToPost({ body = '', rendered = '', tested = noRefs(), curr
       'The tested head or base no longer matches the pull request. This result was not published.',
       '',
       testedHead,
-      `Current head: \`${current.head}\`.`,
+      currentHead,
       testedBase,
-      `Current base: \`${current.base}\` at \`${current.baseSha}\`.`,
+      currentBase,
+    );
+    outcome = 'rejected';
+  } else if (!known && body !== '') {
+    posted = lines(
+      HEADING,
+      '',
+      'This result was not published because the run left no complete record of the head and base it ' +
+        'tested. Its log says why.',
+      '',
+      currentHead,
+      currentBase,
     );
     outcome = 'rejected';
   }
