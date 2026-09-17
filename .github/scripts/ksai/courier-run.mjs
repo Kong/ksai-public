@@ -1,6 +1,7 @@
 import { appendFileSync, existsSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 
 import { streams as opencodeStreams } from '../kreview/opencode-progress.mjs';
@@ -13,7 +14,7 @@ const { movedHead } = require('../lib/watchdog.cjs');
 
 const HEAD_POLL_MS = 60_000;
 
-const wait = (seconds) => new Promise((resolve) => { setTimeout(resolve, seconds * 1000); });
+const wait = (seconds, signal) => delay(seconds * 1000, undefined, { signal }).catch(() => {});
 
 const say = (stateDir, line) => {
   try {
@@ -27,10 +28,10 @@ const say = (stateDir, line) => {
 const loadAuthorize = () => require('../codeowners-authz/authorize.cjs');
 
 const stopLatch = (signals) => {
-  let asked = false;
-  const ask = () => { asked = true; };
+  const stop = new AbortController();
+  const ask = () => { stop.abort(); };
   signals.once('SIGTERM', ask);
-  return { asked: () => asked, close: () => signals.off('SIGTERM', ask) };
+  return { asked: () => stop.signal.aborted, signal: stop.signal, close: () => signals.off('SIGTERM', ask) };
 };
 
 export function authorizerOver({ github, owner, repo, load = loadAuthorize, writeAccessCommands = null }) {
@@ -205,7 +206,7 @@ export async function main(
         await runningStatus;
         return 0;
       }
-      await sleep(POLL_SECONDS);
+      await sleep(POLL_SECONDS, stopping.signal);
     }
     if (stopping.asked() && statusTask) await statusTask;
     return 0;

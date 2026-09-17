@@ -691,8 +691,9 @@ inputs:
       `git log` needs the history.
 
       **A pull-surface phase ignores this and always takes full history**: it is one job per request rather
-      than thirty, and it is changing existing work in response to a review. A review always takes full history
-      too, because the base has to be reachable for a real `git diff`.
+      than thirty, and it is changing existing work in response to a review. A review ignores it too: it clones
+      the pull request head at depth 1, then fetches the head and its base only back to their merge base, so a real
+      `git diff` has its base, and falls back to full history when that merge base cannot be proven.
     required: false
     default: "1"
   denied_paths:
@@ -2562,7 +2563,7 @@ runs:
         steps.triage.outputs.skip != 'true' }}
       with:
         ref: refs/pull/${{ steps.context.outputs.issue_number }}/head
-        fetch-depth: 0
+        fetch-depth: 1
         token: ${{ inputs.source_org_github_token }}
         repository: ${{ github.repository }}
         persist-credentials: false
@@ -2685,13 +2686,8 @@ runs:
         GH_TOKEN: ${{ inputs.source_org_github_token }}
         ISSUE_NUM: ${{ steps.context.outputs.issue_number }}
         SOURCE_REPO: ${{ github.repository }}
-      run: |
-        set -euo pipefail
-        base="$(gh pr view "$ISSUE_NUM" --repo "$SOURCE_REPO" --json baseRefName -q .baseRefName)"
-        git fetch --no-tags \
-          "https://x-access-token:${GH_TOKEN}@github.com/${SOURCE_REPO}.git" \
-          "+refs/heads/${base}:refs/remotes/origin/${base}" >/dev/null 2>&1 || true
-        echo "ref=${base}" >> "$GITHUB_OUTPUT"
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      run: node "${SCRIPTS}/ksai/review-base.mjs"
 
     - name: Detect major dependency bumps
       id: major_bump
@@ -3730,11 +3726,14 @@ runs:
       working-directory: ${{ runner.temp }}
       env:
         VERSION: ${{ inputs.opencode_version }}
+        DIST_DIR: ${{ runner.temp }}/ksai-opencode-dist
+        TOOL_DIR: ${{ runner.temp }}/ksai-opencode/bin
         OPENCODE_PTY: ${{ inputs.opencode_pty }}
         OPENCODE_PHASE: ${{ inputs.flow == 'test' && 'test' || steps.size.outputs.phase }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: |
         set -euo pipefail
+        tool_bin="${RUNNER_TEMP}/ksai-opencode/bin"
         cached="/opt/ksai-tools/opencode/${VERSION}/linux-x64/bin/opencode"
         if [[ "${RUNNER_OS}" == 'Linux' && "${RUNNER_ARCH}" == 'X64' && "${VERSION}" == '1.18.30' && -f "${cached}" && -x "${cached}" ]] &&
           echo "87bd160e053af86b5b409daabf71f8dc05bbc3a2a3a5f563f36011cdf706a999  ${cached}" | sha256sum --check --status; then
@@ -3742,12 +3741,15 @@ runs:
           echo "Reusing verified OpenCode ${VERSION}"
         else
           if [[ -f "${cached}" ]]; then
-            echo "::warning::Baked OpenCode cache is unusable for this run; installing from npm"
+            echo "::warning::Baked OpenCode cache is unusable for this run; installing it"
           fi
-          npm install --global "opencode-ai@${VERSION}"
-          selected="$(npm prefix --global)/bin/opencode"
+          if selected="$(node "${SCRIPTS}/kreview/opencode-install.mjs")" && [[ -n "${selected}" ]]; then
+            echo "Installed OpenCode ${VERSION} from its verified registry package"
+          else
+            npm install --global "opencode-ai@${VERSION}"
+            selected="$(npm prefix --global)/bin/opencode"
+          fi
         fi
-        tool_bin="${RUNNER_TEMP}/ksai-opencode/bin"
         mkdir -p "${tool_bin}"
         ln -sfn "${selected}" "${tool_bin}/opencode"
         export PATH="${tool_bin}:${PATH}"

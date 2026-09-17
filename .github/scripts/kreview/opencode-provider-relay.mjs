@@ -26,7 +26,7 @@ const responseHeaders = (headers) => {
   return out;
 };
 
-export async function relayProviderRequest(request, env, fetchImpl = fetch, token = bearer, timeoutMs = 10 * 60_000) {
+export async function relayProviderRequest(request, env, fetchImpl = fetch, token = bearer, timeoutMs = 10 * 60_000, gone = new AbortController().signal) {
   const origin = String(env.ANTHROPIC_BASE_URL ?? '').trim().replace(/\/+$/, '');
   if (originProblem(origin)) throw new Error(`provider relay received an invalid origin: ${originProblem(origin)}`);
   const target = new URL(request.url ?? '/', 'http://127.0.0.1');
@@ -49,7 +49,7 @@ export async function relayProviderRequest(request, env, fetchImpl = fetch, toke
       method: 'POST',
       headers,
       body: await bodyOf(request),
-      signal: abort.signal,
+      signal: AbortSignal.any([abort.signal, gone]),
     });
   } finally {
     clearTimeout(timer);
@@ -59,8 +59,12 @@ export async function relayProviderRequest(request, env, fetchImpl = fetch, toke
 /** startProviderRelay keeps the bearer and provider origin outside the model process. */
 export async function startProviderRelay({ env = process.env, fetchImpl = fetch, token = bearer } = {}) {
   const server = createServer(async (request, response) => {
+    const gone = new AbortController();
+    response.once('close', () => {
+      if (!response.writableFinished) gone.abort(new Error('provider relay client closed the request'));
+    });
     try {
-      const upstream = await relayProviderRequest(request, env, fetchImpl, token);
+      const upstream = await relayProviderRequest(request, env, fetchImpl, token, undefined, gone.signal);
       if (!upstream) {
         response.writeHead(404).end();
         return;

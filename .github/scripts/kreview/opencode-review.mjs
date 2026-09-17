@@ -106,7 +106,7 @@ export async function completeFinal({ prompt, timeoutMs, invoke, now = Date.now 
 
 const MISSING_TEXT_PART = /^text part [0-9]{1,6} not found$/;
 
-const TRANSPORT_CLOSED = /^Cannot connect to API\b|\bsocket connection was closed unexpectedly\b/;
+const TRANSPORT_CLOSED = /^Cannot connect to API\b|\bsocket connection was closed unexpectedly\b|^SSE read timed out$|^Provider response headers timed out after [0-9]{1,9}ms$/;
 
 /*
  * Gateway answers when it cannot reach the proxied endpoint: a bodyless 5xx arrives as an UnknownError with this text and no statusCode, one with a body as an APIError with a 5xx statusCode. A model cannot mint a 5xx, so the status is authoritative; 4xx answers for the caller and stays unclassified.

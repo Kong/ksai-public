@@ -255,6 +255,8 @@ export const RUNTIME_CONFIG = Object.freeze({
   permission: opencodePermissions(claudeArgs.TOOL_POLICY.review),
 });
 
+export const PROVIDER_TIMEOUTS = Object.freeze({ headerTimeout: 120_000, chunkTimeout: 120_000 });
+
 export const PROVIDER_POLICY_VERSION = '1.18.31';
 
 export const PROVIDER_POLICY = Object.freeze([
@@ -414,6 +416,7 @@ export function runtimeConfig({
         models: PROVIDER_MODELS,
         options: {
           apiKey: 'unused-the-authorization-header-answers-every-request',
+          ...PROVIDER_TIMEOUTS,
           ...(baseUrl ? { baseURL: baseUrl } : {}),
           headers: brokered ? { ...attribution } : { ...attribution, ...authHeaders(BEARER, { ANTHROPIC_AUTH: auth }) },
         },
