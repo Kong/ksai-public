@@ -8,6 +8,17 @@ const { href, marker, positive } = require('./marker.cjs');
 const { STATUS_BEGIN, STATUS_END, URL_SHAPE, locateStatus, oneLine, scrub, spliceStatus } = require('./plan.cjs');
 const { probeComments } = require('./pages.cjs');
 const { withIssueLock } = require('./write-lock.cjs');
+
+const MAX_SELECTION_CHARS = 80;
+
+function cutSelection(said) {
+  const text = String(said ?? '');
+  if (text.length <= MAX_SELECTION_CHARS) return text;
+  let end = MAX_SELECTION_CHARS - 1;
+  const at = text.codePointAt(end);
+  if (at >= 0xdc00 && at <= 0xdfff) end -= 1;
+  return `${text.slice(0, end).trimEnd()}…`;
+}
 const { neutralize } = require('../lib/prompt-text.cjs');
 const {
   MAX_HISTORY,
@@ -425,7 +436,7 @@ function attemptOf(env = process.env, now = Date.now()) {
     effort,
     model_source: modelSource,
     effort_source: effortSource,
-    selection: oneLine(env.SELECTION || 'selection pending').slice(0, 80),
+    selection: cutSelection(oneLine(env.SELECTION || 'selection pending')),
     route_command: String(env.ROUTE_COMMAND ?? ''),
     route_surface: String(env.ROUTE_SURFACE ?? ''),
     route_source: String(env.ROUTE_SOURCE ?? ''),
