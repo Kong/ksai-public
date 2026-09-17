@@ -85,9 +85,15 @@ on:
         description: >-
           explicit host:port allowlist enforced across the autofix job. Keep the provider, telemetry,
           package registries, GitHub APIs, and runner bootstrap endpoints this repository needs.
+
+          Space-separated, and folded rather than literal for that reason: the monitor splits this
+          value on spaces alone, so a newline between two entries leaves one unparseable entry rather
+          than two allowed ones - the first host loses its port and every host after it is dropped
+          without a word. A caller writing its own list writes it the same way, and the job refuses a
+          list with a newline in it rather than blocking the registries it was handed.
         required: false
         type: string
-        default: |-
+        default: >-
           api.github.com:443
           github.com:443
           *.githubusercontent.com:443
@@ -1010,7 +1016,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-help
           repository: Kong/ksai-public
-          ref: v3.83.15
+          ref: v3.83.16
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1452,7 +1458,7 @@ jobs:
         with:
           token: ${{ github.token }}
           repository: Kong/ksai-public
-          ref: v3.83.15
+          ref: v3.83.16
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1603,7 +1609,7 @@ jobs:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: block
-          allowed-endpoints: |-
+          allowed-endpoints: >-
             ${{ inputs.harden_runner_allowed_endpoints }}
             ${{ needs.control_plane.outputs.endpoint }}
           disable-telemetry: true
@@ -1690,6 +1696,11 @@ jobs:
               echo "::error::harden_runner_allowed_endpoints is empty, and an empty list configures no rule at all rather than the strictest one, so this job would write code with nothing bounding where its runner may talk to. Name the destinations this repository needs"
               exit 1 ;;
           esac
+
+          if [ "${ALLOWED#*$'\n'}" != "${ALLOWED}" ]; then
+            echo "::error::harden_runner_allowed_endpoints holds a newline, and the monitor splits this list on spaces alone - the first host loses its port and every host after it is dropped, so the registries and the gateway this job needs are blocked while the workflow still reads egress-policy: block. Write the list space-separated, in a folded block rather than a literal one"
+            exit 1
+          fi
 
           if [ -n "${ENDPOINT}" ] && [ -z "${DESTINATION}" ]; then
             echo "::error::this call names a control plane and the job that reads it handed back no host, so the monitor is blocking the record this run was sent to read. Read the control_plane job"
@@ -1874,15 +1885,20 @@ jobs:
 
   clear-request:
     needs: [gate, review, recover]
+    # A dispatch that names a record is the control plane sending a run, and every command arrives
+    # that way - so `pr` with no `comment_kind` no longer says a review was asked for, and the record
+    # is what says it. Without that the refusals below answered every fix with a comment saying the
+    # review command was turned off, on a pull request where nobody had asked for a review.
     if: >-
       always() && inputs.clear_request &&
       ((needs.gate.result == 'success' &&
         (needs.review.result == 'success' ||
          (needs.review.result == 'failure' && needs.recover.outputs.retried != 'true') ||
          (github.event_name == 'workflow_dispatch' && inputs.pr != '' && inputs.comment_kind == '' &&
+          (inputs.record_id == '' || needs.gate.outputs.record_command == 'review') &&
           (needs.gate.outputs.authorized != 'true' || needs.gate.outputs.review != 'true')))) ||
        (needs.gate.result == 'failure' && github.event_name == 'workflow_dispatch' &&
-        inputs.pr != '' && inputs.comment_kind == ''))
+        inputs.pr != '' && inputs.comment_kind == '' && inputs.record_id == ''))
     runs-on: ${{ startsWith(inputs.runs_on, '[') && fromJSON(inputs.runs_on) || inputs.runs_on }}
     timeout-minutes: 5
     permissions:
@@ -1903,6 +1919,7 @@ jobs:
           refused-actor: ${{ needs.gate.outputs.authorized != 'true' && inputs.actor || '' }}
           refused-command-off: >-
             ${{ github.event_name == 'workflow_dispatch' && inputs.comment_kind == '' &&
+            (inputs.record_id == '' || needs.gate.outputs.record_command == 'review') &&
             needs.gate.outputs.authorized == 'true' && needs.gate.outputs.review != 'true' }}
 
       - name: Say the authorization check could not be completed
@@ -1943,7 +1960,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-recover
           repository: Kong/ksai-public
-          ref: v3.83.15
+          ref: v3.83.16
           sparse-checkout: |
             .github/scripts
           persist-credentials: false
