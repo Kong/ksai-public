@@ -167,7 +167,8 @@ export function sandboxScopes(env, exists, real) {
         missing.push(at);
         return false;
       });
-  return { allow: scoped(env.SANDBOX_ALLOW_WRITE), deny: scoped(env.SANDBOX_DENY_WRITE), missing, masked };
+  const readable = [env.SANDBOX_DENY_WRITE, env.KSAI_GO_MODULE_CACHE].filter(Boolean).join('\n');
+  return { allow: scoped(env.SANDBOX_ALLOW_WRITE), deny: scoped(readable), missing, masked };
 }
 
 /**
@@ -715,9 +716,22 @@ export function denials(events) {
     const tool = String(one.part?.tool ?? 'unknown');
     const input = state.input && typeof state.input === 'object' ? state.input : {};
     const { command_digest: _digest, ...detail } = detailed(CLAUDE_NAME[tool] ?? tool, input);
-    out.push({ tool_name: tool, tool_input: detail });
+    const asked = programOf(input.command);
+    out.push({ tool_name: tool, tool_input: asked === '' ? detail : { program: asked, ...detail } });
   }
   return out;
+}
+
+export function programOf(command) {
+  const words = String(command ?? '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  for (const word of words) {
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(word) || word === 'export' || word === 'env') continue;
+    return /^[A-Za-z0-9._/-]{1,40}$/.test(word) ? word : '';
+  }
+  return '';
 }
 
 /**

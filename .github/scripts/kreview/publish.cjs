@@ -53,7 +53,8 @@ function deniedCall(entry, secrets) {
   const fallback = Object.values(input ?? {}).find((value) => typeof value === 'string') ?? null;
   const said = command ?? fallback;
   const head = said === null ? null : oneLineHead(scrubSecrets(said, secrets));
-  return { tool, head, program: command === null ? null : (head ?? '').split(' ')[0] || null };
+  const named = typeof input?.program === 'string' ? input.program : null;
+  return { tool, head, program: command === null ? named : (head ?? '').split(' ')[0] || null };
 }
 
 function deniedCalls(result, env = process.env) {

@@ -87,8 +87,10 @@ for (const { name, key, granted } of stated ? mergedDenials(policy) : phaseDenia
     `::warning::${name} is denied and ${granted.join(' and ')} granted, and opencode gates them all behind one ${key} key - so the denial is dropped and ${name} is reachable here where the Claude engine refuses it`,
   );
 }
-const scopes = sandboxScopes(process.env, existsSync, realpathSync).allow;
-const permission = stated ? opencodePermissions(policy, scopes) : phasePermissions(phase, scopes);
+const sandbox = sandboxScopes(process.env, existsSync, realpathSync);
+const scopes = sandbox.allow;
+const reachable = [...sandbox.allow, ...sandbox.deny];
+const permission = stated ? opencodePermissions(policy, reachable) : phasePermissions(phase, reachable);
 if (!permission) {
   console.log(
     `::error::opencode_phase ${phase || '(empty)'} names no entry in the shared tool table, so this run has no tool policy - a phase resolving to a default would run a write flow read-only, or hand a reviewer the tools to change the tree it is reviewing`,
@@ -232,6 +234,7 @@ console.log(
     ? `paths outside the workspace this run may read and write: ${scopes.join(', ')}`
     : 'this run reaches no path outside the workspace but its own temporary directory',
 );
+if (sandbox.deny.length) console.log(`paths outside the workspace this run may read: ${sandbox.deny.join(', ')}`);
 console.log(
   channel
     ? 'the run channel is registered, so this run can be told something and asked to stop'

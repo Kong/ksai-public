@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, lstatSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 
@@ -88,6 +88,14 @@ function toolchainOf(workspace) {
   }
 }
 
+function moduleCacheOf(workspace) {
+  try {
+    return execFileSync('go', ['env', 'GOMODCACHE'], { cwd: workspace, encoding: 'utf8' }).trim();
+  } catch {
+    return '';
+  }
+}
+
 function modulesIn(workspace, dirs) {
   const read = [];
   let left = MODULE_READ_BUDGET;
@@ -114,7 +122,13 @@ function downloadIn(cwd, child, timeout) {
 
 export function main(
   env = process.env,
-  { clock = () => Date.now(), toolchain = toolchainOf, download = downloadIn } = {},
+  {
+    clock = () => Date.now(),
+    toolchain = toolchainOf,
+    download = downloadIn,
+    moduleCache = moduleCacheOf,
+    cacheExists = existsSync,
+  } = {},
 ) {
   const workspace = env.WORKSPACE || process.cwd();
   /*
@@ -127,6 +141,12 @@ export function main(
 
   const done = ({ failed = [], version = '' }) => {
     if (lockBuild && env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, 'GOPROXY=off\nGOTOOLCHAIN=local\n');
+    if (env.GITHUB_ENV && version !== '') {
+      const at = moduleCache(workspace);
+      if (at !== '' && !at.includes('\n') && cacheExists(at)) {
+        appendFileSync(env.GITHUB_ENV, `KSAI_GO_MODULE_CACHE=${at}\n`);
+      }
+    }
     if (version !== '' && env.PROMPT_FILE) tellThePrompt(env.PROMPT_FILE, renderGoNote({ version, failed }));
     return 0;
   };
