@@ -347,7 +347,8 @@ async function resolveDispatchedComment({
 
   const wrote = String(data?.user?.login ?? '');
   const sent = String(actor ?? '').trim();
-  if (sent !== '' && !isOwnLogin(sent, appSlug) && sent.toLowerCase() !== wrote.toLowerCase()) {
+  const sentType = sent.toLowerCase().endsWith('[bot]') ? 'Bot' : 'User';
+  if (sent !== '' && !isOwnLogin(sent, appSlug, sentType) && sent.toLowerCase() !== wrote.toLowerCase()) {
     return dispatchedRefusal(
         `comment #${id} was written by \`${wrote}\` and this run was started by \`${sent}\`, so nothing ran. A ` +
         'run answers its own author or is started by this flow itself: which comment a dispatch names is free ' +

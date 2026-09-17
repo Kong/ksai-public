@@ -35,7 +35,7 @@ const deliverySequence = new Map();
 const cut = (value) => neutralCut(value, MAX_TEXT_CHARS);
 
 export function wanted({ comment, kind, triggerPhrase = '', botLogin = null, ownPull = false }) {
-  if (isOwnLogin(comment?.user?.login, botLogin)) return false;
+  if (isOwnLogin(comment?.user?.login, botLogin, comment?.user?.type)) return false;
   if (String(comment?.body ?? '').trim() === '') return false;
   if (wasEdited(comment)) return false;
   const addressed = afterTrigger(String(comment?.body ?? ''), triggerPhrase);
@@ -168,7 +168,7 @@ const graphqlOver = ({ token, apiUrl, fetchImpl }) => async (query, variables) =
 
 async function readReviewEdits(comments, { seen, botLogin, token, apiUrl, fetchImpl }) {
   const asked = comments.filter(
-    (comment) => !seen.has(`${REVIEW_KIND}-${comment?.id}`) && !isOwnLogin(comment?.user?.login, botLogin),
+    (comment) => !seen.has(`${REVIEW_KIND}-${comment?.id}`) && !isOwnLogin(comment?.user?.login, botLogin, comment?.user?.type),
   );
   try {
     return await withLastEdits(asked, { graphql: graphqlOver({ token, apiUrl, fetchImpl }) });

@@ -70,16 +70,19 @@ async function withLastEdits(comments, { graphql }) {
 
 const FOREIGN = 'foreign';
 
-function isOwnLogin(login, botLogin) {
+function isOwnLogin(login, botLogin, actorType = null) {
   const bare = (value) => String(value ?? '').trim().toLowerCase().replace(/\[bot\]$/, '');
   const mine = bare(botLogin);
-  return mine !== '' && bare(login) === mine;
+  if (mine === '' || bare(login) !== mine) return false;
+  const named = String(actorType ?? '').trim();
+  return named === '' || named === 'Bot';
 }
 
 const loginOf = (comment) => comment?.user?.login ?? comment?.login;
+const typeOf = (comment) => comment?.user?.type ?? comment?.actorType ?? null;
 
 function ownState(comment, botLogin) {
-  return isOwnLogin(loginOf(comment), botLogin) ? editState(comment) : FOREIGN;
+  return isOwnLogin(loginOf(comment), botLogin, typeOf(comment)) ? editState(comment) : FOREIGN;
 }
 
 const ownUnedited = (comment, botLogin) => {
@@ -237,6 +240,7 @@ module.exports = {
   wasEdited,
   withLastEdits,
   isOwnLogin,
+  typeOf,
   ownState,
   ownUnedited,
   vouchedOwn,

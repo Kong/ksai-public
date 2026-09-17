@@ -1,6 +1,6 @@
 
 const { createHash } = require('node:crypto');
-const { escapeForRegExp, markerValue, markerValues, triggerPhrases, DEFAULT_TRIGGER_PHRASE } = require('../lib/text.cjs');
+const { escapeForRegExp, markerValue, markerValues, stripBom, triggerPhrases, DEFAULT_TRIGGER_PHRASE } = require('../lib/text.cjs');
 const { asAlert, JIRA_KEY_SHAPE } = require('../lib/select-arm.cjs');
 const { SITE, aboutLink } = require('./marker.cjs');
 const { COMMIT_TYPES, BRANCH_SHAPE, FLOW_BRANCH_SHAPE, JIRA_BRANCH_SHAPE, safeEcho } = require('./verify-chunk.cjs');
@@ -27,6 +27,19 @@ const PLAN_FILE_SHAPE = new RegExp(`^(?:${PATH_SEGMENT}\\/){0,8}${PATH_SEGMENT}\
 const PLAN_DIR_SHAPE = new RegExp(`^(?:${PATH_SEGMENT}\\/){0,7}${PATH_SEGMENT}$`);
 
 const DEFAULT_PLAN_DIR = 'docs/plans';
+
+const INVISIBLE = '\\u00A0\\u1680\\u2000-\\u200D\\u2028\\u2029\\u202F\\u205F\\u2060\\u3000\\uFEFF';
+const HIDDEN_HEADING = new RegExp(`^ {0,3}([${INVISIBLE}]+)#{1,6}[ \\t]`);
+const NAMED_INVISIBLE = new Map([
+  ['\u00A0', 'a no-break space'],
+  ['\u2060', 'a word joiner'],
+  ['\uFEFF', 'a byte-order mark'],
+]);
+const describeInvisible = (run) => {
+  const first = String(run ?? '')[0] ?? '';
+  const named = NAMED_INVISIBLE.get(first);
+  return named ?? `an invisible character (U+${first.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')})`;
+};
 
 const PHASE_HEADING = /^ {0,3}##[ \t]+Phase[ \t]+([1-9][0-9]{0,2})[ \t]*(?:[-:][ \t]*?(.*?))?(?:[ \t]+#+)?[ \t]*$/;
 
@@ -595,7 +608,7 @@ function outsideComments(line, open) {
 }
 
 function parsePlanDocument(text) {
-  const lines = String(text ?? '').split('\n');
+  const lines = stripBom(text).split('\n');
   if (lines.length > MAX_DOC_LINES) {
     return { error: `the plan document is ${lines.length} lines, over the limit of ${MAX_DOC_LINES}` };
   }
@@ -724,6 +737,16 @@ function parsePlanDocument(text) {
       continue;
     }
     const headed = atxText(line, listed);
+    const hiddenHeading = HIDDEN_HEADING.exec(line);
+    if (hiddenHeading && fenced === '' && !commented) {
+      return {
+        error:
+          `line ${i + 1} of the plan document starts with ${describeInvisible(hiddenHeading[1])} before its ` +
+          'heading, so CommonMark reads the line as paragraph text and the heading is not one. GitHub shows ' +
+          'it as a heading all the same, which is why this names the line rather than the phase or step list ' +
+          'that goes missing below it - delete the character and leave the `#` first on the line',
+      };
+    }
     const heading = PHASE_HEADING.exec(line);
     if (heading) {
       const at = Number(heading[1]);

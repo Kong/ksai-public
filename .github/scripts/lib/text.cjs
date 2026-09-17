@@ -1,3 +1,5 @@
+const stripBom = (text) => (String(text ?? '').codePointAt(0) === 0xfeff ? String(text).slice(1) : String(text ?? ''));
+
 function escapeForRegExp(value) {
   return String(value ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -106,6 +108,7 @@ module.exports = {
   describe,
   locate,
   safeText,
+  stripBom,
   escapeForRegExp,
   DEFAULT_TRIGGER_PHRASE,
   triggerPhrases,

@@ -50,7 +50,7 @@ const ownPull = ({ github = null, core = null, owner = null, repo = null, prNumb
     id: prNumber,
     named: (number) => `#${number} to tell whether this flow opened it`,
     read: (number) => github.rest.pulls.get({ owner, repo, pull_number: number }),
-    holds: (pull) => FLOW_BRANCH_SHAPE.test(String(pull?.head?.ref ?? '')) && isOwnLogin(pull?.user?.login, botLogin),
+    holds: (pull) => FLOW_BRANCH_SHAPE.test(String(pull?.head?.ref ?? '')) && isOwnLogin(pull?.user?.login, botLogin, pull?.user?.type),
   });
 
 const ownThread = ({ github = null, core = null, owner = null, repo = null, rootId = null, botLogin = null } = {}) =>
@@ -60,7 +60,7 @@ const ownThread = ({ github = null, core = null, owner = null, repo = null, root
     id: rootId,
     named: (number) => `review comment ${number} to tell whether this flow's review opened it`,
     read: (number) => github.rest.pulls.getReviewComment({ owner, repo, comment_id: number }),
-    holds: (root) => isOwnLogin(root?.user?.login, botLogin) && String(root?.body ?? '').includes(FINDING_MARKER),
+    holds: (root) => isOwnLogin(root?.user?.login, botLogin, root?.user?.type) && String(root?.body ?? '').includes(FINDING_MARKER),
   });
 
 function ownSurface({ github = null, core = null, owner = null, repo = null, botLogin = null, rootId = null, prNumber = null } = {}) {

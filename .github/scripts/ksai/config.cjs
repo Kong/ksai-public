@@ -9,7 +9,7 @@ const {
   safeEcho,
   unknownCommandIn,
 } = require('../lib/select-arm.cjs');
-const { counted, describe, locate, safeText } = require('../lib/text.cjs');
+const { counted, describe, locate, safeText, stripBom } = require('../lib/text.cjs');
 const { BARE_MODES } = require('./bare.cjs');
 const { MAX_GRACE_SECONDS, PRESERVE_MODES, STOP_MODES } = require('./halt.cjs');
 
@@ -46,8 +46,6 @@ const MAX_BYTES = 8 * 1024;
 const NO_ALIASES = Object.freeze(Object.create(null));
 
 const NO_HALT = Object.freeze(Object.create(null));
-
-const stripBom = (text) => (text.codePointAt(0) === 0xfeff ? text.slice(1) : text);
 
 function parseConfig(text) {
   const raw = String(text ?? '');

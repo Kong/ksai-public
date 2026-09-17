@@ -24,11 +24,11 @@ const THREAD_QUERY = `
             path
             line
             root: comments(first: 1) {
-              nodes { databaseId author { login } body createdAt updatedAt lastEditedAt pullRequestReview { databaseId } }
+              nodes { databaseId author { login __typename } body createdAt updatedAt lastEditedAt pullRequestReview { databaseId } }
             }
             recent: comments(last: ${REPLY_SEARCH_DEPTH}) {
               totalCount
-              nodes { databaseId author { login } body createdAt updatedAt lastEditedAt replyTo { databaseId } pullRequestReview { databaseId } }
+              nodes { databaseId author { login __typename } body createdAt updatedAt lastEditedAt replyTo { databaseId } pullRequestReview { databaseId } }
             }
           }
         }
@@ -43,7 +43,7 @@ const THREAD_COMMENTS_QUERY = `
       ... on PullRequestReviewThread {
         comments(first: ${PER_PAGE}, after: $cursor) {
           pageInfo { hasNextPage endCursor }
-          nodes { databaseId author { login } body createdAt updatedAt lastEditedAt replyTo { databaseId } pullRequestReview { databaseId } }
+          nodes { databaseId author { login __typename } body createdAt updatedAt lastEditedAt replyTo { databaseId } pullRequestReview { databaseId } }
         }
       }
     }
@@ -81,6 +81,7 @@ const { resolvePullTarget } = require('./pull.cjs');
 
 const shapeComment = (comment) => ({
   login: String(comment?.author?.login ?? ''),
+  actorType: String(comment?.author?.__typename ?? ''),
   body: String(comment?.body ?? ''),
   commentId: Number.isInteger(comment?.databaseId) ? comment.databaseId : null,
   created_at: String(comment?.createdAt ?? ''),
@@ -180,7 +181,7 @@ function ownAnswer(thread, botLogin) {
     const kind = markerOf(comment?.body)?.kind ?? null;
     const response = answers
       .slice(index + 1, at)
-      .findLast((candidate) => !isOwnLogin(candidate?.login, botLogin));
+      .findLast((candidate) => !isOwnLogin(candidate?.login, botLogin, candidate?.actorType));
     if (response && wasEdited(response) && kind !== LOCK_KIND && kind !== UNCLEAR_KIND) continue;
     index = at;
     marker = kind;
@@ -190,7 +191,7 @@ function ownAnswer(thread, botLogin) {
 
 function latestResponseWasEdited(thread, botLogin) {
   const { answers, index } = ownAnswer(thread, botLogin);
-  const responses = answers.slice(index + 1).filter((comment) => !isOwnLogin(comment?.login, botLogin));
+  const responses = answers.slice(index + 1).filter((comment) => !isOwnLogin(comment?.login, botLogin, comment?.actorType));
   return responses.length > 0 && wasEdited(responses.at(-1));
 }
 
@@ -300,7 +301,7 @@ async function authorizeThreadContext({
   const decisions = new Map();
   const cache = Object.create(null);
   const opened = writeAccessNames(writeAccessCommands);
-  const decide = async (rawLogin) => {
+  const decide = async (rawLogin, actorType = null) => {
     const login = String(rawLogin ?? '').trim();
     const author = login === '' ? '(missing)' : JSON.stringify(login);
     const decided = (allowed, reason) => {
@@ -316,7 +317,7 @@ async function authorizeThreadContext({
       );
     };
     if (login === '') return decided(false, 'missing-login');
-    if (isOwnLogin(login, botLogin)) return decided(true, 'publisher');
+    if (isOwnLogin(login, botLogin, actorType)) return decided(true, 'publisher');
     const authorizationLogin = login.endsWith('[bot]') ? login.slice(0, -5) : login;
     if (!AUTHZ_LOGIN_SHAPE.test(authorizationLogin)) return decided(false, 'invalid-login');
     const key = login.toLowerCase();
@@ -386,14 +387,14 @@ async function authorizeThreadContext({
   };
   for (const thread of threads ?? []) {
     const [root, ...replies] = thread?.comments ?? [];
-    const rootVerdict = await decide(root?.login);
+    const rootVerdict = await decide(root?.login, root?.actorType);
     if (rootVerdict.error) return rootVerdict;
     const rootState = editState(root);
 
     const keptReplies = [];
     let replyWasEdited = false;
     for (const reply of replies) {
-      const verdict = await decide(reply?.login);
+      const verdict = await decide(reply?.login, reply?.actorType);
       if (verdict.error) return verdict;
       if (!verdict.allowed) continue;
       const state = editState(reply);
@@ -408,7 +409,7 @@ async function authorizeThreadContext({
     if (replyWasEdited) continue;
 
     const endorser = keptReplies.find(
-      (reply) => !isOwnLogin(reply?.login, botLogin) && commandOf(reply?.body, { trigger: triggerPhrase }) === 'fix',
+      (reply) => !isOwnLogin(reply?.login, botLogin, reply?.actorType) && commandOf(reply?.body, { trigger: triggerPhrase }) === 'fix',
     );
     if (!rootVerdict.allowed && !endorser) continue;
     if (rootState !== UNEDITED) {
