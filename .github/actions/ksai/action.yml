@@ -361,7 +361,7 @@ inputs:
       model. List model ids, not the fast/balanced/flagship tier aliases: the alias is resolved before this list
       is checked, so an alias here matches nothing and is rejected as a misconfiguration.
     required: false
-    default: "zai-org/GLM-5.3-Flash,claude-opus-5,claude-sonnet-5,claude-haiku-4-5"
+    default: "zai-org/GLM-5.3-Flash,zai-org/GLM-5.3,claude-opus-5,claude-sonnet-5,claude-haiku-4-5"
   disabled_commands:
     description: >-
       commands this repository turns off, comma- or space-separated, from `review`, `implement`, `approve`,
