@@ -4630,6 +4630,7 @@ runs:
         OPENCODE_HOME: ${{ runner.temp }}/opencode-home
         OPENCODE_VERSION: ${{ steps.opencode_install.outputs.version }}
         OPENCODE_SDK_ROOT: ${{ runner.temp }}/ksai-opencode-sdk
+        KSAI_KILLED_FILE: ${{ runner.temp }}/ksai-engine-killed
         ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
         ANTHROPIC_AUTH: ${{ inputs.anthropic_auth }}
         ANTHROPIC_FEDERATED_TOKEN: ${{ steps.mint.outputs.token }}
@@ -4789,6 +4790,7 @@ runs:
         STOP_PRESERVE: ${{ steps.halt.outputs.preserve }}
         STOP_MODE: ${{ steps.halt.outputs.mode }}
         STOP_FILE: ${{ steps.channel.outputs.state_dir }}/stop.json
+        KSAI_KILLED_FILE: ${{ runner.temp }}/ksai-engine-killed
         WORKSPACE: ${{ github.workspace }}
         BRANCH: ${{ steps.open_draft.outputs.branch || steps.open_branch.outputs.branch || steps.phase.outputs.ref }}
         BASE_SHA: ${{ steps.checkout_source.outputs.commit }}

@@ -9,9 +9,9 @@ import { stopHeld } from './channel.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
 
 const require = createRequire(import.meta.url);
-const { MAX_DIRECT_COMMITS, deniedFor, gitVia, grammarFor, safeEcho, soleWritable, verifyChunk } =
+const { MAX_DIRECT_COMMITS, gitVia, grammarFor, safeEcho, soleWritable, verifyChunk } =
   require('./verify-chunk.cjs');
-const { planFilePathFor } = require('./plan.cjs');
+const { expectedPlanFile, planDirOf, planFilePathFor } = require('./plan.cjs');
 const { stageAll } = require('./stage.cjs');
 const { readScope, writeScopeResult } = require('./change-scope.cjs');
 
@@ -26,9 +26,11 @@ export function wipSubject(phase) {
   return `chore(stop): keep the work from ${named}`.slice(0, MAX_SUBJECT_CHARS);
 }
 
-export function decidePreserve({ preserve = '', mode = '', stopped = false, hard = false } = {}) {
-  if (stopped !== true) return { keep: false, why: 'this run was not asked to stop' };
-  if (hard === true || String(mode) === 'hard') return { keep: false, why: 'a hard stop preserves nothing by design' };
+export function decidePreserve({ preserve = '', mode = '', stopped = false, hard = false, killed = false } = {}) {
+  if (stopped !== true && killed !== true) return { keep: false, why: 'this run was not asked to stop and was not killed' };
+  if (stopped === true && (hard === true || String(mode) === 'hard')) {
+    return { keep: false, why: 'a hard stop preserves nothing by design' };
+  }
   if (String(preserve) !== 'auto') return { keep: false, why: 'stop_preserve is off' };
   return { keep: true, why: '' };
 }
@@ -44,11 +46,16 @@ export function main(env = process.env, run = runCommand, read = readFileSync, r
   try {
     held = stopRecord(read(String(env.STOP_FILE ?? ''), 'utf-8'));
   } catch {}
+  let killed = false;
+  try {
+    killed = String(read(String(env.KSAI_KILLED_FILE ?? ''), 'utf-8')).trim() !== '';
+  } catch {}
   const decided = decidePreserve({
     preserve: env.STOP_PRESERVE,
     mode: env.STOP_MODE,
     stopped: held.stopped,
     hard: held.hard,
+    killed,
   });
   if (!decided.keep) {
     outputs.reason = decided.why;
@@ -99,21 +106,18 @@ export function main(env = process.env, run = runCommand, read = readFileSync, r
     return 0;
   }
 
-  const named = String(env.PLAN_FILE ?? '').trim() || planFilePathFor({ branch, dir: env.PLAN_DIR }) || '';
+  const named =
+    expectedPlanFile({ planFile: env.PLAN_FILE, branch, dir: env.PLAN_DIR }) ||
+    planFilePathFor({ branch, dir: env.PLAN_DIR }) ||
+    '';
   const onlyPath = soleWritable(env.PHASE, named);
-  const denied = deniedFor({
-    deniedPaths: env.DENIED_PATHS,
-    planDir: env.PLAN_DIR,
-    workdir: cwd,
-    baseSha: env.BASE_SHA,
-    onlyPath,
-  });
   const verified = verifyChunk({
     cwd,
     branch,
     remoteSha: env.BASE_SHA,
     manifestPath,
-    deniedPaths: denied.denied,
+    deniedPaths: env.DENIED_PATHS,
+    planDir: planDirOf(env.PLAN_DIR),
     onlyPath,
     branchGrammar: grammarFor(env.PHASE),
     maxCommits: MAX_DIRECT_COMMITS,

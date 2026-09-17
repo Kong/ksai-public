@@ -17,7 +17,7 @@ import {
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { conclusionOf, exitedOn, stopReason } from '../lib/execution-log.mjs';
+import { conclusionOf, exitedOn, killedBySignal, stopReason } from '../lib/execution-log.mjs';
 import {
   DEFAULT_OPENCODE_MODEL,
   answer,
@@ -528,6 +528,31 @@ export function scopeBinds(env = process.env, exists = existsSync, real = realpa
   return args;
 }
 
+export function clearKilled(at, remove = rmSync) {
+  const named = String(at ?? '').trim();
+  if (named === '') return false;
+  try {
+    remove(named, { force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function markKilled(at, reason, write = writeFileSync) {
+  const named = String(at ?? '').trim();
+  if (named === '') return false;
+  try {
+    write(named, `${reason}\n`);
+    return true;
+  } catch (error) {
+    console.log(
+      `::warning::the kill could not be recorded (${error?.message ?? error}), so no later step can tell this run was killed from one that failed`,
+    );
+    return false;
+  }
+}
+
 export function resolverBinds(real = realpathSync) {
   let at = '';
   try {
@@ -845,6 +870,7 @@ async function main(env = process.env, {
   for (const name of ['config', 'cache', 'state']) mkdirSync(join(home, name), { recursive: true });
   const events = String(env.EVENTS_FILE ?? '');
   const execution = String(env.EXECUTION_FILE ?? '');
+  clearKilled(env.KSAI_KILLED_FILE);
   writeFileSync(events, '');
   writeOutputs(env.GITHUB_OUTPUT, {
     execution_file: execution,
@@ -1185,9 +1211,10 @@ async function main(env = process.env, {
   }
   const reason = stopReason(code);
   console.log(`opencode exit=${code}`);
+  if (killedBySignal(code)) markKilled(env.KSAI_KILLED_FILE, reason);
   if (deadlineExpired) {
     console.log(`::error::${reason}; the review deadline expired, so this attempt has no finished answer`);
-  } else if (code > 128) {
+  } else if (killedBySignal(code)) {
     console.log(
       `::error::${reason}; an external signal stopped this attempt before it returned a finished answer`,
     );

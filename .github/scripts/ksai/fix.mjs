@@ -6,7 +6,8 @@ import { pathToFileURL } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const { marked } = require('./marker.cjs');
-const { cap, planDirOf, planFilePathFor, scrub, retargetPermalinks, POSITIVE_ID_SHAPE } = require('./plan.cjs');
+const { cap, expectedPlanFile: planFileFor, planDirOf, scrub, retargetPermalinks, POSITIVE_ID_SHAPE } =
+  require('./plan.cjs');
 const { safeEcho, soleWritable, verifyChunk, gitVia, noChangeLeftBehind } = require('./verify-chunk.cjs');
 const { readScope, writeScopeResult } = require('./change-scope.cjs');
 const { MAX_ANSWERABLE: MAX_REPLIES, MAX_REPLY_CHARS } = require('./threads.cjs');
@@ -325,9 +326,7 @@ export function recordFix({
 }
 
 export function expectedPlanFile(env) {
-  const named = String(env.PLAN_FILE ?? '').trim();
-  const expected = planFilePathFor({ branch: env.BRANCH, dir: env.PLAN_DIR });
-  return named !== '' && named === expected ? named : '';
+  return planFileFor({ planFile: env.PLAN_FILE, branch: env.BRANCH, dir: env.PLAN_DIR });
 }
 
 export function main(env = process.env, { run = runCommand } = {}) {

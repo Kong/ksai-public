@@ -461,14 +461,14 @@ const STOPPED_BY = Object.freeze(
       opening: '❌ This run did not complete.',
       said: (env) =>
         'The watchdog stopped it because it had stopped making progress, so it was ended early rather than ' +
-        `left to spend the rest of the job.${watchdogDetail(env)}`,
+        `left to spend the rest of the job.${watchdogDetail(env)}${keptSaid(env)}`,
     },
     ceiling: {
       kind: 'run-failed',
       opening: '❌ This run did not complete.',
       said: (env) =>
         `The watchdog stopped it about a minute short of the job's ${env.CEILING}-minute ceiling, so the work ` +
-        `ran out of time rather than failing. ${outOfTimeAdvice(env)}`,
+        `ran out of time rather than failing. ${outOfTimeAdvice(env)}${keptSaid(env)}`,
     },
     paused: {
       kind: 'run-paused',
@@ -490,7 +490,9 @@ function causeOf(env) {
 async function publishRunFailed({ github, owner, repo, env }) {
   const fired = env.WATCHDOG_FIRED === 'true';
   const notice = fired ? STOPPED_BY[causeOf(env)] ?? STOPPED_BY.ceiling : STOPPED_BY.ceiling;
-  const reason = fired ? notice.said(env) : `See the [workflow run](${env.RUN_URL}) for details.`;
+  const reason = fired
+    ? notice.said(env)
+    : `See the [workflow run](${env.RUN_URL}) for details.${keptSaid(env)}`;
   const said = `${notice.opening} ${reason}`;
 
   const target = env.REPORT_NUM;

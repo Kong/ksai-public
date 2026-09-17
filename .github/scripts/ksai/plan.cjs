@@ -493,6 +493,12 @@ function planFilePathFor({ branch = null, dir = null } = {}) {
   return PLAN_FILE_SHAPE.test(named) ? named : null;
 }
 
+function expectedPlanFile({ planFile = null, branch = null, dir = null } = {}) {
+  const named = String(planFile ?? '').trim();
+  const expected = planFilePathFor({ branch, dir });
+  return named !== '' && named === expected ? named : '';
+}
+
 function blobPath({ repository = null, branch = null, path = null } = {}) {
   const repo = String(repository ?? '').trim();
   const ref = String(branch ?? '').trim();
@@ -1475,6 +1481,7 @@ module.exports = {
   renderPlaceholder,
   hasPlanRegion,
   DEFAULT_PLAN_DIR,
+  expectedPlanFile,
   planDirOf,
   planFilePathFor,
   planDocMarker,

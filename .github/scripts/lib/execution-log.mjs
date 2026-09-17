@@ -34,9 +34,14 @@ export function exitedOn(status, signal) {
 export function stopReason(exitCode) {
   const code = Number(exitCode);
   if (!Number.isFinite(code) || code === 0) return '';
-  if (code <= 128) return `opencode exited ${code}`;
+  if (!killedBySignal(code)) return `opencode exited ${code}`;
   const signal = SIGNAL_NAMES[code - 128];
   return `opencode was killed by ${signal ?? `signal ${code - 128}`} (exit ${code}), not stopped by a turn limit`;
+}
+
+export function killedBySignal(exitCode) {
+  const code = Number(exitCode);
+  return Number.isFinite(code) && code > 128;
 }
 
 export function resultRecord({

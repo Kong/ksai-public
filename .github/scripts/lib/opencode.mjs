@@ -3,7 +3,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import claudeArgs from './claude-args.cjs';
-import { resultRecord, stopReason } from './execution-log.mjs';
+import { killedBySignal, resultRecord, stopReason } from './execution-log.mjs';
 import modelCatalog from './model-catalog.json' with { type: 'json' };
 import selectArm from './select-arm.cjs';
 import { originProblem } from '../kreview/federated-token.mjs';
@@ -791,7 +791,7 @@ function totals(steps) {
  * sentence "I'll start by reading the diff." as its review.
  */
 function truncated(exitCode) {
-  return Number.isFinite(exitCode) && exitCode > 128;
+  return killedBySignal(exitCode);
 }
 
 

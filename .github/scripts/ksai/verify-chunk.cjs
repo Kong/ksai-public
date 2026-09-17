@@ -70,6 +70,10 @@ const DENIED_PATH_FLOOR = Object.freeze([
 const DENIED_PREFIX_FLOOR = Object.freeze(['.env.']);
 
 const COMMIT_DIFF_FLAGS = Object.freeze(['--no-ext-diff', '--no-renames', '--ignore-submodules=none', '--name-only', '-z']);
+
+const COMMIT_MODE_FLAGS = Object.freeze(['--no-ext-diff', '--no-renames', '--ignore-submodules=none', '--raw', '-z']);
+
+const LINK_MODE = '120000';
 const WORKTREE_DIFF_FLAGS = Object.freeze(['--no-ext-diff', '--no-renames', '--ignore-submodules=dirty', '--name-only', '-z']);
 
 function safeEcho(value) {
@@ -430,6 +434,17 @@ function verifyMerge({
   return { ok: true, tree: resolvedTree, mergedTree, decided: files, mergedSha: incoming, baseSha: base };
 }
 
+function writtenLink(raw) {
+  const fields = String(raw ?? '').split('\0');
+  for (let at = 0; at < fields.length; at += 2) {
+    const head = fields[at];
+    if (!head.startsWith(':')) continue;
+    const [, after] = head.slice(1).split(' ');
+    if (after === LINK_MODE) return fields[at + 1] ?? '';
+  }
+  return '';
+}
+
 function verifyChunk({
   cwd = null,
   branch = null,
@@ -530,6 +545,12 @@ function verifyChunk({
 
   let from = baseSha;
   for (const commit of commits) {
+    const modes = git(['diff', ...COMMIT_MODE_FLAGS, from, commit]);
+    if (!modes.ok) return deny(`git could not read the file modes changed on \`${branchName}\`.`);
+    const linked = writtenLink(modes.stdout);
+    if (linked !== '') {
+      return deny(`the commit writes \`${safeEcho(linked)}\` as a symbolic link, which this flow does not push.`);
+    }
     const changed = git(['diff', ...COMMIT_DIFF_FLAGS, from, commit]);
     if (!changed.ok) return deny(`git could not list the files changed on \`${branchName}\`.`);
     for (const file of splitZ(changed.stdout)) {
@@ -599,6 +620,7 @@ module.exports = {
   safeEcho,
   normalizeDeniedPaths,
   deniedFor,
+  PLAN_ONLY_PHASES,
   soleWritable,
   deniedMatch,
   openTree,

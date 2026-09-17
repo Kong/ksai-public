@@ -61,7 +61,7 @@ const {
   renderStepPrompt,
   stripOwnComments,
 } = require('./prompt.cjs');
-const { MAX_DIRECT_COMMITS, deniedFor, soleWritable } = require('./verify-chunk.cjs');
+const { MAX_DIRECT_COMMITS, PLAN_ONLY_PHASES, deniedFor, soleWritable } = require('./verify-chunk.cjs');
 const { createScope, renderAllowed } = require('./change-scope.cjs');
 const { plansWork } = require('./write-triage.cjs');
 
@@ -917,9 +917,7 @@ function resolveWork({ env }) {
   return { outputs, notices: ['This run has no work to do, so nothing is sized and no model is called'] };
 }
 
-const PLAN_WRITING = Object.freeze(['plan', 'revise']);
-
-const writesAPlan = (phase) => (PLAN_WRITING.includes(String(phase ?? '')) ? 'true' : '');
+const writesAPlan = (phase) => (PLAN_ONLY_PHASES.includes(String(phase ?? '')) ? 'true' : '');
 
 function resolveSize({ env }) {
   const discovered = String(env.PHASE ?? '');
