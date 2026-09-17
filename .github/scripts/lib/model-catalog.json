@@ -47,7 +47,9 @@
     "zai-org/GLM-5.3-Flash",
     "zai-org/GLM-5.3",
     "deepseek-ai/DeepSeek-V4-Flash-0731",
-    "moonshotai/Kimi-K3"
+    "moonshotai/Kimi-K3",
+    "deepseek-ai/DeepSeek-V4.1-Flash",
+    "deepseek-ai/DeepSeek-V4-Pro"
   ],
   "allowedModels": [
     "zai-org/GLM-5.3-Flash",
@@ -68,7 +70,9 @@
     "zai-org/GLM-5.3-Flash": "1M",
     "zai-org/GLM-5.3": "1M",
     "deepseek-ai/DeepSeek-V4-Flash-0731": "1M",
-    "moonshotai/Kimi-K3": "1M"
+    "moonshotai/Kimi-K3": "1M",
+    "deepseek-ai/DeepSeek-V4.1-Flash": "1M",
+    "deepseek-ai/DeepSeek-V4-Pro": "1M"
   },
   "rates": {
     "claude-opus-5": {
@@ -102,6 +106,16 @@
       "input": 3,
       "output": 15,
       "cacheRead": 0.3
+    },
+    "deepseek-ai/DeepSeek-V4.1-Flash": {
+      "input": 0.15,
+      "output": 0.6,
+      "cacheRead": 0.003
+    },
+    "deepseek-ai/DeepSeek-V4-Pro": {
+      "input": 1.74,
+      "output": 3.48,
+      "cacheRead": 0.145
     }
   },
   "opencodeModels": {
