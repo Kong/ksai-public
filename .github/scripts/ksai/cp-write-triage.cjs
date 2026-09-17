@@ -14,9 +14,20 @@ const RECORD_SHAPE = /^[0-9a-f]{32}$/;
 
 const COMMIT_SHAPE = /^[0-9a-f]{40}$/;
 
-const NAME_SHAPE = /^[A-Za-z0-9][A-Za-z0-9_.:/+-]{0,127}$/;
-
 const MAX_MODELS = 16;
+
+/**
+ * MAX_TEXT_BYTES is what `triage/v1` bounds every evidence text field at, and it
+ * counts bytes. `neutralCut` counts code points, so a conversation cut to its
+ * twelve thousand is thirty-six thousand bytes of CJK - the control plane refuses
+ * the whole request and the run decides on its own, for every repository whose
+ * people do not write in ASCII. Cut again here, by the measure that is checked.
+ */
+const MAX_TEXT_BYTES = 16 << 10;
+
+const TEXT_FIELDS = Object.freeze([
+  'request', 'ask', 'plan_step', 'conversation', 'threads', 'checks',
+]);
 
 const MAX_REASON_BYTES = 1024;
 
@@ -57,9 +68,28 @@ function capabilityModels(env, configured) {
   const kept = [];
   for (const model of allowed.length === 0 ? [configured] : allowed) {
     const one = String(model ?? '').trim();
-    if (one !== '' && NAME_SHAPE.test(one) && !holds(kept, one)) kept.push(one);
+    if (one !== '' && MODEL_SHAPE.test(one) && !holds(kept, one)) kept.push(one);
   }
   return kept.slice(0, MAX_MODELS);
+}
+
+/** withinBytes cuts to a byte bound without splitting the character it lands in. */
+function withinBytes(value, limit) {
+  const text = String(value ?? '');
+  if (Buffer.byteLength(text, 'utf8') <= limit) return text;
+  const held = Buffer.from(text, 'utf8').subarray(0, limit).toString('utf8');
+
+  return held.endsWith('�') ? held.slice(0, -1) : held;
+}
+
+function boundedEvidence(evidence) {
+  for (const field of TEXT_FIELDS) {
+    if (typeof evidence[field] === 'string') {
+      evidence[field] = withinBytes(evidence[field], MAX_TEXT_BYTES);
+    }
+  }
+
+  return evidence;
 }
 
 function effortIn(value) {
@@ -92,7 +122,7 @@ function writeTriageRequest(env = process.env) {
     return { error: 'the comment named a model this run cannot declare' };
   }
 
-  const evidence = writeEvidence(env);
+  const evidence = boundedEvidence(writeEvidence(env));
   if (evidence.pull_request === 0 && evidence.issue_number === 0 && evidence.work_ref === '') {
     return { error: 'this run names nothing a decision can be bound to' };
   }
