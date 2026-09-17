@@ -219,6 +219,11 @@ on:
         required: false
         type: string
         default: "flagship"
+      dials_override:
+        description: let this dispatch's model and effort inputs win over the control plane's fleet dials, for benchmark arms that name their model per run; the repo's own dispatch surface carries the same trust its pinned workflow file already does
+        required: false
+        type: boolean
+        default: false
       effort:
         description: "reasoning effort for the run: low, medium, high, xhigh, or max. Empty uses the model's default: max for GLM-5.3-Flash, high otherwise"
         required: false
@@ -759,8 +764,8 @@ jobs:
       classifier_output_tokens: ${{ steps.gate.outputs.classifier_output_tokens }}
       classifier_turns: ${{ steps.gate.outputs.classifier_turns }}
       classifier_duration: ${{ steps.gate.outputs.classifier_duration }}
-      model: ${{ steps.record.outputs.model || steps.dials.outputs.model }}
-      effort: ${{ steps.record.outputs.effort || steps.dials.outputs.effort }}
+      model: ${{ (inputs.dials_override && inputs.model != 'flagship') && inputs.model || steps.record.outputs.model || steps.dials.outputs.model }}
+      effort: ${{ (inputs.dials_override && inputs.effort != '') && inputs.effort || steps.record.outputs.effort || steps.dials.outputs.effort }}
       shadow_percent: ${{ steps.dials.outputs.shadow_percent }}
       allowed_models: ${{ steps.dials.outputs.allowed_models }}
       max_effort: ${{ steps.dials.outputs.max_effort }}
@@ -768,7 +773,7 @@ jobs:
       job_timeout_minutes: ${{ steps.dials.outputs.job_timeout_minutes }}
       max_consecutive_tool_failures: ${{ steps.dials.outputs.max_consecutive_tool_failures }}
       max_repeated_tool_calls: ${{ steps.dials.outputs.max_repeated_tool_calls }}
-      dials_arm: ${{ steps.record.outputs.model == '' && steps.dials.outputs.arm || '' }}
+      dials_arm: ${{ !(inputs.dials_override && inputs.model != 'flagship') && (steps.record.outputs.model == '' && steps.dials.outputs.arm || '') || '' }}
       record_command: ${{ steps.record.outputs.command }}
       record_comment_id: ${{ steps.record.outputs.comment_id }}
       record_comment_kind: ${{ steps.record.outputs.comment_kind }}
@@ -1016,7 +1021,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-help
           repository: Kong/ksai-public
-          ref: v3.83.19
+          ref: v3.84.0
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1458,7 +1463,7 @@ jobs:
         with:
           token: ${{ github.token }}
           repository: Kong/ksai-public
-          ref: v3.83.19
+          ref: v3.84.0
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1960,7 +1965,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-recover
           repository: Kong/ksai-public
-          ref: v3.83.19
+          ref: v3.84.0
           sparse-checkout: |
             .github/scripts
           persist-credentials: false
