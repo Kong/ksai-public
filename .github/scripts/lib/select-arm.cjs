@@ -20,6 +20,14 @@ function resolveModel(value) {
 
 const MODEL_TIERS = Object.freeze([...MODEL_CATALOG.tierOrder]);
 
+const MODEL_TIER_BY_ID = new Map(
+  Object.entries(MODEL_CATALOG.modelTiers ?? {}).map(([model, tier]) => [model.toLowerCase(), tier]),
+);
+
+function modelTier(model) {
+  return MODEL_TIERS.indexOf(MODEL_TIER_BY_ID.get(String(model ?? '').trim().toLowerCase()));
+}
+
 /**
  * VENDOR_ALIASES translates the model names other tools speak into the ids this fleet calls.
  *
@@ -979,16 +987,35 @@ function selectArm({
   }
 
   let usedTriage = false;
-  const wantTier = String(triage?.tier ?? '');
-  if (wantTier && !('--model' in requested)) {
-    const named = String(model ?? '').toLowerCase();
-    const callerTier = MODEL_TIERS.findIndex((tier) => String(ALIASES[tier]).toLowerCase() === named);
-    const wantedTier = MODEL_TIERS.indexOf(wantTier);
-    if (callerTier !== -1 && wantedTier !== -1 && wantedTier < callerTier) {
-      const resolved = canonicalOf(ALIASES[wantTier], allowed);
-      if (resolved) {
-        model = resolved;
-        usedTriage = true;
+  const wantModel = String(triage?.model ?? '').trim();
+  if (wantModel && !('--model' in requested)) {
+    const resolved = canonicalOf(wantModel, allowed);
+    const callerTier = modelTier(model);
+    const selectedTier = modelTier(resolved);
+    const wantedTier = MODEL_TIERS.indexOf(String(triage?.tier ?? ''));
+    if (
+      resolved &&
+      callerTier !== -1 &&
+      selectedTier !== -1 &&
+      selectedTier < callerTier &&
+      wantedTier !== -1 &&
+      wantedTier < callerTier
+    ) {
+      usedTriage = resolved !== model;
+      model = resolved;
+    }
+  } else {
+    const wantTier = String(triage?.tier ?? '');
+    if (wantTier && !('--model' in requested)) {
+      const named = String(model ?? '').toLowerCase();
+      const callerTier = MODEL_TIERS.findIndex((tier) => String(ALIASES[tier]).toLowerCase() === named);
+      const wantedTier = MODEL_TIERS.indexOf(wantTier);
+      if (callerTier !== -1 && wantedTier !== -1 && wantedTier < callerTier) {
+        const resolved = canonicalOf(ALIASES[wantTier], allowed);
+        if (resolved) {
+          model = resolved;
+          usedTriage = true;
+        }
       }
     }
   }

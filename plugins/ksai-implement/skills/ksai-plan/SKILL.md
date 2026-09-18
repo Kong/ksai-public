@@ -50,8 +50,9 @@ Facts that follow, and that the plan has to respect:
   the PR and the issue comments.
 - **The plan document is the only file you write**, at the path the run names, plus the manifest.
   Editing anything else leaves the tree dirty and the push gate refuses the whole run.
-- **Every step costs a whole workflow run** and a model call. A step with no work in it still
-  burns both.
+- **Every step is a separate paid workflow run** and a model call, and each run spends minutes on
+  fixed setup - runner, checkout, toolchain - before the model starts. A step with no work in it
+  still burns all of it.
 - **Nothing carries over between runs** except the repo, the plan, and the git history. A step
   whose intent lives only in your reasoning gets implemented by a model that never saw it.
 - **Your final action is writing the manifest.** It is the only way you report out.
@@ -107,8 +108,15 @@ boundaries. They explore; they do not edit and they do not plan.
 
 Rules, in order of how often they get broken:
 
-- **One commit's worth.** If the step's commit subject would need an "and", split it. If two
-  changes have to land together for the gates to pass, they are one step.
+- **A unit of reviewable work, not an edit.** Size each step as a separate paid workflow run with
+  fixed setup cost, because that is what it is. A mechanical edit belongs to the step whose change
+  forces it: updating the test assertions or expectations that change breaks, renaming its callers,
+  fixing its imports, adding its changelog entry. Never give such an edit a step of its own, and
+  never list them one per step: a step whose edits an earlier commit already made finds nothing to do
+  and still pays for a whole run.
+- **One commit's worth.** If the step's commit subject would need an "and" joining two pieces of
+  work, split it. A change and the edits it forces are one piece of work, not two. If two changes
+  have to land together for the gates to pass, they are one step.
 - **Independently committable.** The repo's gates pass at the end of every step. No step may
   leave the build broken or a test red for a later step to repair.
 - **Verifiable.** Every step implies how to tell it is done: a command that passes, a test that
@@ -128,7 +136,8 @@ Rules, in order of how often they get broken:
 - **Repo work only.** No step may need a token, a credential, an external service, a deploy, a
   change in another repo, or a human in the loop.
 
-**How many.** Aim for two to seven. One is right when the issue really is one commit. Past about
+**How many.** Prefer one to three substantive steps per phase, and two to seven across the plan.
+One is right when the issue really is one commit. Past about
 ten, either the steps are too fine to be worth a workflow run each, or the issue should have been
 split into several issues first. Thirty is the hard cap: a longer plan is refused whole, not
 trimmed. If the work genuinely does not fit a bounded list of commits, report `blocked`.
@@ -150,7 +159,8 @@ time, so:
 - **Imperative and specific.** Aim for about 90 characters; 200 is the checklist limit, and a longer
   title is shortened to fit with the shortening reported on the pull request.
   Readable in a checklist, precise enough to implement from.
-- **A title that will not fit is a step that should be split.** Measured five times: runs produced
+- **A title that will not fit is a step that should be split** - unless what overruns is a list of
+  the edits the change forces, which the title leaves out rather than splitting. Measured five times: runs produced
   212, 221, 224, 201 and 277 characters, and each was one step describing two pieces of work joined
   by "and". If a title needs much more than 90 characters, split
   the step rather than compressing the title - one commit per step is what the flow wants anyway, and
@@ -184,6 +194,7 @@ to touch, an assumption you made - goes in `summary`, not into the title.
 - [ ] Every step leaves the gates green.
 - [ ] No step needs a token, a credential, or a human decision.
 - [ ] No verification-only step.
+- [ ] No step that only carries the mechanical fallout of another step's change.
 - [ ] No step changes existing messages, return values or public API the ticket did not ask to
       change, and no step rewrites an existing test expectation without quoting the sentence that
       requires it.
@@ -231,6 +242,10 @@ The reconcile command writes unconditionally. Issue #42 asks for a flag that sho
   bullet carries no title and is refused with the plan. A numbered item, and a bullet below a `---` or
   `***` rule inside a `### Steps` section, are refused rather than read - both render as list items an
   approver reads as steps, and neither is one. Close a step list with a heading, never with a rule.
+- A bullet below a paragraph or a code block, inside a `### Steps` section that already lists a step,
+  is refused as well: it renders under `### Steps` and would run as a step of its own. Put detail
+  about a step - target code, expected strings, the files it touches - in the phase prose above
+  `### Steps`, never below the step it describes.
 - An HTML comment beside text on any line is refused. A comment renders as nothing, so the line an
   approver reads is not the line this parses - and a bullet written inside a comment block is a step
   nobody approved, while one inside a phase heading erases the phase and its checkpoint.

@@ -236,6 +236,11 @@ function evalRunRecord(env, { now = new Date() } = {}) {
           reviewable_lines: num(env.TRIAGE_LINES),
           risk: unmeasured ? null : env.TRIAGE_RISK === 'true',
           api_surface: unmeasured ? null : env.TRIAGE_API_SURFACE === 'true',
+          source: env.TRIAGE_SOURCE || 'local',
+          policy_version: env.TRIAGE_POLICY_VERSION || null,
+          local_policy_version: env.TRIAGE_LOCAL_POLICY_VERSION || null,
+          cp_policy_version: env.TRIAGE_CP_POLICY_VERSION || null,
+          mismatch: env.TRIAGE_MISMATCH === '' ? [] : String(env.TRIAGE_MISMATCH).split(','),
         },
     outcome: {
       status: env.CONCLUSION,
@@ -378,6 +383,11 @@ function reviewRecord(env) {
     detail: {
       requester: env.REQUESTER || null,
       triage_why: env.TRIAGE_WHY || null,
+      triage_source: env.TRIAGE_SOURCE || 'local',
+      triage_policy_version: env.TRIAGE_POLICY_VERSION || null,
+      triage_local_policy_version: env.TRIAGE_LOCAL_POLICY_VERSION || null,
+      triage_cp_policy_version: env.TRIAGE_CP_POLICY_VERSION || null,
+      triage_mismatch: env.TRIAGE_MISMATCH === '' ? [] : String(env.TRIAGE_MISMATCH).split(','),
       rules_path: env.REPO_RULES_PATH || null,
       rules_sha: /^[0-9a-f]{7,40}$/.test(String(env.REPO_RULES_SHA ?? '')) ? env.REPO_RULES_SHA : null,
       rules_bytes: counting(env.REPO_RULES_BYTES),

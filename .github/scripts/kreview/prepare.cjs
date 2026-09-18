@@ -1,4 +1,5 @@
 const fs = require('node:fs');
+const crypto = require('node:crypto');
 const { CLARIFY_VERDICT, NO_VERDICT, actOnVerdict, renderClarification, renderStandDown, verdictOf } =
   require('../ksai/classify.cjs');
 const loadKsaiConfig = require('../ksai/config.cjs');
@@ -18,7 +19,7 @@ const {
 } = require('../lib/select-arm.cjs');
 const { ASSIGNED_SOURCE, receiptOf, sourceOf } = require('../lib/request-intent.cjs');
 const { ceilingMinutes } = require('../lib/watchdog.cjs');
-const { skipsAuthor, stackManifests, triage } = require('../triage/policy.cjs');
+const { SKILLS: REVIEWER_SKILLS, skipsAuthor, stackManifests, triage } = require('../triage/policy.cjs');
 const { renderReviewPrompt, renderPipelineContext } = require('./prompt.cjs');
 const { STRATEGIES, experimentOf, promptDigest } = require('./review-pipeline.cjs');
 const { materializeScopes } = require('./review-scopes.cjs');
@@ -26,8 +27,12 @@ const { availableReviewers, bodyOf, resolveReviewers, sharedFields } = require('
 
 const PLUGIN_DIR = '_ksai/plugins/kreview';
 
-const NO_TRIAGE_DEFAULTS = { tier: null, effort: null, skills: [], skip: null, apiSurface: false, facts: null };
+const NO_TRIAGE_DEFAULTS = { tier: null, model: null, effort: null, skills: [], skip: null, apiSurface: false, facts: null };
 const NO_TRIAGE = Object.freeze(NO_TRIAGE_DEFAULTS);
+const TRIAGE_API_VERSION = 'triage/v1';
+const TRIAGE_MODES = Object.freeze(['local', 'shadow', 'cp']);
+const SHA = /^[0-9a-f]{40}$/;
+const RECORD_ID = /^[0-9a-f]{32}$/;
 
 function telemetryTag(value) {
   return String(value ?? '').replace(/[, =]/g, '_');
@@ -44,10 +49,10 @@ async function commitAuthorsOf({ github, core, owner, repo, pull_number }) {
     const commits = await github.paginate(github.rest.pulls.listCommits, {
       owner, repo, pull_number, per_page: 100,
     });
-    return commits.map((commit) => commit.author?.login ?? '');
+    return { authors: commits.map((commit) => commit.author?.login ?? ''), read: true, error: '' };
   } catch (error) {
     core?.warning?.(`Could not read who wrote the commits, so the review runs: ${error.message}`);
-    return [];
+    return { authors: [], read: false, error: String(error.message ?? 'GitHub refused the commit list').slice(0, 1024) };
   }
 }
 
@@ -68,31 +73,254 @@ async function readStackManifests({ github, core, owner, repo }) {
   return manifests;
 }
 
-async function runTriage({ github, core, owner, repo, prNumber }) {
+const splitNames = (value) => String(value ?? '').split(/[\s,]+/).map((one) => one.trim()).filter(Boolean);
+
+function sha256(value) {
+  return `sha256:${crypto.createHash('sha256').update(value).digest('hex')}`;
+}
+
+function goJSON(value) {
+  const escaped = { '<': '003c', '>': '003e', '&': '0026', '\u2028': '2028', '\u2029': '2029' };
+  return JSON.stringify(value).replace(/[<>&\u2028\u2029]/g, (character) => `\\u${escaped[character]}`);
+}
+
+function decisionOf(result) {
+  return {
+    tier: result.tier ?? '',
+    skills: result.skills ?? [],
+    skip: result.skip
+      ? { proposed: true, reason: result.skip.reason ?? '', by: result.skip.by ?? '' }
+      : { proposed: false },
+    risk: result.facts?.risk === true,
+    api_surface: result.apiSurface === true,
+    facts: {
+      reviewable_files: result.facts?.reviewableFiles ?? 0,
+      reviewable_lines: result.facts?.reviewableLines ?? 0,
+    },
+    reasons: result.facts?.reasons ?? [],
+  };
+}
+
+function resultOf(decision) {
+  return {
+    tier: decision.tier || null,
+    model: decision.model,
+    effort: null,
+    skills: decision.skills,
+    skip: decision.skip.proposed ? { reason: decision.skip.reason, by: decision.skip.by } : null,
+    apiSurface: decision.api_surface,
+    facts: {
+      reviewableFiles: decision.facts.reviewable_files,
+      reviewableLines: decision.facts.reviewable_lines,
+      risk: decision.risk,
+      reasons: decision.reasons,
+    },
+  };
+}
+
+function differentFields(local, remote) {
+  const canonical = (value) => {
+    if (Array.isArray(value)) return value.map((entry) => canonical(entry));
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])]));
+    }
+    return value;
+  };
+  return ['tier', 'skills', 'skip', 'risk', 'api_surface', 'facts', 'reasons']
+    .filter((field) => JSON.stringify(canonical(local[field])) !== JSON.stringify(canonical(remote[field])));
+}
+
+function bareEndpoint(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && url.hostname !== '' && url.username === '' && url.password === ''
+      && url.search === '' && url.hash === '';
+  } catch {
+    return false;
+  }
+}
+
+function jwtClaims(token) {
+  const pieces = String(token).split('.');
+  if (pieces.length !== 3) throw new Error('the identity token is malformed');
+  return JSON.parse(Buffer.from(pieces[1], 'base64url').toString('utf8'));
+}
+
+function validReviewDecision(decision, { evidenceRevision, requestId, headSha, models }) {
+  const exactKeys = (value, keys) => value && typeof value === 'object' && !Array.isArray(value)
+    && Object.keys(value).every((key) => keys.includes(key)) && keys.every((key) => Object.hasOwn(value, key));
+  const top = [
+    'api_version', 'policy_version', 'evidence_revision', 'request_id', 'head_sha', 'tier', 'model', 'skills',
+    'skip', 'risk', 'api_surface', 'facts', 'reasons',
+  ];
+  const skipKeys = decision?.skip?.proposed ? ['proposed', 'reason', 'by'] : ['proposed'];
+  if (!decision || decision.api_version !== TRIAGE_API_VERSION || decision.head_sha !== headSha
+    || decision.evidence_revision !== evidenceRevision || decision.request_id !== requestId
+    || !exactKeys(decision, top) || !exactKeys(decision.skip, skipKeys)
+    || !exactKeys(decision.facts, ['reviewable_files', 'reviewable_lines'])
+    || !/^[A-Za-z0-9][A-Za-z0-9_.:/+-]{0,127}$/.test(String(decision.policy_version ?? ''))
+    || !['', 'fast', 'balanced', 'flagship'].includes(decision.tier)
+    || !MODEL_SHAPE.test(String(decision.model ?? '')) || !models.includes(decision.model)
+    || !Array.isArray(decision.skills) || decision.skills.length > 2
+    || decision.skills.some((skill) => !REVIEWER_SKILLS.includes(skill))
+    || new Set(decision.skills).size !== decision.skills.length
+    || typeof decision.risk !== 'boolean' || typeof decision.api_surface !== 'boolean'
+    || !decision.facts || !Number.isInteger(decision.facts.reviewable_files) || decision.facts.reviewable_files < 0
+    || !Number.isInteger(decision.facts.reviewable_lines) || decision.facts.reviewable_lines < 0
+    || !Array.isArray(decision.reasons) || decision.reasons.length > 16
+    || decision.reasons.some((reason) => typeof reason !== 'string' || reason.length === 0 || Buffer.byteLength(reason) > 1024)
+    || !decision.skip || typeof decision.skip.proposed !== 'boolean') return false;
+  if (decision.skip.proposed) {
+    return ['author', 'content', 'manifest'].includes(decision.skip.by)
+      && typeof decision.skip.reason === 'string' && decision.skip.reason.length > 0
+      && Buffer.byteLength(decision.skip.reason) <= 1024;
+  }
+  return !decision.skip.by && !decision.skip.reason;
+}
+
+const pause = (milliseconds) => new Promise((resolve) => { setTimeout(resolve, milliseconds); });
+
+async function requestReviewTriage({ core, endpoint, request, mint, call = fetch, rest = pause }) {
+  if (!bareEndpoint(endpoint)) throw new Error('the control-plane endpoint is not a bare https URL');
+  if (!process.env.ACTIONS_ID_TOKEN_REQUEST_URL || !process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) {
+    throw new Error('this job cannot mint an identity token');
+  }
+  const token = String(await mint('ksai-cp'));
+  core?.setSecret?.(token);
+  const claims = jwtClaims(token);
+  const evidenceRevision = sha256(goJSON({ kind: 'review', head: request.head_sha, evidence: request.evidence }));
+  const requestRevision = sha256(goJSON({ kind: 'review', request }));
+  const requestId = crypto.createHash('sha256').update([
+    String(claims.repository ?? '').toLowerCase(), String(claims.run_id ?? ''),
+    String(claims.job_workflow_ref ?? ''), request.record_id, 'review', requestRevision,
+  ].join('\0')).digest('hex').slice(0, 32);
+  const url = `${endpoint.replace(/\/+$/, '')}/v1/triage/review`;
+  const options = {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify(request),
+  };
+  let answer;
+  let lastFailure;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      answer = await call(url, { ...options, signal: AbortSignal.timeout(15000) });
+      lastFailure = null;
+    } catch (error) {
+      lastFailure = error;
+    }
+    const retryable = lastFailure || answer.status === 408 || answer.status === 429 || answer.status >= 500;
+    if (!retryable || attempt === 2) break;
+    await Promise.resolve(answer?.body?.cancel?.()).catch(() => {});
+    const asked = Number(answer?.headers?.get?.('retry-after')) * 1000;
+    await rest(Number.isFinite(asked) && asked > 0 ? Math.min(asked, 5000) : 1000 * (attempt + 1));
+    answer = undefined;
+  }
+  if (lastFailure) throw new Error(`the control plane could not be reached: ${lastFailure.message}`);
+  if (!answer.ok) throw new Error(`the control plane answered ${answer.status}`);
+  const raw = await answer.text();
+  if (Buffer.byteLength(raw) > 65536) throw new Error('the control plane returned an oversized review decision');
+  let decision;
+  try {
+    decision = JSON.parse(raw);
+  } catch {
+    throw new Error('the control plane returned a malformed review decision');
+  }
+  if (!validReviewDecision(decision, {
+    evidenceRevision, requestId, headSha: request.head_sha, models: request.capabilities.models,
+  })) {
+    throw new Error('the control plane returned a stale or malformed review decision');
+  }
+  return decision;
+}
+
+async function runTriage({ github, core, owner, repo, prNumber, env = process.env, mint, call, rest }) {
   let result = NO_TRIAGE;
+  let remote = null;
+  let source = 'local';
+  let mismatch = [];
+  let policyVersion = '';
   try {
     const pull_number = Number(prNumber);
     const manifests = readStackManifests({ github, core, owner, repo });
     const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number });
     const files = await github.paginate(github.rest.pulls.listFiles, { owner, repo, pull_number, per_page: 100 });
     const author = pr.user?.login;
-    const commitAuthors = skipsAuthor(author)
+    const commits = skipsAuthor(author)
       ? await commitAuthorsOf({ github, core, owner, repo, pull_number })
-      : null;
-    result = triage({
-      author,
-      commitAuthors,
-      commitCount: pr.commits,
-      changedFiles: pr.changed_files,
-      manifests: await manifests,
-      files: files.map((f) => ({ path: f.filename, additions: f.additions, deletions: f.deletions })),
-    });
+      : { authors: [], read: false, error: '' };
+    result = {
+      ...triage({
+        author,
+        commitAuthors: skipsAuthor(author) ? commits.authors : null,
+        commitCount: pr.commits,
+        changedFiles: pr.changed_files,
+        manifests: await manifests,
+        files: files.map((f) => ({ path: f.filename, additions: f.additions, deletions: f.deletions })),
+      }),
+      model: null,
+    };
+    const mode = TRIAGE_MODES.includes(env.REVIEW_TRIAGE_MODE) ? env.REVIEW_TRIAGE_MODE : 'local';
+    const remoteReady = env.FLEET_DIALS_ENDPOINT && RECORD_ID.test(env.RECORD_ID ?? '')
+      && SHA.test(env.RUN_HEAD_SHA ?? '') && SHA.test(pr.head?.sha ?? '');
+    if (mode !== 'local' && remoteReady) {
+      const models = [...new Set([env.CONFIGURED_MODEL, ...splitNames(env.ALLOWED_MODELS)].filter(Boolean))].slice(0, 16);
+      const boundedFiles = files.slice(0, 3000);
+      const boundedAuthors = commits.authors.slice(0, 250);
+      const request = {
+        api_version: TRIAGE_API_VERSION,
+        record_id: env.RECORD_ID,
+        run_head_sha: env.RUN_HEAD_SHA,
+        head_sha: pr.head.sha.toLowerCase(),
+        capabilities: { reviewer_skills: [...REVIEWER_SKILLS], models },
+        enforcement: {
+          triage: env.TRIAGE_MODE === 'off' ? 'off' : 'auto',
+          configured_model: env.CONFIGURED_MODEL,
+          configured_effort: env.CONFIGURED_EFFORT,
+          minimum_effort: env.MIN_EFFORT || undefined,
+          maximum_effort: env.MAX_EFFORT || undefined,
+        },
+        evidence: {
+          pull_request: pull_number,
+          author,
+          changed_files: pr.changed_files,
+          commit_count: pr.commits,
+          files: boundedFiles.map((file) => ({ path: file.filename, additions: file.additions, deletions: file.deletions })),
+          files_complete: boundedFiles.length === pr.changed_files,
+          files_error: boundedFiles.length === files.length ? undefined : 'file evidence exceeded the runner bound',
+          commit_authors_read: commits.read && boundedAuthors.length === commits.authors.length,
+          commit_authors: boundedAuthors.length === commits.authors.length ? boundedAuthors : [],
+          commit_authors_error: commits.read && boundedAuthors.length !== commits.authors.length
+            ? 'commit author evidence exceeded the runner bound' : commits.error || undefined,
+        },
+      };
+      try {
+        remote = await requestReviewTriage({
+          core, endpoint: env.FLEET_DIALS_ENDPOINT, request,
+          mint: mint ?? ((audience) => core.getIDToken(audience)), call, rest,
+        });
+        policyVersion = remote.policy_version;
+        mismatch = differentFields(decisionOf(result), remote);
+        source = mode === 'cp' ? 'cp' : 'shadow';
+        if (mode === 'cp') result = resultOf(remote);
+      } catch (error) {
+        core?.warning?.(`Control-plane review triage failed: ${error.message}`);
+        if (mode === 'cp') {
+          result = NO_TRIAGE;
+          source = 'fallback';
+        }
+      }
+    } else if (mode === 'cp') {
+      result = NO_TRIAGE;
+      source = 'fallback';
+    }
   } catch (error) {
     core?.warning?.(`Triage failed, falling back to the configured arm: ${error.message}`);
   }
 
   const outputs = {
     tier: result.tier ?? '',
+    model: result.model ?? '',
     effort: result.effort ?? '',
     skills: result.skills.join(','),
     skip: result.skip ? 'true' : 'false',
@@ -103,6 +331,11 @@ async function runTriage({ github, core, owner, repo, prNumber }) {
     lines: result.facts ? String(result.facts.reviewableLines) : '',
     risk: result.facts?.risk ? 'true' : 'false',
     why: (result.facts?.reasons ?? []).slice(0, 3).join('; '),
+    source,
+    policy_version: source === 'cp' ? policyVersion : source === 'fallback' ? 'configured' : 'local/review-v1',
+    local_policy_version: 'local/review-v1',
+    cp_policy_version: policyVersion,
+    mismatch: mismatch.join(','),
   };
   return outputs;
 }
@@ -145,7 +378,7 @@ async function selectReviewArm({ github, core, owner, repo, env }) {
     legacyAllowedCommands: env.LEGACY_ALLOWED_COMMANDS,
     maxEffort: env.MAX_EFFORT,
     minEffort: env.MIN_EFFORT,
-    triage: { tier: env.TRIAGE_TIER, effort: env.TRIAGE_EFFORT },
+    triage: { tier: env.TRIAGE_TIER, model: env.TRIAGE_MODEL, effort: env.TRIAGE_EFFORT },
     commandAliases: config.aliases,
     onIssue: false,
     threadRootId: env.THREAD_ROOT_ID,
@@ -241,6 +474,11 @@ async function selectReviewArm({ github, core, owner, repo, env }) {
           `and this action ${reviews ? 'reviews it' : 'stands aside'}.`
         : `The comment reads as \`${verdict}\`, so this action ${reviews ? 'reviews it' : 'stands down'}.`;
   return { ...outputs, rejected: null, note };
+}
+
+async function reviewCommandStatus(options) {
+  const { error, skipped } = await selectReviewArm(options);
+  return { error, skipped };
 }
 
 function buildReviewPrompt({ env }) {
@@ -352,6 +590,7 @@ module.exports = {
   validateExtraArgs,
   telemetryTag,
   runTriage,
+  reviewCommandStatus,
   selectReviewArm,
   buildReviewPrompt,
   EXTRA_ARGS_REFUSAL,

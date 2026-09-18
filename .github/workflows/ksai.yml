@@ -465,6 +465,14 @@ on:
         required: false
         type: string
         default: "10"
+      review_triage_mode:
+        description: >-
+          Review-triage authority: local, shadow, or cp. V3 defaults local; the generated V4 entrypoint
+          defaults shadow. The fleet dial changes only the generated V4 entrypoint; this workflow runs
+          the caller's input.
+        required: false
+        type: string
+        default: "local"
       engine:
         description: >-
           which reviewer reads the diff. `opencode` is the only one, and empty resolves to it on
@@ -767,6 +775,7 @@ jobs:
       model: ${{ (inputs.dials_override && inputs.model != 'flagship') && inputs.model || steps.record.outputs.model || steps.dials.outputs.model }}
       effort: ${{ (inputs.dials_override && inputs.effort != '') && inputs.effort || steps.record.outputs.effort || steps.dials.outputs.effort }}
       shadow_percent: ${{ steps.dials.outputs.shadow_percent }}
+      review_triage_mode: ${{ steps.dials.outputs.review_triage_mode }}
       allowed_models: ${{ steps.dials.outputs.allowed_models }}
       max_effort: ${{ steps.dials.outputs.max_effort }}
       min_effort: ${{ steps.dials.outputs.min_effort }}
@@ -866,6 +875,7 @@ jobs:
           model: ${{ inputs.model }}
           effort: ${{ inputs.effort }}
           shadow_percent: ${{ inputs.shadow_percent }}
+          review_triage_mode: ${{ inputs.review_triage_mode }}
           allowed_models: ${{ inputs.allowed_models }}
           max_effort: ${{ inputs.max_effort }}
           min_effort: ${{ inputs.min_effort }}
@@ -1022,7 +1032,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-help
           repository: Kong/ksai-public
-          ref: v3.89.0
+          ref: v3.90.0
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1192,6 +1202,8 @@ jobs:
           model: ${{ needs.gate.outputs.model || inputs.model }}
           dials_arm: ${{ needs.gate.outputs.dials_arm }}
           fleet_dials_endpoint: ${{ inputs.fleet_dials_endpoint }}
+          record_id: ${{ inputs.record_id }}
+          review_triage_mode: ${{ inputs.review_triage_mode }}
           effort: ${{ needs.gate.outputs.effort || inputs.effort }}
           allowed_models: ${{ needs.gate.outputs.allowed_models || inputs.allowed_models }}
           max_effort: ${{ needs.gate.outputs.max_effort || inputs.max_effort }}
@@ -1467,7 +1479,7 @@ jobs:
         with:
           token: ${{ github.token }}
           repository: Kong/ksai-public
-          ref: v3.89.0
+          ref: v3.90.0
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1557,6 +1569,8 @@ jobs:
           model: ${{ needs.gate.outputs.model || inputs.model }}
           dials_arm: ${{ needs.gate.outputs.dials_arm }}
           fleet_dials_endpoint: ${{ inputs.fleet_dials_endpoint }}
+          record_id: ${{ inputs.record_id }}
+          review_triage_mode: ${{ inputs.review_triage_mode }}
           shadow_model: ${{ inputs.shadow_model }}
           effort: ${{ needs.gate.outputs.effort || inputs.effort }}
           allowed_models: ${{ needs.gate.outputs.allowed_models || inputs.allowed_models }}
@@ -1971,7 +1985,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-recover
           repository: Kong/ksai-public
-          ref: v3.89.0
+          ref: v3.90.0
           sparse-checkout: |
             .github/scripts
           persist-credentials: false

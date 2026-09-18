@@ -45,6 +45,10 @@ inputs:
     description: share of runs compared against the shadow engine, pinned in this workflow
     required: false
     default: ""
+  review_triage_mode:
+    description: local, shadow, or cp authority for V4 review triage, pinned in this workflow
+    required: false
+    default: "local"
   allowed_models:
     description: model ids a comment or an automatic selector may choose, pinned in this workflow
     required: false
@@ -102,6 +106,9 @@ outputs:
       leaving a dial out means, and what it does with one served in a shape this
       workflow would refuse later.
     value: ${{ steps.dials.outputs.shadow_percent }}
+  review_triage_mode:
+    description: local, shadow, or cp authority for V4 review triage
+    value: ${{ steps.dials.outputs.review_triage_mode }}
   allowed_models:
     description: model ids a comment or an automatic selector may choose
     value: ${{ steps.dials.outputs.allowed_models }}
@@ -144,6 +151,7 @@ runs:
         DIALS_MODEL: ${{ inputs.model }}
         DIALS_EFFORT: ${{ inputs.effort }}
         DIALS_SHADOW_PERCENT: ${{ inputs.shadow_percent }}
+        DIALS_REVIEW_TRIAGE_MODE: ${{ inputs.review_triage_mode }}
         DIALS_ALLOWED_MODELS: ${{ inputs.allowed_models }}
         DIALS_MAX_EFFORT: ${{ inputs.max_effort }}
         DIALS_MIN_EFFORT: ${{ inputs.min_effort }}
@@ -155,6 +163,7 @@ runs:
           const { readDials } = await import(`file://${process.env.DIALS_ACTION_PATH}/dials.mjs`);
           const pinned = {
             shadow_percent: process.env.DIALS_SHADOW_PERCENT,
+            review_triage_mode: process.env.DIALS_REVIEW_TRIAGE_MODE,
             allowed_models: process.env.DIALS_ALLOWED_MODELS,
             max_effort: process.env.DIALS_MAX_EFFORT,
             min_effort: process.env.DIALS_MIN_EFFORT,

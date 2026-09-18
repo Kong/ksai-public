@@ -502,6 +502,13 @@ inputs:
       but the profile it would have chosen on its own.
     required: false
     default: ""
+  review_triage_mode:
+    description: >-
+      V4 control-plane authority for review triage: `local` keeps the local decision, `shadow` compares
+      a bound control-plane decision while keeping the local decision, and `cp` uses a valid control-plane
+      decision. `cp` falls back to the configured review arm, never an unvalidated or stale response.
+    required: false
+    default: "local"
   repo_rules:
     description: >-
       `auto` to read `.ksai/review-rules.md`, `.ksai/review-rules.json` and `.ksai/review-rules/` from the
@@ -1576,16 +1583,64 @@ runs:
           for (const line of notices) core.info(line);
           if (failure) core.setFailed(failure);
 
+    - name: Resolve the review command
+      id: review_command
+      if: ${{ inputs.flow == 'review' && steps.prompt.outputs.has_trigger == 'true' }}
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        SHADOW_MODEL: ${{ inputs.shadow_model }}
+        PUBLISH: ${{ inputs.publish }}
+        PROMPT: ${{ steps.prompt.outputs.prompt_content_raw }}
+        DEFAULT_MODEL: ${{ inputs.model }}
+        DEFAULT_EFFORT: ${{ inputs.effort }}
+        ALLOWED_MODELS: ${{ inputs.allowed_models }}
+        DISABLED_COMMANDS: ${{ inputs.disabled_commands }}
+        WRITE_ACCESS_COMMANDS: ${{ inputs.write_access_commands }}
+        CODEOWNER: ${{ steps.check.outputs.authorized }}
+        WRITE_ACCESS: ${{ steps.check.outputs.write_access }}
+        LEGACY_ALLOWED_COMMANDS: ${{ inputs.allowed_commands }}
+        MAX_EFFORT: ${{ inputs.max_effort }}
+        MIN_EFFORT: ${{ inputs.min_effort }}
+        TRIGGER: ${{ inputs.trigger_phrase }}
+        THREAD_ROOT_ID: ${{ steps.context.outputs.thread_root_id }}
+        CLASSIFIED_COMMAND: ${{ steps.verdict.outputs.verdict }}
+        COMMENT_ID: ${{ steps.context.outputs.comment_id }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      with:
+        github-token: ${{ inputs.authorization_github_token || github.token }}
+        script: |
+          const { reviewCommandStatus } = require(`${process.env.SCRIPTS}/kreview/prepare.cjs`);
+          const out = await reviewCommandStatus({
+            github,
+            core,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            env: process.env,
+          });
+          core.setOutput('error', out.error);
+          core.setOutput('skipped', out.skipped);
+
     - name: Triage the pull request
       id: triage
       continue-on-error: true
       if: >-
-        ${{ inputs.flow == 'review' && steps.prompt.outputs.has_trigger == 'true' && inputs.triage == 'auto'
-        }}
+        ${{ inputs.flow == 'review' && steps.prompt.outputs.has_trigger == 'true' && inputs.triage == 'auto' &&
+        steps.review_command.outcome == 'success' && steps.review_command.outputs.error == '' &&
+        steps.review_command.outputs.skipped != 'true' }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
         PR_NUMBER: ${{ steps.context.outputs.issue_number }}
+        REVIEW_TRIAGE_MODE: ${{ inputs.review_triage_mode }}
+        FLEET_DIALS_ENDPOINT: ${{ inputs.fleet_dials_endpoint }}
+        RECORD_ID: ${{ inputs.record_id }}
+        RUN_HEAD_SHA: ${{ github.sha }}
+        TRIAGE_MODE: ${{ inputs.triage }}
+        CONFIGURED_MODEL: ${{ inputs.model }}
+        CONFIGURED_EFFORT: ${{ inputs.effort }}
+        ALLOWED_MODELS: ${{ inputs.allowed_models }}
+        MIN_EFFORT: ${{ inputs.min_effort }}
+        MAX_EFFORT: ${{ inputs.max_effort }}
       with:
         github-token: ${{ inputs.source_org_github_token }}
         script: |
@@ -1620,6 +1675,7 @@ runs:
         TRIGGER: ${{ inputs.trigger_phrase }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
         TRIAGE_TIER: ${{ steps.triage.outputs.tier }}
+        TRIAGE_MODEL: ${{ steps.triage.outputs.model }}
         TRIAGE_EFFORT: ${{ steps.triage.outputs.effort }}
         THREAD_ROOT_ID: ${{ steps.context.outputs.thread_root_id }}
         CLASSIFIED_COMMAND: ${{ steps.verdict.outputs.verdict }}
@@ -5716,6 +5772,11 @@ runs:
         TRIAGE_LINES: ${{ steps.triage.outputs.lines }}
         TRIAGE_RISK: ${{ steps.triage.outputs.risk }}
         TRIAGE_API_SURFACE: ${{ steps.triage.outputs.api_surface }}
+        TRIAGE_SOURCE: ${{ steps.triage.outputs.source }}
+        TRIAGE_POLICY_VERSION: ${{ steps.triage.outputs.policy_version }}
+        TRIAGE_LOCAL_POLICY_VERSION: ${{ steps.triage.outputs.local_policy_version }}
+        TRIAGE_CP_POLICY_VERSION: ${{ steps.triage.outputs.cp_policy_version }}
+        TRIAGE_MISMATCH: ${{ steps.triage.outputs.mismatch }}
         REPO_RULES_ENABLED: ${{ steps.repo_rules.outputs.enabled }}
         REPO_RULES_MODE: ${{ steps.repo_rules.outputs.mode }}
         PLUGIN_REF: ${{ steps.plugin_ref.outputs.ref }}
@@ -5862,6 +5923,11 @@ runs:
         TRIAGE_SKILLS: ${{ steps.triage.outputs.skills }}
         TRIAGE_TIER: ${{ steps.triage.outputs.tier }}
         TRIAGE_WHY: ${{ steps.triage.outputs.why }}
+        TRIAGE_SOURCE: ${{ steps.triage.outputs.source }}
+        TRIAGE_POLICY_VERSION: ${{ steps.triage.outputs.policy_version }}
+        TRIAGE_LOCAL_POLICY_VERSION: ${{ steps.triage.outputs.local_policy_version }}
+        TRIAGE_CP_POLICY_VERSION: ${{ steps.triage.outputs.cp_policy_version }}
+        TRIAGE_MISMATCH: ${{ steps.triage.outputs.mismatch }}
         REPO_RULES_MODE: ${{ steps.repo_rules.outputs.mode }}
         REPO_RULES_ENABLED: ${{ steps.repo_rules.outputs.enabled }}
         REPO_RULES_PATH: ${{ steps.repo_rules.outputs.path }}

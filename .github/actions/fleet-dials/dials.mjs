@@ -21,6 +21,7 @@ export const ALIASES = ['fast', 'balanced', 'flagship', 'opus', 'sonnet', 'haiku
 export const PINNED = {
   shadow_percent: (/** @type {string} */ value) =>
     SHARE.test(value) && Number(value) >= 0 && Number(value) <= 100,
+  review_triage_mode: (/** @type {string} */ value) => ['local', 'shadow', 'cp'].includes(value),
   allowed_models: (/** @type {string} */ value) => {
     const named = value.split(/[,\s]+/).filter((one) => one !== '');
     return named.length > 0

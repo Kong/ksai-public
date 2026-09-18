@@ -619,6 +619,7 @@ function parsePlanDocument(text) {
     'that list - a list item anywhere else renders as one and would not be carried out';
   let region = '';
   let stepped = false;
+  let detailed = 0;
   let listed = false;
   let itemAt = -1;
   let fenced = '';
@@ -692,6 +693,7 @@ function parsePlanDocument(text) {
         };
       }
       if (fenced === '') {
+        if (region === 'steps' && phases.at(-1).steps.length > 0 && detailed === 0) detailed = i + 1;
         fenced = fence[1];
         fencedAt = i + 1;
       } else if (fence[1].startsWith(fenced) && String(fence[2] ?? '').trim() === '') {
@@ -778,6 +780,7 @@ function parsePlanDocument(text) {
       stepped = true;
       listed = false;
       region = 'steps';
+      detailed = 0;
       continue;
     }
     if (headed !== null && NAMES_STEPS.test(headed)) {
@@ -827,6 +830,16 @@ function parsePlanDocument(text) {
       continue;
     }
     const bullet = DOC_BULLET.exec(line);
+    if (bullet && detailed !== 0) {
+      return {
+        error:
+          `line ${i + 1} of the plan document is a bullet below the prose or code block on line ${detailed}, ` +
+          'inside a `### Steps` section that already listed a step. It renders under `### Steps` and would ' +
+          'run as a step of its own, which is how a detail list - expected strings, files to touch - turned ' +
+          'into one paid run per line. Put detail about a step in the phase prose above `### Steps`, and ' +
+          'keep the step list to the step bullets alone',
+      };
+    }
     if (bullet) {
       phases.at(-1).steps.push(bullet[1]);
       last = 'bullet';
@@ -857,6 +870,7 @@ function parsePlanDocument(text) {
           'the step above',
       };
     }
+    if (phases.at(-1).steps.length > 0 && detailed === 0) detailed = i + 1;
     last = 'prose';
     said = was === 'prose' ? `${wasText}\n${line}` : line;
     saidAt = was === 'prose' ? wasAt : i + 1;
