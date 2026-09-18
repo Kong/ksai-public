@@ -1144,7 +1144,20 @@ runs:
       run: |
         set -euo pipefail
         echo "ref=${KSAI_REF:-$ACTION_REF}" >> "$GITHUB_OUTPUT"
-        echo "started_at_ms=$(date +%s%3N)" >> "$GITHUB_OUTPUT"
+        at=$(date +%s%3N)
+        echo "started_at_ms=${at}" >> "$GITHUB_OUTPUT"
+        # The same instant the stage report measures `setup_ms` from, so both reports share an origin.
+        printf '%s\t%s\n' "$at" "resolve" >> "${RUNNER_TEMP}/ksai-phases.tsv" || true
+
+    - name: Mark the bootstrap phase
+      if: ${{ always() }}
+      shell: bash
+      env:
+        PHASES_FILE: ${{ runner.temp }}/ksai-phases.tsv
+        PHASE: bootstrap
+      run: |
+        # Measurement only: a mark this step cannot append costs the run nothing.
+        printf '%s\t%s\n' "$(date +%s%3N)" "$PHASE" >> "$PHASES_FILE" || true
 
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       name: checkout trusted authz action
@@ -1240,6 +1253,16 @@ runs:
     # exchange took down step 15 of some 200 and the review never happened, to authenticate a
     # narrator that treats absence as "say nothing". The deletion removed the reason and left the
     # consequence.
+    - name: Mark the authorize phase
+      if: ${{ always() }}
+      shell: bash
+      env:
+        PHASES_FILE: ${{ runner.temp }}/ksai-phases.tsv
+        PHASE: authorize
+      run: |
+        # Measurement only: a mark this step cannot append costs the run nothing.
+        printf '%s\t%s\n' "$(date +%s%3N)" "$PHASE" >> "$PHASES_FILE" || true
+
     - name: Mint a gateway bearer token from the job's OIDC token
       id: gateway_token
       continue-on-error: true
@@ -1448,6 +1471,16 @@ runs:
           core.setOutput('workflow', telemetryTag(process.env.GITHUB_WORKFLOW));
           core.setOutput('team', telemetryTag(process.env.TEAM));
 
+    - name: Mark the classify phase
+      if: ${{ always() }}
+      shell: bash
+      env:
+        PHASES_FILE: ${{ runner.temp }}/ksai-phases.tsv
+        PHASE: classify
+      run: |
+        # Measurement only: a mark this step cannot append costs the run nothing.
+        printf '%s\t%s\n' "$(date +%s%3N)" "$PHASE" >> "$PHASES_FILE" || true
+
     - name: Decide whether to classify the comment
       id: classify_gate
       if: ${{ steps.prompt.outputs.has_trigger == 'true' && inputs.classifier_model_used == '' }}
@@ -1604,6 +1637,16 @@ runs:
           for (const [name, value] of Object.entries(outputs)) core.setOutput(name, value);
           for (const line of notices) core.info(line);
           if (failure) core.setFailed(failure);
+
+    - name: Mark the triage phase
+      if: ${{ always() }}
+      shell: bash
+      env:
+        PHASES_FILE: ${{ runner.temp }}/ksai-phases.tsv
+        PHASE: triage
+      run: |
+        # Measurement only: a mark this step cannot append costs the run nothing.
+        printf '%s\t%s\n' "$(date +%s%3N)" "$PHASE" >> "$PHASES_FILE" || true
 
     - name: Resolve the review command
       id: review_command
@@ -2640,6 +2683,16 @@ runs:
           for (const [name, value] of Object.entries(outputs)) core.setOutput(name, value);
           for (const line of notices) core.info(line);
 
+    - name: Mark the checkout phase
+      if: ${{ always() }}
+      shell: bash
+      env:
+        PHASES_FILE: ${{ runner.temp }}/ksai-phases.tsv
+        PHASE: checkout
+      run: |
+        # Measurement only: a mark this step cannot append costs the run nothing.
+        printf '%s\t%s\n' "$(date +%s%3N)" "$PHASE" >> "$PHASES_FILE" || true
+
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       name: checkout the branch an implement run works on
       id: checkout_source
@@ -2732,6 +2785,16 @@ runs:
         echo '.ksai-manifest.json' >> .git/info/exclude
         echo '.mcp.json' >> .git/info/exclude
         echo '_ksai/' >> .git/info/exclude
+
+    - name: Mark the diff phase
+      if: ${{ always() }}
+      shell: bash
+      env:
+        PHASES_FILE: ${{ runner.temp }}/ksai-phases.tsv
+        PHASE: diff
+      run: |
+        # Measurement only: a mark this step cannot append costs the run nothing.
+        printf '%s\t%s\n' "$(date +%s%3N)" "$PHASE" >> "$PHASES_FILE" || true
 
     - name: Fetch the base ref a pull-surface run diffs against
       id: fetch_base
@@ -2869,6 +2932,16 @@ runs:
           printf 'shortstat=%s\n' "${stat# }"
         } >> "$GITHUB_OUTPUT"
         echo "The review reads ${stat# }"
+
+    - name: Mark the context phase
+      if: ${{ always() }}
+      shell: bash
+      env:
+        PHASES_FILE: ${{ runner.temp }}/ksai-phases.tsv
+        PHASE: context
+      run: |
+        # Measurement only: a mark this step cannot append costs the run nothing.
+        printf '%s\t%s\n' "$(date +%s%3N)" "$PHASE" >> "$PHASES_FILE" || true
 
     - name: Load the repository's own review rules
       id: repo_rules
@@ -3884,6 +3957,16 @@ runs:
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: node "${SCRIPTS}/ksai/run-flow.mjs"
 
+    - name: Mark the install-cli phase
+      if: ${{ always() }}
+      shell: bash
+      env:
+        PHASES_FILE: ${{ runner.temp }}/ksai-phases.tsv
+        PHASE: install-cli
+      run: |
+        # Measurement only: a mark this step cannot append costs the run nothing.
+        printf '%s\t%s\n' "$(date +%s%3N)" "$PHASE" >> "$PHASES_FILE" || true
+
     - name: Install opencode
       id: opencode_install
       if: >-
@@ -4019,6 +4102,16 @@ runs:
           for (const [name, value] of Object.entries(outputs)) core.setOutput(name, value);
           if (failure) core.setFailed(failure);
 
+    - name: Mark the prompt phase
+      if: ${{ always() }}
+      shell: bash
+      env:
+        PHASES_FILE: ${{ runner.temp }}/ksai-phases.tsv
+        PHASE: prompt
+      run: |
+        # Measurement only: a mark this step cannot append costs the run nothing.
+        printf '%s\t%s\n' "$(date +%s%3N)" "$PHASE" >> "$PHASES_FILE" || true
+
     - name: Warm locked Node dependencies while there is still a network
       if: >-
         ${{ inputs.flow == 'implement' && inputs.dry_run == 'false' &&
@@ -4108,6 +4201,16 @@ runs:
           const { outputs, error } = buildReviewPrompt({ env: process.env });
           for (const [name, value] of Object.entries(outputs)) core.setOutput(name, value);
           if (error) core.setFailed(error);
+
+    - name: Mark the sandbox phase
+      if: ${{ always() }}
+      shell: bash
+      env:
+        PHASES_FILE: ${{ runner.temp }}/ksai-phases.tsv
+        PHASE: sandbox
+      run: |
+        # Measurement only: a mark this step cannot append costs the run nothing.
+        printf '%s\t%s\n' "$(date +%s%3N)" "$PHASE" >> "$PHASES_FILE" || true
 
     - name: Install the opencode SDK
       id: opencode_sdk_install
@@ -4293,6 +4396,16 @@ runs:
       run: |
         set -euo pipefail
         node "${SCRIPTS}/ksai/attribution.mjs"
+
+    - name: Mark the arm phase
+      if: ${{ always() }}
+      shell: bash
+      env:
+        PHASES_FILE: ${{ runner.temp }}/ksai-phases.tsv
+        PHASE: arm
+      run: |
+        # Measurement only: a mark this step cannot append costs the run nothing.
+        printf '%s\t%s\n' "$(date +%s%3N)" "$PHASE" >> "$PHASES_FILE" || true
 
     - name: Stage the native LSP canary servers
       id: opencode_lsp
@@ -4786,6 +4899,16 @@ runs:
           echo "conclusion=failure" >> "$GITHUB_OUTPUT"
         fi
 
+    - name: Mark the model phase
+      if: ${{ always() }}
+      shell: bash
+      env:
+        PHASES_FILE: ${{ runner.temp }}/ksai-phases.tsv
+        PHASE: model
+      run: |
+        # Measurement only: a mark this step cannot append costs the run nothing.
+        printf '%s\t%s\n' "$(date +%s%3N)" "$PHASE" >> "$PHASES_FILE" || true
+
     - name: Run opencode
       id: opencode
       if: >-
@@ -4844,6 +4967,16 @@ runs:
         OPENCODE_LSP_ROOT: ${{ steps.opencode_lsp.outputs.root }}
       working-directory: ${{ runner.temp }}
       run: node "${SCRIPTS}/kreview/opencode-run.mjs"
+
+    - name: Mark the publish phase
+      if: ${{ always() }}
+      shell: bash
+      env:
+        PHASES_FILE: ${{ runner.temp }}/ksai-phases.tsv
+        PHASE: publish
+      run: |
+        # Measurement only: a mark this step cannot append costs the run nothing.
+        printf '%s\t%s\n' "$(date +%s%3N)" "$PHASE" >> "$PHASES_FILE" || true
 
     - name: Say how the model run ended, whichever engine ran it
       id: model_run
@@ -6207,6 +6340,19 @@ runs:
           } else if (answer.why) {
             core.notice(`ksai did not report what this run cost: ${answer.why}`);
           }
+
+    - name: Report where the action spent its time
+      id: phases
+      if: ${{ always() }}
+      shell: bash
+      env:
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+        PHASES_FILE: ${{ runner.temp }}/ksai-phases.tsv
+      run: |
+        set -euo pipefail
+        echo "::group::Where the action spent its time"
+        node "${SCRIPTS}/ksai/phases.mjs" || echo "The phase timings could not be measured"
+        echo "::endgroup::"
 
     - name: Put this action back for the post phase
       if: ${{ always() && steps.save_self.outputs.at != '' }}
