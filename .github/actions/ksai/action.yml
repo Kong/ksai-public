@@ -2445,17 +2445,25 @@ runs:
         DISPATCHED: ${{ steps.context.outputs.dispatched }}
         REVIEW_ID: ${{ steps.context.outputs.review_id }}
         REVIEW_SUBMITTED_AT: ${{ steps.context.outputs.review_submitted_at }}
+        CONTROL_PLANE_APPROVER: ${{ steps.context.outputs.threadless == 'true' && steps.dispatch_record.outputs.approver || '' }}
+        CONTROL_PLANE_APPROVAL_ID: ${{ steps.context.outputs.threadless == 'true' && steps.dispatch_record.outputs.approval_id || '' }}
+        CONTROL_PLANE_HEAD_SHA: ${{ steps.context.outputs.threadless == 'true' && steps.dispatch_record.outputs.head_sha || '' }}
+        CONTROL_PLANE_PR: ${{ steps.context.outputs.threadless == 'true' && steps.dispatch_record.outputs.pr || '' }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:
-        github-token: ${{ inputs.source_org_github_token }}
+        github-token: ${{ inputs.authorization_github_token || inputs.source_org_github_token }}
         retries: 3
         script: |
           const { resolveCheckpoint } = require(`${process.env.SCRIPTS}/ksai/prepare.cjs`);
+          const authorize = require(`${process.env.SCRIPTS}/codeowners-authz/authorize.cjs`);
           const { outputs, notices } = await resolveCheckpoint({
             github,
+            core,
             owner: context.repo.owner,
             repo: context.repo.repo,
             env: process.env,
+            authorize,
+            writeAccess: authorize.writeAccess,
           });
           for (const [name, value] of Object.entries(outputs)) core.setOutput(name, value);
           for (const line of notices) core.info(line);
@@ -2469,7 +2477,9 @@ runs:
         ISSUE_NUM: ${{ steps.subject.outputs.number }}
         RUN_ID: ${{ github.run_id }}
         STEP_TITLE: ${{ steps.read_plan.outputs.step_title }}
-        APPROVED_BY: ${{ steps.context.outputs.commenter }}
+        APPROVED_BY: >-
+          ${{ steps.context.outputs.commenter ||
+          (steps.context.outputs.threadless == 'true' && steps.dispatch_record.outputs.approver) || '' }}
         KSAI_ASK: ${{ inputs.ask }}
         JIRA_KEY: ${{ steps.subject.outputs.jira_key || steps.context.outputs.jira_key }}
         COMMENT_ID: ${{ steps.checkpoint.outputs.release_token }}

@@ -17,6 +17,7 @@ const {
 } = require('./plan.cjs');
 const { PAGE_SIZE: RELEASE_PER_PAGE, probeComments } = require('./pages.cjs');
 const { isOwnLogin, planRecords, vouchedOwn, EDITED, UNEDITED } = require('./approval.cjs');
+const { readControlPlaneApprovalRef } = require('./control-plane-approval.cjs');
 const { markerOf } = require('./marker.cjs');
 const { counted, plural } = require('../lib/text.cjs');
 
@@ -92,22 +93,30 @@ async function alreadyReleased({
   if (!known) return { released: false, unreadable: 'no bot login was given to gate the marker on' };
 
   let body;
+  let head = '';
   try {
     const response = await github.rest.pulls.get({ owner, repo, pull_number: Number(prNumber) });
     body = String(response?.data?.body ?? '');
+    head = String(response?.data?.head?.sha ?? '').trim().toLowerCase();
   } catch (error) {
-    return { released: false, unreadable: `could not read #${String(prNumber)}: ${error.message}` };
+    return { released: false, head: '', unreadable: `could not read #${String(prNumber)}: ${error.message}` };
   }
-  if (releasesIn(body).some((release) => release.token === wanted)) return { released: true, unreadable: null };
+  if (releasesIn(body).some((release) => release.token === wanted)) return { released: true, head, unreadable: null };
 
   const seen = await releasedTokens({ github, owner, repo, prNumber, botLogin });
-  if (seen.bound.some((release) => release.token === wanted)) return { released: true, unreadable: null };
-  return { released: false, unreadable: seen.unreadable };
+  if (seen.bound.some((release) => release.token === wanted)) return { released: true, head, unreadable: null };
+  return { released: false, head, unreadable: seen.unreadable };
 }
 
 const isApprove = (command) => String(command ?? '').trim().toLowerCase() === 'approve';
 
 const isResume = (command) => String(command ?? '').trim().toLowerCase() === 'resume';
+
+// askedToRelease covers the two ways a checkpoint is released: the approval command typed in a comment,
+// and an approval typed in Jira, which reaches the run as a reference in its dispatch record and never
+// as a comment. Without the second, a plan started from Jira waits at every checkpoint forever.
+const askedToRelease = (command, approvalRef) =>
+  isApprove(command) || readControlPlaneApprovalRef(approvalRef) !== null;
 
 function withoutRelease({
   atCheckpoint = null,
@@ -117,6 +126,7 @@ function withoutRelease({
   writeAccessCommands = null,
   disabledCommands = null,
   commentEdited = null,
+  approvalRef = null,
 } = {}) {
   if (String(atCheckpoint) !== 'true') return { release: false, waiting: false, reason: 'no-checkpoint' };
   if (!commandEnabled('approve', { flow: 'implement', disabledCommands })) {
@@ -126,7 +136,7 @@ function withoutRelease({
   if (editedState !== '' && editedState !== UNEDITED) {
     return { release: false, waiting: true, reason: editedState === EDITED ? 'edited-request' : 'edit-unreadable' };
   }
-  if (isApprove(command)) {
+  if (askedToRelease(command, approvalRef)) {
     const bar = commandAuthorized('approve', {
       codeowner: authorized,
       write,
@@ -150,7 +160,10 @@ function releaseTokenFor({
   threadRootId = null,
   dispatched = null,
   reviewId = null,
+  approvalRef = null,
 } = {}) {
+  const approved = readControlPlaneApprovalRef(approvalRef);
+  if (approved !== null) return `cp/${approved.approvalId}`;
   if (!isApprove(command)) return '';
   const said = String(commentId ?? '').trim();
   if (said !== '') return `${spaceOf({ threadRootId, dispatched })}/${said}`;
@@ -233,11 +246,29 @@ async function pendingSince({ github = null, owner = null, repo = null, prNumber
   };
 }
 
-function decideCheckpoint({ released = null, unreadable = null, requestedAt = null, pendingSince: since = null, ...asked } = {}) {
-  const settled = withoutRelease(asked);
+function decideCheckpoint({
+  released = null,
+  unreadable = null,
+  requestedAt = null,
+  pendingSince: since = null,
+  head = null,
+  approvalRef = null,
+  ...asked
+} = {}) {
+  const settled = withoutRelease({ ...asked, approvalRef });
   if (settled) return settled;
   if (unreadable) return { release: false, waiting: true, reason: 'unreadable' };
   if (released === true) return { release: false, waiting: true, reason: 'already-released' };
+  // An approval typed in Jira names the head its approver was shown rather than a moment, and that is
+  // the stronger test: a step landing after they approved moves the head, so the approval covers work
+  // nobody agreed to and releases nothing.
+  const approved = readControlPlaneApprovalRef(approvalRef);
+  if (approved !== null) {
+    if (approved.commitId !== String(head ?? '').trim().toLowerCase()) {
+      return { release: false, waiting: true, reason: 'moved-on' };
+    }
+    return { release: true, waiting: false, reason: 'released' };
+  }
   const requested = Date.parse(String(requestedAt ?? ''));
   const pending = Date.parse(String(since ?? ''));
   if (!Number.isFinite(requested) || !Number.isFinite(pending)) {
@@ -306,6 +337,16 @@ const WAITING = Object.freeze(
         (detail === '' ? '' : ` ${detail}`) +
         outstanding +
         ' A release is only ever read off a request newer than the step it covers: post a new comment asking for it',
+    }),
+    'moved-on': Object.freeze({
+      kind: 'phase-waiting',
+      level: 'WARNING',
+      say: ({ outstanding }) =>
+        'This phase of the plan is done and the approval given in Jira names an earlier commit than the one ' +
+        'this pull request is on, so it released nothing.' +
+        outstanding +
+        ' An approval only ever covers the commits its approver was shown: read the commits above, then ' +
+        'approve again',
     }),
     'approve-disabled': Object.freeze({
       kind: 'phase-waiting',

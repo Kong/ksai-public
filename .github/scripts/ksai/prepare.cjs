@@ -27,7 +27,9 @@ const { bareMode, ownPull, ownSurface, renderNudge, renderUnaddressed } = requir
 const { DEFAULT_TRIGGER_PHRASE, afterTrigger } = require('../lib/text.cjs');
 const { labelReaders, readLabelBasis, readReviewBasis, recordBasis } = require('./label-basis.cjs');
 const loadKsaiConfig = require('./config.cjs');
+const { controlPlaneApprovalRef } = require('./control-plane-approval.cjs');
 const {
+  AUTHZ_LOGIN_SHAPE,
   COMMENT_EVENT,
   CONTINUATION_EVENT,
   REVIEW_COMMENT_EVENT,
@@ -698,22 +700,58 @@ async function resolveRunSubject({ github, owner, repo, env }) {
   return { outputs, notices: [`this run is about #${outputs.number}`] };
 }
 
-async function resolveCheckpoint({ github, owner, repo, env }) {
+/**
+ * approvedInJira reads the approval a run carries from the control plane, which is what somebody
+ * replying "approve" in a Jira chat reaches this flow as.
+ *
+ * The pull request is compared rather than trusted: a record names the one its approver was looking at,
+ * and a run dispatched against another pull request may not release this one's checkpoint.
+ */
+function approvedInJira(env) {
+  if (String(env.CONTROL_PLANE_PR ?? '').trim() !== String(env.PR_NUMBER ?? '').trim()) return null;
+  if (!AUTHZ_LOGIN_SHAPE.test(String(env.CONTROL_PLANE_APPROVER ?? '').trim())) return null;
+  return controlPlaneApprovalRef({ approvalId: env.CONTROL_PLANE_APPROVAL_ID, headSha: env.CONTROL_PLANE_HEAD_SHA });
+}
+
+/**
+ * barFor answers the authorization a checkpoint is decided against.
+ *
+ * An approval from Jira names its approver, and the run it arrives on was authorized against whoever the
+ * control plane said asked for the work. Those are the same account today and the bar may not rest on
+ * that: a release is only ever read off the account that gave it, so this asks GitHub about the named
+ * approver rather than reusing an answer about somebody else.
+ */
+async function barFor({ github, core, owner, repo, env, approvalRef, authorize, writeAccess }) {
+  if (approvalRef === null) return { authorized: env.AUTHORIZED, write: env.WRITE_ACCESS };
+  if (typeof authorize !== 'function') return { authorized: 'false', write: '' };
+  const username = String(env.CONTROL_PLANE_APPROVER ?? '').trim();
+  const cache = Object.create(null);
+  const owns = (await authorize({ github, core, owner, repo, username, cache })) === true;
+  if (owns) return { authorized: 'true', write: '' };
+  const holds = typeof writeAccess === 'function' ? await writeAccess({ github, core, owner, repo, username, cache }) : '';
+  return { authorized: 'false', write: holds };
+}
+
+async function resolveCheckpoint({ github, core, owner, repo, env, authorize, writeAccess }) {
+  const approvalRef = approvedInJira(env);
   const token = releaseTokenFor({
     command: env.COMMAND,
     commentId: env.COMMENT_ID,
     threadRootId: env.THREAD_ROOT_ID,
     dispatched: env.DISPATCHED,
     reviewId: env.REVIEW_ID,
+    approvalRef,
   });
+  const bar = await barFor({ github, core, owner, repo, env, approvalRef, authorize, writeAccess });
   const asked = {
     atCheckpoint: env.AT_CHECKPOINT,
     command: env.COMMAND,
-    authorized: env.AUTHORIZED,
-    write: env.WRITE_ACCESS,
+    authorized: bar.authorized,
+    write: bar.write,
     writeAccessCommands: env.WRITE_ACCESS_COMMANDS,
     disabledCommands: env.DISABLED_COMMANDS,
     commentEdited: env.COMMENT_EDITED,
+    approvalRef,
     requestedAt: String(env.COMMENT_ID ?? '').trim() === '' ? env.REVIEW_SUBMITTED_AT : env.COMMENT_CREATED_AT,
   };
   const [seen, dated] = needsReleaseRead(asked)
@@ -728,12 +766,13 @@ async function resolveCheckpoint({ github, owner, repo, env }) {
         }),
         pendingSince({ github, owner, repo, prNumber: env.PR_NUMBER, botLogin: env.BOT_LOGIN }),
       ])
-    : [{ released: false, unreadable: null }, { at: null, unreadable: null }];
+    : [{ released: false, head: '', unreadable: null }, { at: null, unreadable: null }];
 
   const out = decideCheckpoint({
     ...asked,
     released: seen.released,
     unreadable: seen.unreadable,
+    head: seen.head,
     pendingSince: dated.at,
   });
 

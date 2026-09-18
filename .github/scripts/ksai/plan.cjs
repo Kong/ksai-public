@@ -1439,7 +1439,11 @@ const COMMENT_SPACES = Object.freeze(['issue', 'thread', 'review', 'dispatch']);
 
 const ID_CORE = POSITIVE_ID_SHAPE.source.slice(1, -1);
 
-const RELEASE_TOKEN_CORE = `(?:${COMMENT_SPACES.join('|')})\\/${ID_CORE}|${ID_CORE}`;
+// A control-plane approval is typed in Jira and has no comment behind it, so it names itself by the
+// approval id the control plane minted for it - a fresh one each time somebody approves.
+const CONTROL_PLANE_TOKEN_CORE = 'cp\\/[0-9a-f]{32}';
+
+const RELEASE_TOKEN_CORE = `(?:${COMMENT_SPACES.join('|')})\\/${ID_CORE}|${CONTROL_PLANE_TOKEN_CORE}|${ID_CORE}`;
 
 const RELEASE_VALUE_SHAPE = new RegExp(`^(${RELEASE_TOKEN_CORE})(?::([1-9][0-9]{0,2}))?$`);
 
