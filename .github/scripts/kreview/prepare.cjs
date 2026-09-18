@@ -379,6 +379,8 @@ async function selectReviewArm({ github, core, owner, repo, env }) {
     maxEffort: env.MAX_EFFORT,
     minEffort: env.MIN_EFFORT,
     triage: { tier: env.TRIAGE_TIER, model: env.TRIAGE_MODEL, effort: env.TRIAGE_EFFORT },
+    modelPinned: env.MODEL_PINNED,
+    effortPinned: env.EFFORT_PINNED,
     commandAliases: config.aliases,
     onIssue: false,
     threadRootId: env.THREAD_ROOT_ID,

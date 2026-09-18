@@ -10,6 +10,7 @@ const { spendFromExecution } = require('./write-report.cjs');
 const {
   ALLOWED_EFFORTS,
   DEFAULT_MIN_EFFORT,
+  armFixed,
   KNOWN_MODELS,
   MODEL_SHAPE,
   MODEL_TIERS,
@@ -2769,8 +2770,14 @@ function planWriteTriage(env = process.env) {
       warnings: [],
     };
   }
-  if (env.MODEL_SOURCE === 'comment' && env.EFFORT_SOURCE === 'comment') {
-    return { outputs: { ...outputs, verdict: 'explicit', reason: 'the comment selected both arm axes' }, warnings: [] };
+  if (armFixed(env.MODEL_SOURCE) && armFixed(env.EFFORT_SOURCE)) {
+    const both =
+      env.MODEL_SOURCE === env.EFFORT_SOURCE
+        ? env.MODEL_SOURCE === 'pinned'
+          ? 'the dispatch pinned both arm axes'
+          : 'the comment selected both arm axes'
+        : 'the request fixed both arm axes';
+    return { outputs: { ...outputs, verdict: 'explicit', reason: both }, warnings: [] };
   }
   if (risk !== '') {
     return {
@@ -2971,10 +2978,20 @@ function offeredModel(model, allowed) {
   return allowed.length === 0 || allowed.some((one) => one.toLowerCase() === String(model).toLowerCase());
 }
 
+/**
+ * controlPlaneArm answers the write arm the control plane decided, or null where this run keeps its own.
+ *
+ * A pinned axis withdraws the whole answer rather than half of it. The decision names a model and an
+ * effort together and carries one reason for both, so honouring the unpinned half would publish a
+ * selection reason for an arm the control plane did not choose. The gate already prefers an
+ * overriding dispatch over this control plane's record and dials; this is the same rule one layer
+ * down, where the write phase gets its second chance to move the arm.
+ */
 function controlPlaneArm(env, early) {
   const model = String(env.CP_MODEL ?? '').trim();
   const effort = String(env.CP_EFFORT ?? '').trim();
   if (model === '' && effort === '') return null;
+  if (early.modelSource === 'pinned' || early.effortSource === 'pinned') return null;
 
   const within = withinEffortBounds(effort, {
     fallback: String(env.DEFAULT_EFFORT ?? early.effort).trim(),
@@ -3029,14 +3046,14 @@ function selectWriteArm(env = process.env) {
   let selectedEffort = effort;
   let selectedModelSource = modelSource;
   let automaticModelApplied = false;
-  const retry = isTrue(env.PRIOR_RED) && modelSource !== 'comment';
+  const retry = isTrue(env.PRIOR_RED) && !armFixed(modelSource);
   const hard = profileName === 'uncertain' || profileName === 'critical';
   let selectedTier = tierOf(model);
   const targetTier = retry ? raisedTier(selectedTier) : profile.model;
   let limited = false;
   const retryAtCeiling = retry && targetTier === selectedTier;
 
-  if (modelSource !== 'comment' && profileName !== 'planning' && (hard || retry)) {
+  if (!armFixed(modelSource) && profileName !== 'planning' && (hard || retry)) {
     const resolved = automaticModel({
       target: targetTier,
       ceiling: env.DEFAULT_MODEL ?? model,
@@ -3049,7 +3066,7 @@ function selectWriteArm(env = process.env) {
     limited = resolved.limited || retryAtCeiling;
     if (automaticModelApplied) selectedModelSource = 'triage';
   }
-  if (effortSource !== 'comment') {
+  if (!armFixed(effortSource)) {
     const resolved = automaticEffort({
       target: profile.effort,
       fallback: String(env.DEFAULT_EFFORT ?? effort).trim() || defaultEffortFor(selectedModel),
@@ -3073,7 +3090,7 @@ function selectWriteArm(env = process.env) {
     model: selectedModel,
     effort: selectedEffort,
     model_source: selectedModelSource,
-    effort_source: effortSource === 'comment' ? 'comment' : 'triage',
+    effort_source: armFixed(effortSource) ? effortSource : 'triage',
     selection: selectionOf(selectedTier, reason),
   });
   return { outputs };

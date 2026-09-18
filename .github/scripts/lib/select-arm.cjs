@@ -873,6 +873,43 @@ function parseOptions(prompt, { commandAliases = null, defaultCommand = DEFAULT_
   return { command, requested, prompt: text.slice(i).trimStart() };
 }
 
+/**
+ * SELECTION_SOURCES names every answer to "who chose this axis". It is a set, not a ranking.
+ *
+ * `pinned` joined the other three when a dispatch gained the ability to name the arm for one run,
+ * and it is not folded into `input`: a caller default is a model a repository runs at, a pin is a
+ * model one dispatch asked for, and a benchmark reading has to segment on which. `write-record.cjs`
+ * validates a stored attempt against this list, so a value missing from it refuses a whole report.
+ */
+const SELECTION_SOURCES = Object.freeze(['input', 'pinned', 'triage', 'comment']);
+
+/**
+ * FIXED_SOURCES names the answers no automatic selection may move.
+ *
+ * A comment is an author asking for one arm and a pin is a dispatch asking for one; both are a
+ * request this run answers, so review triage, write triage and the control plane's own write arm
+ * read them the same way. Every guard tests this set rather than the word `comment`, because two of
+ * them used to and a pinned run had its review moved onto a model nobody asked for.
+ */
+const FIXED_SOURCES = Object.freeze(['comment', 'pinned']);
+
+/** armFixed answers whether an axis was already decided by a request, so nothing may move it. */
+function armFixed(source) {
+  return FIXED_SOURCES.includes(String(source ?? '').trim());
+}
+
+/**
+ * isPinned reads the two pin flags, which arrive as a step output rather than a boolean.
+ *
+ * An unset GitHub Actions output arrives as `''` and a `false` boolean input renders as the string
+ * `'false'`, so only the exact word `true` pins. Anything else leaves the axis movable, which is the
+ * direction a misread has to fail in: a run wrongly read as pinned would silently refuse a triage
+ * downgrade every repository already pays for.
+ */
+function isPinned(value) {
+  return value === true || String(value ?? '').trim().toLowerCase() === 'true';
+}
+
 function selectArm({
   prompt = null,
   defaultModel = null,
@@ -891,7 +928,11 @@ function selectArm({
   onReview = null,
   reviewState = null,
   bare = false,
+  modelPinned = false,
+  effortPinned = false,
 } = {}) {
+  const pinnedModel = isPinned(modelPinned);
+  const pinnedEffort = isPinned(effortPinned);
   const allowed = parseAllowedModels(allowedModels);
   const configuredEffort = String(defaultEffort ?? '').trim();
   const fallbackModel = resolveModel(defaultModel);
@@ -987,8 +1028,9 @@ function selectArm({
   }
 
   let usedTriage = false;
+  const modelFixed = '--model' in requested || pinnedModel;
   const wantModel = String(triage?.model ?? '').trim();
-  if (wantModel && !('--model' in requested)) {
+  if (wantModel && !modelFixed) {
     const resolved = canonicalOf(wantModel, allowed);
     const callerTier = modelTier(model);
     const selectedTier = modelTier(resolved);
@@ -1006,7 +1048,7 @@ function selectArm({
     }
   } else {
     const wantTier = String(triage?.tier ?? '');
-    if (wantTier && !('--model' in requested)) {
+    if (wantTier && !modelFixed) {
       const named = String(model ?? '').toLowerCase();
       const callerTier = MODEL_TIERS.findIndex((tier) => String(ALIASES[tier]).toLowerCase() === named);
       const wantedTier = MODEL_TIERS.indexOf(wantTier);
@@ -1045,7 +1087,7 @@ function selectArm({
   }
 
   const wantEffort = String(triage?.effort ?? '');
-  if (wantEffort && !('--effort' in requested)) {
+  if (wantEffort && !('--effort' in requested) && !pinnedEffort) {
     const wantedIdx = ALLOWED_EFFORTS.indexOf(wantEffort);
     if (wantedIdx !== -1 && wantedIdx >= ALLOWED_EFFORTS.indexOf(floor) && wantedIdx < ALLOWED_EFFORTS.indexOf(fallbackEffort)) {
       effort = wantEffort;
@@ -1099,9 +1141,30 @@ function selectArm({
     dryRun,
     planAsk,
     planGiven,
-    selectedBy: '--model' in requested || '--effort' in requested ? 'comment' : usedTriage ? 'triage' : 'input',
-    modelSelectedBy: '--model' in requested ? 'comment' : usedTriage && model !== fallbackModel ? 'triage' : 'input',
-    effortSelectedBy: '--effort' in requested ? 'comment' : usedTriage && effort !== fallbackEffort ? 'triage' : 'input',
+    selectedBy:
+      '--model' in requested || '--effort' in requested
+        ? 'comment'
+        : pinnedModel || pinnedEffort
+          ? 'pinned'
+          : usedTriage
+            ? 'triage'
+            : 'input',
+    modelSelectedBy:
+      '--model' in requested
+        ? 'comment'
+        : pinnedModel
+          ? 'pinned'
+          : usedTriage && model !== fallbackModel
+            ? 'triage'
+            : 'input',
+    effortSelectedBy:
+      '--effort' in requested
+        ? 'comment'
+        : pinnedEffort
+          ? 'pinned'
+          : usedTriage && effort !== fallbackEffort
+            ? 'triage'
+            : 'input',
     prompt: parsed.prompt,
     promptHtml: escaped,
     promptReport: escaped.replace(/\r?\n/g, '<br>').replace(/\|/g, '&#124;'),
@@ -1282,6 +1345,10 @@ module.exports = {
   parseOptions,
   resolveCommand,
   selectArm,
+  SELECTION_SOURCES,
+  FIXED_SOURCES,
+  armFixed,
+  isPinned,
   renderRejection,
   safeEcho,
 };

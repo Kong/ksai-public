@@ -350,6 +350,21 @@ inputs:
     description: "model id or catalog alias for the run. Exposed as an input so one value feeds both the CLI and any later record."
     required: false
     default: "flagship"
+  model_pinned:
+    description: >-
+      `true` when the caller's dispatch named the model for this one run, so nothing automatic may move
+      it: review triage, write triage and the control plane's own write arm all leave it alone, and the
+      run records `pinned` as the arm's provenance rather than `input` or `triage`. Empty, the default,
+      leaves the model exactly as movable as it is today. It bounds nothing a comment may ask for - the
+      `allowed_models` and effort bounds still answer that question.
+    required: false
+    default: ""
+  effort_pinned:
+    description: >-
+      `true` when the caller's dispatch named the effort for this one run. The same rule as
+      `model_pinned`, on the other axis.
+    required: false
+    default: ""
   dials_arm:
     description: >-
       experiment arm the control plane assigned this run, as `<experiment>:<control|variant>`, or
@@ -1572,6 +1587,8 @@ runs:
         REQUEST_REVIEW: ${{ steps.context.outputs.label_review }}
         PLAN_MODE: ${{ inputs.plan_mode }}
         FILE_PLAN_MODE: ${{ steps.bare_gate.outputs.plan_mode }}
+        MODEL_PINNED: ${{ inputs.model_pinned }}
+        EFFORT_PINNED: ${{ inputs.effort_pinned }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:
         github-token: ${{ inputs.authorization_github_token || inputs.source_org_github_token }}
@@ -1682,6 +1699,8 @@ runs:
         TRIAGE_TIER: ${{ steps.triage.outputs.tier }}
         TRIAGE_MODEL: ${{ steps.triage.outputs.model }}
         TRIAGE_EFFORT: ${{ steps.triage.outputs.effort }}
+        MODEL_PINNED: ${{ inputs.model_pinned }}
+        EFFORT_PINNED: ${{ inputs.effort_pinned }}
         THREAD_ROOT_ID: ${{ steps.context.outputs.thread_root_id }}
         CLASSIFIED_COMMAND: ${{ steps.verdict.outputs.verdict }}
         COMMENT_ID: ${{ steps.context.outputs.comment_id }}

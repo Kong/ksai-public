@@ -220,7 +220,14 @@ on:
         type: string
         default: "flagship"
       dials_override:
-        description: let this dispatch's model and effort inputs win over the control plane's fleet dials, for benchmark arms that name their model per run; the repo's own dispatch surface carries the same trust its pinned workflow file already does
+        description: >-
+          let this dispatch's model and effort inputs win over the control plane's fleet dials, for
+          benchmark arms that name their model per run; the repo's own dispatch surface carries the
+          same trust its pinned workflow file already does. An overridden axis is pinned for the
+          whole run - review triage, write triage and the control plane's write arm all leave it
+          alone, and every record says the arm was pinned rather than triaged. It bounds no comment:
+          `allowed_models`, `max_effort` and `min_effort` still answer what a `/ksai` comment may ask
+          for, and a comment that names one still wins that axis.
         required: false
         type: boolean
         default: false
@@ -1032,7 +1039,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-help
           repository: Kong/ksai-public
-          ref: v3.90.4
+          ref: v3.90.5
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1200,6 +1207,8 @@ jobs:
           classifier_duration: ${{ needs.gate.outputs.classifier_duration }}
           otel_endpoint: ${{ inputs.otel_endpoint }}
           model: ${{ needs.gate.outputs.model || inputs.model }}
+          model_pinned: ${{ (inputs.dials_override && inputs.model != 'flagship') && 'true' || '' }}
+          effort_pinned: ${{ (inputs.dials_override && inputs.effort != '') && 'true' || '' }}
           dials_arm: ${{ needs.gate.outputs.dials_arm }}
           fleet_dials_endpoint: ${{ inputs.fleet_dials_endpoint }}
           record_id: ${{ inputs.record_id }}
@@ -1378,6 +1387,8 @@ jobs:
           classifier_duration: ${{ needs.gate.outputs.classifier_duration }}
           otel_endpoint: ${{ inputs.otel_endpoint }}
           model: ${{ needs.gate.outputs.model || inputs.model }}
+          model_pinned: ${{ (inputs.dials_override && inputs.model != 'flagship') && 'true' || '' }}
+          effort_pinned: ${{ (inputs.dials_override && inputs.effort != '') && 'true' || '' }}
           dials_arm: ${{ needs.gate.outputs.dials_arm }}
           fleet_dials_endpoint: ${{ inputs.fleet_dials_endpoint }}
           effort: ${{ needs.gate.outputs.effort || inputs.effort }}
@@ -1479,7 +1490,7 @@ jobs:
         with:
           token: ${{ github.token }}
           repository: Kong/ksai-public
-          ref: v3.90.4
+          ref: v3.90.5
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1567,6 +1578,8 @@ jobs:
           verdict: ${{ needs.gate.outputs.verdict }}
           otel_endpoint: ${{ inputs.otel_endpoint }}
           model: ${{ needs.gate.outputs.model || inputs.model }}
+          model_pinned: ${{ (inputs.dials_override && inputs.model != 'flagship') && 'true' || '' }}
+          effort_pinned: ${{ (inputs.dials_override && inputs.effort != '') && 'true' || '' }}
           dials_arm: ${{ needs.gate.outputs.dials_arm }}
           fleet_dials_endpoint: ${{ inputs.fleet_dials_endpoint }}
           record_id: ${{ inputs.record_id }}
@@ -1871,6 +1884,8 @@ jobs:
           keep_plan_file: ${{ inputs.keep_plan_file }}
           plan_mode: ${{ inputs.plan_mode }}
           model: ${{ needs.gate.outputs.model || inputs.model }}
+          model_pinned: ${{ (inputs.dials_override && inputs.model != 'flagship') && 'true' || '' }}
+          effort_pinned: ${{ (inputs.dials_override && inputs.effort != '') && 'true' || '' }}
           dials_arm: ${{ needs.gate.outputs.dials_arm }}
           fleet_dials_endpoint: ${{ inputs.fleet_dials_endpoint }}
           effort: ${{ needs.gate.outputs.effort || inputs.effort }}
@@ -1985,7 +2000,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-recover
           repository: Kong/ksai-public
-          ref: v3.90.4
+          ref: v3.90.5
           sparse-checkout: |
             .github/scripts
           persist-credentials: false

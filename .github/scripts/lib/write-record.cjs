@@ -2,7 +2,14 @@
 
 const { createHash } = require('node:crypto');
 
-const { COMMANDS, DIALS_ARM_SHAPE, MODEL_CORE, MODEL_SHAPE, canonicalCommand } = require('./select-arm.cjs');
+const {
+  COMMANDS,
+  DIALS_ARM_SHAPE,
+  MODEL_CORE,
+  MODEL_SHAPE,
+  SELECTION_SOURCES,
+  canonicalCommand,
+} = require('./select-arm.cjs');
 const { markerJson } = require('./run-record.cjs');
 const { escapeForRegExp } = require('./text.cjs');
 
@@ -37,7 +44,6 @@ const ARM_MODEL_SHAPE = new RegExp(`^(?:${MODEL_CORE})?$`);
 const ARM_EFFORT_SHAPE = /^[a-z]{0,16}$/;
 const { SOURCES: ROUTE_SOURCES } = require('./request-intent.cjs');
 const ROUTE_SURFACES = Object.freeze(['issue', 'pull', 'thread', 'review']);
-const SELECTION_SOURCES = Object.freeze(['input', 'comment', 'triage']);
 
 const ROUTE_FIELDS = Object.freeze(['route_command', 'route_surface', 'route_source']);
 

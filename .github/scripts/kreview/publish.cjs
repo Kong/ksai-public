@@ -417,8 +417,17 @@ function packsRecord(env) {
     .map((pack) => ({ name: pack.name, bytes: counting(pack.bytes), matched: pack.matched === true }));
 }
 
+/*
+ * armRecord names who chose the arm, and it is an allowlist rather than a passthrough: the value is
+ * read back out of a comment a write-access account can edit. `pinned` is the fourth answer - a
+ * dispatch naming the model for one run - and it has to stay distinguishable from `input` for the
+ * same reason `triage` does: a benchmark reading segments on which answer chose the model, and a
+ * pinned run recorded as the caller default attributes the spend to a workflow file that did not
+ * choose it.
+ */
 function armRecord(env) {
   if (env.SELECTED_BY === 'comment') return 'comment';
+  if (env.SELECTED_BY === 'pinned') return 'pinned';
   if (env.SELECTED_BY === 'triage') return 'triage';
   return 'input';
 }

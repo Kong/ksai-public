@@ -178,6 +178,8 @@ async function selectImplementArm({ github, core, owner, repo, env }) {
       legacyAllowedCommands: env.LEGACY_ALLOWED_COMMANDS,
       maxEffort: env.MAX_EFFORT,
       minEffort: env.MIN_EFFORT,
+      modelPinned: env.MODEL_PINNED,
+      effortPinned: env.EFFORT_PINNED,
     },
     codeowner: env.CODEOWNER,
     write: env.WRITE_ACCESS,
