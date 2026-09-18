@@ -389,6 +389,13 @@ const asFileUrl = (path) => (path.startsWith('file://') ? path : `file://${path}
 /**
  * runtimeConfig answers that configuration with the origin, the headers and the renewing auth plugin.
  *
+ * `small_model` is the run's own model rather than the CLI's default. opencode picks a small model
+ * for side work - session titles above all - and its anthropic default is a Claude model this
+ * gateway does not route for every arm. Left unset, every session spent 7.3s at the median failing
+ * that call three times before carrying on: 2,080 seconds across 287 sessions in one week, for a
+ * string no CI run ever reads. Naming the arm's own model is what makes the side call as routable
+ * as the review itself.
+ *
  * The static header stays beside the hook: it authenticates a request the hook does not reach, and
  * both are written by `authHeaders`, so the two cannot disagree about how this run authenticates.
  *
@@ -406,11 +413,13 @@ export function runtimeConfig({
   baseUrl = '',
   auth = '',
   attribution = {},
+  smallModel = '',
 } = {}) {
   const loadedPlugins = [plugin, channel, ...plugins].filter(Boolean).map((one) => asFileUrl(one));
   return {
     ...RUNTIME_CONFIG,
     ...(shell ? { shell } : {}),
+    ...(smallModel ? { small_model: `anthropic/${smallModel}` } : {}),
     ...(permission ? { permission } : {}),
     provider: {
       anthropic: {

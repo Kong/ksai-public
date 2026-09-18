@@ -206,6 +206,7 @@ if (staged) {
 }
 const channel = String(process.env.KSAI_CHANNEL_NONCE ?? '').trim() === '' ? '' : CHANNEL_PLUGIN;
 const config = runtimeConfig({ channel, agents, skills, permission, auth, attribution,
+  smallModel: model,
   plugin: isolatedTools ? '' : AUTH_PLUGIN,
   brokered: isolatedTools,
   shell: isolatedTools ? TOOL_SHELL : '',
