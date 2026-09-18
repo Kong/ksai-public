@@ -107,6 +107,8 @@ async function alreadyReleased({
 
 const isApprove = (command) => String(command ?? '').trim().toLowerCase() === 'approve';
 
+const isResume = (command) => String(command ?? '').trim().toLowerCase() === 'resume';
+
 function withoutRelease({
   atCheckpoint = null,
   command = null,
@@ -156,9 +158,17 @@ function releaseTokenFor({
   return submitted === '' ? '' : `review/${submitted}`;
 }
 
-function releasedNothing({ command = null, phase = null, remaining = null, releaseRef = null, atGate = null } = {}) {
-  if (!isApprove(command)) return false;
+function releasedNothing({
+  command = null,
+  phase = null,
+  remaining = null,
+  releaseRef = null,
+  atGate = null,
+  releasedHold = null,
+} = {}) {
   if (String(phase ?? '').trim() !== 'step') return false;
+  if (isResume(command)) return String(releasedHold ?? '').trim() === 'false';
+  if (!isApprove(command)) return false;
   if (String(atGate ?? '').trim() === 'true') return false;
   return String(remaining ?? '').trim() === '' && String(releaseRef ?? '').trim() === '';
 }
@@ -385,6 +395,7 @@ module.exports = {
   needsReleaseRead,
   gateWaiting,
   isApprove,
+  isResume,
   releasedNothing,
   releaseTokenFor,
   decideCheckpoint,

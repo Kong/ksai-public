@@ -2607,6 +2607,7 @@ runs:
         RELEASED_REMAINING: ${{ steps.release_checkpoint.outputs.remaining }}
         RELEASE_REF: ${{ steps.approval.outputs.release_ref }}
         GATE_WAITING: ${{ steps.read_plan.outputs.gate_waiting }}
+        RELEASED_HOLD: ${{ steps.read_plan.outputs.released_hold }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:
         script: |

@@ -47,6 +47,7 @@ const {
   decideCheckpoint,
   gateWaiting,
   isApprove,
+  isResume,
   pendingSince,
   releasedNothing,
   releaseTokenFor,
@@ -906,6 +907,18 @@ async function decidePhase({ github, core, owner, repo, env, authorize, writeAcc
   return { notices: outputs.quiet === 'true' ? [REVIEW_QUIET] : [], outputs };
 }
 
+const IDLE_REASON = Object.freeze(
+  Object.assign(Object.create(null), {
+    approve: 'This approval released nothing - no checkpoint was waiting',
+    resume: 'This resume released nothing - the plan was not paused',
+  }),
+);
+
+function idleNotice(command) {
+  const named = String(command ?? '').trim().toLowerCase();
+  return `${IDLE_REASON[named]} - so no successor is dispatched and no step runs`;
+}
+
 function resolveWork({ env }) {
   const outputs = {
     works: 'false',
@@ -921,6 +934,7 @@ function resolveWork({ env }) {
     remaining: said('RELEASED_REMAINING'),
     releaseRef: said('RELEASE_REF'),
     atGate: said('GATE_WAITING'),
+    releasedHold: said('RELEASED_HOLD'),
   });
   const planning = said('PHASE') === 'plan';
   const stepping = said('HAS_STEP') === 'true' && !blocked && said('AT_CHECKPOINT') !== 'true' && !idle;
@@ -932,14 +946,7 @@ function resolveWork({ env }) {
   outputs.unblocked = blocked ? 'false' : 'true';
   outputs.released_nothing = idle ? 'true' : 'false';
   if (works) return { outputs, notices: [] };
-  if (idle) {
-    return {
-      outputs,
-      notices: [
-        'This approval released nothing - no checkpoint was waiting - so no successor is dispatched and no step runs',
-      ],
-    };
-  }
+  if (idle) return { outputs, notices: [idleNotice(said('COMMAND'))] };
   return { outputs, notices: ['This run has no work to do, so nothing is sized and no model is called'] };
 }
 
@@ -1174,11 +1181,13 @@ async function readPlan({ github, owner, repo, env }) {
     requested_by: '',
     held: '',
     gate_waiting: '',
+    released_hold: '',
   };
 
-  if (String(env.COMMAND ?? '') === 'resume') {
+  if (isResume(env.COMMAND)) {
     const released = await releaseHold({ github, owner, repo, prNumber: env.PR_NUMBER });
     if (released.error) return { outputs: { ...outputs, error: released.error } };
+    outputs.released_hold = released.released ? 'true' : 'false';
   }
   const out = await nextStep({ github, owner, repo, prNumber: env.PR_NUMBER, botLogin: env.BOT_LOGIN });
   if (out.held) {
