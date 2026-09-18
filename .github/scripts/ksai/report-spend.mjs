@@ -14,6 +14,33 @@ function attemptOf(raw) {
 
 const MAX_USD = 1000;
 
+const TALLY = Object.freeze([
+  'input_tokens',
+  'output_tokens',
+  'cache_read_tokens',
+  'cache_creation_tokens',
+  'cache_write_5m_tokens',
+  'cache_write_1h_tokens',
+]);
+
+const SEGMENT = '[A-Za-z0-9][A-Za-z0-9._-]{0,63}';
+const MODEL = new RegExp(`^${SEGMENT}(/${SEGMENT}){0,2}$`);
+
+export function tallyOf(usage) {
+  if (usage === null || typeof usage !== 'object') return null;
+
+  const held = {};
+  let counted = false;
+  for (const name of TALLY) {
+    const value = Number(usage[name] ?? 0);
+    if (!Number.isFinite(value) || value < 0) return null;
+    held[name] = Math.round(value);
+    if (held[name] > 0) counted = true;
+  }
+
+  return counted ? held : null;
+}
+
 export const ATTEMPTS = 3;
 
 export const TIMEOUT = 10000;
@@ -25,6 +52,8 @@ export async function reportSpend({
   audience = 'ksai-cp',
   attempt = '',
   cost = '',
+  model = '',
+  usage = null,
   env = process.env,
   mint = async (_audience = '') => '',
   secret = (_token = '') => {},
@@ -41,9 +70,13 @@ export async function reportSpend({
     return { reported: false, why: 'this job could not name the piece of work it is reporting' };
   }
 
+  const spelled = String(model).trim();
+  const tally = MODEL.test(spelled) ? tallyOf(usage) : null;
+
   const said = String(cost).trim();
   const usd = said === '' ? Number.NaN : Number(said);
-  if (!Number.isFinite(usd) || usd < 0 || usd > MAX_USD) {
+  const priced = Number.isFinite(usd) && usd >= 0 && usd <= MAX_USD;
+  if (tally === null && !priced) {
     return { reported: false, why: 'this run measured no cost it could pass on' };
   }
 
@@ -61,7 +94,11 @@ export async function reportSpend({
   secret(token);
 
   const at = `${named.replace(/\/+$/, '')}/spend`;
-  const body = JSON.stringify({ attempt: piece, cost_usd: usd });
+  const body = JSON.stringify(
+    tally === null
+      ? { attempt: piece, cost_usd: usd }
+      : { attempt: piece, model: spelled, usage: tally },
+  );
 
   let last = '';
   for (let tries = 0; tries < ATTEMPTS; tries += 1) {

@@ -62,10 +62,28 @@ const held = (model, effort, pinned, why) => ({
   effort,
   arm: '',
   dials: kept(pinned),
+  catalog: /** @type {unknown} */ (null),
   refused: /** @type {string[]} */ ([]),
   served: false,
   why,
 });
+
+export function catalogOf(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
+  const models = /** @type {{ models?: unknown }} */ (value).models;
+  return Array.isArray(models) && models.length > 0 ? value : null;
+}
+
+export function runs(catalog, wanted) {
+  const models = /** @type {{ models: unknown[] }} */ (catalog).models;
+  return models.some((one) => {
+    if (one === null || typeof one !== 'object') return false;
+    const model = /** @type {{ id?: unknown, aliases?: unknown, opencode?: unknown }} */ (one);
+    if (model.opencode === null || typeof model.opencode !== 'object') return false;
+    const names = [model.id, ...(Array.isArray(model.aliases) ? model.aliases : [])];
+    return names.some((name) => String(name ?? '').toLowerCase() === wanted.toLowerCase());
+  });
+}
 
 /**
  * bare reports whether an endpoint is an https URL with a host and nothing a request would carry
@@ -152,6 +170,11 @@ export async function readDials({
     return keep('the control plane served an effort this workflow will not pass on');
   }
 
+  const catalog = catalogOf(served.catalog);
+  if (catalog !== null && !runs(catalog, servedModel)) {
+    return keep('the control plane served a model its own catalog says this runner cannot run');
+  }
+
   const arm = typeof served.arm === 'string' && ARM.test(served.arm) ? served.arm : '';
 
   const dials = kept(pinned);
@@ -172,5 +195,5 @@ export async function readDials({
     }
   }
 
-  return { model: servedModel, effort: servedEffort, arm, dials, refused, served: true, why: '' };
+  return { model: servedModel, effort: servedEffort, arm, dials, catalog, refused, served: true, why: '' };
 }

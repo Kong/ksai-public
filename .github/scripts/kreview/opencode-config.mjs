@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFi
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import modelCatalog from '../lib/model-catalog.json' with { type: 'json' };
+import modelCatalog from '../lib/model-catalog.cjs';
 import { counted } from '../lib/text.cjs';
 import { AUTH_MODES, originProblem } from './federated-token.mjs';
 import { LIMITS } from './review-pipeline.cjs';

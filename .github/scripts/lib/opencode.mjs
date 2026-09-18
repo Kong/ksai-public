@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 import claudeArgs from './claude-args.cjs';
 import { killedBySignal, resultRecord, stopReason } from './execution-log.mjs';
-import modelCatalog from './model-catalog.json' with { type: 'json' };
+import modelCatalog from './model-catalog.cjs';
 import selectArm from './select-arm.cjs';
 import { originProblem } from '../kreview/federated-token.mjs';
 import { authHeaders } from './opencode-token.mjs';

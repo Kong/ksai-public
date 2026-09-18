@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 import { tallyOf } from './progress.mjs';
 
 const require = createRequire(import.meta.url);
-const MODEL_CATALOG = require('../lib/model-catalog.json');
+const MODEL_CATALOG = require('../lib/model-catalog.cjs');
 
 /** RATES holds list prices in dollars per million tokens, read from Anthropic's table on 2026-08-28. */
 const RATES = Object.freeze(
@@ -33,10 +33,13 @@ export function estimate(usage, model) {
   const short = count(usage?.cache_write_5m_tokens);
   const split = hour + short;
   const unsplit = Math.max(0, written - split);
+  const cached = Number.isFinite(rate.cacheRead) && rate.cacheRead > 0
+    ? rate.cacheRead
+    : rate.input * CACHE.read;
   const dollars =
     (count(usage?.input_tokens) * rate.input +
       count(usage?.output_tokens) * rate.output +
-      count(usage?.cache_read_tokens) * rate.input * CACHE.read +
+      count(usage?.cache_read_tokens) * cached +
       (short * CACHE.write5m + hour * CACHE.write1h + unsplit * CACHE.write5m) * rate.input) /
     PER_MILLION;
   return Number.isFinite(dollars) ? dollars : null;

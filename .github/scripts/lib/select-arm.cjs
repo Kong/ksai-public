@@ -1,6 +1,6 @@
 
 const { docsLink } = require('./docs.cjs');
-const MODEL_CATALOG = require('./model-catalog.json');
+const MODEL_CATALOG = require('./model-catalog.cjs');
 const { extractGivenPlan } = require('./plan-given.cjs');
 const { DEFAULT_TRIGGER_PHRASE, triggerAlternation, triggerMatcher } = require('./text.cjs');
 

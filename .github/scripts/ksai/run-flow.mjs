@@ -1,7 +1,7 @@
 import { existsSync, statSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-import modelCatalog from '../lib/model-catalog.json' with { type: 'json' };
+import modelCatalog from '../lib/model-catalog.cjs';
 import { writeOutputs } from '../lib/outputs.mjs';
 
 const EFFORTS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);

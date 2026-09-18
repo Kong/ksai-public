@@ -137,6 +137,15 @@ outputs:
       starts. Nothing is pinned here, because a repository moves onto control-plane
       decisions by being served this dial rather than by editing its own caller.
     value: ${{ steps.dials.outputs.triage_write }}
+  catalog_path:
+    description: >-
+      the file the served model catalog was written to, or empty where the
+      control plane served none this action will pass on. Every later step reads
+      it through `KSAI_MODEL_CATALOG`, which this action exports, and falls back
+      to the table shipped in this repository whenever it is empty or unreadable
+      - so a run that could not reach the control plane still resolves the model
+      it was dispatched with.
+    value: ${{ steps.dials.outputs.catalog_path }}
 
 runs:
   using: composite
@@ -194,3 +203,18 @@ runs:
           for (const [name, value] of Object.entries(answer.dials)) {
             core.setOutput(name, value);
           }
+
+          let at = '';
+          if (answer.catalog !== null) {
+            const { writeFileSync } = await import('node:fs');
+            const { join } = await import('node:path');
+            at = join(process.env.RUNNER_TEMP || process.env.HOME || '.', 'ksai-model-catalog.json');
+            try {
+              writeFileSync(at, JSON.stringify(answer.catalog));
+              core.exportVariable('KSAI_MODEL_CATALOG', at);
+            } catch (unwritten) {
+              at = '';
+              core.notice(`ksai read the models from the table it ships: the served catalog could not be written: ${unwritten?.message ?? 'it said nothing'}`);
+            }
+          }
+          core.setOutput('catalog_path', at);

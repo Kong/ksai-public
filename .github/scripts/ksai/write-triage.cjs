@@ -2,7 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const MODEL_CATALOG = require('../lib/model-catalog.json');
+const MODEL_CATALOG = require('../lib/model-catalog.cjs');
 const { createHash } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const { classifierModel, finalResult } = require('./classify.cjs');
