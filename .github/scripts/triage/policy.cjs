@@ -230,7 +230,7 @@ const DEPENDENCY_FIELDS = ['dependencies', 'devDependencies', 'peerDependencies'
 function dependencyNames(text) {
   let parsed;
   try {
-    parsed = JSON.parse(String(text ?? ''));
+    parsed = JSON.parse(text);
   } catch {
     return new Set();
   }
@@ -246,17 +246,15 @@ function dependencyNames(text) {
 
 function remapFor(manifests, rules = DEFAULT_RULES) {
   const remap = Object.create(null);
-  const matched = [];
   const read = manifests && typeof manifests === 'object' ? manifests : {};
   for (const rule of rules.stacks ?? []) {
     const text = read[rule.manifest];
     if (typeof text !== 'string' || text === '') continue;
     const names = dependencyNames(text);
     if (!rule.requires.some((name) => names.has(name))) continue;
-    for (const [from, to] of Object.entries(rule.remap)) remap[from] = to;
-    matched.push(rule);
+    for (const [from, to] of Object.entries(rule.remap)) remap[from] = { skill: to, why: rule.why };
   }
-  return { remap, matched };
+  return remap;
 }
 
 /**
@@ -278,13 +276,14 @@ function summarize(files, rules = DEFAULT_RULES, remap = null) {
     apiSurface: false,
     byLanguage: Object.create(null),
     uncoveredLines: 0,
-    renamedFrom: new Set(),
     reasons: [],
   };
 
   const note = (why) => {
     if (why && !facts.reasons.includes(why)) facts.reasons.push(why);
   };
+
+  const renames = new Set();
 
   const raise = (floor) => {
     if (!floor) return;
@@ -323,11 +322,14 @@ function summarize(files, rules = DEFAULT_RULES, remap = null) {
     }
 
     const claimed = skillFor(path, rules);
-    const skill = claimed === null ? null : (remap?.[claimed] ?? claimed);
-    if (skill !== claimed) facts.renamedFrom.add(claimed);
+    const renamed = claimed === null ? null : remap?.[claimed];
+    const skill = renamed ? renamed.skill : claimed;
+    if (renamed && skill !== claimed) renames.add(renamed.why);
     if (skill) facts.byLanguage[skill] = (facts.byLanguage[skill] ?? 0) + lines;
     else facts.uncoveredLines += lines;
   }
+
+  for (const why of renames) note(why);
 
   return facts;
 }
@@ -477,12 +479,7 @@ function triage({
   const total = Number.isFinite(changedFiles) ? changedFiles : files.length;
   if (files.length < total) return inert;
 
-  const { remap, matched } = remapFor(manifests, rules);
-  const facts = summarize(files, rules, remap);
-  for (const rule of matched) {
-    if (!rule.why || facts.reasons.includes(rule.why)) continue;
-    if (Object.keys(rule.remap).some((from) => facts.renamedFrom.has(from))) facts.reasons.push(rule.why);
-  }
+  const facts = summarize(files, rules, remapFor(manifests, rules));
 
   // Nothing in the diff a reviewer can read. Skipping is where the saving is: today this spends a
   // full run to report that a documentation change is a documentation change. A ruleset naming no
