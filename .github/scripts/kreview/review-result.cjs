@@ -18,8 +18,9 @@ const pathOf = (value) => text(value, 512) && !/^(?:\/|[A-Za-z]:)/.test(value) &
 const canonical = (value) => JSON.stringify(value) ?? '';
 const exact = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).every((key) => keys.includes(key));
 
-const FLATTENED = /```|\|\s*:?-{3,}/;
+const FLATTENED = /```|\|\s*:?-{3,}|^\s*\|.*\|/;
 const flattened = (value) => typeof value === 'string' && !value.includes('\n') && FLATTENED.test(value);
+const summaryLimit = (kind) => (kind === 'final' ? 4000 : 20_000);
 
 function flatProblem(submission) {
   const written = [
@@ -73,7 +74,8 @@ function submissionProblem(kind, submission, candidateIds = []) {
   if (!submission || typeof submission !== 'object' || Array.isArray(submission)) return 'submission is not an object';
   const allowed = kind === 'final' ? ['summary', 'findings'] : kind === 'audit' ? ['summary', 'findings', 'coverage', 'decisions'] : ['summary', 'findings', 'coverage'];
   if (!exact(submission, allowed)) return 'unexpected submission field';
-  if (!text(submission.summary, 20_000) || !Array.isArray(submission.findings)) return 'summary and findings are required';
+  if (!text(submission.summary, Infinity) || !Array.isArray(submission.findings)) return 'summary and findings are required';
+  if (submission.summary.length > summaryLimit(kind)) return `summary is over ${summaryLimit(kind)} characters; shorten it to what the contract asks for`;
   const flat = flatProblem(submission);
   if (flat) return flat;
   if (kind === 'final') return submission.findings.map(finalFindingProblem).find(Boolean) ?? '';
@@ -163,7 +165,7 @@ function schemaFor(kind, candidateIds = []) {
     additionalProperties: false,
     required: ['summary', 'findings'],
     properties: {
-      summary: kind === 'audit' ? { const: 'audit' } : { type: 'string', minLength: 1, maxLength: 20_000 },
+      summary: kind === 'audit' ? { const: 'audit' } : { type: 'string', minLength: 1, maxLength: summaryLimit(kind) },
       findings: { type: 'array', items: kind === 'final' ? finalFindingSchema : candidateSchema },
     },
   };
