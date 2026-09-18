@@ -95,12 +95,17 @@ export function summary(record) {
 /**
  * main reports the action's own phase timings, from the marks its steps appended.
  *
+ * `recordOnly` is the invocation the eval record reads. That record is written before the publishing
+ * tail finishes, so a single run of this at the end of the action would be too late for it and a
+ * single run before it would cut the tail out of the table a reader sees. Two invocations, each
+ * honest about the moment it measured.
+ *
  * Every write fails open. This measures a run that has already happened, so nothing it cannot do is
  * worth failing the step for.
  *
  * @param {Record<string, string | undefined>} [env]
  */
-export function main(env = process.env) {
+export function main(env = process.env, { recordOnly = false } = {}) {
   let source = '';
   try {
     source = readFileSync(env.PHASES_FILE ?? '', 'utf8');
@@ -111,13 +116,15 @@ export function main(env = process.env) {
   const { marks, dropped } = stamps(source);
   const measured = measure(marks, Date.now());
   const record = measured ? { ...measured, dropped } : null;
-  process.stdout.write(`${format(record)}\n`);
+  if (!recordOnly) process.stdout.write(`${format(record)}\n`);
   try {
-    writeOutputs(env.GITHUB_OUTPUT, { phases: record ? JSON.stringify(record) : undefined });
+    writeOutputs(env.GITHUB_OUTPUT, {
+      phases: record ? JSON.stringify(record) : undefined,
+    });
   } catch (error) {
     process.stdout.write(`The phase record could not be published: ${plain(error?.message)}\n`);
   }
-  const digest = summary(record);
+  const digest = recordOnly ? '' : summary(record);
   if (env.GITHUB_STEP_SUMMARY && digest) {
     try {
       appendFileSync(env.GITHUB_STEP_SUMMARY, digest);
@@ -129,5 +136,5 @@ export function main(env = process.env) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  process.exit(main());
+  process.exit(main(process.env, { recordOnly: process.argv.includes('--record') }));
 }

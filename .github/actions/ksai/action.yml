@@ -5941,6 +5941,17 @@ runs:
         retention-days: ${{ inputs.artifact_retention_days }}
         if-no-files-found: warn
 
+    - name: Record where the action spent its time
+      id: phases
+      if: ${{ always() }}
+      shell: bash
+      env:
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+        PHASES_FILE: ${{ runner.temp }}/ksai-phases.tsv
+      run: |
+        set -euo pipefail
+        node "${SCRIPTS}/ksai/phases.mjs" --record || echo "The phase record could not be measured"
+
     - name: Write eval run record
       id: eval_record
       if: >-
@@ -6007,6 +6018,7 @@ runs:
         BILLED: ${{ steps.report.outputs.billed }}
         DENIED: ${{ steps.report.outputs.denied }}
         STAGES: ${{ steps.timeline.outputs.stages }}
+        PHASES: ${{ steps.phases.outputs.phases }}
         CHANNEL_NOTES: ${{ steps.status_report.outputs.notes }}
         STATUS: ${{ steps.status_report.outputs.record }}
         RUN_RESULT: ${{ steps.report.outputs.run_result }}
@@ -6352,7 +6364,6 @@ runs:
           }
 
     - name: Report where the action spent its time
-      id: phases
       if: ${{ always() }}
       shell: bash
       env:

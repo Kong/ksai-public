@@ -491,6 +491,8 @@ export function runtimeSummary(invocations, mcpServers = null) {
       ? sum('first_tool_ms', withTool) / withTool.length
       : null,
     model_calls: sum('model_calls'),
+    side_calls: sum('side_calls'),
+    side_ms: sum('side_ms'),
     mcp_connects: sum('mcp_connects'),
     tool_calls: sum('tool_calls'),
     compaction_count: compactionAvailable ? sum('compaction_count') : null,
@@ -927,7 +929,7 @@ async function main(env = process.env, {
     removePtyMetrics();
     return 1;
   }
-  const traces = traceObserver();
+  const traces = traceObserver({ arm: String(env.MODEL ?? '').trim() || DEFAULT_OPENCODE_MODEL });
   let relay = null;
   let providerRelay = null;
   try {

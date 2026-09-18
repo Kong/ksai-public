@@ -9,6 +9,22 @@ const SESSION = /^[A-Za-z0-9_-]{1,128}$/;
 
 const groups = (value) => (Array.isArray(value) ? value : []);
 
+const MODEL_KEYS = Object.freeze(['gen_ai.request.model', 'ai.model.id']);
+
+/*
+ * modelOf answers the model a span says served it, which is not the arm the run was started on. A
+ * side call - a session title above all - is a model span like any other, so a count that does not
+ * separate the two reads as review turns and is not. Sandbox-authored like every other span field.
+ */
+function modelOf(span) {
+  for (const key of MODEL_KEYS) {
+    const named = groups(span?.attributes).find((one) => one?.key === key);
+    const value = named?.value?.stringValue ?? named?.value?.string_value;
+    if (typeof value === 'string' && value.trim() !== '') return value.trim();
+  }
+  return '';
+}
+
 export const supportsCompaction = (version) => String(version ?? '').trim() === COMPACTION_VERSION;
 
 function timing(span) {
@@ -31,7 +47,8 @@ function spans(payload) {
   );
 }
 
-export function traceObserver() {
+export function traceObserver({ arm = '' } = {}) {
+  const named = String(arm ?? '').trim();
   let active = null;
   const observe = (signal, payload) => {
     if (signal !== 'traces' || !active) return;
@@ -39,7 +56,12 @@ export function traceObserver() {
       if (span?.name !== MCP_SPAN && span?.name !== MODEL_SPAN) continue;
       const measured = timing(span);
       if (!measured) continue;
-      active[span.name === MODEL_SPAN ? 'models' : 'mcp'].push(measured);
+      if (span.name !== MODEL_SPAN) {
+        active.mcp.push(measured);
+        continue;
+      }
+      const model = modelOf(span);
+      active.models.push({ ...measured, side: named !== '' && model !== '' && model !== named });
     }
   };
   const begin = (beganAt) => {
@@ -63,6 +85,8 @@ export function traceObserver() {
         mcp_connects: mcp.length,
         model_ms: models.length ? models.reduce((total, span) => total + span.durationMs, 0) : null,
         model_calls: models.length,
+        side_calls: named === '' ? null : models.filter((span) => span.side).length,
+        side_ms: named === '' ? null : models.filter((span) => span.side).reduce((total, span) => total + span.durationMs, 0),
       };
     };
   };

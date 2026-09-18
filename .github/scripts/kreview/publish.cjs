@@ -274,6 +274,7 @@ function evalRunRecord(env, { now = new Date() } = {}) {
       denied: deniedOf(env.DENIED),
     },
     stages: stagesOf(env.STAGES),
+    phases: stagesOf(env.PHASES),
     classifier:
       env.CLASSIFIER_MODEL === ''
         ? null
