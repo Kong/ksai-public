@@ -157,7 +157,7 @@ function agentsUnder(root) {
  * missing answers a line about something absent, as a warning only where it was meant to be there.
  *
  * The channel and the agent mandates belong to a flow the reviewer and the implement action drive.
- * A caller naming its own tool list is `claude-run`, which registers no channel and points at no
+ * A caller naming its own tool list is `flow: run`, which registers no channel and points at no
  * plugin root by design, so warning it about both published two annotations per run that named
  * nothing to fix - one of them telling a `fixer` about "the audit this review must run". A warning
  * that fires where nothing is wrong is read as noise everywhere else too, which costs the one that

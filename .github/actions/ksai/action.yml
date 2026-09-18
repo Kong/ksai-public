@@ -4895,7 +4895,8 @@ runs:
         # One arm, so no branch. The `else` arms called `ksai/progress.mjs` and `ksai/stages.mjs`,
         # which read a transcript by `SESSION_ID` - a value this step stopped carrying when the
         # Claude run that published it went, so they were broken rather than merely unreachable.
-        # `claude-run` still runs both modules itself, which is why they stay in the tree.
+        # Both modules stay in the tree as libraries: every status, channel and price module
+        # imports `progress.mjs`, and `kreview/opencode-progress.mjs --stages` calls `stages.mjs`.
         echo "::group::What the run did"
         node "${SCRIPTS}/kreview/opencode-progress.mjs" || echo "The timeline could not be rendered"
         echo "::endgroup::"

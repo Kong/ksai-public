@@ -11,9 +11,10 @@ const GH_DENY = 'Bash(gh:*),Bash(gh)';
 /**
  * PROFILES is what `flow: run` may touch, named once so a caller picks a bound instead of enumerating one.
  *
- * The lists are `claude-run`'s, in the Claude tool vocabulary `opencodePermissions` translates, so the two
- * actions grant one profile the same tools. `gh` is denied under every profile: this flow hands the model
- * no GitHub token, and a trusted step in the calling job owns anything that leaves the runner.
+ * The lists are in the Claude tool vocabulary `opencodePermissions` translates - they came from `claude-run`,
+ * which held the second spelling until it was deleted, and this is now the only one. `gh` is denied under
+ * every profile: this flow hands the model no GitHub token, and a trusted step in the calling job owns
+ * anything that leaves the runner.
  */
 export const PROFILES = Object.freeze({
   reviewer: Object.freeze({
