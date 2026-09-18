@@ -5332,6 +5332,30 @@ runs:
         set -euo pipefail
         node "${SCRIPTS}/ksai/preserve-refused.mjs"
 
+    - name: Stop the run this one started when this step stopped for a human
+      id: stop_successor
+      if: >-
+        ${{ always() && steps.dispatch.outputs.next_run != '' &&
+        (steps.publish.outputs.status == 'blocked' || steps.publish_direct.outputs.status == 'blocked' ||
+        steps.record.outputs.status == 'blocked' || steps.record_fix.outputs.status == 'blocked' ||
+        steps.record_do.outputs.status == 'blocked') }}
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        NEXT_RUN: ${{ steps.dispatch.outputs.next_run }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      with:
+        github-token: ${{ github.token }}
+        script: |
+          const { stopSuccessor } = require(`${process.env.SCRIPTS}/ksai/publish.cjs`);
+          const { notices, warnings } = await stopSuccessor({
+            github,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            env: process.env,
+          });
+          for (const line of notices) core.info(line);
+          for (const line of warnings) core.warning(line);
+
     - name: Upload the work a push gate refused
       if: ${{ always() && inputs.flow == 'implement' && steps.preserve_refused.outputs.tree != '' }}
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -5537,7 +5561,9 @@ runs:
           steps.record.outputs.message_file || steps.record_fix.outputs.message_file ||
           steps.record_do.outputs.message_file || steps.release_plan.outputs.message_file }}
         CURRENT: >-
-          This write run did not complete. See the linked workflow run for the failure or cancellation details.
+          ${{ (steps.publish.outputs.status || steps.publish_direct.outputs.status || steps.record.outputs.status ||
+          steps.record_fix.outputs.status || steps.record_do.outputs.status || steps.release_plan.outputs.status) == '' &&
+          'This write run did not complete. See the linked workflow run for the failure or cancellation details.' || '' }}
         DO_REQUEST: >-
           ${{ steps.record_do.outcome == 'success' &&
           (steps.record_do.outputs.status == 'changed' || steps.record_do.outputs.status == 'unchanged') &&

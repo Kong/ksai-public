@@ -73,6 +73,7 @@ async function say({ github, owner, repo, target, notice, env, warnings }) {
 async function dispatchNext({ github, core, owner, repo, env, fetch: call = globalThis.fetch }) {
   const outputs = {
     stops_here: '',
+    next_run: '',
   };
   const answer = (started) => {
     outputs.stops_here = stopsHere({ handsOff: env.HANDS_OFF, started });
@@ -132,6 +133,7 @@ async function dispatchNext({ github, core, owner, repo, env, fetch: call = glob
   });
   if (through.outcome === 'failed') return undispatched(through.reason);
   if (through.outcome === 'dispatched') {
+    outputs.next_run = String(through.run ?? '');
     return {
       outputs: answer(true),
       notices: ['the control plane started the next run, with the work this job carries'],
@@ -512,10 +514,35 @@ async function publishRunFailed({ github, owner, repo, env }) {
   return { notices: [`reported the run as incomplete (watchdog fired: ${fired})`] };
 }
 
+async function stopSuccessor({ github, owner, repo, env }) {
+  const asked = String(env.NEXT_RUN ?? '').trim();
+  if (!/^\d{1,15}$/.test(asked)) return { notices: [], warnings: [] };
+  const run = Number(asked);
+  if (!Number.isSafeInteger(run) || run === 0) return { notices: [], warnings: [] };
+
+  try {
+    await github.rest.actions.cancelWorkflowRun({ owner, repo, run_id: run });
+  } catch (refused) {
+    return {
+      notices: [],
+      warnings: [
+        `the run this one had already started could not be stopped, so it will meet the same wall: ${
+          refused?.message ?? 'GitHub said nothing'
+        }`,
+      ],
+    };
+  }
+  return {
+    notices: [`stopped run ${run}, which this one started before this step stopped for a decision only a human can make`],
+    warnings: [],
+  };
+}
+
 module.exports = {
   decideFinished,
   markReady,
   dispatchNext,
+  stopSuccessor,
   publishNotice,
   publishTesterNotice,
   releaseCheckpoint,

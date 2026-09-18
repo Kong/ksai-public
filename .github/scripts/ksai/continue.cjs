@@ -249,6 +249,16 @@ const CONTINUE_TIMEOUT = 30000;
 
 const CONTINUE_HOLD = 25000;
 
+async function startedRun(answer) {
+  try {
+    const said = await answer.json();
+    const run = readCount(said?.run_id);
+    return run === null || run === 0 ? '' : String(run);
+  } catch {
+    return '';
+  }
+}
+
 async function continueThroughControlPlane({
   endpoint = '',
   audience = 'ksai-cp',
@@ -311,7 +321,7 @@ async function continueThroughControlPlane({
       continue;
     }
 
-    if (answer.ok) return { outcome: 'dispatched', reason: '' };
+    if (answer.ok) return { outcome: 'dispatched', reason: '', run: await startedRun(answer) };
     if (answer.status === 404 || answer.status === 405) return { outcome: 'unheld', reason: '' };
     if (answer.status === 409) {
       busy = true;
