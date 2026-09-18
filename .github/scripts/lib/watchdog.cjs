@@ -24,6 +24,21 @@ function ceilingMinutes(value) {
 }
 
 /**
+ * What ended this run, when it did not end itself.
+ *
+ * `cause` is the watchdog's own vocabulary: `progress` for a run that stopped making any, `halt`
+ * for one stopped on request, and anything else - including nothing at all - for the deadline it
+ * arms with, which is the job's ceiling less a salvage margin rather than a budget sized for the
+ * work. The reason text is left out on purpose: it quotes a tool detail the model wrote, and this
+ * value is read by machines and joined across runs.
+ */
+function stoppedBy(env) {
+  if (String(env?.WATCHDOG_FIRED ?? '') !== 'true') return null;
+  const cause = String(env?.WATCHDOG_CAUSE ?? '').trim();
+  return cause === 'progress' || cause === 'halt' ? `watchdog:${cause}` : 'watchdog:deadline';
+}
+
+/**
  * watchdogDetail names what the watchdog counted, or nothing when it recorded no reason.
  *
  * The caller splices this into a body that goes through `scrub` as a whole, which is what makes it
@@ -45,6 +60,7 @@ function watchdogDetail(env) {
 }
 
 module.exports = {
+  stoppedBy,
   ASSUMED_CEILING_MINUTES,
   MAX_CEILING_MINUTES,
   MAX_REASON_CHARS,

@@ -6,7 +6,7 @@ const { DIALS_ARM_SHAPE, MODEL_TIERS, armLabel } = require('../lib/select-arm.cj
 const { renderClassifierFooter } = require('../ksai/classify.cjs');
 const { href: markerHref } = require('../ksai/marker.cjs');
 const { scrub } = require('../ksai/plan.cjs');
-const { watchdogDetail } = require('../lib/watchdog.cjs');
+const { stoppedBy, watchdogDetail } = require('../lib/watchdog.cjs');
 const { collectSecrets, scrub: scrubSecrets } = require('./secrets.cjs');
 const { counted } = require('../lib/text.cjs');
 
@@ -357,6 +357,7 @@ function reviewRecord(env) {
   const held = statusOf(env);
   return {
     conclusion: env.CONCLUSION || null,
+    stopped_by: stoppedBy(env),
     reviewed_commit: env.COMMIT_ID || null,
     model: env.MODEL || null,
     effort: env.EFFORT || null,

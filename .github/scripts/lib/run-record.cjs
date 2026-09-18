@@ -6,8 +6,14 @@ const PREFIX = '<!-- ksai-run-state:';
 
 const SHAPE = new RegExp(`${escapeForRegExp(PREFIX)}(\\{[^]*?\\}) -->`);
 
+// `stopped_by` names what ended a run that did not end itself. The watchdog knows - `publish.cjs`
+// has written the sentence "the review watchdog stopped it" into the posted comment since it
+// existed - but nothing machine-readable carried it, so the corpus recorded a terminated review as
+// `head_moved` or `error_during_execution` and every findings rate counted it as a review that
+// looked and found nothing. 84 of them over 2026-09-13..09-18, 19% of one arm's runs.
 const FIELDS = Object.freeze([
   'conclusion',
+  'stopped_by',
   'reviewed_commit',
   'model',
   'effort',
