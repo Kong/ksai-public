@@ -87,6 +87,11 @@ const OUTPUT_CONTRACT = `7. Emit your final message as exactly one fenced \`\`\`
      \`Findings audit | Completed\` is the text of one cell pair, never a sentence in the
      prose. Emit the header and the separator row even when a cell is empty, or the
      reader renders one run of pipes instead of a report.
+
+     The submission is refused unless those six lines open \`summary\` with two cells
+     each: the header, the rule, then Scope, Mandate, Findings and Findings audit under
+     their own names. A cell whose text carries a \`|\` escapes it as \`\\|\`, or it opens
+     a cell the row has no header for. Never repeat a column to fill the row.
    - \`body\` is 80 words or fewer of prose, one paragraph, not counting a code block,
      per the format policy's Length rules.
    - A code fix belongs in a \`\`\`suggestion fence and no other: only that one renders an

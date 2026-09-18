@@ -31,6 +31,42 @@ function flatProblem(submission) {
   return written.some((value) => flattened(value)) ? 'a table or fence lost its line breaks; write real newlines in summary and body, never the letter n' : '';
 }
 
+const VERDICT_ROWS = Object.freeze(['Check', 'Scope', 'Mandate', 'Findings', 'Findings audit']);
+const RULE_CELL = /^:?-{3,}:?$/;
+const TABLE_PROBLEM = 'the verdict table must open summary: a `| Check | Result |` header, a `| :--- | :--- |` rule, then the rows Scope, Mandate, Findings and Findings audit, each on its own line with exactly two cells';
+
+/**
+ * cells splits a row where GFM splits it, at an unescaped pipe.
+ *
+ * A value carrying a bare `|` makes a third cell here and a broken table on the pull request, so
+ * the two agree and both are refused.
+ */
+function cells(line) {
+  const row = String(line ?? '').trim();
+  if (row.length < 2 || !row.startsWith('|') || !row.endsWith('|')) return null;
+  return row.slice(1, -1).split(/(?<!\\)\|/).map((cell) => cell.trim());
+}
+
+/*
+ * The verdict table is checked for its shape, not only for its line breaks.
+ *
+ * `flatProblem` reads a summary that lost its newlines by the separator rule left in it, so a
+ * degenerate header - `| Check | Result | Result | Result |` for 2221 columns, the whole review
+ * body of the ksai source repository#1000 - passed it untouched: the repetition never reached the rule, and the one
+ * guard aimed at broken tables missed it for want of the row it never wrote. Row count, cell count
+ * and the four labels are all the contract already asks for, and the reader can read nothing else,
+ * so they are checked here, where a refusal still has attempts left to spend.
+ */
+function tableProblem(summary) {
+  const lines = String(summary ?? '').trim().split('\n');
+  if (lines.length < VERDICT_ROWS.length + 1) return TABLE_PROBLEM;
+  const [header, rule, ...body] = lines.slice(0, VERDICT_ROWS.length + 1).map((line) => cells(line));
+  if ([header, rule, ...body].some((row) => row?.length !== 2)) return TABLE_PROBLEM;
+  if (header[0].toLowerCase() !== 'check' || header[1].toLowerCase() !== 'result') return TABLE_PROBLEM;
+  if (!rule.every((cell) => RULE_CELL.test(cell))) return TABLE_PROBLEM;
+  return body.some((row, index) => row[0].toLowerCase() !== VERDICT_ROWS[index + 1].toLowerCase()) ? TABLE_PROBLEM : '';
+}
+
 function evidenceProblem(evidence) {
   if (!exact(evidence, ['trigger', 'expected', 'observed', 'causal_path', 'premises'])) return 'unexpected evidence field';
   for (const location of evidence.causal_path ?? []) if (!exact(location, ['path', 'line', 'reason'])) return 'unexpected causal-path field';
@@ -78,7 +114,7 @@ function submissionProblem(kind, submission, candidateIds = []) {
   if (submission.summary.length > summaryLimit(kind)) return `summary is over ${summaryLimit(kind)} characters; shorten it to what the contract asks for`;
   const flat = flatProblem(submission);
   if (flat) return flat;
-  if (kind === 'final') return submission.findings.map(finalFindingProblem).find(Boolean) ?? '';
+  if (kind === 'final') return tableProblem(submission.summary) || (submission.findings.map(finalFindingProblem).find(Boolean) ?? '');
   if (!['complete', 'incomplete'].includes(submission.coverage)) return 'coverage must be complete or incomplete';
   if (kind === 'candidate') {
     if (submission.findings.length > LIMITS.candidates) return 'candidate limit exceeded';
