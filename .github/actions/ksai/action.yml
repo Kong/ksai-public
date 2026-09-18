@@ -87,6 +87,11 @@ inputs:
       read-only token pull-request write phases read their CI evidence on: checks:read, statuses:read and
       actions:read. Empty keeps the evidence on `source_org_github_token`.
 
+      The implement flow's plan claim reads workflow run status on this token for the same reason. On
+      `source_org_github_token` every `actions.getWorkflowRun` call answers 403 wherever the push token is an
+      App installation token, and an unreadable answer releases the plan - so the guard passed on every
+      consumer and two runs could write one plan.
+
       It exists because those three scopes cannot always be added to the push token. They are App-installation
       configuration, and an installation that does not hold them answers `422 The permissions requested are not
       granted to this installation` to a token request naming them - so a consumer cannot grant them to itself
@@ -2950,13 +2955,15 @@ runs:
         RUN_ATTEMPT: ${{ github.run_attempt }}
         JOB: ${{ github.job }}
         JOB_INDEX: ${{ strategy.job-index || 0 }}
+        EVIDENCE_TOKEN: ${{ inputs.ci_evidence_github_token }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:
         github-token: ${{ inputs.source_org_github_token }}
         script: |
-          const { planHolder } = require(`${process.env.SCRIPTS}/ksai/write-report.cjs`);
+          const { actionsClient, planHolder } = require(`${process.env.SCRIPTS}/ksai/write-report.cjs`);
           const { outputs, notices = [] } = await planHolder({
             github,
+            actionsGithub: actionsClient(github, process.env),
             owner: context.repo.owner,
             repo: context.repo.repo,
             env: process.env,
@@ -3494,13 +3501,15 @@ runs:
           ${{ steps.works.outputs.unblocked == 'true' && steps.select.outputs.receipt ||
           'Preparing the write run and selecting its model profile.' }}
         TRIGGER: ${{ inputs.trigger_phrase }}
+        EVIDENCE_TOKEN: ${{ inputs.ci_evidence_github_token }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:
         github-token: ${{ inputs.source_org_github_token }}
         script: |
-          const { mutateWriteReport } = require(`${process.env.SCRIPTS}/ksai/write-report.cjs`);
+          const { actionsClient, mutateWriteReport } = require(`${process.env.SCRIPTS}/ksai/write-report.cjs`);
           const { outputs, notices = [], failure, heldBy } = await mutateWriteReport({
             github,
+            actionsGithub: actionsClient(github, process.env),
             owner: context.repo.owner,
             repo: context.repo.repo,
             env: process.env,
@@ -3773,13 +3782,15 @@ runs:
         STATUS_HISTORY: ${{ steps.status_gate.outputs.history }}
         REQUEST_COMMENT_ID: ${{ steps.context.outputs.comment_id }}
         RECOVER_DIR: ${{ runner.temp }}
+        EVIDENCE_TOKEN: ${{ inputs.ci_evidence_github_token }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:
         github-token: ${{ inputs.source_org_github_token }}
         script: |
-          const { mutateWriteReport } = require(`${process.env.SCRIPTS}/ksai/write-report.cjs`);
+          const { actionsClient, mutateWriteReport } = require(`${process.env.SCRIPTS}/ksai/write-report.cjs`);
           const { outputs, notices = [], failure, commentId } = await mutateWriteReport({
             github,
+            actionsGithub: actionsClient(github, process.env),
             owner: context.repo.owner,
             repo: context.repo.repo,
             env: process.env,

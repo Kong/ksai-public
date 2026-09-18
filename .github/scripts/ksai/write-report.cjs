@@ -323,7 +323,24 @@ function runOfAttempt(id) {
   return /^\d{1,20}$/.test(runId) ? runId : '';
 }
 
-async function planHeldBy({ github, owner, repo, state, attempt }) {
+function actionsClient(github, env = process.env) {
+  const token = String(env.EVIDENCE_TOKEN ?? '');
+  return token === '' ? github : new github.constructor({ auth: token, baseUrl: env.GITHUB_API_URL });
+}
+
+function refusalOf(error) {
+  const said = String(error?.message ?? error ?? '')
+    .replace(/[\p{C}\p{Zl}\p{Zp}]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 200);
+  const code = Number(error?.status ?? 0);
+  const reason = said === '' ? 'no reason given' : said;
+  return code > 0 ? `${code} ${reason}` : reason;
+}
+
+async function planHeldBy({ github, actionsGithub = null, owner, repo, state, attempt, unreadable = [] }) {
+  const client = actionsGithub ?? github;
   const mine = runOfAttempt(attempt.id);
   const working = state.attempts
     .filter((entry) => WORKING_OUTCOMES.includes(entry.outcome))
@@ -332,8 +349,12 @@ async function planHeldBy({ github, owner, repo, state, attempt }) {
   for (const runId of new Set(working)) {
     let status;
     try {
-      status = (await github.rest.actions.getWorkflowRun({ owner, repo, run_id: Number(runId) }))?.data?.status;
-    } catch {
+      status = (await client.rest.actions.getWorkflowRun({ owner, repo, run_id: Number(runId) }))?.data?.status;
+    } catch (error) {
+      unreadable.push(
+        `the plan claim could not read whether run ${runId} is still working this plan (${refusalOf(error)}), ` +
+        'so it was treated as finished and this run went ahead',
+      );
       continue;
     }
     if (typeof status === 'string' && status !== '' && status !== 'completed') return runId;
@@ -1051,7 +1072,14 @@ async function updateWriteProgressUnlocked({
   return { outputs: blank, failure: 'the durable write report kept changing and could not publish live progress safely' };
 }
 
-async function mutateWriteReportUnlocked({ github, owner, repo, env = process.env, now = Date.now }) {
+async function mutateWriteReportUnlocked({
+  github,
+  actionsGithub = null,
+  owner,
+  repo,
+  env = process.env,
+  now = Date.now,
+}) {
   const identified = identityOf(env);
   if (identified.error) return { outputs: {}, failure: identified.error };
   const attempted = attemptOf(env, now());
@@ -1080,13 +1108,22 @@ async function mutateWriteReportUnlocked({ github, owner, repo, env = process.en
     const held = read.state ?? { identity, run_base: attempted.run_base, history: [], attempts: [] };
     const claiming = WORKING_OUTCOMES.includes(attempted.attempt.outcome) &&
       !held.attempts.some((entry) => entry.id === attempted.attempt.id);
+    const unreadable = [];
     if (claiming) {
-      const holder = await planHeldBy({ github, owner, repo, state: held, attempt: attempted.attempt });
+      const holder = await planHeldBy({
+        github,
+        actionsGithub,
+        owner,
+        repo,
+        state: held,
+        attempt: attempted.attempt,
+        unreadable,
+      });
       if (holder !== '') {
         const where = `${attempted.run_base}/${holder}`;
         return {
           outputs: { held_by: where },
-          notices: [`another run is already working this plan (${where}), so this one recorded nothing`],
+          notices: [...unreadable, `another run is already working this plan (${where}), so this one recorded nothing`],
         };
       }
     }
@@ -1122,7 +1159,10 @@ async function mutateWriteReportUnlocked({ github, owner, repo, env = process.en
         comment_id: store.idOf(verified.ref),
         recorded: 'true',
       },
-      notices: [fresh ? 'created and verified the durable write report' : 'merged and verified the durable write report'],
+      notices: [
+        ...unreadable,
+        fresh ? 'created and verified the durable write report' : 'merged and verified the durable write report',
+      ],
     };
   }
   return { outputs: {}, failure: 'the durable write report kept changing and could not be merged safely' };
@@ -1195,7 +1235,7 @@ async function updateWriteProgress({
   return { ...result, outputs };
 }
 
-async function planHolder({ github, owner, repo, env = process.env }) {
+async function planHolder({ github, actionsGithub = null, owner, repo, env = process.env }) {
   const outputs = {
     held_by: '',
   };
@@ -1215,13 +1255,30 @@ async function planHolder({ github, owner, repo, env = process.env }) {
   if (read.error || read.missing || read.state === null) {
     return { outputs, notices: read.error ? [read.error] : [] };
   }
-  const holder = await planHeldBy({ github, owner, repo, state: read.state, attempt: { id: attemptId(env) } });
-  if (holder === '') return { outputs, notices: [] };
+  const unreadable = [];
+  const holder = await planHeldBy({
+    github,
+    actionsGithub,
+    owner,
+    repo,
+    state: read.state,
+    attempt: { id: attemptId(env) },
+    unreadable,
+  });
+  if (holder === '') return { outputs, notices: unreadable };
   outputs.held_by = `${read.state.run_base}/${holder}`;
-  return { outputs, notices: [`another run is already working this plan (${outputs.held_by})`] };
+  return { outputs, notices: [...unreadable, `another run is already working this plan (${outputs.held_by})`] };
 }
 
-async function mutateWriteReport({ github, owner, repo, env = process.env, sleep, now = Date.now }) {
+async function mutateWriteReport({
+  github,
+  actionsGithub = null,
+  owner,
+  repo,
+  env = process.env,
+  sleep,
+  now = Date.now,
+}) {
   const result = await lockedMutation({
     github,
     owner,
@@ -1231,7 +1288,7 @@ async function mutateWriteReport({ github, owner, repo, env = process.env, sleep
     lockKind: 'report',
     recoverKinds: ['live'],
     releaseRequired: true,
-    task: () => mutateWriteReportUnlocked({ github, owner, repo, env, now }),
+    task: () => mutateWriteReportUnlocked({ github, actionsGithub, owner, repo, env, now }),
   });
   const attempted = attemptOf(env, now());
   const outputs = {
@@ -1254,6 +1311,7 @@ module.exports = {
   REPORT_HEADING,
   VERSION,
   ARMS,
+  actionsClient,
   aggregateSpend,
   armTotals,
   attemptOf,
