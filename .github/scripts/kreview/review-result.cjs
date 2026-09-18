@@ -18,6 +18,18 @@ const pathOf = (value) => text(value, 512) && !/^(?:\/|[A-Za-z]:)/.test(value) &
 const canonical = (value) => JSON.stringify(value) ?? '';
 const exact = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).every((key) => keys.includes(key));
 
+const FLATTENED = /```|\|\s*:?-{3,}/;
+const flattened = (value) => typeof value === 'string' && !value.includes('\n') && FLATTENED.test(value);
+
+function flatProblem(submission) {
+  const written = [
+    submission.summary,
+    ...(Array.isArray(submission.findings) ? submission.findings : []).map((finding) => finding?.body),
+    ...(Array.isArray(submission.decisions) ? submission.decisions : []).map((decision) => decision?.finding?.body),
+  ];
+  return written.some((value) => flattened(value)) ? 'a table or fence lost its line breaks; write real newlines in summary and body, never the letter n' : '';
+}
+
 function evidenceProblem(evidence) {
   if (!exact(evidence, ['trigger', 'expected', 'observed', 'causal_path', 'premises'])) return 'unexpected evidence field';
   for (const location of evidence.causal_path ?? []) if (!exact(location, ['path', 'line', 'reason'])) return 'unexpected causal-path field';
@@ -62,6 +74,8 @@ function submissionProblem(kind, submission, candidateIds = []) {
   const allowed = kind === 'final' ? ['summary', 'findings'] : kind === 'audit' ? ['summary', 'findings', 'coverage', 'decisions'] : ['summary', 'findings', 'coverage'];
   if (!exact(submission, allowed)) return 'unexpected submission field';
   if (!text(submission.summary, 20_000) || !Array.isArray(submission.findings)) return 'summary and findings are required';
+  const flat = flatProblem(submission);
+  if (flat) return flat;
   if (kind === 'final') return submission.findings.map(finalFindingProblem).find(Boolean) ?? '';
   if (!['complete', 'incomplete'].includes(submission.coverage)) return 'coverage must be complete or incomplete';
   if (kind === 'candidate') {

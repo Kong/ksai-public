@@ -79,6 +79,10 @@ const OUTPUT_CONTRACT = `7. Emit your final message as exactly one fenced \`\`\`
      | Findings | <count per severity, like \`1 Medium, 2 Low\`, or \`None\`> |
      | Findings audit | <what step 3 did> |
 
+     Write real line breaks between those rows, and between the lines of every fence in
+     \`body\`. A bare \`n\` where the break belongs, as in \`| Check | Result |n| :--- |\`
+     or \`suggestionnconst x = 1\`, is a lost escape and the submission is refused.
+
      Write it as a table. A row on its own line, outside a table, is not this table:
      \`Findings audit | Completed\` is the text of one cell pair, never a sentence in the
      prose. Emit the header and the separator row even when a cell is empty, or the
