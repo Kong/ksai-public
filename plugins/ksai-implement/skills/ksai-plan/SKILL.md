@@ -73,6 +73,11 @@ Extract, and write down for yourself:
   (errors handled, nothing adjacent regressed). Do not invent stricter requirements the ticket
   never stated.
 - **Constraints and non-goals** the ticket states explicitly.
+- **The existing behaviour it leaves alone.** Error and log messages, return values, output formats,
+  exit codes and public API stay exactly as they are unless the ticket explicitly asks to change them.
+  A hint, an example or a proposed wording covers the case the ticket describes, not every case the
+  same code prints. When you cannot tell whether a change to existing output is asked for, keep the
+  output and say so under `## Risks`.
 - **Type and scope hints** from labels, issue type and title (`bug`, `feat`, `chore`, an area label).
 - **The one sentence** that says when the whole ticket is done. Every step has to move toward it.
 
@@ -114,6 +119,12 @@ Rules, in order of how often they get broken:
   tests" step.
 - **Complete.** The steps together satisfy every acceptance criterion from Phase 1. Nothing is
   left implied.
+- **New tests, not rewritten ones.** New behaviour is proven by tests added beside the existing ones.
+  A step that rewrites existing test expectations to match new output is the shape of a fix that
+  changed what nobody asked to change. Where an expectation genuinely has to change, the step title
+  names that test and `## Context` quotes the ticket sentence that requires it. Never write a new
+  message or value into the plan as settled fact the ticket did not state - a later step implements
+  exactly what the plan spells out.
 - **Repo work only.** No step may need a token, a credential, an external service, a deploy, a
   change in another repo, or a human in the loop.
 
@@ -173,6 +184,9 @@ to touch, an assumption you made - goes in `summary`, not into the title.
 - [ ] Every step leaves the gates green.
 - [ ] No step needs a token, a credential, or a human decision.
 - [ ] No verification-only step.
+- [ ] No step changes existing messages, return values or public API the ticket did not ask to
+      change, and no step rewrites an existing test expectation without quoting the sentence that
+      requires it.
 - [ ] Every title is one line of plain prose, unique, within 200 characters, and implementable
       from the title alone.
 - [ ] Every phase heading is numbered from 1 and in order, and each carries one `### Steps` list holding at least one step.

@@ -16,7 +16,8 @@ const {
   scrub,
 } = require('./plan.cjs');
 const { PAGE_SIZE: RELEASE_PER_PAGE, probeComments } = require('./pages.cjs');
-const { isOwnLogin, planRecords, EDITED, UNEDITED } = require('./approval.cjs');
+const { isOwnLogin, planRecords, vouchedOwn, EDITED, UNEDITED } = require('./approval.cjs');
+const { markerOf } = require('./marker.cjs');
 const { counted, plural } = require('../lib/text.cjs');
 
 const RELEASE_TOKEN_SHAPE = new RegExp(`^(?:${RELEASE_TOKEN_CORE})$`);
@@ -153,6 +154,44 @@ function releaseTokenFor({
   if (said !== '') return `${spaceOf({ threadRootId, dispatched })}/${said}`;
   const submitted = String(reviewId ?? '').trim();
   return submitted === '' ? '' : `review/${submitted}`;
+}
+
+function releasedNothing({ command = null, phase = null, remaining = null, releaseRef = null, atGate = null } = {}) {
+  if (!isApprove(command)) return false;
+  if (String(phase ?? '').trim() !== 'step') return false;
+  if (String(atGate ?? '').trim() === 'true') return false;
+  return String(remaining ?? '').trim() === '' && String(releaseRef ?? '').trim() === '';
+}
+
+const GATE_NOTICE_KINDS = Object.freeze(['plan-waiting', 'plan-blocked']);
+
+const MAX_GATE_PAGES = 5;
+
+async function gateWaiting({ github = null, owner = null, repo = null, prNumber = null, botLogin = null } = {}) {
+  const known = String(botLogin ?? '').trim();
+  if (!known) return { waiting: false, unreadable: "No bot login was given to tell this flow's own notices apart." };
+
+  let noticed = Number.NaN;
+  const { unreadable } = await probeComments({
+    github,
+    owner,
+    repo,
+    prNumber,
+    maxPages: MAX_GATE_PAGES,
+    cannot: 'cannot tell whether the plan is waiting at its approval gate',
+    take: (comment) => {
+      if (!vouchedOwn(comment, known)) return;
+      if (!GATE_NOTICE_KINDS.includes(markerOf(comment?.body)?.kind)) return;
+      const at = Date.parse(String(comment?.created_at ?? ''));
+      if (Number.isFinite(at) && (Number.isNaN(noticed) || at > noticed)) noticed = at;
+    },
+  });
+  if (unreadable) return { waiting: false, unreadable };
+  if (!Number.isFinite(noticed)) return { waiting: false, unreadable: null };
+
+  const edited = await pendingSince({ github, owner, repo, prNumber, botLogin: known });
+  if (edited.unreadable) return { waiting: false, unreadable: edited.unreadable };
+  return { waiting: noticed > Date.parse(edited.at), unreadable: null };
 }
 
 function needsReleaseRead(env) {
@@ -344,6 +383,9 @@ module.exports = {
   alreadyReleased,
   pendingSince,
   needsReleaseRead,
+  gateWaiting,
+  isApprove,
+  releasedNothing,
   releaseTokenFor,
   decideCheckpoint,
   renderWaiting,

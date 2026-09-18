@@ -2281,13 +2281,14 @@ runs:
         retries: 3
         script: |
           const { readPlan } = require(`${process.env.SCRIPTS}/ksai/prepare.cjs`);
-          const { outputs } = await readPlan({
+          const { outputs, notices = [] } = await readPlan({
             github,
             owner: context.repo.owner,
             repo: context.repo.repo,
             env: process.env,
           });
           for (const [name, value] of Object.entries(outputs)) core.setOutput(name, value);
+          for (const line of notices) core.info(line);
 
     - name: Resolve which ticket this run is about
       id: jira_ref
@@ -2546,6 +2547,10 @@ runs:
         AT_CHECKPOINT: ${{ steps.read_plan.outputs.at_checkpoint }}
         ON_BRANCH: ${{ steps.phase.outputs.on_branch }}
         PENDING: ${{ steps.phase.outputs.pending }}
+        COMMAND: ${{ steps.select.outputs.command }}
+        RELEASED_REMAINING: ${{ steps.release_checkpoint.outputs.remaining }}
+        RELEASE_REF: ${{ steps.approval.outputs.release_ref }}
+        GATE_WAITING: ${{ steps.read_plan.outputs.gate_waiting }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:
         script: |
@@ -3013,7 +3018,7 @@ runs:
         ${{ inputs.continuation_workflow != '' && inputs.dry_run == 'false' &&
         steps.holder.outputs.held_by == '' &&
         steps.approval.outputs.blocked != 'true' && steps.checkpoint.outputs.waiting != 'true' &&
-        steps.read_plan.outputs.held != 'true' &&
+        steps.read_plan.outputs.held != 'true' && steps.works.outputs.released_nothing != 'true' &&
         (steps.release_checkpoint.outcome != 'success' || steps.release_checkpoint.outputs.remaining != '0') &&
         (steps.phase.outputs.phase == 'step' || steps.release_plan.outputs.status == 'released') }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
@@ -5531,6 +5536,7 @@ runs:
         (steps.write_comment.outputs.recorded != 'true' &&
         steps.size.outputs.phase != 'replayed' &&
         steps.dispatch.outputs.stops_here != 'true' &&
+        steps.works.outputs.released_nothing != 'true' &&
         steps.lock_threads.outputs.held != 'true' &&
         steps.checkpoint.outputs.waiting != 'true' &&
         steps.open_draft.outputs.status != 'blocked' &&

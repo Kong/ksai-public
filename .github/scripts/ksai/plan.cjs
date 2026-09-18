@@ -924,9 +924,11 @@ function renderDirectBody({
   repository = null,
   triggerPhrase = null,
   jira = null,
+  warning = '',
 } = {}) {
   const options = { triggerPhrase };
   const motivation = motivationLines(summary, options);
+  const warned = scrub(String(warning ?? ''), options).trim();
 
   const out = [
     ...motivation.lines,
@@ -937,6 +939,7 @@ function renderDirectBody({
         'below are the whole change. Review them as you would any other pull request',
       options,
     ),
+    ...(warned === '' ? [] : ['', warned]),
   ];
   const below = creditBlock({ issueNumber, requestedBy, repository, jira }, options);
   return {

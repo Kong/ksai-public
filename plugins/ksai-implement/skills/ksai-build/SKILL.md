@@ -83,6 +83,15 @@ failing, and it is the cheapest moment to say so.
 Stay inside what the issue asks for. An adjacent improvement you notice belongs in the summary, not
 in the diff.
 
+Existing behaviour the issue does not ask to change stays exactly as it is: error and log messages,
+return values, output formats, exit codes and public API. A hint or proposed wording in the issue
+covers the case it describes, not every case the same code prints. Prove new behaviour with new
+tests, and never edit or delete an existing assertion or expected value to get green - fix the code
+instead. Only where the issue text explicitly requires an existing expectation to change may you
+edit it, and then the commit body and `summary` name each edited test and quote the sentence
+requiring it. A trusted step scans the pushed diff for changed or removed test expectations and
+puts what it finds in the pull request description.
+
 ## Phase 3 - Implement
 
 Write the change the way the surrounding code is written. Match its naming, its idiom, its error

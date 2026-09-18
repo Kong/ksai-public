@@ -9,6 +9,7 @@ const { checkStep, oneLine, planDirOf, scrub, storedTitle } = require('./plan.cj
 const { readCount } = require('./continue.cjs');
 const { counted, plural } = require('../lib/text.cjs');
 const { safeEcho, verifyChunk, gitVia, noChangeLeftBehind } = require('./verify-chunk.cjs');
+const { expectationWarning, readExpectationEdits } = require('./expectation-edits.cjs');
 import { blockerFor, editPullBody, field, readManifest, readPullBody, reasonOf, runCommand, shown } from './run.mjs';
 import { publishCommit } from './signed-push.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
@@ -30,6 +31,7 @@ export function recordStep({
   bodyFile = null,
   commitFile = null,
   recordPushed = (_sha) => {},
+  readEdits = readExpectationEdits,
   run = runCommand,
 } = {}) {
   const block = blockerFor(manifestPath);
@@ -51,6 +53,7 @@ export function recordStep({
   const status = field(manifest?.status);
   let pushed;
   let pushedSha = '';
+  let warning = '';
 
   if (status === 'blocked') {
     return block(`Stopped on "${quoted}": ${scrub(reasonOf(manifest), { triggerPhrase }).trim()}`);
@@ -73,6 +76,7 @@ export function recordStep({
   } else if (status === 'done') {
     const verified = verifyChunk({ cwd, branch, remoteSha, manifestPath, deniedPaths, planDir });
     if (!verified.ok) return block(`I did not push "${quoted}": ${verified.reason}`);
+    warning = expectationWarning({ readEdits, git: gitVia(run, cwd), from: remoteSha, to: verified.sha, noun: 'This step' });
 
     const published = publishCommit({
       cwd,
@@ -132,7 +136,8 @@ export function recordStep({
     pushedSha,
     remaining: remainingAfter,
     boundary: stepsLeft === 0 && remainingAfter > 0,
-    message: finishedMessage({ quoted, remainingAfter, stepsLeft }),
+    warned: warning !== '',
+    message: `${finishedMessage({ quoted, remainingAfter, stepsLeft })}${warning === '' ? '' : `\n\n${warning}`}`,
   };
 }
 
@@ -181,7 +186,7 @@ export function main(env = process.env, { run = runCommand } = {}) {
     return 1;
   }
 
-  const speaks = result.status !== 'stepped' || result.boundary === true;
+  const speaks = result.status !== 'stepped' || result.boundary === true || result.warned === true;
   if (speaks) writeFileSync(messageFile, `${result.message}\n`);
   writeOutputs(env.GITHUB_OUTPUT, {
     status: result.status,

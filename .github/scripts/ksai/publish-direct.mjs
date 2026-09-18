@@ -14,6 +14,7 @@ const {
   shortenedNote,
 } = require('./plan.cjs');
 const { MAX_DIRECT_COMMITS, gitVia, safeEcho, verifyChunk } = require('./verify-chunk.cjs');
+const { expectationWarning, readExpectationEdits } = require('./expectation-edits.cjs');
 import { blockerFor, createPull, field, readManifest, reasonOf, runCommand, shown, subjectFrom } from './run.mjs';
 import { publishCommit } from './signed-push.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
@@ -36,6 +37,7 @@ export function publishDirect({
   commitFile = null,
   recordPushed = (_sha) => {},
   recordPull = (_number) => {},
+  readEdits = readExpectationEdits,
   run = runCommand,
 } = {}) {
   const block = blockerFor(manifestPath);
@@ -59,13 +61,15 @@ export function publishDirect({
   if (subject.blocker) return block(subject.blocker);
   const { title } = subject;
 
-  const rendered = renderDirectBody({
+  const bodyFor = (warning = '') => renderDirectBody({
     issueNumber: Number(issueNumber),
     requestedBy,
     summary: manifest?.summary,
     repository: repo,
     triggerPhrase,
+    warning,
   });
+  let rendered = bodyFor();
 
   rmSync(manifestPath, { force: true });
 
@@ -80,6 +84,8 @@ export function publishDirect({
     maxCommits: MAX_DIRECT_COMMITS,
   });
   if (!verified.ok) return block(`I did not push this work: ${verified.reason}`);
+  const warning = expectationWarning({ readEdits, git, from: baseSha, to: verified.sha, noun: 'This run' });
+  if (warning !== '') rendered = bodyFor(warning);
 
   const published = publishCommit({
     cwd,
@@ -118,7 +124,7 @@ export function publishDirect({
     message: linked(
       scrub(
         'This was small enough to build without a plan, so the whole change is in [one pull request](LINK), ' +
-          `open for review${shortenedNote(null, rendered.shortened)}`,
+          `open for review${shortenedNote(null, rendered.shortened)}${warning === '' ? '' : `\n\n${warning}`}`,
         { triggerPhrase },
       ),
       at || prUrl,

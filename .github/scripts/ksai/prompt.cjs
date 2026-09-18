@@ -206,6 +206,38 @@ const COMMIT_MESSAGE_NOTE = Object.freeze([
   'commit nothing here can amend - so the work lands and the branch is failing.',
 ]);
 
+const PRESERVE_BEHAVIOUR_PLAN_NOTE = Object.freeze([
+  'PRESERVE EXISTING BEHAVIOUR. Existing observable behaviour - error and log messages, return values,',
+  'output formats, exit codes and public API - stays exactly as it is unless the issue or ticket text',
+  'explicitly asks to change it. A hint, an example or a proposed wording in that text covers the case',
+  'it describes, not every case the same code prints: apply it there and leave the output of every',
+  'other case untouched. Never write a changed message or value into a step as settled fact when the',
+  'issue did not state it.',
+  'Plan new behaviour as NEW tests added beside the existing ones. Do not plan a step that rewrites',
+  'existing test expectations to match new output. Where one genuinely has to change, the step title',
+  'names that test, and `## Context` quotes the sentence of the issue that requires the change. If you',
+  'cannot tell whether the issue asks to change existing output, keep it and say so under `## Risks`.',
+  'A trusted step scans each pushed diff for changed or removed test expectations and shows what it',
+  'finds to the reviewer.',
+]);
+
+const PRESERVE_BEHAVIOUR_WORK_NOTE = Object.freeze([
+  'PRESERVE EXISTING BEHAVIOUR. Change only the behaviour the work names. Existing error and log',
+  'messages, return values, output formats, exit codes and public API stay exactly as they are unless',
+  'the issue or ticket text explicitly asks to change them. A hint or proposed wording in that text',
+  'covers the case it describes, not every case the same code prints.',
+  'Prove new behaviour with NEW tests. Do not edit or delete an existing assertion or expected value to',
+  'make a test pass: an existing test failing after your change is evidence that you changed behaviour',
+  'nobody asked you to change, so fix the code rather than the test. Reformatting or moving a test',
+  'without changing what it expects is not an edit.',
+  'Only where the issue or ticket text explicitly requires an existing expectation to change may you',
+  'edit it, and then the commit message body and the manifest summary name each edited test and quote',
+  'the sentence that requires it. If the work as written requires changing existing output the issue',
+  'does not ask to change, report "blocked" naming that conflict rather than rewriting the tests.',
+  'A trusted step scans the pushed diff for changed or removed test expectations and shows what it',
+  'finds to the reviewer, whatever your summary says.',
+]);
+
 const MERGE_COMMIT_NOTE = Object.freeze([
   'The merge commit is written and made by a trusted step after you finish, so its message is not yours',
   'to choose and you make no commit at all. Leave the resolved files in the worktree.',
@@ -387,6 +419,8 @@ function renderPlanPrompt({
           },`,
           'holding one empty commit. Your plan replaces the placeholder note in its body.',
         ]),
+    ...PRESERVE_BEHAVIOUR_PLAN_NOTE,
+    '',
     'Three phases of that skill are overridden for this environment:',
     '',
     '- Reading the issue: already done, it is provided below. Do not call `gh`.',
@@ -508,6 +542,8 @@ function renderDirectPrompt({
     'and say so. It is then planned instead, which is the outcome that was sized away,',
     'and reporting it costs far less than half-finishing it.',
     '',
+    ...PRESERVE_BEHAVIOUR_WORK_NOTE,
+    '',
     'Two phases are overridden for this environment:',
     '',
     '- Reading the issue: already done, it is provided below. Do not call `gh`.',
@@ -617,6 +653,8 @@ function renderStepPrompt({
     `That is step ${totalSteps - left + 1} of ${totalSteps}; ${left} remain after`,
     'this one, and a later run does each of those. Work already committed for earlier',
     `steps is in \`git log ${text(baseSha)}\` and is not yours to redo or revise.`,
+    '',
+    ...PRESERVE_BEHAVIOUR_WORK_NOTE,
     '',
     'Two phases are overridden for this environment:',
     '',

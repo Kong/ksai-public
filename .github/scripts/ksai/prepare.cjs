@@ -41,7 +41,16 @@ const {
 } = require('./context.cjs');
 const { classifyTarget, nextStep, resolveRequest } = require('./dispatch.cjs');
 const { approvalApplies, describeApproval, resolveApproval } = require('./gate.cjs');
-const { alreadyReleased, needsReleaseRead, decideCheckpoint, pendingSince, releaseTokenFor } = require('./checkpoint.cjs');
+const {
+  alreadyReleased,
+  needsReleaseRead,
+  decideCheckpoint,
+  gateWaiting,
+  isApprove,
+  pendingSince,
+  releasedNothing,
+  releaseTokenFor,
+} = require('./checkpoint.cjs');
 const {
   renderClosed,
   renderPhaseNotice,
@@ -902,18 +911,35 @@ function resolveWork({ env }) {
     works: 'false',
     reads_source: 'false',
     unblocked: 'true',
+    released_nothing: 'false',
   };
   const said = (name) => String(env[name] ?? '');
   const blocked = said('BLOCKED') === 'true';
+  const idle = releasedNothing({
+    command: said('COMMAND'),
+    phase: said('PHASE'),
+    remaining: said('RELEASED_REMAINING'),
+    releaseRef: said('RELEASE_REF'),
+    atGate: said('GATE_WAITING'),
+  });
   const planning = said('PHASE') === 'plan';
-  const stepping = said('HAS_STEP') === 'true' && !blocked && said('AT_CHECKPOINT') !== 'true';
-  const onBranch = said('ON_BRANCH') === 'true' && said('PENDING') !== '0';
+  const stepping = said('HAS_STEP') === 'true' && !blocked && said('AT_CHECKPOINT') !== 'true' && !idle;
+  const onBranch = said('ON_BRANCH') === 'true' && said('PENDING') !== '0' && !idle;
   const reads = planning || stepping;
   const works = reads || onBranch;
   outputs.reads_source = reads ? 'true' : 'false';
   outputs.works = works ? 'true' : 'false';
   outputs.unblocked = blocked ? 'false' : 'true';
+  outputs.released_nothing = idle ? 'true' : 'false';
   if (works) return { outputs, notices: [] };
+  if (idle) {
+    return {
+      outputs,
+      notices: [
+        'This approval released nothing - no checkpoint was waiting - so no successor is dispatched and no step runs',
+      ],
+    };
+  }
   return { outputs, notices: ['This run has no work to do, so nothing is sized and no model is called'] };
 }
 
@@ -1147,6 +1173,7 @@ async function readPlan({ github, owner, repo, env }) {
     release_ref: '',
     requested_by: '',
     held: '',
+    gate_waiting: '',
   };
 
   if (String(env.COMMAND ?? '') === 'resume') {
@@ -1187,7 +1214,12 @@ async function readPlan({ github, owner, repo, env }) {
     release_ref: out.releasedRef ?? '',
     requested_by: out.requestedBy ?? '',
   });
-  return { outputs };
+  if (!out.hasStep || out.atCheckpoint || !isApprove(env.COMMAND)) {
+    return { outputs };
+  }
+  const gate = await gateWaiting({ github, owner, repo, prNumber: env.PR_NUMBER, botLogin: env.BOT_LOGIN });
+  outputs.gate_waiting = gate.waiting ? 'true' : 'false';
+  return { outputs, notices: gate.unreadable ? [gate.unreadable] : [] };
 }
 
 const LOGIN = /^[A-Za-z0-9-[\]]+$/;
