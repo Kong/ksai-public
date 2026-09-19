@@ -41,7 +41,13 @@ const OUTPUT_CONTRACT = `7. Emit your final message as exactly one fenced \`\`\`
 
    \`\`\`json
    {
-     "summary": "<markdown overview: verdict table, a short summary, Additional Risk notes>",
+     "verdict": {
+       "scope": "<what the diff covers, one line>",
+       "mandate": "<the mandate you reviewed under>",
+       "findings": "<count per severity, like \`1 Medium, 2 Low\`, or \`None\`>",
+       "findings_audit": "<what step 3 did>"
+     },
+     "assessment": ["<overall assessment>", "<the Additional Risk pass>"],
      "findings": [
        {
          "path": "<repo-relative file path>",
@@ -50,11 +56,17 @@ const OUTPUT_CONTRACT = `7. Emit your final message as exactly one fenced \`\`\`
          "side": "RIGHT",
          "severity": "Critical | High | Medium | Low",
          "tag": "<a format-policy tag, e.g. bug, risk, nit>",
-         "body": "<markdown explanation; add a fenced code or \`\`\`suggestion fix when confident>"
+         "body": ["<markdown explanation>", "\`\`\`suggestion", "<the replacement>", "\`\`\`"]
        }
      ]
    }
    \`\`\`
+
+   **No value holds a line break.** \`body\` and \`assessment\` are arrays, one element per
+   line, and the trusted runner joins them with real newlines. The verdict table is
+   written for you from the four \`verdict\` cells; never write the table yourself and
+   never send a pipe row as text. A newline escape inside a string does not survive
+   every engine, and an array needs none - so a string that carries one is refused.
 
    Field rules:
    - \`line\`/\`side\`: for added or changed code use "RIGHT" and the line number in the
@@ -64,36 +76,18 @@ const OUTPUT_CONTRACT = `7. Emit your final message as exactly one fenced \`\`\`
      inline; a finding whose location is outside the diff still belongs in \`findings\`
      (the publisher folds it into the summary rather than dropping it).
    - Put every concrete issue in \`findings\`; do not list individual issues inside
-     \`summary\`. Output nothing outside the single \`\`\`json block.
-   - \`summary\` is 120 words or fewer: the verdict table, then at most three sentences
-     of overall assessment, then one sentence for the Additional Risk pass. No
-     per-finding detail, no restatement of the diff, no account of how you reviewed
-     it (what you grepped, read, or could not verify).
-   - The verdict table opens \`summary\` and is a markdown table with this header, this
-     separator row and these four rows, in this order and with no rows added or removed:
-
-     | Check | Result |
-     | :--- | :--- |
-     | Scope | <what the diff covers, one line> |
-     | Mandate | <the mandate you reviewed under> |
-     | Findings | <count per severity, like \`1 Medium, 2 Low\`, or \`None\`> |
-     | Findings audit | <what step 3 did> |
-
-     Write real line breaks between those rows, and between the lines of every fence in
-     \`body\`. A bare \`n\` where the break belongs, as in \`| Check | Result |n| :--- |\`
-     or \`suggestionnconst x = 1\`, is a lost escape and the submission is refused.
-
-     Write it as a table. A row on its own line, outside a table, is not this table:
-     \`Findings audit | Completed\` is the text of one cell pair, never a sentence in the
-     prose. Emit the header and the separator row even when a cell is empty, or the
-     reader renders one run of pipes instead of a report.
-
-     The submission is refused unless those six lines open \`summary\` with two cells
-     each: the header, the rule, then Scope, Mandate, Findings and Findings audit under
-     their own names. A cell whose text carries a \`|\` escapes it as \`\\|\`, or it opens
-     a cell the row has no header for. Never repeat a column to fill the row.
+     \`verdict\` or \`assessment\`. Output nothing outside the single \`\`\`json block.
+   - \`verdict\` and \`assessment\` together are 120 words or fewer: the four cells, then
+     at most three sentences of overall assessment, then one sentence for the Additional
+     Risk pass. No per-finding detail, no restatement of the diff, no account of how you
+     reviewed it (what you grepped, read, or could not verify).
+   - Every \`verdict\` cell is one line of plain text. A pipe inside a cell is escaped for
+     you, so write the text and nothing about the table around it.
+   - \`assessment\` holds one to four paragraphs, each its own array element.
    - \`body\` is 80 words or fewer of prose, one paragraph, not counting a code block,
-     per the format policy's Length rules.
+     per the format policy's Length rules. It is an array: the prose is one element, and
+     a fence is the opening element, one element per line of the replacement, then the
+     closing element.
    - A code fix belongs in a \`\`\`suggestion fence and no other: only that one renders an
      Apply button, and any other fence leaves the author retyping the change by hand.
      GitHub replaces exactly the anchored lines - \`start_line\` through \`line\` - with the
@@ -105,7 +99,7 @@ const OUTPUT_CONTRACT = `7. Emit your final message as exactly one fenced \`\`\`
      replacement that is itself markdown holding a \`\`\` block needs \`\`\`\`suggestion and
      \`\`\`\`. A three-backtick suggestion ends at the first bare \`\`\` inside it, which
      truncates the fix and renders the rest of the comment as code.
-   - Write both fields in ASD-STE100 Simplified Technical English: one idea per
+   - Write every field in ASD-STE100 Simplified Technical English: one idea per
      sentence, 20 words or fewer, active voice, present tense, one term for one thing.
      Identifiers, code and paths are exempt.`;
 
@@ -118,8 +112,8 @@ const outputContractFor = (transport) => transport === 'tool' ? OUTPUT_CONTRACT.
   '7. Emit your final message as exactly one fenced ```json block matching this contract:',
   '7. Call `submit_review_result`. Pass its `submission` argument an object matching this contract:',
 ).replace(
-  'Put every concrete issue in `findings`; do not list individual issues inside\n     `summary`. Output nothing outside the single ```json block.',
-  'Put every concrete issue in `findings`; do not list individual issues inside\n     `summary`. After the tool accepts the result, end the turn without repeating it.',
+  'Put every concrete issue in `findings`; do not list individual issues inside\n     `verdict` or `assessment`. Output nothing outside the single ```json block.',
+  'Put every concrete issue in `findings`; do not list individual issues inside\n     `verdict` or `assessment`. After the tool accepts the result, end the turn without repeating it.',
 ) : OUTPUT_CONTRACT;
 
 const AUDIT_MINUTES = 5;

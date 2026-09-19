@@ -1,6 +1,6 @@
 const fs = require('node:fs');
 
-const { LIMITS, auditProblem, findingProblem } = require('./review-pipeline.cjs');
+const { LIMITS, auditProblem, findingProblem, wireProblem, fromWire, CELL_LIMIT, LINE_LIMIT, ASSESSMENT_LIMIT, ASSESSMENT_CHARS, BODY_CHARS } = require('./review-pipeline.cjs');
 
 const TOOL_NAME = 'submit_review_result';
 const STRUCTURED_EVENT = 'ksai_structured_result';
@@ -99,10 +99,17 @@ function single(finding) {
   return rest;
 }
 
-/** normalized answers the submission as it is held and published, with each finding's own shape settled. */
+/**
+ * normalized answers the submission as it is held and published.
+ *
+ * `fromWire` joins each body's lines and renders the verdict table; `single` settles a one-line
+ * finding's own shape. It is idempotent, so a submission read back from the held file normalizes
+ * to itself.
+ */
 function normalized(kind, submission) {
-  if (kind !== 'final' || !submission || typeof submission !== 'object' || Array.isArray(submission) || !Array.isArray(submission.findings)) return submission;
-  return { ...submission, findings: submission.findings.map(single) };
+  const rendered = fromWire(kind, submission);
+  if (kind !== 'final' || !rendered || typeof rendered !== 'object' || Array.isArray(rendered) || !Array.isArray(rendered.findings)) return rendered;
+  return { ...rendered, findings: rendered.findings.map((finding) => single(finding)) };
 }
 
 function submissionProblem(kind, submission, candidateIds = []) {
@@ -126,6 +133,8 @@ function submissionProblem(kind, submission, candidateIds = []) {
   const decisionProblem = submission.decisions?.find((decision) => !exact(decision, ['id', 'verdict', 'reason', 'finding']) || decision.finding && evidenceProblem(decision.finding.evidence));
   return decisionProblem ? 'unexpected audit decision field' : auditProblem(submission, candidateIds);
 }
+
+const bodySchema = { type: 'array', minItems: 1, maxItems: LINE_LIMIT, items: { type: 'string', maxLength: BODY_CHARS } };
 
 const locationSchema = {
   type: 'object',
@@ -173,7 +182,7 @@ const candidateSchema = {
     side: { type: 'string', enum: ['LEFT', 'RIGHT'] },
     severity: { type: 'string', enum: ['Critical', 'High', 'Medium', 'Low'] },
     tag: { type: 'string', minLength: 1, maxLength: 32 },
-    body: { type: 'string', minLength: 1, maxLength: 4000 },
+    body: bodySchema,
     root_cause: { type: 'string', minLength: 1, maxLength: 400 },
     evidence: evidenceSchema,
     verification_hypothesis: { type: 'string', maxLength: 4000 },
@@ -191,21 +200,39 @@ const finalFindingSchema = {
     side: { type: 'string', enum: ['LEFT', 'RIGHT'] },
     severity: { type: 'string', enum: ['Critical', 'High', 'Medium', 'Low'] },
     tag: { type: 'string', minLength: 1, maxLength: 32 },
-    body: { type: 'string', minLength: 1, maxLength: 4000 },
+    body: bodySchema,
   },
 };
 
+const verdictSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['scope', 'mandate', 'findings', 'findings_audit'],
+  properties: Object.fromEntries(['scope', 'mandate', 'findings', 'findings_audit'].map((key) => [key, { type: 'string', minLength: 1, maxLength: CELL_LIMIT }])),
+};
+
 function schemaFor(kind, candidateIds = []) {
+  if (kind === 'final') {
+    return {
+      type: 'object',
+      additionalProperties: false,
+      required: ['verdict', 'assessment', 'findings'],
+      properties: {
+        verdict: verdictSchema,
+        assessment: { type: 'array', minItems: 1, maxItems: ASSESSMENT_LIMIT, items: { type: 'string', minLength: 1, maxLength: ASSESSMENT_CHARS } },
+        findings: { type: 'array', items: finalFindingSchema },
+      },
+    };
+  }
   const common = {
     type: 'object',
     additionalProperties: false,
     required: ['summary', 'findings'],
     properties: {
       summary: kind === 'audit' ? { const: 'audit' } : { type: 'string', minLength: 1, maxLength: summaryLimit(kind) },
-      findings: { type: 'array', items: kind === 'final' ? finalFindingSchema : candidateSchema },
+      findings: { type: 'array', items: candidateSchema },
     },
   };
-  if (kind === 'final') return common;
   common.required.push('coverage');
   common.properties.coverage = { type: 'string', enum: ['complete', 'incomplete'] };
   if (kind === 'candidate') {
@@ -287,7 +314,7 @@ function plugin(env = process.env) {
             held = null;
             throw new Error('no attempts remain, so this review result is refused');
           }
-          const problem = !AGENTS.has(context?.agent) ? 'this agent cannot submit review results' : !/^ses_[a-zA-Z0-9]+$/.test(context?.sessionID ?? '') ? 'review result has no valid session' : submissionProblem(kind, args?.submission, candidateIds);
+          const problem = !AGENTS.has(context?.agent) ? 'this agent cannot submit review results' : !/^ses_[a-zA-Z0-9]+$/.test(context?.sessionID ?? '') ? 'review result has no valid session' : wireProblem(kind, args?.submission) || submissionProblem(kind, normalized(kind, args?.submission), candidateIds);
           const bytes = canonical(args?.submission);
           if (problem || !bytes || Buffer.byteLength(bytes) > LIMITS.outputBytes) {
             return reject(problem || 'review result exceeds its byte bound');
@@ -346,7 +373,7 @@ function submitted({ file, events, kind, candidateIds = [] }) {
   const encoded = canonical(normalized(kind, input));
   if (!encoded) return { status: 'invalid', text: null };
   if (Buffer.byteLength(encoded) > LIMITS.outputBytes) return { status: 'oversized', text: null };
-  if (submissionProblem(kind, input, candidateIds)) return { status: 'invalid', text: null };
+  if (wireProblem(kind, input) || submissionProblem(kind, normalized(kind, input), candidateIds)) return { status: 'invalid', text: null };
   let held;
   let stat;
   try {
@@ -367,11 +394,11 @@ function structuredSubmission({ events, kind, candidateIds = [] }) {
   if (marked.length !== 1) return { status: 'duplicate', text: null };
   const event = marked[0];
   if (event.result === undefined) return { status: event.failure || 'missing', text: null };
-  const encoded = canonical(event.result);
+  const encoded = canonical(normalized(kind, event.result));
   if (!encoded) return { status: 'invalid', text: null };
   if (Buffer.byteLength(encoded) > LIMITS.outputBytes) return { status: 'oversized', text: null };
-  if (submissionProblem(kind, event.result, candidateIds)) return { status: 'invalid', text: null };
+  if (wireProblem(kind, event.result) || submissionProblem(kind, normalized(kind, event.result), candidateIds)) return { status: 'invalid', text: null };
   return { status: 'accepted', text: encoded };
 }
 
-module.exports = { TOOL_NAME, STRUCTURED_EVENT, KINDS, ENV_KEYS, schemaFor, submissionProblem, finalFindingProblem, plugin, submitted, structuredSubmission };
+module.exports = { TOOL_NAME, STRUCTURED_EVENT, KINDS, ENV_KEYS, schemaFor, submissionProblem, wireProblem, normalized, finalFindingProblem, plugin, submitted, structuredSubmission };
