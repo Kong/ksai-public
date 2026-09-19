@@ -13,7 +13,6 @@ const {
   renderUndispatched,
   remainingOf,
   reportOf,
-  stopThroughControlPlane,
   stopsHere,
 } = require('./continue.cjs');
 const { finish } = require('./finish.cjs');
@@ -77,12 +76,27 @@ async function say({ github, owner, repo, target, notice, request, env, warnings
   }
 }
 
+function reportTo({ core, env, workRef, report, fetch, pause }) {
+  return continueThroughControlPlane({
+    endpoint: env.CONTINUE_ENDPOINT,
+    workRef,
+    issueNumber: env.ISSUE_NUM,
+    phase: env.PHASE,
+    remaining: remainingOf(env),
+    handsOff: env.HANDS_OFF,
+    report,
+    env,
+    mint: (audience) => core.getIDToken(audience),
+    secret: (token) => core.setSecret(token),
+    fetch,
+    pause,
+  });
+}
+
 async function dispatchNext({ github, core, owner, repo, env, fetch: call = globalThis.fetch, pause }) {
   const outputs = {
     stops_here: '',
-    next_run: '',
-    next_seal: '',
-    owed: '',
+    successor: '',
   };
   const answer = (started) => {
     outputs.stops_here = stopsHere({ handsOff: env.HANDS_OFF, started });
@@ -92,10 +106,13 @@ async function dispatchNext({ github, core, owner, repo, env, fetch: call = glob
   const report = reportOf(env);
   const remaining = remainingOf(env);
 
-  const waiting = () => ({
+  const waiting = (unheard = '') => ({
     outputs: answer(false),
     notices: [`not dispatching: this run is waiting for a person (${report.reason || 'the control plane said so'})`],
-    warnings: [],
+    warnings:
+      unheard === ''
+        ? []
+        : [`the control plane did not hear that this run waits for a person, so it may start the next run anyway: ${unheard}`],
   });
 
   const stopped = async (verdict) => {
@@ -112,6 +129,8 @@ async function dispatchNext({ github, core, owner, repo, env, fetch: call = glob
       await say({ github, owner, repo, target, notice, request, env, warnings, fetch: call });
     } else if (notice) {
       warnings.push(`the flow stopped and there was nowhere to say so: ${notice}`);
+    } else if (verdict.reason !== 'finished') {
+      warnings.push(`the chain stopped for a reason this runner cannot say on the page: ${verdict.reason}`);
     }
     return { outputs: answer(false), notices, warnings };
   };
@@ -134,43 +153,18 @@ async function dispatchNext({ github, core, owner, repo, env, fetch: call = glob
     return undispatched('the ticket this run is about is not a key the successor could be handed');
   }
 
-  const through = await continueThroughControlPlane({
-    endpoint: env.CONTINUE_ENDPOINT,
-    workRef,
-    issueNumber: env.ISSUE_NUM,
-    phase: env.PHASE,
-    remaining,
-    handsOff: env.HANDS_OFF,
-    report,
-    env,
-    mint: (audience) => core.getIDToken(audience),
-    secret: (token) => core.setSecret(token),
-    fetch: call,
-    pause,
-  });
-  if (through.outcome === 'dispatched' && report.outcome === 'waiting') {
-    const unwanted = await stopSuccessor({
-      github,
-      core,
-      owner,
-      repo,
-      env: { ...env, NEXT_RUN: String(through.run ?? ''), NEXT_SEAL: String(through.seal ?? ''), OWED: '' },
-      fetch: call,
-    });
-    const held = waiting();
-    return { ...held, notices: [...held.notices, ...unwanted.notices], warnings: unwanted.warnings };
-  }
+  const through = await reportTo({ core, env, workRef, report, fetch: call, pause });
   if (through.outcome === 'dispatched') {
-    outputs.next_run = String(through.run ?? '');
-    outputs.next_seal = String(through.seal ?? '');
+    outputs.successor = 'asked';
+    const named = through.run === '' ? '' : ` ${through.run}`;
     return {
       outputs: answer(true),
-      notices: ['the control plane started the next run, with the work this job carries'],
+      notices: [`the control plane started the next run${named}, with the work this job carries`],
       warnings: [],
     };
   }
   if (through.outcome === 'owed') {
-    outputs.owed = 'true';
+    outputs.successor = 'asked';
     return {
       outputs: answer(false),
       notices: [`the control plane owes the next run and starts it again itself: ${through.reason}`],
@@ -178,8 +172,9 @@ async function dispatchNext({ github, core, owner, repo, env, fetch: call = glob
     };
   }
   if (through.outcome === 'stopped') return stopped(through);
-  if (through.outcome === 'waiting') return waiting();
-  if (report.outcome === 'waiting') return waiting();
+  if (through.outcome === 'waiting' || report.outcome === 'waiting') {
+    return waiting(through.outcome === 'failed' ? through.reason : '');
+  }
   if (!decidesLocally(env)) {
     return {
       outputs: answer(false),
@@ -611,55 +606,21 @@ async function publishRunFailed({ github, owner, repo, env, fetch = globalThis.f
   return { notices: [`reported the run as incomplete (watchdog fired: ${fired})`] };
 }
 
-async function stopSuccessor({ github, core = null, owner, repo, env, fetch: call = globalThis.fetch }) {
-  const asked = String(env.NEXT_RUN ?? '').trim();
-  if (asked === '' && env.OWED === 'true') {
-    const held = await stopThroughControlPlane({
-      endpoint: env.CONTINUE_ENDPOINT,
-      owed: true,
-      env,
-      mint: (audience) => core.getIDToken(audience),
-      secret: (token) => core.setSecret(token),
-      fetch: call,
-    });
-    if (held.outcome === 'held') {
-      return { notices: ['the control plane holds this chain for the person this step stopped for'], warnings: [] };
-    }
-    return {
-      notices: [],
-      warnings: [`the control plane could not hold this chain, so it may start the next run into the same wall: ${held.reason}`],
-    };
+async function stopSuccessor({ core = null, env, fetch: call = globalThis.fetch, pause }) {
+  const report = { ...reportOf(env), outcome: 'waiting', reason: 'blocked' };
+  const workRef = workRefFor(String(env.JIRA_KEY ?? '').trim());
+  const heard = await reportTo({ core, env, workRef, report, fetch: call, pause });
+  if (heard.outcome === 'waiting') {
+    return { notices: ['the control plane holds this chain for the person this step stopped for'], warnings: [] };
   }
-  if (!/^\d{1,15}$/.test(asked)) return { notices: [], warnings: [] };
-  const run = Number(asked);
-  if (!Number.isSafeInteger(run) || run === 0) return { notices: [], warnings: [] };
-
-  const stopped = {
-    notices: [`stopped run ${run}, which this one started before this step stopped for a decision only a human can make`],
-    warnings: [],
-  };
-  const notStopped = (why) => ({
+  if (heard.outcome === 'stopped') {
+    return { notices: [`the chain had already stopped: ${heard.reason}`], warnings: [] };
+  }
+  const why = heard.reason === '' ? `it answered ${heard.outcome}` : heard.reason;
+  return {
     notices: [],
-    warnings: [`the run this one had already started could not be stopped, so it will meet the same wall: ${why}`],
-  });
-  const through = await stopThroughControlPlane({
-    endpoint: env.CONTINUE_ENDPOINT,
-    run: asked,
-    seal: env.NEXT_SEAL,
-    env,
-    mint: (audience) => core.getIDToken(audience),
-    secret: (token) => core.setSecret(token),
-    fetch: call,
-  });
-  if (through.outcome === 'stopped') return stopped;
-  if (through.outcome === 'failed') return notStopped(through.reason);
-
-  try {
-    await github.rest.actions.cancelWorkflowRun({ owner, repo, run_id: run });
-  } catch (refused) {
-    return notStopped(refused?.message ?? 'GitHub said nothing');
-  }
-  return stopped;
+    warnings: [`the control plane did not hear that this step stopped for a person, so the next run may meet the same wall: ${why}`],
+  };
 }
 
 module.exports = {

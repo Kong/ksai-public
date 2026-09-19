@@ -5505,31 +5505,28 @@ runs:
         set -euo pipefail
         node "${SCRIPTS}/ksai/preserve-refused.mjs"
 
-    - name: Stop the run this one started when this step stopped for a human
+    - name: Tell the control plane this step stopped for a human
       id: stop_successor
       if: >-
-        ${{ always() && (steps.dispatch.outputs.next_run != '' || steps.dispatch.outputs.owed == 'true') &&
+        ${{ always() && steps.dispatch.outputs.successor == 'asked' &&
         (steps.publish.outputs.status == 'blocked' || steps.publish_direct.outputs.status == 'blocked' ||
         steps.record.outputs.status == 'blocked' || steps.record_fix.outputs.status == 'blocked' ||
         steps.record_do.outputs.status == 'blocked') }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
-        NEXT_RUN: ${{ steps.dispatch.outputs.next_run }}
-        NEXT_SEAL: ${{ steps.dispatch.outputs.next_seal }}
-        OWED: ${{ steps.dispatch.outputs.owed }}
         CONTINUE_ENDPOINT: ${{ inputs.fleet_dials_endpoint }}
+        PHASE: ${{ steps.size.outputs.phase }}
+        ISSUE_NUM: ${{ steps.subject.outputs.number }}
+        JIRA_KEY: ${{ steps.subject.outputs.jira_key || steps.context.outputs.jira_key }}
+        HANDS_OFF: ${{ steps.phase.outputs.hands_off }}
+        REMAINING: ${{ steps.read_plan.outputs.remaining }}
+        RELEASED_REMAINING: ${{ steps.release_checkpoint.outcome == 'success' && steps.release_checkpoint.outputs.remaining || '' }}
+        TOTAL: ${{ steps.read_plan.outputs.total }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:
-        github-token: ${{ github.token }}
         script: |
           const { stopSuccessor } = require(`${process.env.SCRIPTS}/ksai/publish.cjs`);
-          const { notices, warnings } = await stopSuccessor({
-            github,
-            core,
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            env: process.env,
-          });
+          const { notices, warnings } = await stopSuccessor({ core, env: process.env });
           for (const line of notices) core.info(line);
           for (const line of warnings) core.warning(line);
 

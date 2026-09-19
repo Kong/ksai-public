@@ -5,7 +5,7 @@ const { setTimeout: pauseFor } = require('node:timers/promises');
 const { scrub } = require('./plan.cjs');
 const { asAlert } = require('../lib/select-arm.cjs');
 const { counted, plural } = require('../lib/text.cjs');
-const { mintedId, postTo, reachControlPlane, unreached } = require('../lib/control-plane.cjs');
+const { postTo, reachControlPlane, unreached } = require('../lib/control-plane.cjs');
 const { MAX_ATTEMPTS } = require('../lib/write-record.cjs');
 
 const MAX_STALL = 3;
@@ -96,7 +96,7 @@ function planPosition(env) {
   const total = readCount(env?.TOTAL);
   const remaining = readCount(remainingOf(env));
   return {
-    step: total === null || remaining === null ? '' : String(total - remaining + 1),
+    step: total === null || remaining === null ? '' : String(Math.min(total, total - remaining + 1)),
     total: total === null ? '' : String(total),
   };
 }
@@ -140,6 +140,9 @@ function renderStop({ reason = null, stall = null, attempt = null, remaining = n
       'That is the hard ceiling on one chain rather than a failure of any single step. ' +
       'Re-triggering the bot on this issue starts a fresh chain from the first unchecked box'
     );
+  }
+  if (reason === 'unrecoverable') {
+    return renderUndispatched({ reason: 'the control plane could not start it again', remaining, triggerPhrase });
   }
   return null;
 }
@@ -294,8 +297,6 @@ const CONTINUE_TIMEOUT = 30000;
 
 const CONTINUE_HOLD = 25000;
 
-const STOPS = Object.freeze(['finished', 'stalled', 'attempts', 'plan-not-retried']);
-
 async function bodyOf(answer) {
   try {
     return (await answer.json()) ?? {};
@@ -304,13 +305,21 @@ async function bodyOf(answer) {
   }
 }
 
-async function whyOf(answer) {
+async function refusalOf(answer) {
+  let text = '';
   try {
-    const said = String(await answer.text()).trim().split('\n')[0].slice(0, 200);
-    return said === '' ? '' : `: ${said}`;
+    text = String(await answer.text());
   } catch {
-    return '';
+    return { owed: false, why: '' };
   }
+  let told = {};
+  try {
+    told = JSON.parse(text) ?? {};
+  } catch {
+    told = {};
+  }
+  const said = String(typeof told.error === 'string' ? told.error : text).trim().split('\n')[0].slice(0, 200);
+  return { owed: told.owed === true, why: said === '' ? '' : `: ${said}` };
 }
 
 async function continueThroughControlPlane({
@@ -353,7 +362,6 @@ async function continueThroughControlPlane({
 
   let last = '';
   let busy = false;
-  let owed = false;
   for (let tries = 0; tries < CONTINUE_ATTEMPTS; tries += 1) {
     if (tries > 0) await pause(busy ? CONTINUE_HOLD : 2 ** tries * 1000);
     busy = false;
@@ -369,8 +377,8 @@ async function continueThroughControlPlane({
     if (answer.ok) {
       const told = await bodyOf(answer);
       if (told?.waiting === true) return { outcome: 'waiting', reason: '' };
-      const stop = String(told?.stopped ?? '');
-      if (STOPS.includes(stop)) {
+      const stop = typeof told?.stopped === 'string' ? told.stopped : '';
+      if (stop !== '') {
         return {
           outcome: 'stopped',
           reason: stop,
@@ -380,64 +388,23 @@ async function continueThroughControlPlane({
         };
       }
       const run = readCount(told?.run_id);
-      return {
-        outcome: 'dispatched',
-        reason: '',
-        run: run === null || run === 0 ? '' : String(run),
-        seal: mintedId(told?.seal),
-      };
+      return { outcome: 'dispatched', reason: '', run: run === null || run === 0 ? '' : String(run) };
+    }
+    const refused = await refusalOf(answer);
+    if (refused.owed) {
+      return { outcome: 'owed', reason: `the control plane answered ${answer.status}${refused.why}` };
     }
     if (answer.status === 409) {
       busy = true;
     } else if (answer.status < 500) {
       return {
         outcome: 'failed',
-        reason: `the control plane refused to start the next run with ${answer.status}${await whyOf(answer)}`,
+        reason: `the control plane refused to start the next run with ${answer.status}${refused.why}`,
       };
     }
-    owed = owed || answer.status === 502;
-    last = `the control plane answered ${answer.status}`;
+    last = `the control plane answered ${answer.status}${refused.why}`;
   }
-  const reason = `${last}, on the last of ${CONTINUE_ATTEMPTS} attempts`;
-  return { outcome: owed ? 'owed' : 'failed', reason };
-}
-
-async function stopThroughControlPlane({
-  endpoint = '',
-  run = '',
-  seal = '',
-  owed = false,
-  env = process.env,
-  mint = async (_audience = '') => '',
-  secret = (_token = '') => {},
-  fetch: call = globalThis.fetch,
-  timeout = CONTINUE_TIMEOUT,
-} = {}) {
-  const named = String(endpoint ?? '').trim();
-  const sealed = mintedId(seal);
-  const successor = readCount(run);
-  const holding = owed === true && successor === null && sealed === '';
-  if (named === '') return { outcome: 'unheld', reason: '' };
-  if (!holding && (sealed === '' || successor === null || successor === 0)) {
-    return { outcome: 'failed', reason: 'the control plane sealed no run for this one to stop' };
-  }
-
-  const { base, token, failure } = await reachControlPlane({ endpoint: named, env, mint, secret });
-  if (failure) return { outcome: 'failed', reason: failure };
-
-  let answer;
-  try {
-    answer = await postTo(call, `${base}/run/continue/stop`, {
-      token,
-      body: JSON.stringify(holding ? {} : { run_id: String(successor), seal: sealed }),
-      timeout,
-    });
-  } catch (error) {
-    return { outcome: 'failed', reason: unreached(error) };
-  }
-
-  if (answer.ok) return { outcome: holding ? 'held' : 'stopped', reason: '' };
-  return { outcome: 'failed', reason: `the control plane answered ${answer.status}${await whyOf(answer)}` };
+  return { outcome: 'failed', reason: `${last}, on the last of ${CONTINUE_ATTEMPTS} attempts` };
 }
 
 module.exports = {
@@ -453,15 +420,14 @@ module.exports = {
   progress,
   shouldContinue,
   decideContinuation,
+  decidesLocally,
   stopsHere,
   reportOf,
   remainingOf,
-  decidesLocally,
   renderStop,
   renderUndispatched,
   resolveRef,
   normalizeInputs,
   dispatchSuccessor,
   continueThroughControlPlane,
-  stopThroughControlPlane,
 };
