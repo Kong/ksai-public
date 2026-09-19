@@ -789,8 +789,11 @@ inputs:
   continuation_workflow:
     description: >-
       the caller's own workflow filename, e.g. `ksai.yml`. Set it to turn on the continuation chain: one run
-      does one plan step, and this is what the run dispatches to start the next. The workflow must declare
-      `workflow_dispatch` with the continuation inputs below and the job needs `actions: write`.
+      does one plan step. Where `fleet_dials_endpoint` names a control plane the repository is enrolled with,
+      that control plane decides whether the chain goes on and starts the next run itself. Otherwise this is
+      what the run dispatches to start the next: the
+      workflow must declare `workflow_dispatch` with the continuation inputs below and the job needs
+      `actions: write`.
     required: false
     default: ""
   continuation_attempt:
@@ -3191,6 +3194,7 @@ runs:
       env:
         WORKFLOW: ${{ inputs.continuation_workflow }}
         CONTINUE_ENDPOINT: ${{ inputs.fleet_dials_endpoint }}
+        RECORD_ID: ${{ inputs.record_id }}
         PHASE: ${{ steps.phase.outputs.phase }}
         ISSUE_NUM: ${{ steps.subject.outputs.number }}
         KSAI_ASK: ${{ inputs.ask }}
@@ -5485,6 +5489,8 @@ runs:
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         NEXT_RUN: ${{ steps.dispatch.outputs.next_run }}
+        NEXT_SEAL: ${{ steps.dispatch.outputs.next_seal }}
+        CONTINUE_ENDPOINT: ${{ inputs.fleet_dials_endpoint }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:
         github-token: ${{ github.token }}
@@ -5492,6 +5498,7 @@ runs:
           const { stopSuccessor } = require(`${process.env.SCRIPTS}/ksai/publish.cjs`);
           const { notices, warnings } = await stopSuccessor({
             github,
+            core,
             owner: context.repo.owner,
             repo: context.repo.repo,
             env: process.env,

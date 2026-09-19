@@ -10,6 +10,7 @@ const {
   dispatchSuccessor,
   renderStop,
   renderUndispatched,
+  stopThroughControlPlane,
   stopsHere,
 } = require('./continue.cjs');
 const { finish } = require('./finish.cjs');
@@ -74,22 +75,14 @@ async function dispatchNext({ github, core, owner, repo, env, fetch: call = glob
   const outputs = {
     stops_here: '',
     next_run: '',
+    next_seal: '',
   };
   const answer = (started) => {
     outputs.stops_here = stopsHere({ handsOff: env.HANDS_OFF, started });
     return outputs;
   };
 
-  const verdict = decideContinuation({
-    phase: env.PHASE,
-    remaining: env.REMAINING,
-    prevRemaining: env.PREV_REMAINING,
-    prevStall: env.STALL,
-    attempt: env.ATTEMPT,
-    handsOff: env.HANDS_OFF,
-  });
-
-  if (!verdict.go) {
+  const stopped = async (verdict) => {
     const notices = [`not dispatching: ${verdict.reason}`];
     const warnings = [];
     const notice = renderStop({ ...verdict, remaining: env.REMAINING, triggerPhrase: env.TRIGGER });
@@ -100,7 +93,7 @@ async function dispatchNext({ github, core, owner, repo, env, fetch: call = glob
       warnings.push(`the flow stopped and there was nowhere to say so: ${notice}`);
     }
     return { outputs: answer(false), notices, warnings };
-  }
+  };
 
   const undispatched = async (reason) => {
     const warnings = [`the next run was not started, so this flow stops after this step: ${reason}`];
@@ -123,17 +116,21 @@ async function dispatchNext({ github, core, owner, repo, env, fetch: call = glob
   const through = await continueThroughControlPlane({
     endpoint: env.CONTINUE_ENDPOINT,
     workRef,
-    attempt: String(verdict.attempt + 1),
-    stall: String(verdict.stall),
-    prevRemaining: verdict.remainingForSuccessor,
+    issueNumber: env.ISSUE_NUM,
+    recordId: env.RECORD_ID,
+    phase: env.PHASE,
+    remaining: env.REMAINING,
+    handsOff: env.HANDS_OFF,
     env,
     mint: (audience) => core.getIDToken(audience),
     secret: (token) => core.setSecret(token),
     fetch: call,
   });
   if (through.outcome === 'failed') return undispatched(through.reason);
+  if (through.outcome === 'stopped') return stopped(through);
   if (through.outcome === 'dispatched') {
     outputs.next_run = String(through.run ?? '');
+    outputs.next_seal = String(through.seal ?? '');
     return {
       outputs: answer(true),
       notices: ['the control plane started the next run, with the work this job carries'],
@@ -145,6 +142,16 @@ async function dispatchNext({ github, core, owner, repo, env, fetch: call = glob
       'no control plane holds the work for this ticket, and a run started without its record could not read the work item',
     );
   }
+
+  const verdict = decideContinuation({
+    phase: env.PHASE,
+    remaining: env.REMAINING,
+    prevRemaining: env.PREV_REMAINING,
+    prevStall: env.STALL,
+    attempt: env.ATTEMPT,
+    handsOff: env.HANDS_OFF,
+  });
+  if (!verdict.go) return stopped(verdict);
 
   const out = await dispatchSuccessor({
     github,
@@ -514,28 +521,38 @@ async function publishRunFailed({ github, owner, repo, env }) {
   return { notices: [`reported the run as incomplete (watchdog fired: ${fired})`] };
 }
 
-async function stopSuccessor({ github, owner, repo, env }) {
+async function stopSuccessor({ github, core = null, owner, repo, env, fetch: call = globalThis.fetch }) {
   const asked = String(env.NEXT_RUN ?? '').trim();
   if (!/^\d{1,15}$/.test(asked)) return { notices: [], warnings: [] };
   const run = Number(asked);
   if (!Number.isSafeInteger(run) || run === 0) return { notices: [], warnings: [] };
 
-  try {
-    await github.rest.actions.cancelWorkflowRun({ owner, repo, run_id: run });
-  } catch (refused) {
-    return {
-      notices: [],
-      warnings: [
-        `the run this one had already started could not be stopped, so it will meet the same wall: ${
-          refused?.message ?? 'GitHub said nothing'
-        }`,
-      ],
-    };
-  }
-  return {
+  const stopped = {
     notices: [`stopped run ${run}, which this one started before this step stopped for a decision only a human can make`],
     warnings: [],
   };
+  const notStopped = (why) => ({
+    notices: [],
+    warnings: [`the run this one had already started could not be stopped, so it will meet the same wall: ${why}`],
+  });
+  const through = await stopThroughControlPlane({
+    endpoint: env.CONTINUE_ENDPOINT,
+    run: asked,
+    seal: env.NEXT_SEAL,
+    env,
+    mint: (audience) => core.getIDToken(audience),
+    secret: (token) => core.setSecret(token),
+    fetch: call,
+  });
+  if (through.outcome === 'stopped') return stopped;
+  if (through.outcome === 'failed') return notStopped(through.reason);
+
+  try {
+    await github.rest.actions.cancelWorkflowRun({ owner, repo, run_id: run });
+  } catch (refused) {
+    return notStopped(refused?.message ?? 'GitHub said nothing');
+  }
+  return stopped;
 }
 
 module.exports = {

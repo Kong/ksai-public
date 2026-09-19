@@ -6,7 +6,7 @@ const { scrub } = require('./plan.cjs');
 const { asAlert } = require('../lib/select-arm.cjs');
 const { counted, plural } = require('../lib/text.cjs');
 const { MAX_ATTEMPTS } = require('../lib/write-record.cjs');
-const { bareEndpoint } = require('./control-plane.cjs');
+const { controlPlaneToken, unreached } = require('./control-plane.cjs');
 
 const MAX_STALL = 3;
 
@@ -249,13 +249,20 @@ const CONTINUE_TIMEOUT = 30000;
 
 const CONTINUE_HOLD = 25000;
 
-async function startedRun(answer) {
+const STOPS = Object.freeze(['finished', 'stalled', 'attempts', 'plan-not-retried']);
+
+const MINTED_SHAPE = /^[0-9a-f]{32}$/;
+
+const mintedId = (value) => {
+  const said = String(value ?? '').trim();
+  return MINTED_SHAPE.test(said) ? said : '';
+};
+
+async function bodyOf(answer) {
   try {
-    const said = await answer.json();
-    const run = readCount(said?.run_id);
-    return run === null || run === 0 ? '' : String(run);
+    return (await answer.json()) ?? {};
   } catch {
-    return '';
+    return {};
   }
 }
 
@@ -263,9 +270,11 @@ async function continueThroughControlPlane({
   endpoint = '',
   audience = 'ksai-cp',
   workRef = '',
-  attempt = '',
-  stall = '',
-  prevRemaining = '',
+  issueNumber = '',
+  recordId = '',
+  phase = '',
+  remaining = '',
+  handsOff = '',
   env = process.env,
   mint = async (_audience = '') => '',
   secret = (_token = '') => {},
@@ -274,32 +283,21 @@ async function continueThroughControlPlane({
   timeout = CONTINUE_TIMEOUT,
 } = {}) {
   const named = String(endpoint ?? '').trim();
-  if (named === '' || String(workRef ?? '') === '') return { outcome: 'unheld', reason: '' };
-  if (!bareEndpoint(named)) {
-    return { outcome: 'failed', reason: 'the control plane endpoint is not a bare https URL' };
-  }
-  if (!env.ACTIONS_ID_TOKEN_REQUEST_URL || !env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) {
-    return {
-      outcome: 'failed',
-      reason: 'this job holds no id-token: write, so it cannot ask the control plane for the next run',
-    };
-  }
+  const ref = String(workRef ?? '');
+  const issue = String(issueNumber ?? '');
+  if (named === '' || (ref === '' && issue === '')) return { outcome: 'unheld', reason: '' };
 
-  let token = '';
-  try {
-    token = String((await mint(audience)) ?? '');
-  } catch {
-    return { outcome: 'failed', reason: 'a token for the control plane could not be minted' };
-  }
-  if (token === '') return { outcome: 'failed', reason: 'the token endpoint answered with no token' };
-  secret(token);
+  const minted = await controlPlaneToken({ endpoint: named, audience, env, mint, secret });
+  if (minted.failure) return { outcome: 'failed', reason: minted.failure };
+  const { token } = minted;
 
-  const at = `${named.replace(/\/+$/, '')}/run/continue`;
+  const at = `${minted.base}/run/continue`;
   const body = JSON.stringify({
-    work_ref: String(workRef),
-    attempt: String(attempt),
-    stall: String(stall),
-    prev_remaining: String(prevRemaining ?? ''),
+    ...(ref !== '' ? { work_ref: ref } : { issue_number: issue }),
+    record_id: mintedId(recordId),
+    phase: String(phase ?? '').trim() || 'step',
+    remaining: String(readCount(remaining) ?? ''),
+    hands_off: String(handsOff) === 'true' ? 'true' : '',
   });
 
   let last = '';
@@ -316,13 +314,32 @@ async function continueThroughControlPlane({
         body,
         signal: AbortSignal.timeout(timeout),
       });
-    } catch (unreached) {
-      last = `the control plane could not be reached: ${unreached?.cause?.code || unreached?.message || 'it said nothing'}`;
+    } catch (error) {
+      last = unreached(error);
       continue;
     }
 
-    if (answer.ok) return { outcome: 'dispatched', reason: '', run: await startedRun(answer) };
+    if (answer.ok) {
+      const told = await bodyOf(answer);
+      const stop = String(told?.stopped ?? '');
+      if (STOPS.includes(stop)) {
+        return { outcome: 'stopped', reason: stop, attempt: readCount(told.attempt) ?? 0, stall: readCount(told.stall) ?? 0 };
+      }
+      const run = readCount(told?.run_id);
+      return {
+        outcome: 'dispatched',
+        reason: '',
+        run: run === null || run === 0 ? '' : String(run),
+        seal: mintedId(told?.seal),
+      };
+    }
     if (answer.status === 404 || answer.status === 405) return { outcome: 'unheld', reason: '' };
+    if (answer.status === 410) {
+      return {
+        outcome: 'failed',
+        reason: 'the control plane can no longer read the record this run was started with, so it cannot count the chain',
+      };
+    }
     if (answer.status === 409) {
       busy = true;
     } else if (answer.status < 500) {
@@ -331,6 +348,42 @@ async function continueThroughControlPlane({
     last = `the control plane answered ${answer.status}`;
   }
   return { outcome: 'failed', reason: `${last}, on the last of ${CONTINUE_ATTEMPTS} attempts` };
+}
+
+async function stopThroughControlPlane({
+  endpoint = '',
+  audience = 'ksai-cp',
+  run = '',
+  seal = '',
+  env = process.env,
+  mint = async (_audience = '') => '',
+  secret = (_token = '') => {},
+  fetch: call = globalThis.fetch,
+  timeout = CONTINUE_TIMEOUT,
+} = {}) {
+  const named = String(endpoint ?? '').trim();
+  const sealed = mintedId(seal);
+  const successor = readCount(run);
+  if (named === '' || sealed === '' || successor === null || successor === 0) return { outcome: 'unheld', reason: '' };
+
+  const minted = await controlPlaneToken({ endpoint: named, audience, env, mint, secret });
+  if (minted.failure) return { outcome: 'failed', reason: minted.failure };
+
+  let answer;
+  try {
+    answer = await call(`${minted.base}/run/continue/stop`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${minted.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ run_id: String(successor), seal: sealed }),
+      signal: AbortSignal.timeout(timeout),
+    });
+  } catch (error) {
+    return { outcome: 'failed', reason: unreached(error) };
+  }
+
+  if (answer.ok) return { outcome: 'stopped', reason: '' };
+  if (answer.status === 404 || answer.status === 405) return { outcome: 'unheld', reason: '' };
+  return { outcome: 'failed', reason: `the control plane answered ${answer.status}` };
 }
 
 module.exports = {
@@ -353,4 +406,5 @@ module.exports = {
   normalizeInputs,
   dispatchSuccessor,
   continueThroughControlPlane,
+  stopThroughControlPlane,
 };

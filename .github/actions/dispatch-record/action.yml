@@ -5,9 +5,13 @@ description: >-
   workflow_dispatch allows.
 
   Nothing here is a secret. The caller is named by a GitHub Actions OIDC token whose repository and
-  run claims are signed by GitHub and cannot be changed from inside the job. The control plane binds a
-  record to the run that first reads it and answers only that run afterwards, so the gate and the job
-  that does the work can both read it and no other run can.
+  run claims are signed by GitHub and cannot be changed from inside the job. The control plane ties a
+  record to the run its dispatch started and answers only that run, so the gate and the job that does
+  the work can both read it and no other run can. A run asking for a record tied to another run, or to
+  none, or asking from a workflow other than `ksai-cp.yml` pinned to a commit or a release tag, is
+  refused with a 403 and fails at once, naming the reason the control plane gave. A run that asks
+  before the control plane has tied the record gets a 503 and asks again like any other failure that
+  can pass.
 
   A dispatch naming no record skips the read. One naming a record is read or the run fails, and nothing
   falls back to the dispatch inputs. The control plane sends a dispatch whose answer was lost again

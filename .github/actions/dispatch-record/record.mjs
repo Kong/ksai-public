@@ -55,10 +55,13 @@ const GUIDANCE_MAX = 4096;
 
 const WORK_ITEM_MAX = 16384;
 
+const TOLD_MAX = 300;
+
 const WHY_STATUS = Object.freeze({
   401: 'the control plane could not tell which run this is',
-  404: 'the control plane holds no readable record for this run - another run may already have read it, it may have expired, or this repository may not be enrolled',
-  503: 'the control plane could not reach its records',
+  403: 'the control plane refused this run its record',
+  404: 'the control plane holds no readable record for this run - it may have expired, or this repository may not be enrolled',
+  503: 'the control plane could not reach its records, or has not tied this record to a run yet',
 });
 
 const PR_SHAPE = /^[1-9][0-9]{0,9}$/;
@@ -155,6 +158,12 @@ const rest = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 
 const release = (answer) => Promise.resolve().then(() => answer.body?.cancel()).catch(() => {});
 
+const told = (answer) =>
+  Promise.resolve()
+    .then(() => answer.text())
+    .then((said) => text(said).replace(/\s+/g, ' ').trim().slice(0, TOLD_MAX), () => '')
+    .then((said) => said || 'it said nothing');
+
 /**
  * bare reports whether an endpoint is an https URL with a host and nothing a request would carry
  * past its path. The token goes out in a header, so a query, a fragment or credentials would put the
@@ -234,10 +243,13 @@ async function attempt({ url, audience, mint, secret, fetch, timeout }) {
     return { retry: `the control plane could not be reached: ${because(unreached)}`, asked: null };
   }
 
-  const why = WHY_STATUS[/** @type {401|404|503} */ (answer.status)] ?? `the control plane answered ${answer.status}`;
+  const why = WHY_STATUS[/** @type {401|403|404|503} */ (answer.status)] ?? `the control plane answered ${answer.status}`;
   if (passing(answer.status)) {
     await release(answer);
     return { retry: why, asked: waitAsked(answer) };
+  }
+  if (answer.status === 403) {
+    throw stopped(`${why}: ${await told(answer)}`);
   }
   if (!answer.ok) {
     await release(answer);
@@ -399,10 +411,10 @@ function sayable(value, limit) {
  * read; one naming a record is read, or this throws with the reason, and nothing falls back to the
  * dispatch inputs.
  *
- * The control plane binds a record to the run that first reads it, and sends a dispatch whose answer
- * was lost again under the same record. A run that carried on without reading it could be the second
- * run of that dispatch, doing the work twice, or a run answering a different question than the one
- * decided - so a record that cannot be read stops the run whatever the reason.
+ * The control plane sends a dispatch whose answer was lost again under the same record. A run that
+ * carried on without reading it could be the second run of that dispatch, doing the work twice, or a
+ * run answering a different question than the one decided - so a record that cannot be read stops the
+ * run whatever the reason.
  *
  * A failure that can pass - the token mint, the network, a body that did not parse, a 408, a 429 or a
  * 5xx - is tried again on the delays given, waiting longer where the control plane asks to, up to the
