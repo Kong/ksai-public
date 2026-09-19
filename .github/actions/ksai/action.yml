@@ -1285,8 +1285,8 @@ runs:
     - name: Read the dispatch record
       id: dispatch_record
       if: >-
-        ${{ steps.checkout_authz.outcome == 'success' && inputs.flow == 'implement' &&
-        inputs.record_id != '' }}
+        ${{ steps.checkout_authz.outcome == 'success' && inputs.record_id != '' &&
+        inputs.flow != 'test' && inputs.flow != 'test-publish' && inputs.flow != 'run' }}
       uses: ./_ksai/.github/actions/dispatch-record
       with:
         endpoint: ${{ inputs.fleet_dials_endpoint }}

@@ -411,11 +411,6 @@ function sayable(value, limit) {
  * read; one naming a record is read, or this throws with the reason, and nothing falls back to the
  * dispatch inputs.
  *
- * The control plane sends a dispatch whose answer was lost again under the same record. A run that
- * carried on without reading it could be the second run of that dispatch, doing the work twice, or a
- * run answering a different question than the one decided - so a record that cannot be read stops the
- * run whatever the reason.
- *
  * A failure that can pass - the token mint, the network, a body that did not parse, a 408, a 429 or a
  * 5xx - is tried again on the delays given, waiting longer where the control plane asks to, up to the
  * longest delay, and never past the budget: each read is cut to the time left, and a wait that would
