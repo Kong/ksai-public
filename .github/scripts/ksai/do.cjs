@@ -478,6 +478,13 @@ async function createPushedReceipt({
     return { recorded: false };
   }
   try {
+    const verification = (await github.rest.repos.getCommit({ owner, repo, ref: pushedShaOf(body) })).data?.commit
+      ?.verification;
+    if (verification?.verified !== false || verification?.reason !== 'unsigned') return { recorded: false };
+  } catch (error) {
+    core?.warning?.(`Could not read the head signature (${error?.message ?? error}), so the receipt is posted anyway.`);
+  }
+  try {
     await github.rest.issues.createComment({ owner, repo, issue_number: number, body });
     return { recorded: true };
   } catch (error) {
