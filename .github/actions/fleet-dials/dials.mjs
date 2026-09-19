@@ -37,6 +37,7 @@ export const PINNED = {
     between(0, 100000)(value) && Number(value) !== 1,
   triage_write: (/** @type {string} */ value) => value === 'off' || value === 'cp',
   report_rendering: WHERE,
+  run_tokens: WHERE,
 };
 
 /**

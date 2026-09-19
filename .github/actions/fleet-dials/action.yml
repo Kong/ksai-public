@@ -144,6 +144,14 @@ outputs:
       when it cannot answer. The run posts every one of them itself either way. Nothing is pinned
       here, because a repository moves by being served this dial.
     value: ${{ steps.dials.outputs.report_rendering }}
+  run_tokens:
+    description: >-
+      where a `ksai-cp.yml` run gets its GitHub tokens: `local` mints them with the App key the
+      caller passes, `shadow` does that and also asks the control plane for each one and revokes
+      what it answers at once, and `cp` asks the control plane alone. A caller that passes no key
+      asks the control plane whatever this says. Nothing is pinned here, because a repository moves
+      by being served this dial.
+    value: ${{ steps.dials.outputs.run_tokens }}
   catalog_path:
     description: >-
       the file the served model catalog was written to, or empty where the

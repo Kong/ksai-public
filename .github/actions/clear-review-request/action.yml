@@ -24,11 +24,21 @@ inputs:
       picks the fallback, and the step below refuses an empty value outright.
     required: true
   client-id:
-    description: "client id of the GitHub App to mint the withdrawal token from (not sensitive)"
-    required: true
+    description: "client id of the GitHub App to mint the withdrawal token from (not sensitive); unused when `token` is set"
+    required: false
+    default: ""
   private-key:
-    description: "private key of that same App"
-    required: true
+    description: "private key of that same App; unused when `token` is set"
+    required: false
+    default: ""
+  token:
+    description: >-
+      an App installation token to withdraw with instead of minting one, which is how a `ksai-cp.yml`
+      run on the control plane's tokens calls this. It has to hold members: read to resolve the team
+      and pull-requests: write to withdraw it, as the mint below asks for. Empty, the default, mints
+      one from `client-id` and `private-key`.
+    required: false
+    default: ""
   refused-actor:
     description: >-
       login to name in a refusal comment before withdrawing. Empty (the default) withdraws in
@@ -59,6 +69,7 @@ runs:
     # necessarily Kong, which is where the reviewer plugin is read from.
     - name: Mint org-read token
       id: token
+      if: ${{ inputs.token == '' }}
       uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
       with:
         owner: ${{ github.repository_owner }}
@@ -89,7 +100,7 @@ runs:
     - name: Withdraw the team's request
       shell: bash
       env:
-        GH_TOKEN: ${{ steps.token.outputs.token }}
+        GH_TOKEN: ${{ inputs.token || steps.token.outputs.token }}
         REPO: ${{ github.repository }}
         OWNER: ${{ github.repository_owner }}
         PR: ${{ inputs.pr_number }}
@@ -144,7 +155,7 @@ runs:
       if: ${{ inputs.refused-command-off == 'true' }}
       shell: bash
       env:
-        GH_TOKEN: ${{ steps.token.outputs.token }}
+        GH_TOKEN: ${{ inputs.token || steps.token.outputs.token }}
         REPO: ${{ github.repository }}
         PR: ${{ inputs.pr_number }}
       run: |
@@ -155,7 +166,7 @@ runs:
       if: ${{ inputs.refused-actor != '' && inputs.refused-command-off != 'true' }}
       shell: bash
       env:
-        GH_TOKEN: ${{ steps.token.outputs.token }}
+        GH_TOKEN: ${{ inputs.token || steps.token.outputs.token }}
         REPO: ${{ github.repository }}
         PR: ${{ inputs.pr_number }}
         ACTOR: ${{ inputs.refused-actor }}
