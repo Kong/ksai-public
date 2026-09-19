@@ -137,6 +137,13 @@ outputs:
       starts. Nothing is pinned here, because a repository moves onto control-plane
       decisions by being served this dial rather than by editing its own caller.
     value: ${{ steps.dials.outputs.triage_write }}
+  report_rendering:
+    description: >-
+      where a run's results are rendered: `local` on this runner, `shadow` on this runner and
+      compared with the control plane's answer, or `cp` by the control plane, with a minimal report
+      when it cannot answer. The run posts every one of them itself either way. Nothing is pinned
+      here, because a repository moves by being served this dial.
+    value: ${{ steps.dials.outputs.report_rendering }}
   catalog_path:
     description: >-
       the file the served model catalog was written to, or empty where the

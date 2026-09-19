@@ -5,6 +5,7 @@ const { ANSWERED, threadState } = require('./threads.cjs');
 const { marked } = require('./marker.cjs');
 const { scrub } = require('./plan.cjs');
 const { counted } = require('../lib/text.cjs');
+const { renderedNotice } = require('../lib/cp-render.cjs');
 
 const OVERRIDE_KIND = 'thread-overridden';
 
@@ -40,6 +41,17 @@ function renderOverride({ answered = false, triggerPhrase = null, prNumber = nul
   });
 }
 
+function renderedOverride({ answered, triggerPhrase, prNumber, command, ask, env, fetch }) {
+  return renderedNotice({
+    notice: { kind: 'thread_overridden', answered },
+    fields: { COMMAND: command, PR_NUMBER: prNumber, TRIGGER: triggerPhrase, KSAI_ASK: ask },
+    local: () => ({ body: renderOverride({ answered, triggerPhrase, prNumber, command, ask }) }),
+    what: 'the answer to this thread',
+    env,
+    fetch,
+  });
+}
+
 async function resolveOverriddenThreads({
   github = null,
   core = null,
@@ -51,13 +63,17 @@ async function resolveOverriddenThreads({
   triggerPhrase = null,
   command = null,
   ask = null,
+  env = process.env,
+  fetch = globalThis.fetch,
 } = {}) {
   const open = await openPlanThreads({ github, owner, repo, prNumber, planFile, botLogin, includeAnswered: true });
   if (open.error) return { answered: 0, resolved: 0, notices: [open.error] };
 
-  const said = {
-    waiting: renderOverride({ answered: false, triggerPhrase, prNumber, command, ask }),
-    answered: renderOverride({ answered: true, triggerPhrase, prNumber, command, ask }),
+  const override = { triggerPhrase, prNumber, command, ask, env, fetch };
+  const said = {};
+  const reply = (answeredThread) => {
+    said[answeredThread] ??= renderedOverride({ ...override, answered: answeredThread });
+    return said[answeredThread];
   };
   const notices = [];
   let answered = 0;
@@ -72,7 +88,7 @@ async function resolveOverriddenThreads({
           repo,
           pull_number: Number(prNumber),
           comment_id: root,
-          body: threadState(thread, { botLogin }) === ANSWERED ? said.answered : said.waiting,
+          body: await reply(threadState(thread, { botLogin }) === ANSWERED),
         });
         answered += 1;
       } catch (error) {

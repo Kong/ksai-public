@@ -28,6 +28,24 @@ const { marked, payloadFor } = require('./marker.cjs');
 const { spendFromExecution } = require('./write-report.cjs');
 const { scrub } = require('./plan.cjs');
 const { asAlert } = require('../lib/select-arm.cjs');
+const { renderedNotice } = require('../lib/cp-render.cjs');
+
+const REPLY_KIND = Object.freeze({
+  [LOCK_KIND]: 'thread_locked',
+  [UNCLEAR_KIND]: 'thread_unclear',
+  [AGREED_KIND]: 'thread_agreed',
+  [UNLOCK_KIND]: 'thread_unlocked',
+});
+
+function renderedReply({ kind, env, local, fetch }) {
+  return renderedNotice({
+    notice: { kind: REPLY_KIND[kind] },
+    local: () => ({ body: local() }),
+    what: 'the answer to this thread',
+    env,
+    fetch,
+  });
+}
 
 const HELD =
   'A disagreement was detected in this thread, so it is held. Nothing will work on it until somebody says ' +
@@ -87,7 +105,7 @@ export function buildDispute(env = process.env) {
   };
 }
 
-export async function lockDisputed({ github, core, owner, repo, env = process.env }) {
+export async function lockDisputed({ github, core, owner, repo, env = process.env, fetch = globalThis.fetch }) {
   const roots = String(env.DISPUTE_ROOTS ?? '')
     .split(',')
     .map(Number)
@@ -108,15 +126,27 @@ export async function lockDisputed({ github, core, owner, repo, env = process.en
   let locked = 0;
   let held = false;
   const scoped = Number(env.THREAD_ROOT_ID);
+  const replies = new Map();
+  const replyFor = (kind) => {
+    if (!replies.has(kind)) {
+      const fields = payloadFor(env, { kind });
+      replies.set(kind, renderedReply({
+        kind,
+        env,
+        fetch,
+        local: () =>
+          kind === LOCK_KIND
+            ? marked(asAlert('IMPORTANT', scrub(HELD, { triggerPhrase: env.TRIGGER })), fields)
+            : marked(scrub(SETTLED[kind], { triggerPhrase: env.TRIGGER }), fields),
+      }));
+    }
+    return replies.get(kind);
+  };
   for (const [index, root] of roots.entries()) {
     const verdict = verdicts[index];
     if (verdict === DISAGREE && root === scoped) held = true;
     const kind = verdict === DISAGREE ? LOCK_KIND : verdict === UNCLEAR ? UNCLEAR_KIND : AGREED_KIND;
-    const fields = payloadFor(env, { kind });
-    const body =
-      verdict === DISAGREE
-        ? marked(asAlert('IMPORTANT', scrub(HELD, { triggerPhrase: env.TRIGGER })), fields)
-        : marked(scrub(SETTLED[kind], { triggerPhrase: env.TRIGGER }), fields);
+    const body = await replyFor(kind);
     try {
       await github.rest.pulls.createReplyForReviewComment({
         owner,
@@ -134,16 +164,18 @@ export async function lockDisputed({ github, core, owner, repo, env = process.en
   return { locked, held, notices, spend };
 }
 
-export async function releaseThread({ github, core, owner, repo, env = process.env }) {
+export async function releaseThread({ github, core, owner, repo, env = process.env, fetch = globalThis.fetch }) {
   const root = Number(env.THREAD_ROOT_ID);
   if (!Number.isInteger(root) || root <= 0) return { released: false, why: 'no thread was named' };
   const threads = readThreadsFile(env.THREADS_FILE);
   const held = lockedThreads(threads, { botLogin: env.BOT_LOGIN }).some((thread) => thread?.rootCommentId === root);
   if (!held) return { released: false, why: 'that thread is not held, so there is nothing to release' };
-  const body = marked(
-    scrub(RELEASED, { triggerPhrase: env.TRIGGER }),
-    payloadFor(env, { kind: UNLOCK_KIND }),
-  );
+  const body = await renderedReply({
+    kind: UNLOCK_KIND,
+    env,
+    fetch,
+    local: () => marked(scrub(RELEASED, { triggerPhrase: env.TRIGGER }), payloadFor(env, { kind: UNLOCK_KIND })),
+  });
   await github.rest.pulls.createReplyForReviewComment({
     owner,
     repo,

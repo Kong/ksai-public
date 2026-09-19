@@ -14,6 +14,7 @@ const { classifierModel } = require('./classify.cjs');
 const { runUrl } = require('./plan.cjs');
 const { CARRIED_FILE, armOf, renderRunProgress, saidFor } = require('./run-start.cjs');
 const { identityOf, storesInBody, updateWriteProgress } = require('./write-report.cjs');
+const { RENDER_ENV_KEYS, pick } = require('../lib/cp-render.cjs');
 
 const DEFAULT_API_URL = 'https://api.github.com';
 
@@ -230,7 +231,7 @@ function writeGithubOver(token, apiUrl, fetchImpl) {
   };
 }
 
-export async function publishStatus({ held, reading, token, apiUrl = DEFAULT_API_URL, fetchImpl = fetch, sleep }) {
+export async function publishStatus({ held, reading, token, apiUrl = DEFAULT_API_URL, fetchImpl = fetch, sleep, rendering = {} }) {
   const body = renderRunProgress(held, reading);
   if (body === '') return false;
   if (held.FLOW !== 'implement') {
@@ -251,7 +252,7 @@ export async function publishStatus({ held, reading, token, apiUrl = DEFAULT_API
     github,
     owner: parts[0],
     repo: parts[1],
-    env: held,
+    env: { ...held, ...pick(rendering, RENDER_ENV_KEYS) },
     note: latest ? { at: latest.at, said: latest.said } : null,
     live: {
       arm: armOf(held),
@@ -260,6 +261,7 @@ export async function publishStatus({ held, reading, token, apiUrl = DEFAULT_API
       link: runUrl({ serverUrl: held.SERVER_URL, repository: held.REPOSITORY, runId: held.RUN_ID }),
     },
     sleep,
+    fetch: fetchImpl,
   });
   return result.outputs?.recorded === 'true';
 }
@@ -320,6 +322,7 @@ export async function tick(
     apiUrl: env.GITHUB_API_URL,
     fetchImpl,
     sleep,
+    rendering: env,
   });
   record(env.CHANNEL_DIR, {
     at: state.at,

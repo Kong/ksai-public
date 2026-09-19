@@ -18,10 +18,12 @@ const SHARE = /^(?:0|[1-9][0-9]*)(\.[0-9]+)?$/;
 
 export const ALIASES = ['fast', 'balanced', 'flagship', 'opus', 'sonnet', 'haiku'];
 
+const WHERE = (/** @type {string} */ value) => ['local', 'shadow', 'cp'].includes(value);
+
 export const PINNED = {
   shadow_percent: (/** @type {string} */ value) =>
     SHARE.test(value) && Number(value) >= 0 && Number(value) <= 100,
-  review_triage_mode: (/** @type {string} */ value) => ['local', 'shadow', 'cp'].includes(value),
+  review_triage_mode: WHERE,
   allowed_models: (/** @type {string} */ value) => {
     const named = value.split(/[,\s]+/).filter((one) => one !== '');
     return named.length > 0
@@ -34,6 +36,7 @@ export const PINNED = {
   max_repeated_tool_calls: (/** @type {string} */ value) =>
     between(0, 100000)(value) && Number(value) !== 1,
   triage_write: (/** @type {string} */ value) => value === 'off' || value === 'cp',
+  report_rendering: WHERE,
 };
 
 /**

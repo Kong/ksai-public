@@ -10,9 +10,13 @@
 const { parseHunks } = require('../lib/hunks.cjs');
 const { readReviewOutput, REPAIRED } = require('../lib/review-output.cjs');
 const { applySuppression } = require('./suppress.cjs');
+const { DIGEST_CHARS, MATCH_VERSION } = require('./match-id.cjs');
 const { RESERVED_COMMENT } = require('../ksai/plan.cjs');
+const { rendered, unrendered } = require('../lib/cp-render.cjs');
 
 const SUCCESS = 'success';
+
+const UNRENDERED = 'unrendered';
 
 /*
  * A run that ended in error publishes no text of its own, whatever it happened to be saying.
@@ -34,6 +38,7 @@ const MARKER = '<!-- kreview-finding -->';
 const FOLDED_HEADING = '### Additional findings (not anchored to the diff)';
 const BULLET_END = '<!-- kreview-finding-end -->';
 const MAX_INLINE = 40;
+const MAX_PATCH_LINES = 20_000;
 /*
  * Asks the reader to rate the finding with a 👍 or a 👎, which the eval extractor already reads back
  * off the comment for free: the repo-wide `pulls/comments` sweep carries the per-content reaction
@@ -86,8 +91,13 @@ const lineLabel = (f) => (Number.isFinite(Number(f.line)) ? Number(f.line) : '?'
  * reply" or the comments API; the run's suppression record artifact carries the same pair.
  * eval/parse.mjs strips this marker back out — it renders the comment body, not part of it.
  */
+const MATCH_SHAPE = new RegExp(`^m${MATCH_VERSION}-[0-9a-f]{${DIGEST_CHARS}}$`);
+const FINDING_SHAPE = new RegExp(`^f${MATCH_VERSION}-[0-9a-f]{${DIGEST_CHARS}}$`);
+
 const idMarker = (f) =>
-  f.match_id ? `\n<!-- kreview-ids match=${f.match_id}${f.finding_id ? ` finding=${f.finding_id}` : ''} -->` : '';
+  MATCH_SHAPE.test(String(f.match_id ?? ''))
+    ? `\n<!-- kreview-ids match=${f.match_id}${FINDING_SHAPE.test(String(f.finding_id ?? '')) ? ` finding=${f.finding_id}` : ''} -->`
+    : '';
 
 /*
  * Four literals in a published review mean something structural, and this publisher is the only
@@ -262,6 +272,110 @@ async function reviewedFiles({ github, owner, repo, base, commitId }) {
   return data?.files ?? [];
 }
 
+function planReview({ owner, repo, prNumber, commitId, runResult, read = readReviewOutput(runResult), conclusion, suppression, files, note, later }) {
+  const { review: parsed, reason: parseReason } = read;
+  const nothing = { inline: [], findings_total: 0, folded: 0, suppressed: 0, fires: [], records: [] };
+  if (!parsed) {
+    // Scrubbed like every other model-written string, and for a sharper reason than the rest: this
+    // comment is posted under the bot's identity, so a marker in it makes kreview/fetch-prior.cjs
+    // read the raw output as this PR's prior findings and feed any `- ` line under a heading into
+    // the next run, which is told to drop duplicates of them. It also has to carry no marker for
+    // parse compliance to stay measurable - the absence is the signal.
+    return {
+      parse_ok: false,
+      parse_reason: parseReason,
+      comment: withNote(ended(conclusion) ? FAILED_NOTICE : balanceFences(fromModel(runResult).trim()) || '_The reviewer produced no output._', note),
+      ...nothing,
+    };
+  }
+
+  // A single malformed element (e.g. null) must not crash the publisher once JSON parsing
+  // already succeeded — that would skip the graceful "unparseable output" path above.
+  const produced = parsed.findings
+    .filter((f) => f && typeof f === 'object')
+    .sort((a, b) => (SEV_RANK[sevKey(a)] ?? 9) - (SEV_RANK[sevKey(b)] ?? 9));
+
+  // Suppression runs on the sorted list, before anchoring, so a withheld finding consumes no
+  // inline slot and the record indexes match the order the review was published in.
+  const gated = suppression
+    ? applySuppression({
+        findings: produced,
+        rules: suppression.rules ?? [],
+        scope: `${owner}/${repo}`,
+        reviewerId: suppression.reviewerId,
+        runId: suppression.runId,
+        prNumber,
+        reviewedHead: commitId,
+        firedAt: suppression.firedAt,
+      })
+    : { kept: produced, fires: [], records: [] };
+
+  const findings = gated.kept;
+  // The model's summary is written before suppression and may still mention a withheld finding.
+  // Rewriting it would mean putting a model back in the loop, so it is left as written.
+  const counted = {
+    parse_ok: true,
+    parse_reason: parseReason,
+    findings_total: findings.length,
+    suppressed: gated.fires.length,
+    fires: gated.fires,
+    records: gated.records,
+  };
+  if (files === null) {
+    return { ...counted, comment: renderSummary(parsed.summary, findings, note), inline: [], folded: findings.length };
+  }
+  const hunks = new Map(
+    files.map((f) => [f.filename, parseHunks(String(f.patch ?? '').split('\n').length > MAX_PATCH_LINES ? '' : f.patch)]),
+  );
+
+  const inline = [];
+  const folded = [];
+  for (const f of findings) {
+    const side = String(f.side || '').toUpperCase() === 'LEFT' ? 'LEFT' : 'RIGHT';
+    const map = hunks.get(f.path);
+    const table = map ? (side === 'LEFT' ? map.left : map.right) : null;
+    const line = Number(f.line);
+    if (!table || !Number.isInteger(line) || !table.has(line) || inline.length >= MAX_INLINE) {
+      folded.push(f);
+      continue;
+    }
+    const comment = { path: f.path, side, line, body: renderBody(f) };
+    const start = Number(f.start_line);
+    // A range that crosses a hunk boundary makes the whole review 422; only attach start_line
+    // when it shares the anchor line's hunk.
+    if (
+      Number.isInteger(start) &&
+      start < line &&
+      table.has(start) &&
+      table.get(start) === table.get(line)
+    ) {
+      comment.start_line = start;
+      comment.start_side = side;
+    }
+    inline.push(comment);
+  }
+
+  const planned = { ...counted, body: renderSummary(parsed.summary, folded, note), inline, folded: folded.length };
+  if (inline.length === 0) return planned;
+  // An unmoved review anchored against the pull request's diff as it was read; a push since then
+  // is why GitHub refused every anchor, so the body says so.
+  const whole = later && later !== commitId ? movedNote(commitId, later) : note;
+  return { ...planned, whole_body: renderSummary(parsed.summary, findings, whole) };
+}
+
+const unrenderedReview = (why, env, mine) => ({
+  parse_ok: mine?.parse_ok === true,
+  parse_reason: mine ? mine.parse_reason : UNRENDERED,
+  comment: unrendered('this review', why, env),
+  inline: [],
+  findings_total: mine?.findings_total ?? 0,
+  folded: 0,
+  suppressed: mine?.suppressed ?? 0,
+  fires: mine?.fires ?? [],
+  records: mine?.records ?? [],
+  unrendered: true,
+});
+
 /*
  * Returns a summary of what was published. Whether the model's output parsed is decided here and
  * nowhere else, so this is the only place that can report it — an unparseable run posts a comment
@@ -293,6 +407,8 @@ module.exports = async ({
   conclusion = SUCCESS,
   reviewStrategy = 'baseline',
   protocol = null,
+  env = process.env,
+  fetch = globalThis.fetch,
 }) => {
   if (!['baseline', 'evidence', 'dual'].includes(reviewStrategy)) throw new Error('unknown trusted review strategy');
   /*
@@ -306,141 +422,122 @@ module.exports = async ({
   const moved = publish && head !== commitId;
   const note = moved ? movedNote(commitId, head) : '';
   const postComment = (args) => github.rest.issues.createComment(args);
-  const { review: parsed, reason: parseReason } = readReviewOutput(runResult);
+  const read = readReviewOutput(runResult);
+  const { review: parsed } = read;
   if (reviewStrategy !== 'baseline' && parsed) {
     const { findingProblem } = require('./review-pipeline.cjs');
     if (protocol?.strategy !== reviewStrategy || protocol?.head_sha !== commitId || !Array.isArray(protocol?.published_candidates)) throw new Error('review protocol does not match the trusted run');
     if (parsed.findings.some((finding) => findingProblem(finding) || !protocol.published_candidates.includes(finding.candidate_id))) throw new Error('review lacks independently audited evidence');
   }
 
-  if (!parsed) {
-    core.warning('Structured review output missing or unparseable; posting a single comment.');
-    // Scrubbed like every other model-written string, and for a sharper reason than the rest: this
-    // comment is posted under the bot's identity, so a marker in it makes kreview/fetch-prior.cjs
-    // read the raw output as this PR's prior findings and feed any `- ` line under a heading into
-    // the next run, which is told to drop duplicates of them. It also has to carry no marker for
-    // parse compliance to stay measurable - the absence is the signal.
+  let files = null;
+  if (parsed) {
+    try {
+      files = moved
+        ? await reviewedFiles({ github, owner, repo, base: pull?.base?.sha, commitId })
+        : await github.paginate(github.rest.pulls.listFiles, {
+            owner,
+            repo,
+            pull_number: prNumber,
+            per_page: 100,
+          });
+    } catch (e) {
+      core.warning(`Could not list PR files (${e.status ?? '?'}): ${e.message}. Posting body-only comment.`);
+    }
+  }
+
+  const gate = suppression?.reviewerId
+    ? { ...suppression, firedAt: suppression.firedAt ?? new Date().toISOString() }
+    : null;
+  const named = new Set((parsed?.findings ?? []).filter((f) => f && typeof f === 'object').map((f) => f.path));
+  const sent = files === null ? null : files.filter((file) => named.has(file?.filename));
+  const plan = (later) =>
+    rendered({
+      kind: 'review',
+      request: {
+        run_result: String(runResult ?? ''),
+        conclusion: String(conclusion ?? SUCCESS),
+        pr: prNumber,
+        commit: commitId,
+        publish,
+        head,
+        later,
+        files: sent === null ? null : sent.map((file) => ({ filename: String(file?.filename ?? ''), patch: String(file?.patch ?? '') })),
+        suppression:
+          gate === null
+            ? null
+            : { reviewer_id: String(gate.reviewerId), run_id: String(gate.runId ?? ''), fired_at: gate.firedAt, rules: gate.rules ?? [] },
+      },
+      local: () => planReview({ owner, repo, prNumber, commitId, runResult, read, conclusion, suppression: gate, files: sent, note, later }),
+      fallback: (why, mine) => unrenderedReview(why, env, mine),
+      accept: (answer) => typeof answer.parse_ok === 'boolean' && Array.isArray(answer.inline),
+      env,
+      fetch,
+      warn: (message) => core.warning(message),
+    });
+  const { value: planned, parity } = await plan('');
+  const shadowed = parity !== '' ? { render_parity: parity } : planned.unrendered ? { render_parity: 'unrendered' } : {};
+
+  if (!planned.parse_ok) {
+    if (planned.parse_reason !== UNRENDERED) {
+      core.warning('Structured review output missing or unparseable; posting a single comment.');
+    }
     if (publish) {
-      await postComment({
-        owner,
-        repo,
-        issue_number: prNumber,
-        body: withNote(ended(conclusion) ? FAILED_NOTICE : balanceFences(fromModel(runResult).trim()) || '_The reviewer produced no output._', note),
-      });
+      await postComment({ owner, repo, issue_number: prNumber, body: planned.comment });
     }
     return {
       parse_ok: false,
-      parse_reason: parseReason,
+      parse_reason: planned.parse_reason,
       findings_total: 0,
       inline: 0,
       folded: 0,
       review_id: null,
       mode: publish ? 'published' : 'shadow',
       posted_as: publish ? 'issue-comment' : 'none',
+      ...shadowed,
     };
   }
 
-  if (parseReason === REPAIRED) {
+  if (planned.parse_reason === REPAIRED) {
     core.notice('Structured review output was off-contract and recovered; publishing the repaired review.');
   }
 
-  // A single malformed element (e.g. null) must not crash the publisher once JSON parsing
-  // already succeeded — that would skip the graceful "unparseable output" path above.
-  const produced = parsed.findings
-    .filter((f) => f && typeof f === 'object')
-    .sort((a, b) => (SEV_RANK[sevKey(a)] ?? 9) - (SEV_RANK[sevKey(b)] ?? 9));
-
-  // Suppression runs on the sorted list, before anchoring, so a withheld finding consumes no
-  // inline slot and the record indexes match the order the review was published in.
-  const gated = suppression?.reviewerId
-    ? applySuppression({
-        findings: produced,
-        rules: suppression.rules ?? [],
-        scope: `${owner}/${repo}`,
-        reviewerId: suppression.reviewerId,
-        runId: suppression.runId,
-        prNumber,
-        reviewedHead: commitId,
-        firedAt: suppression.firedAt ?? new Date().toISOString(),
-      })
-    : { kept: produced, fires: [], records: [] };
-
-  const findings = gated.kept;
-  if (gated.fires.length) {
+  if (planned.fires.length) {
     // An annotation, not a comment: the point of suppression is a quieter PR, but a maintainer
     // still has to be able to see what was withheld and which entry did it.
     core.notice(
-      `Suppressed ${gated.fires.length} of ${produced.length} findings: ` +
-        `${gated.fires.map((fire) => fire.rule_id).join(', ')}`,
+      `Suppressed ${planned.fires.length} of ${planned.findings_total + planned.suppressed} findings: ` +
+        `${planned.fires.map((fire) => fire.rule_id).join(', ')}`,
     );
   }
-  // The model's summary is written before suppression and may still mention a withheld finding.
-  // Rewriting it would mean putting a model back in the loop, so it is left as written.
 
-  let files;
-  try {
-    files = moved
-      ? await reviewedFiles({ github, owner, repo, base: pull?.base?.sha, commitId })
-      : await github.paginate(github.rest.pulls.listFiles, {
-          owner,
-          repo,
-          pull_number: prNumber,
-          per_page: 100,
-        });
-  } catch (e) {
-    core.warning(`Could not list PR files (${e.status ?? '?'}): ${e.message}. Posting body-only comment.`);
+  const { body, inline } = planned;
+
+  // findings_total counts what reached the PR, so it stays comparable with what the eval
+  // extractor can reconstruct from posted comments. A withheld finding is counted by
+  // `suppressed` instead: findings_total + suppressed is what the model produced.
+  const summarize = (extra) => ({
+    parse_ok: true,
+    parse_reason: planned.parse_reason,
+    findings_total: planned.findings_total,
+    inline: inline.length,
+    folded: planned.folded,
+    mode: publish ? 'published' : 'shadow',
+    review_id: null,
+    posted_as: 'review',
+    suppressed: planned.suppressed,
+    fires: planned.fires,
+    records: planned.records,
+    ...shadowed,
+    ...extra,
+  });
+
+  if (planned.comment !== undefined) {
     if (publish) {
-      await postComment({
-        owner,
-        repo,
-        issue_number: prNumber,
-        body: renderSummary(parsed.summary, findings, note),
-      });
+      await postComment({ owner, repo, issue_number: prNumber, body: planned.comment });
     }
-    return {
-      parse_ok: true,
-      parse_reason: parseReason,
-      findings_total: findings.length,
-      inline: 0,
-      folded: findings.length,
-      review_id: null,
-      mode: publish ? 'published' : 'shadow',
-      posted_as: publish ? 'issue-comment' : 'none',
-      suppressed: gated.fires.length,
-      fires: gated.fires,
-      records: gated.records,
-    };
+    return summarize({ inline: 0, posted_as: publish ? 'issue-comment' : 'none' });
   }
-  const hunks = new Map(files.map((f) => [f.filename, parseHunks(f.patch)]));
-
-  const inline = [];
-  const folded = [];
-  for (const f of findings) {
-    const side = String(f.side || '').toUpperCase() === 'LEFT' ? 'LEFT' : 'RIGHT';
-    const map = hunks.get(f.path);
-    const table = map ? (side === 'LEFT' ? map.left : map.right) : null;
-    const line = Number(f.line);
-    if (!table || !Number.isInteger(line) || !table.has(line) || inline.length >= MAX_INLINE) {
-      folded.push(f);
-      continue;
-    }
-    const comment = { path: f.path, side, line, body: renderBody(f) };
-    const start = Number(f.start_line);
-    // A range that crosses a hunk boundary makes the whole review 422; only attach start_line
-    // when it shares the anchor line's hunk.
-    if (
-      Number.isInteger(start) &&
-      start < line &&
-      table.has(start) &&
-      table.get(start) === table.get(line)
-    ) {
-      comment.start_line = start;
-      comment.start_side = side;
-    }
-    inline.push(comment);
-  }
-
-  const body = renderSummary(parsed.summary, folded, note);
 
   const postReview = (reviewBody, comments) =>
     github.rest.pulls.createReview({
@@ -452,24 +549,6 @@ module.exports = async ({
       body: reviewBody,
       ...(comments ? { comments } : {}),
     });
-
-  // findings_total counts what reached the PR, so it stays comparable with what the eval
-  // extractor can reconstruct from posted comments. A withheld finding is counted by
-  // `suppressed` instead: findings_total + suppressed is what the model produced.
-  const summarize = (extra) => ({
-    parse_ok: true,
-    parse_reason: parseReason,
-    findings_total: findings.length,
-    inline: inline.length,
-    folded: folded.length,
-    mode: publish ? 'published' : 'shadow',
-    review_id: null,
-    posted_as: 'review',
-    suppressed: gated.fires.length,
-    fires: gated.fires,
-    records: gated.records,
-    ...extra,
-  });
 
   // Short-circuited above every posting path, so no shadow run can reach a `createReview` at all.
   if (!publish) return summarize({ review_id: null, posted_as: 'none' });
@@ -498,15 +577,18 @@ module.exports = async ({
       return summarize({ review_id: res?.data?.id ?? null, retried: 'single-line' });
     } catch (e2) {
       core.warning(`Single-line retry failed (${e2.status ?? '?'}): ${e2.message}. Body only.`);
-      // An unmoved review anchored against the pull request's diff as it was read; a push since then
-      // is why GitHub refused every anchor, so the body says so.
       const later = moved
-        ? head
+        ? ''
         : await github.rest.pulls.get({ owner, repo, pull_number: prNumber }).then((r) => String(r.data?.head?.sha ?? '')).catch(() => '');
-      const wholeBody = renderSummary(parsed.summary, findings, later && later !== commitId ? movedNote(commitId, later) : note);
+      const replan = later && later !== commitId ? await plan(later) : null;
+      const replanned = replan === null ? planned : replan.value;
+      const reshadowed = replan !== null && replan.parity !== '' ? { render_parity: replan.parity } : {};
+      const wholeBody =
+        replanned.whole_body ??
+        (later && later !== commitId ? `${planned.whole_body}\n\n${movedNote(commitId, later)}` : planned.whole_body);
       try {
         const res = await postReview(wholeBody);
-        return summarize({ inline: 0, folded: findings.length, review_id: res?.data?.id ?? null, retried: 'body-only' });
+        return summarize({ inline: 0, folded: planned.findings_total, review_id: res?.data?.id ?? null, retried: 'body-only', ...reshadowed });
       } catch (e3) {
         core.warning(`Body-only review failed (${e3.status ?? '?'}): ${e3.message}. Plain comment.`);
         await postComment({
@@ -515,7 +597,7 @@ module.exports = async ({
           issue_number: prNumber,
           body: wholeBody,
         });
-        return summarize({ inline: 0, folded: findings.length, posted_as: 'issue-comment', retried: 'body-only' });
+        return summarize({ inline: 0, folded: planned.findings_total, posted_as: 'issue-comment', retried: 'body-only', ...reshadowed });
       }
     }
   }

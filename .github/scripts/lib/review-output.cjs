@@ -4,6 +4,7 @@ const NO_FINDINGS = 'no-findings';
 const REPAIRED = 'repaired';
 
 const FENCE_OPENER = /```(?:json)?[^\S\n]*\r?\n/gi;
+const MAX_FENCES = 64;
 const AFTER_STRING = new Set([',', '}', ']', ':']);
 
 function objectAt(text, start, end) {
@@ -91,10 +92,8 @@ function escapeStrayQuotes(text) {
 }
 
 function candidateRegions(text) {
-  const regions = [];
-  for (const opener of text.matchAll(FENCE_OPENER)) regions.push(text.slice(opener.index + opener[0].length));
-  regions.push(text);
-  return regions;
+  const starts = [...text.matchAll(FENCE_OPENER)].map((opener) => opener.index + opener[0].length);
+  return [...starts.slice(-MAX_FENCES).map((start) => text.slice(start)), text];
 }
 
 function findReview(regions) {
@@ -116,11 +115,16 @@ function readReviewOutput(raw) {
   const strict = findReview(regions);
   if (strict.review) return { review: strict.review, reason: null };
 
-  const repairs = regions.map((region) => escapeStrayQuotes(region)).filter((repair) => repair.changed);
-  const salvaged = findReview(repairs.map((repair) => repair.text));
-  if (salvaged.review) return { review: salvaged.review, reason: REPAIRED };
+  let sawRepaired = false;
+  for (const region of regions) {
+    const repair = escapeStrayQuotes(region);
+    if (!repair.changed) continue;
+    const salvaged = findReview([repair.text]);
+    if (salvaged.review) return { review: salvaged.review, reason: REPAIRED };
+    sawRepaired ||= salvaged.sawObject;
+  }
 
-  return { review: null, reason: strict.sawObject || salvaged.sawObject ? NO_FINDINGS : NOT_JSON };
+  return { review: null, reason: strict.sawObject || sawRepaired ? NO_FINDINGS : NOT_JSON };
 }
 
 function extractReviewJson(raw) {

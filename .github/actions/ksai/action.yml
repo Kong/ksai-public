@@ -522,6 +522,17 @@ inputs:
       but the profile it would have chosen on its own.
     required: false
     default: ""
+  report_rendering:
+    description: >-
+      where this run's results are rendered: the review, its run report and notice, the write report, the
+      notices and the thread replies. `local` renders them on this runner. `shadow` renders them here too, asks
+      the control plane named by `fleet_dials_endpoint` over this job's own OIDC token, and records whether the
+      two agreed. `cp` posts what the control plane renders and, when it cannot answer, a minimal comment that
+      names why. This runner posts every one of them with its own token whichever it is.
+
+      The control plane serves this dial; a caller does not pin it, and anything else reads as `local`.
+    required: false
+    default: ""
   review_triage_mode:
     description: >-
       V4 control-plane authority for review triage: `local` keeps the local decision, `shadow` compares
@@ -977,6 +988,18 @@ runs:
             fi
           done
         fi
+
+    - name: Say where this run's results are rendered
+      id: report_rendering
+      if: ${{ inputs.report_rendering != '' }}
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        RENDERING: ${{ inputs.report_rendering }}
+        ENDPOINT: ${{ inputs.fleet_dials_endpoint }}
+      with:
+        script: |
+          core.exportVariable('KSAI_REPORT_RENDERING', process.env.RENDERING);
+          core.exportVariable('KSAI_REPORT_ENDPOINT', process.env.ENDPOINT);
 
     - name: Validate pull request test inputs
       id: validate_test_inputs

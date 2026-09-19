@@ -7,7 +7,7 @@ const { doRequestOf, renderDoMarker } = require('./do.cjs');
 const { href, marker, positive } = require('./marker.cjs');
 const { STATUS_BEGIN, STATUS_END, URL_SHAPE, locateStatus, oneLine, scrub, spliceStatus } = require('./plan.cjs');
 const { probeComments } = require('./pages.cjs');
-const { withIssueLock } = require('./write-lock.cjs');
+const { LOCK_TIMEOUT_MS, withIssueLock } = require('./write-lock.cjs');
 
 const MAX_SELECTION_CHARS = 80;
 
@@ -56,9 +56,12 @@ const {
 } = require('../lib/write-record.cjs');
 const { DIALS_ARM_SHAPE, armLabel, asAlert } = require('../lib/select-arm.cjs');
 const { counted, safeText } = require('../lib/text.cjs');
+const cpRender = require('../lib/cp-render.cjs');
 const { STATUS_TABLE, reporting } = require('./publish.cjs');
 
 const MAX_PAGES = 20;
+const MAX_PASSES = 5;
+const LOCKED_RENDER_BUDGET = Math.floor(LOCK_TIMEOUT_MS / 6);
 const MAX_CURRENT_CHARS = 7_000;
 const MAX_STATUS_RUNS = 200;
 const PLAN_KINDS = Object.freeze(['implement', 'revise']);
@@ -830,6 +833,42 @@ function renderWriteReport({
   return body;
 }
 
+function renderBudget(now) {
+  const until = now() + LOCKED_RENDER_BUDGET;
+  return () => Math.max(0, until - now());
+}
+
+async function renderedReport(args, { env = process.env, fetch = globalThis.fetch, timeout = LOCKED_RENDER_BUDGET } = {}) {
+  const { value } = await cpRender.rendered({
+    kind: 'write_report',
+    request: {
+      state: args.state,
+      current: String(args.current ?? ''),
+      issue: String(args.issue ?? ''),
+      run: String(args.run ?? ''),
+      trigger: String(args.triggerPhrase ?? ''),
+      command: String(args.command ?? ''),
+      ask: String(args.ask ?? ''),
+      do_request: String(args.doRequest ?? ''),
+      budget: args.budget ?? null,
+      live: args.live ?? null,
+      history_mode: String(args.historyMode ?? ''),
+      paused: args.paused === true,
+      standing: args.standing === true,
+    },
+    local: () => ({ body: renderWriteReport(args) }),
+    fallback: (why, mine) => ({
+      body: mine
+        ? cpRender.withMarkers(cpRender.unrendered('this report', why, env), mine.body)
+        : [cpRender.unrendered('this report', why, env), '', identityMarker(args.state.identity), stateMarker(args.state), ''].join('\n'),
+    }),
+    env,
+    fetch,
+    timeout,
+  });
+  return String(value?.body ?? '');
+}
+
 const sameLogin = (left, right) => String(left ?? '').toLowerCase() === String(right ?? '').toLowerCase();
 
 function hasExactMarker(body, exact) {
@@ -1014,6 +1053,7 @@ async function updateWriteProgressUnlocked({
   note = null,
   live = null,
   now = Date.now,
+  fetch = globalThis.fetch,
 }) {
   const blank = { recorded: '' };
   const identified = liveIdentityOf(env);
@@ -1031,8 +1071,9 @@ async function updateWriteProgressUnlocked({
   });
   if (chosen.error) return { outputs: blank, failure: chosen.error };
   const store = chosen.store;
+  const renderLeft = renderBudget(now);
 
-  for (let pass = 0; pass < 5; pass += 1) {
+  for (let pass = 0; pass < MAX_PASSES; pass += 1) {
     const read = await store.load();
     if (read.missing) return { outputs: blank, failure: 'the durable write report disappeared before its live update' };
     if (read.error) return { outputs: blank, failure: read.error };
@@ -1043,7 +1084,7 @@ async function updateWriteProgressUnlocked({
     const grown = note === null
       ? historyOf(read.state)
       : noted(read.state, currentText(note.said, env.TRIGGER), note.at ?? now(), env.TRIGGER);
-    const rendered = renderWriteReport({
+    const rendered = await renderedReport({
       state: { ...read.state, history: grown },
       current: note === null ? current : note.said,
       issue: env.ISSUE_NUM,
@@ -1056,7 +1097,7 @@ async function updateWriteProgressUnlocked({
       live: reading,
       historyMode: env.STATUS_HISTORY,
       standing: standingHold(env),
-    });
+    }, { env, fetch, timeout: renderLeft() });
     const saved = await store.save(read.ref, rendered);
     if (saved.missing) return { outputs: blank, failure: 'the durable write report disappeared during its live update' };
     if (saved.error) return { outputs: blank, failure: `the durable write report could not publish live progress (${saved.error})` };
@@ -1079,6 +1120,7 @@ async function mutateWriteReportUnlocked({
   repo,
   env = process.env,
   now = Date.now,
+  fetch = globalThis.fetch,
 }) {
   const identified = identityOf(env);
   if (identified.error) return { outputs: {}, failure: identified.error };
@@ -1096,8 +1138,9 @@ async function mutateWriteReportUnlocked({
   });
   if (chosen.error) return { outputs: {}, failure: chosen.error };
   const store = chosen.store;
+  const renderLeft = renderBudget(now);
 
-  for (let pass = 0; pass < 5; pass += 1) {
+  for (let pass = 0; pass < MAX_PASSES; pass += 1) {
     const read = await store.load();
     if (read.missing) continue;
     if (read.error) return { outputs: {}, failure: read.error };
@@ -1132,7 +1175,7 @@ async function mutateWriteReportUnlocked({
     const before = held.attempts.map((entry) => entry.id);
     const current = currentOfEnv(env);
     const noteAt = numberOrNull(env.CURRENT_AT) ?? now();
-    const rendered = renderWriteReport({
+    const rendered = await renderedReport({
       state: { ...merged.state, history: noted(merged.state, currentText(current, env.TRIGGER), noteAt, env.TRIGGER) },
       current,
       issue: env.ISSUE_NUM,
@@ -1145,7 +1188,7 @@ async function mutateWriteReportUnlocked({
       historyMode: env.STATUS_HISTORY,
       paused: String(env.HELD ?? '') === 'true',
       standing: standingHold(env),
-    });
+    }, { env, fetch, timeout: renderLeft() });
     const saved = await store.save(read.ref, rendered);
     if (saved.missing) continue;
     if (saved.error) return { outputs: {}, failure: `the durable write report could not be updated (${saved.error})` };
@@ -1217,6 +1260,7 @@ async function updateWriteProgress({
   live = null,
   sleep,
   now = Date.now,
+  fetch = globalThis.fetch,
 }) {
   const result = await lockedMutation({
     github,
@@ -1227,7 +1271,7 @@ async function updateWriteProgress({
     lockKind: 'live',
     recoverKinds: [],
     releaseRequired: false,
-    task: () => updateWriteProgressUnlocked({ github, owner, repo, env, current, note, live, now }),
+    task: () => updateWriteProgressUnlocked({ github, owner, repo, env, current, note, live, now, fetch }),
   });
   const outputs = {
     recorded: result.outputs?.recorded ?? '',
@@ -1278,6 +1322,7 @@ async function mutateWriteReport({
   env = process.env,
   sleep,
   now = Date.now,
+  fetch = globalThis.fetch,
 }) {
   const result = await lockedMutation({
     github,
@@ -1288,7 +1333,7 @@ async function mutateWriteReport({
     lockKind: 'report',
     recoverKinds: ['live'],
     releaseRequired: true,
-    task: () => mutateWriteReportUnlocked({ github, actionsGithub, owner, repo, env, now }),
+    task: () => mutateWriteReportUnlocked({ github, actionsGithub, owner, repo, env, now, fetch }),
   });
   const attempted = attemptOf(env, now());
   const outputs = {
@@ -1325,6 +1370,7 @@ module.exports = {
   planHeldBy,
   planHolder,
   renderWriteReport,
+  renderedReport,
   spendFromExecution,
   spendFromFields,
   spendFromStatus,

@@ -9,6 +9,7 @@ const { scrub } = require('../ksai/plan.cjs');
 const { stoppedBy, watchdogDetail } = require('../lib/watchdog.cjs');
 const { collectSecrets, scrub: scrubSecrets } = require('./secrets.cjs');
 const { counted } = require('../lib/text.cjs');
+const { RUN_REPORT_KEYS, pick, rendered, unrendered, withMarkers } = require('../lib/cp-render.cjs');
 
 const MISSING_COST = 'Claude execution output omitted total_cost_usd; defaulting total cost to 0.0000.';
 
@@ -253,6 +254,7 @@ function evalRunRecord(env, { now = new Date() } = {}) {
       posted_as: alt(published.posted_as),
       conditioned: alt(published.conditioned),
       report_format: alt(published.report_format),
+      render_parity: alt(published.render_parity),
       stopped_by: env.STOPPED_BY === '' || env.STOPPED_BY === undefined ? null : env.STOPPED_BY,
       ended_on: String(env.ENDED_ON ?? '').trim() || null,
     },
@@ -597,36 +599,67 @@ function renderReviewNotice(kind, env, { headed = true } = {}) {
   ].join('\n');
 }
 
-async function publishReviewNotice({ github, owner, repo, env }) {
+function reviewNoticeDue(env) {
   const kind = decideReviewNotice(env);
-  if (kind === null) return { notices: ['this run posted a review, so it published no notice'] };
+  if (kind === null) return { kind: '', why: 'this run posted a review, so it published no notice' };
   if (String(env.REPORT_PUBLISHED ?? '') === 'true' && CARRIED_NOTICE.includes(kind)) {
-    return { notices: [`the run report carried the \`${kind}\` notice, so nothing was published beside it`] };
+    return { kind: '', why: `the run report carried the \`${kind}\` notice, so nothing was published beside it` };
   }
+  return { kind, why: '' };
+}
 
+function localReviewNotice(env, { kind } = reviewNoticeDue(env)) {
+  if (kind === '') return { body: '' };
   const said = scrub(renderReviewNotice(kind, env), { triggerPhrase: env.TRIGGER });
   const footer = renderClassifierFooter(env.ROUTE_SOURCE, { triggerPhrase: env.TRIGGER });
+  return { kind, body: footer ? `${said}\n\n${footer}` : said };
+}
+
+async function publishReviewNotice({ github, owner, repo, env, fetch = globalThis.fetch }) {
+  const due = reviewNoticeDue(env);
+  const nothing = { notices: [due.why || 'nothing was due beside this review, so no notice was published'] };
+  if (due.kind === '') return nothing;
+  const { value } = await rendered({
+    kind: 'review_notice',
+    request: pick(env, RUN_REPORT_KEYS),
+    local: () => localReviewNotice(env, due),
+    fallback: (why, mine) => ({ kind: due.kind, body: withMarkers(unrendered('the notice for this review', why, env), mine?.body) }),
+    accept: (answer) => typeof answer.kind === 'string' && typeof answer.body === 'string',
+    env,
+    fetch,
+  });
+  const kind = String(value?.kind ?? '');
+  if (kind === '') return nothing;
+
   await github.rest.issues.createComment({
     owner,
     repo,
     issue_number: Number(env.PR_NUMBER),
-    body: footer ? `${said}\n\n${footer}` : said,
+    body: String(value.body ?? ''),
   });
   return { notices: [`published the \`${kind}\` notice`] };
 }
 
-async function publishRunReport({ github, core, owner, repo, env }) {
+async function publishRunReport({ github, core, owner, repo, env, fetch = globalThis.fetch }) {
   const outputs = {
     replaced: 'false',
     published: 'false',
   };
+  const { value } = await rendered({
+    kind: 'run_report',
+    request: pick(env, RUN_REPORT_KEYS),
+    local: () => ({ body: renderRunReport(env) }),
+    fallback: (why, mine) => ({ body: withMarkers(unrendered('the report for this review run', why, env), mine?.body) }),
+    env,
+    fetch,
+  });
   const out = await updateOrCreate({
     github,
     core,
     owner,
     repo,
     issueNumber: env.PR_NUMBER,
-    body: renderRunReport(env),
+    body: String(value?.body ?? ''),
     commentId: env.START_COMMENT_ID,
   });
   outputs.replaced = out.mode === 'updated' ? 'true' : 'false';

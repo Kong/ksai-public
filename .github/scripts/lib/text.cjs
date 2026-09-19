@@ -58,7 +58,8 @@ const plural = (count, one, many = '') => (Number(count) === 1 ? one : many || `
 
 const counted = (count, one, many = '') => `${count} ${plural(count, one, many)}`;
 
-const annotation = (message) => `::error::${String(message).replaceAll('%', '%25').replaceAll(/[\r\n]/g, ' ')}`;
+const annotation = (message, level = 'error') =>
+  `::${level}::${String(message).replaceAll('%', '%25').replaceAll(/[\r\n]/g, ' ')}`;
 
 function locate(message) {
   const text = String(message ?? '');
