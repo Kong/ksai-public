@@ -70,6 +70,51 @@ function decideContinuation({
   return { ...verdict, remainingForSuccessor: idle || seen === null ? '' : String(seen) };
 }
 
+const HUMAN_STOPS = Object.freeze([
+  Object.freeze({ flag: 'APPROVAL_BLOCKED', reason: 'approval' }),
+  Object.freeze({ flag: 'CHECKPOINT_WAITING', reason: 'checkpoint' }),
+  Object.freeze({ flag: 'PLAN_HELD', reason: 'held' }),
+]);
+
+function phaseOf(env) {
+  return String(env?.PHASE ?? '').trim();
+}
+
+function planReleased(env) {
+  return phaseOf(env) === 'plan-review' && env?.RELEASE_PLAN === 'released';
+}
+
+function decidesLocally(env) {
+  return phaseOf(env) === 'step' || planReleased(env);
+}
+
+function remainingOf(env) {
+  return env?.RELEASED_REMAINING === '0' ? '0' : String(env?.REMAINING ?? '');
+}
+
+function planPosition(env) {
+  const total = readCount(env?.TOTAL);
+  const remaining = readCount(remainingOf(env));
+  return {
+    step: total === null || remaining === null ? '' : String(total - remaining + 1),
+    total: total === null ? '' : String(total),
+  };
+}
+
+function reportOf(env = process.env) {
+  const held = env ?? {};
+  const { step, total } = planPosition(held);
+  const waiting = (reason) => ({ outcome: 'waiting', reason, step, total });
+  const phase = phaseOf(held);
+  if (phase === 'revise') return waiting('rework');
+  if (phase === 'plan') return waiting('approval');
+  if (phase === 'plan-review' && !planReleased(held)) return waiting('approval');
+  for (const { flag, reason } of HUMAN_STOPS) {
+    if (held[flag] === 'true') return waiting(reason);
+  }
+  return { outcome: 'continue', reason: '', step, total };
+}
+
 function renderStop({ reason = null, stall = null, attempt = null, remaining = null, triggerPhrase = null } = {}) {
   const out = (text) => asAlert('WARNING', scrub(text, { triggerPhrase }));
   const left = readCount(remaining);
@@ -272,11 +317,11 @@ async function continueThroughControlPlane({
   endpoint = '',
   workRef = '',
   issueNumber = '',
-  recordId = '',
   phase = '',
   remaining = '',
   handsOff = '',
   env = process.env,
+  report = reportOf(env),
   mint = async (_audience = '') => '',
   secret = (_token = '') => {},
   fetch: call = globalThis.fetch,
@@ -297,14 +342,18 @@ async function continueThroughControlPlane({
   const at = `${base}/run/continue`;
   const body = JSON.stringify({
     ...(ref !== '' ? { work_ref: ref } : { issue_number: issue }),
-    record_id: mintedId(recordId),
     phase: String(phase ?? '').trim() || 'step',
     remaining: String(readCount(remaining) ?? ''),
     hands_off: String(handsOff) === 'true' ? 'true' : '',
+    step: report.step,
+    total: report.total,
+    outcome: report.outcome,
+    reason: report.reason,
   });
 
   let last = '';
   let busy = false;
+  let owed = false;
   for (let tries = 0; tries < CONTINUE_ATTEMPTS; tries += 1) {
     if (tries > 0) await pause(busy ? CONTINUE_HOLD : 2 ** tries * 1000);
     busy = false;
@@ -319,9 +368,16 @@ async function continueThroughControlPlane({
 
     if (answer.ok) {
       const told = await bodyOf(answer);
+      if (told?.waiting === true) return { outcome: 'waiting', reason: '' };
       const stop = String(told?.stopped ?? '');
       if (STOPS.includes(stop)) {
-        return { outcome: 'stopped', reason: stop, attempt: readCount(told.attempt) ?? 0, stall: readCount(told.stall) ?? 0 };
+        return {
+          outcome: 'stopped',
+          reason: stop,
+          attempt: readCount(told.attempt) ?? 0,
+          stall: readCount(told.stall) ?? 0,
+          noticed: told.noticed === true,
+        };
       }
       const run = readCount(told?.run_id);
       return {
@@ -329,12 +385,6 @@ async function continueThroughControlPlane({
         reason: '',
         run: run === null || run === 0 ? '' : String(run),
         seal: mintedId(told?.seal),
-      };
-    }
-    if (answer.status === 410) {
-      return {
-        outcome: 'failed',
-        reason: 'the control plane can no longer read the record this run was started with, so it cannot count the chain',
       };
     }
     if (answer.status === 409) {
@@ -345,15 +395,18 @@ async function continueThroughControlPlane({
         reason: `the control plane refused to start the next run with ${answer.status}${await whyOf(answer)}`,
       };
     }
+    owed = owed || answer.status === 502;
     last = `the control plane answered ${answer.status}`;
   }
-  return { outcome: 'failed', reason: `${last}, on the last of ${CONTINUE_ATTEMPTS} attempts` };
+  const reason = `${last}, on the last of ${CONTINUE_ATTEMPTS} attempts`;
+  return { outcome: owed ? 'owed' : 'failed', reason };
 }
 
 async function stopThroughControlPlane({
   endpoint = '',
   run = '',
   seal = '',
+  owed = false,
   env = process.env,
   mint = async (_audience = '') => '',
   secret = (_token = '') => {},
@@ -363,8 +416,9 @@ async function stopThroughControlPlane({
   const named = String(endpoint ?? '').trim();
   const sealed = mintedId(seal);
   const successor = readCount(run);
+  const holding = owed === true && successor === null && sealed === '';
   if (named === '') return { outcome: 'unheld', reason: '' };
-  if (sealed === '' || successor === null || successor === 0) {
+  if (!holding && (sealed === '' || successor === null || successor === 0)) {
     return { outcome: 'failed', reason: 'the control plane sealed no run for this one to stop' };
   }
 
@@ -375,14 +429,14 @@ async function stopThroughControlPlane({
   try {
     answer = await postTo(call, `${base}/run/continue/stop`, {
       token,
-      body: JSON.stringify({ run_id: String(successor), seal: sealed }),
+      body: JSON.stringify(holding ? {} : { run_id: String(successor), seal: sealed }),
       timeout,
     });
   } catch (error) {
     return { outcome: 'failed', reason: unreached(error) };
   }
 
-  if (answer.ok) return { outcome: 'stopped', reason: '' };
+  if (answer.ok) return { outcome: holding ? 'held' : 'stopped', reason: '' };
   return { outcome: 'failed', reason: `the control plane answered ${answer.status}${await whyOf(answer)}` };
 }
 
@@ -400,6 +454,9 @@ module.exports = {
   shouldContinue,
   decideContinuation,
   stopsHere,
+  reportOf,
+  remainingOf,
+  decidesLocally,
   renderStop,
   renderUndispatched,
   resolveRef,

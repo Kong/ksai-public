@@ -3208,16 +3208,13 @@ runs:
       id: dispatch
       if: >-
         ${{ inputs.continuation_workflow != '' && inputs.dry_run == 'false' &&
-        steps.holder.outputs.held_by == '' &&
-        steps.approval.outputs.blocked != 'true' && steps.checkpoint.outputs.waiting != 'true' &&
-        steps.read_plan.outputs.held != 'true' && steps.works.outputs.released_nothing != 'true' &&
-        (steps.release_checkpoint.outcome != 'success' || steps.release_checkpoint.outputs.remaining != '0') &&
-        (steps.phase.outputs.phase == 'step' || steps.release_plan.outputs.status == 'released') }}
+        steps.holder.outputs.held_by == '' && steps.works.outputs.released_nothing != 'true' &&
+        (steps.phase.outputs.phase == 'step' || steps.phase.outputs.phase == 'plan' ||
+        steps.phase.outputs.phase == 'plan-review' || steps.phase.outputs.phase == 'revise') }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         WORKFLOW: ${{ inputs.continuation_workflow }}
         CONTINUE_ENDPOINT: ${{ inputs.fleet_dials_endpoint }}
-        RECORD_ID: ${{ inputs.record_id }}
         PHASE: ${{ steps.phase.outputs.phase }}
         ISSUE_NUM: ${{ steps.subject.outputs.number }}
         KSAI_ASK: ${{ inputs.ask }}
@@ -3232,6 +3229,12 @@ runs:
         STALL: ${{ steps.context.outputs.stall }}
         PREV_REMAINING: ${{ steps.context.outputs.prev_remaining }}
         REMAINING: ${{ steps.read_plan.outputs.remaining }}
+        RELEASED_REMAINING: ${{ steps.release_checkpoint.outcome == 'success' && steps.release_checkpoint.outputs.remaining || '' }}
+        TOTAL: ${{ steps.read_plan.outputs.total }}
+        APPROVAL_BLOCKED: ${{ steps.approval.outputs.blocked }}
+        CHECKPOINT_WAITING: ${{ steps.checkpoint.outputs.waiting }}
+        PLAN_HELD: ${{ steps.read_plan.outputs.held }}
+        RELEASE_PLAN: ${{ steps.release_plan.outputs.status }}
         COMMAND: ${{ steps.select.outputs.command }}
         TRIGGER: ${{ inputs.trigger_phrase }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
@@ -5505,7 +5508,7 @@ runs:
     - name: Stop the run this one started when this step stopped for a human
       id: stop_successor
       if: >-
-        ${{ always() && steps.dispatch.outputs.next_run != '' &&
+        ${{ always() && (steps.dispatch.outputs.next_run != '' || steps.dispatch.outputs.owed == 'true') &&
         (steps.publish.outputs.status == 'blocked' || steps.publish_direct.outputs.status == 'blocked' ||
         steps.record.outputs.status == 'blocked' || steps.record_fix.outputs.status == 'blocked' ||
         steps.record_do.outputs.status == 'blocked') }}
@@ -5513,6 +5516,7 @@ runs:
       env:
         NEXT_RUN: ${{ steps.dispatch.outputs.next_run }}
         NEXT_SEAL: ${{ steps.dispatch.outputs.next_seal }}
+        OWED: ${{ steps.dispatch.outputs.owed }}
         CONTINUE_ENDPOINT: ${{ inputs.fleet_dials_endpoint }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:

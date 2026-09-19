@@ -7,9 +7,12 @@ const { releaseKind, renderReleased, renderWaiting, withPhaseRelease } = require
 const {
   continueThroughControlPlane,
   decideContinuation,
+  decidesLocally,
   dispatchSuccessor,
   renderStop,
   renderUndispatched,
+  remainingOf,
+  reportOf,
   stopThroughControlPlane,
   stopsHere,
 } = require('./continue.cjs');
@@ -74,21 +77,35 @@ async function say({ github, owner, repo, target, notice, request, env, warnings
   }
 }
 
-async function dispatchNext({ github, core, owner, repo, env, fetch: call = globalThis.fetch }) {
+async function dispatchNext({ github, core, owner, repo, env, fetch: call = globalThis.fetch, pause }) {
   const outputs = {
     stops_here: '',
     next_run: '',
     next_seal: '',
+    owed: '',
   };
   const answer = (started) => {
     outputs.stops_here = stopsHere({ handsOff: env.HANDS_OFF, started });
     return outputs;
   };
 
+  const report = reportOf(env);
+  const remaining = remainingOf(env);
+
+  const waiting = () => ({
+    outputs: answer(false),
+    notices: [`not dispatching: this run is waiting for a person (${report.reason || 'the control plane said so'})`],
+    warnings: [],
+  });
+
   const stopped = async (verdict) => {
     const notices = [`not dispatching: ${verdict.reason}`];
     const warnings = [];
-    const notice = renderStop({ ...verdict, remaining: env.REMAINING, triggerPhrase: env.TRIGGER });
+    if (verdict.noticed === true) {
+      notices.push('the control plane said the chain stopped, and said so on the pull request');
+      return { outputs: answer(false), notices, warnings };
+    }
+    const notice = renderStop({ ...verdict, remaining, triggerPhrase: env.TRIGGER });
     const target = env.REPORT_NUM;
     if (notice && target) {
       const request = { reason: String(verdict.reason ?? ''), stall: String(verdict.stall ?? ''), attempt: String(verdict.attempt ?? '') };
@@ -101,7 +118,7 @@ async function dispatchNext({ github, core, owner, repo, env, fetch: call = glob
 
   const undispatched = async (reason) => {
     const warnings = [`the next run was not started, so this flow stops after this step: ${reason}`];
-    const notice = renderUndispatched({ reason, remaining: env.REMAINING, triggerPhrase: env.TRIGGER });
+    const notice = renderUndispatched({ reason, remaining, triggerPhrase: env.TRIGGER });
     const target = env.REPORT_NUM;
     if (target) {
       await say({ github, owner, repo, target, notice, request: { reason: String(reason ?? '') }, env, warnings, fetch: call });
@@ -121,20 +138,28 @@ async function dispatchNext({ github, core, owner, repo, env, fetch: call = glob
     endpoint: env.CONTINUE_ENDPOINT,
     workRef,
     issueNumber: env.ISSUE_NUM,
-    recordId: env.RECORD_ID,
     phase: env.PHASE,
-    remaining: env.REMAINING,
+    remaining,
     handsOff: env.HANDS_OFF,
+    report,
     env,
     mint: (audience) => core.getIDToken(audience),
     secret: (token) => core.setSecret(token),
     fetch: call,
+    pause,
   });
-  if (through.outcome === 'failed') {
-    const done = decideContinuation({ phase: env.PHASE, remaining: env.REMAINING });
-    return done.reason === 'finished' ? stopped(done) : undispatched(through.reason);
+  if (through.outcome === 'dispatched' && report.outcome === 'waiting') {
+    const unwanted = await stopSuccessor({
+      github,
+      core,
+      owner,
+      repo,
+      env: { ...env, NEXT_RUN: String(through.run ?? ''), NEXT_SEAL: String(through.seal ?? ''), OWED: '' },
+      fetch: call,
+    });
+    const held = waiting();
+    return { ...held, notices: [...held.notices, ...unwanted.notices], warnings: unwanted.warnings };
   }
-  if (through.outcome === 'stopped') return stopped(through);
   if (through.outcome === 'dispatched') {
     outputs.next_run = String(through.run ?? '');
     outputs.next_seal = String(through.seal ?? '');
@@ -144,6 +169,28 @@ async function dispatchNext({ github, core, owner, repo, env, fetch: call = glob
       warnings: [],
     };
   }
+  if (through.outcome === 'owed') {
+    outputs.owed = 'true';
+    return {
+      outputs: answer(false),
+      notices: [`the control plane owes the next run and starts it again itself: ${through.reason}`],
+      warnings: [],
+    };
+  }
+  if (through.outcome === 'stopped') return stopped(through);
+  if (through.outcome === 'waiting') return waiting();
+  if (report.outcome === 'waiting') return waiting();
+  if (!decidesLocally(env)) {
+    return {
+      outputs: answer(false),
+      notices: ['not deciding here: this run reports what it did, and no successor follows it'],
+      warnings: [],
+    };
+  }
+  if (through.outcome === 'failed') {
+    const done = decideContinuation({ phase: env.PHASE, remaining });
+    return done.reason === 'finished' ? stopped(done) : undispatched(through.reason);
+  }
   if (workRef !== '') {
     return undispatched(
       'no control plane holds the work for this ticket, and a run started without its record could not read the work item',
@@ -152,7 +199,7 @@ async function dispatchNext({ github, core, owner, repo, env, fetch: call = glob
 
   const verdict = decideContinuation({
     phase: env.PHASE,
-    remaining: env.REMAINING,
+    remaining,
     prevRemaining: env.PREV_REMAINING,
     prevStall: env.STALL,
     attempt: env.ATTEMPT,
@@ -566,6 +613,23 @@ async function publishRunFailed({ github, owner, repo, env, fetch = globalThis.f
 
 async function stopSuccessor({ github, core = null, owner, repo, env, fetch: call = globalThis.fetch }) {
   const asked = String(env.NEXT_RUN ?? '').trim();
+  if (asked === '' && env.OWED === 'true') {
+    const held = await stopThroughControlPlane({
+      endpoint: env.CONTINUE_ENDPOINT,
+      owed: true,
+      env,
+      mint: (audience) => core.getIDToken(audience),
+      secret: (token) => core.setSecret(token),
+      fetch: call,
+    });
+    if (held.outcome === 'held') {
+      return { notices: ['the control plane holds this chain for the person this step stopped for'], warnings: [] };
+    }
+    return {
+      notices: [],
+      warnings: [`the control plane could not hold this chain, so it may start the next run into the same wall: ${held.reason}`],
+    };
+  }
   if (!/^\d{1,15}$/.test(asked)) return { notices: [], warnings: [] };
   const run = Number(asked);
   if (!Number.isSafeInteger(run) || run === 0) return { notices: [], warnings: [] };
