@@ -126,7 +126,10 @@ async function dispatchNext({ github, core, owner, repo, env, fetch: call = glob
     secret: (token) => core.setSecret(token),
     fetch: call,
   });
-  if (through.outcome === 'failed') return undispatched(through.reason);
+  if (through.outcome === 'failed') {
+    const done = decideContinuation({ phase: env.PHASE, remaining: env.REMAINING });
+    return done.reason === 'finished' ? stopped(done) : undispatched(through.reason);
+  }
   if (through.outcome === 'stopped') return stopped(through);
   if (through.outcome === 'dispatched') {
     outputs.next_run = String(through.run ?? '');

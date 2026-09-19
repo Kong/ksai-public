@@ -2,7 +2,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const { ATTEMPT_ID_SHAPE, compactJob } = require('../lib/write-record.cjs');
-const { controlPlaneBase, controlPlaneToken, unreached } = require('./control-plane.cjs');
+const { postTo, reachControlPlane, unreached } = require('../lib/control-plane.cjs');
 
 function attemptOf(raw) {
   const parts = String(raw).trim().split(':');
@@ -63,8 +63,6 @@ export async function reportSpend({
 } = {}) {
   const named = String(endpoint).trim();
   if (named === '') return { reported: false, why: '' };
-  const base = controlPlaneBase(named);
-  if (base === '') return { reported: false, why: 'the endpoint is not a bare https URL' };
 
   const piece = attemptOf(attempt);
   if (piece === '') {
@@ -81,9 +79,8 @@ export async function reportSpend({
     return { reported: false, why: 'this run measured no cost it could pass on' };
   }
 
-  const minted = await controlPlaneToken({ audience, env, mint, secret });
-  if (minted.failure) return { reported: false, why: minted.failure };
-  const { token } = minted;
+  const { base, token, failure } = await reachControlPlane({ endpoint: named, audience, env, mint, secret });
+  if (failure) return { reported: false, why: failure };
 
   const at = `${base}/spend`;
   const body = JSON.stringify(
@@ -98,12 +95,7 @@ export async function reportSpend({
 
     let answer;
     try {
-      answer = await call(at, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body,
-        signal: AbortSignal.timeout(timeout),
-      });
+      answer = await postTo(call, at, { token, body, timeout });
     } catch (error) {
       last = unreached(error);
       continue;

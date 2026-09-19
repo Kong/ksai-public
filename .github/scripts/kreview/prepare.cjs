@@ -4,6 +4,7 @@ const { CLARIFY_VERDICT, NO_VERDICT, actOnVerdict, renderClarification, renderSt
   require('../ksai/classify.cjs');
 const loadKsaiConfig = require('../ksai/config.cjs');
 const { EXTRA_ARGS_REFUSAL, toolPolicy, validateExtraArgs } = require('../lib/claude-args.cjs');
+const { mintedId, postTo, reachControlPlane, unreached } = require('../lib/control-plane.cjs');
 const {
   HELP_COMMAND,
   commandAuthorized,
@@ -32,7 +33,6 @@ const NO_TRIAGE = Object.freeze(NO_TRIAGE_DEFAULTS);
 const TRIAGE_API_VERSION = 'triage/v1';
 const TRIAGE_MODES = Object.freeze(['local', 'shadow', 'cp']);
 const SHA = /^[0-9a-f]{40}$/;
-const RECORD_ID = /^[0-9a-f]{32}$/;
 
 function telemetryTag(value) {
   return String(value ?? '').replace(/[, =]/g, '_');
@@ -130,16 +130,6 @@ function differentFields(local, remote) {
     .filter((field) => JSON.stringify(canonical(local[field])) !== JSON.stringify(canonical(remote[field])));
 }
 
-function bareEndpoint(value) {
-  try {
-    const url = new URL(value);
-    return url.protocol === 'https:' && url.hostname !== '' && url.username === '' && url.password === ''
-      && url.search === '' && url.hash === '';
-  } catch {
-    return false;
-  }
-}
-
 function jwtClaims(token) {
   const pieces = String(token).split('.');
   if (pieces.length !== 3) throw new Error('the identity token is malformed');
@@ -181,12 +171,10 @@ function validReviewDecision(decision, { evidenceRevision, requestId, headSha, m
 const pause = (milliseconds) => new Promise((resolve) => { setTimeout(resolve, milliseconds); });
 
 async function requestReviewTriage({ core, endpoint, request, mint, call = fetch, rest = pause }) {
-  if (!bareEndpoint(endpoint)) throw new Error('the control-plane endpoint is not a bare https URL');
-  if (!process.env.ACTIONS_ID_TOKEN_REQUEST_URL || !process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) {
-    throw new Error('this job cannot mint an identity token');
-  }
-  const token = String(await mint('ksai-cp'));
-  core?.setSecret?.(token);
+  const { base, token, failure } = await reachControlPlane({
+    endpoint, env: process.env, mint, secret: (minted) => core?.setSecret?.(minted),
+  });
+  if (failure) throw new Error(failure);
   const claims = jwtClaims(token);
   const evidenceRevision = sha256(goJSON({ kind: 'review', head: request.head_sha, evidence: request.evidence }));
   const requestRevision = sha256(goJSON({ kind: 'review', request }));
@@ -194,17 +182,13 @@ async function requestReviewTriage({ core, endpoint, request, mint, call = fetch
     String(claims.repository ?? '').toLowerCase(), String(claims.run_id ?? ''),
     String(claims.job_workflow_ref ?? ''), request.record_id, 'review', requestRevision,
   ].join('\0')).digest('hex').slice(0, 32);
-  const url = `${endpoint.replace(/\/+$/, '')}/v1/triage/review`;
-  const options = {
-    method: 'POST',
-    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-    body: JSON.stringify(request),
-  };
+  const url = `${base}/v1/triage/review`;
+  const body = JSON.stringify(request);
   let answer;
   let lastFailure;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      answer = await call(url, { ...options, signal: AbortSignal.timeout(15000) });
+      answer = await postTo(call, url, { token, body, timeout: 15000 });
       lastFailure = null;
     } catch (error) {
       lastFailure = error;
@@ -216,7 +200,7 @@ async function requestReviewTriage({ core, endpoint, request, mint, call = fetch
     await rest(Number.isFinite(asked) && asked > 0 ? Math.min(asked, 5000) : 1000 * (attempt + 1));
     answer = undefined;
   }
-  if (lastFailure) throw new Error(`the control plane could not be reached: ${lastFailure.message}`);
+  if (lastFailure) throw new Error(unreached(lastFailure));
   if (!answer.ok) throw new Error(`the control plane answered ${answer.status}`);
   const raw = await answer.text();
   if (Buffer.byteLength(raw) > 65536) throw new Error('the control plane returned an oversized review decision');
@@ -261,7 +245,8 @@ async function runTriage({ github, core, owner, repo, prNumber, env = process.en
       model: null,
     };
     const mode = TRIAGE_MODES.includes(env.REVIEW_TRIAGE_MODE) ? env.REVIEW_TRIAGE_MODE : 'local';
-    const remoteReady = env.FLEET_DIALS_ENDPOINT && RECORD_ID.test(env.RECORD_ID ?? '')
+    const record = mintedId(env.RECORD_ID);
+    const remoteReady = env.FLEET_DIALS_ENDPOINT && record !== ''
       && SHA.test(env.RUN_HEAD_SHA ?? '') && SHA.test(pr.head?.sha ?? '');
     if (mode !== 'local' && remoteReady) {
       const models = [...new Set([env.CONFIGURED_MODEL, ...splitNames(env.ALLOWED_MODELS)].filter(Boolean))].slice(0, 16);
@@ -269,7 +254,7 @@ async function runTriage({ github, core, owner, repo, prNumber, env = process.en
       const boundedAuthors = commits.authors.slice(0, 250);
       const request = {
         api_version: TRIAGE_API_VERSION,
-        record_id: env.RECORD_ID,
+        record_id: record,
         run_head_sha: env.RUN_HEAD_SHA,
         head_sha: pr.head.sha.toLowerCase(),
         capabilities: { reviewer_skills: [...REVIEWER_SKILLS], models },

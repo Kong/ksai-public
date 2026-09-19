@@ -12,11 +12,9 @@ const {
   parseAllowedModels,
   defaultEffortFor,
 } = require('../lib/select-arm.cjs');
-const { controlPlaneBase, controlPlaneToken } = require('./control-plane.cjs');
+const { mintedId, postTo, reachControlPlane } = require('../lib/control-plane.cjs');
 
 const API_VERSION = 'triage/v1';
-
-const RECORD_SHAPE = /^[0-9a-f]{32}$/;
 
 const COMMIT_SHAPE = /^[0-9a-f]{40}$/;
 
@@ -98,10 +96,10 @@ function writeTriageRequest(env = process.env) {
   if (triage === 'off') return { error: 'write triage is off, so this run keeps the arm it resolved' };
   if (triage !== 'auto') return { error: 'triage is neither auto nor off' };
 
-  const record = String(env.RECORD_ID ?? '').trim().toLowerCase();
+  const record = mintedId(env.RECORD_ID);
   const runHead = String(env.RUN_HEAD_SHA ?? '').trim().toLowerCase();
   const head = String(env.HEAD_SHA ?? '').trim().toLowerCase();
-  if (!RECORD_SHAPE.test(record)) return { error: 'this run carries no control-plane record' };
+  if (record === '') return { error: 'this run carries no control-plane record' };
   if (!COMMIT_SHAPE.test(runHead) || !COMMIT_SHAPE.test(head)) {
     return { error: 'this run carries no head to bind a decision to' };
   }
@@ -242,24 +240,17 @@ async function decideWrite({
   if (String(env.TRIAGE_WRITE ?? '').trim() !== 'cp') return kept('');
   const endpoint = String(env.ENDPOINT ?? '').trim();
   if (endpoint === '') return kept('no control plane serves this repository');
-  const base = controlPlaneBase(endpoint);
-  if (base === '') return kept('the control plane endpoint is not a bare https URL');
 
   const { body, error } = writeTriageRequest(env);
   if (error) return kept(error);
 
-  const minted = await controlPlaneToken({ audience: String(env.AUDIENCE ?? '').trim() || 'ksai-cp', env, mint, secret });
-  if (minted.failure) return kept(minted.failure);
-  const { token } = minted;
+  const audience = String(env.AUDIENCE ?? '').trim() || undefined;
+  const { base, token, failure } = await reachControlPlane({ endpoint, audience, env, mint, secret });
+  if (failure) return kept(failure);
 
   let answer;
   try {
-    const response = await fetch(`${base}/v1/triage/write`, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(timeout),
-    });
+    const response = await postTo(fetch, `${base}/v1/triage/write`, { token, body: JSON.stringify(body), timeout });
     if (response.status === 409) return kept('the evidence this run sent is no longer current');
     if (!response.ok) return kept('the control plane did not decide this run');
     answer = await response.json();
