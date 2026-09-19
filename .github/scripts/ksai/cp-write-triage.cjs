@@ -12,7 +12,7 @@ const {
   parseAllowedModels,
   defaultEffortFor,
 } = require('../lib/select-arm.cjs');
-const { bareEndpoint } = require('./control-plane.cjs');
+const { controlPlaneBase, controlPlaneToken } = require('./control-plane.cjs');
 
 const API_VERSION = 'triage/v1';
 
@@ -242,26 +242,19 @@ async function decideWrite({
   if (String(env.TRIAGE_WRITE ?? '').trim() !== 'cp') return kept('');
   const endpoint = String(env.ENDPOINT ?? '').trim();
   if (endpoint === '') return kept('no control plane serves this repository');
-  if (!bareEndpoint(endpoint)) return kept('the control plane endpoint is not a bare https URL');
-  if (!env.ACTIONS_ID_TOKEN_REQUEST_URL || !env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) {
-    return kept('this job holds no id-token: write, so it cannot say which repository it is');
-  }
+  const base = controlPlaneBase(endpoint);
+  if (base === '') return kept('the control plane endpoint is not a bare https URL');
 
   const { body, error } = writeTriageRequest(env);
   if (error) return kept(error);
 
-  let token = '';
-  try {
-    token = await mint(String(env.AUDIENCE ?? '').trim() || 'ksai-cp');
-  } catch {
-    return kept('the OIDC token could not be minted');
-  }
-  if (typeof token !== 'string' || token === '') return kept('the OIDC token endpoint answered with no token');
-  secret(token);
+  const minted = await controlPlaneToken({ audience: String(env.AUDIENCE ?? '').trim() || 'ksai-cp', env, mint, secret });
+  if (minted.failure) return kept(minted.failure);
+  const { token } = minted;
 
   let answer;
   try {
-    const response = await fetch(`${endpoint.replace(/\/+$/, '')}/v1/triage/write`, {
+    const response = await fetch(`${base}/v1/triage/write`, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify(body),

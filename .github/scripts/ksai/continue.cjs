@@ -6,7 +6,7 @@ const { scrub } = require('./plan.cjs');
 const { asAlert } = require('../lib/select-arm.cjs');
 const { counted, plural } = require('../lib/text.cjs');
 const { MAX_ATTEMPTS } = require('../lib/write-record.cjs');
-const { controlPlaneToken, unreached } = require('./control-plane.cjs');
+const { controlPlaneBase, controlPlaneToken, unreached } = require('./control-plane.cjs');
 
 const MAX_STALL = 3;
 
@@ -287,11 +287,13 @@ async function continueThroughControlPlane({
   const issue = String(issueNumber ?? '');
   if (named === '' || (ref === '' && issue === '')) return { outcome: 'unheld', reason: '' };
 
-  const minted = await controlPlaneToken({ endpoint: named, audience, env, mint, secret });
+  const base = controlPlaneBase(named);
+  if (base === '') return { outcome: 'failed', reason: 'the control plane endpoint is not a bare https URL' };
+  const minted = await controlPlaneToken({ audience, env, mint, secret });
   if (minted.failure) return { outcome: 'failed', reason: minted.failure };
   const { token } = minted;
 
-  const at = `${minted.base}/run/continue`;
+  const at = `${base}/run/continue`;
   const body = JSON.stringify({
     ...(ref !== '' ? { work_ref: ref } : { issue_number: issue }),
     record_id: mintedId(recordId),
@@ -366,12 +368,14 @@ async function stopThroughControlPlane({
   const successor = readCount(run);
   if (named === '' || sealed === '' || successor === null || successor === 0) return { outcome: 'unheld', reason: '' };
 
-  const minted = await controlPlaneToken({ endpoint: named, audience, env, mint, secret });
+  const base = controlPlaneBase(named);
+  if (base === '') return { outcome: 'failed', reason: 'the control plane endpoint is not a bare https URL' };
+  const minted = await controlPlaneToken({ audience, env, mint, secret });
   if (minted.failure) return { outcome: 'failed', reason: minted.failure };
 
   let answer;
   try {
-    answer = await call(`${minted.base}/run/continue/stop`, {
+    answer = await call(`${base}/run/continue/stop`, {
       method: 'POST',
       headers: { authorization: `Bearer ${minted.token}`, 'content-type': 'application/json' },
       body: JSON.stringify({ run_id: String(successor), seal: sealed }),

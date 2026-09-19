@@ -12,26 +12,29 @@ function bareEndpoint(endpoint) {
     && url.username === '' && url.password === '';
 }
 
-async function controlPlaneToken({ endpoint, audience, env, mint, secret }) {
+function controlPlaneBase(endpoint) {
   const named = String(endpoint ?? '').trim();
-  if (!bareEndpoint(named)) return { failure: 'the control plane endpoint is not a bare https URL' };
+  return bareEndpoint(named) ? named.replace(/\/+$/, '') : '';
+}
+
+async function controlPlaneToken({ audience = 'ksai-cp', env, mint, secret }) {
   if (!env.ACTIONS_ID_TOKEN_REQUEST_URL || !env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) {
-    return { failure: 'this job holds no id-token: write, so it cannot ask the control plane' };
+    return { failure: 'this job holds no id-token: write, so it cannot name itself to the control plane' };
   }
 
-  let token = '';
+  let token;
   try {
-    token = String((await mint(audience)) ?? '');
+    token = await mint(audience);
   } catch {
     return { failure: 'a token for the control plane could not be minted' };
   }
-  if (token === '') return { failure: 'the token endpoint answered with no token' };
+  if (typeof token !== 'string' || token === '') return { failure: 'the token endpoint answered with no token' };
   secret(token);
-  return { token, base: named.replace(/\/+$/, '') };
+  return { token };
 }
 
 function unreached(error) {
   return `the control plane could not be reached: ${error?.cause?.code || error?.message || 'it said nothing'}`;
 }
 
-module.exports = { bareEndpoint, controlPlaneToken, unreached };
+module.exports = { bareEndpoint, controlPlaneBase, controlPlaneToken, unreached };

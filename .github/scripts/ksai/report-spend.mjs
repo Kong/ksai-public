@@ -2,7 +2,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const { ATTEMPT_ID_SHAPE, compactJob } = require('../lib/write-record.cjs');
-const { bareEndpoint } = require('./control-plane.cjs');
+const { controlPlaneBase, controlPlaneToken, unreached } = require('./control-plane.cjs');
 
 function attemptOf(raw) {
   const parts = String(raw).trim().split(':');
@@ -63,7 +63,8 @@ export async function reportSpend({
 } = {}) {
   const named = String(endpoint).trim();
   if (named === '') return { reported: false, why: '' };
-  if (!bareEndpoint(named)) return { reported: false, why: 'the endpoint is not a bare https URL' };
+  const base = controlPlaneBase(named);
+  if (base === '') return { reported: false, why: 'the endpoint is not a bare https URL' };
 
   const piece = attemptOf(attempt);
   if (piece === '') {
@@ -80,20 +81,11 @@ export async function reportSpend({
     return { reported: false, why: 'this run measured no cost it could pass on' };
   }
 
-  if (!env.ACTIONS_ID_TOKEN_REQUEST_URL || !env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) {
-    return { reported: false, why: 'this job holds no id-token: write, so it cannot name itself' };
-  }
+  const minted = await controlPlaneToken({ audience, env, mint, secret });
+  if (minted.failure) return { reported: false, why: minted.failure };
+  const { token } = minted;
 
-  let token = '';
-  try {
-    token = String((await mint(audience)) ?? '');
-  } catch {
-    return { reported: false, why: 'a token for the control plane could not be minted' };
-  }
-  if (token === '') return { reported: false, why: 'the token endpoint answered with no token' };
-  secret(token);
-
-  const at = `${named.replace(/\/+$/, '')}/spend`;
+  const at = `${base}/spend`;
   const body = JSON.stringify(
     tally === null
       ? { attempt: piece, cost_usd: usd }
@@ -112,8 +104,8 @@ export async function reportSpend({
         body,
         signal: AbortSignal.timeout(timeout),
       });
-    } catch (unreached) {
-      last = `the control plane could not be reached: ${unreached?.cause?.code || unreached?.message || 'it said nothing'}`;
+    } catch (error) {
+      last = unreached(error);
       continue;
     }
 
