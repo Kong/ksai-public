@@ -178,9 +178,10 @@ async function requestReviewTriage({ core, endpoint, request, mint, call = fetch
   const claims = jwtClaims(token);
   const evidenceRevision = sha256(goJSON({ kind: 'review', head: request.head_sha, evidence: request.evidence }));
   const requestRevision = sha256(goJSON({ kind: 'review', request }));
+  const [workflow] = String(claims.job_workflow_ref ?? '').split('@');
   const requestId = crypto.createHash('sha256').update([
     String(claims.repository ?? '').toLowerCase(), String(claims.run_id ?? ''),
-    String(claims.job_workflow_ref ?? ''), request.record_id, 'review', requestRevision,
+    `${workflow}@${claims.job_workflow_sha ?? ''}`, request.record_id, 'review', requestRevision,
   ].join('\0')).digest('hex').slice(0, 32);
   const url = `${base}/v1/triage/review`;
   const body = JSON.stringify(request);
