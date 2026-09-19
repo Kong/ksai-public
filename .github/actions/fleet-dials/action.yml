@@ -76,6 +76,13 @@ inputs:
     description: how many times one call may repeat before the watchdog stops the run, pinned in this workflow
     required: false
     default: ""
+  key_held:
+    description: >-
+      `true` where the caller passes the App key. A caller that passes none has nothing to mint
+      with, so `run_tokens` answers `cp` for it whatever the control plane serves, and every step
+      after it reads one mode.
+    required: false
+    default: "true"
 
 outputs:
   model:
@@ -148,9 +155,9 @@ outputs:
     description: >-
       where a `ksai-cp.yml` run gets its GitHub tokens: `local` mints them with the App key the
       caller passes, `shadow` does that and also asks the control plane for each one and revokes
-      what it answers at once, and `cp` asks the control plane alone. A caller that passes no key
-      asks the control plane whatever this says. Nothing is pinned here, because a repository moves
-      by being served this dial.
+      what it answers at once, and `cp` asks the control plane alone. It is `cp` for a caller that
+      passes no key, whatever the control plane serves. Nothing is pinned here, because a
+      repository moves by being served this dial.
     value: ${{ steps.dials.outputs.run_tokens }}
   catalog_path:
     description: >-
@@ -182,9 +189,10 @@ runs:
         DIALS_JOB_TIMEOUT_MINUTES: ${{ inputs.job_timeout_minutes }}
         DIALS_MAX_CONSECUTIVE_TOOL_FAILURES: ${{ inputs.max_consecutive_tool_failures }}
         DIALS_MAX_REPEATED_TOOL_CALLS: ${{ inputs.max_repeated_tool_calls }}
+        DIALS_KEY_HELD: ${{ inputs.key_held }}
       with:
         script: |
-          const { readDials } = await import(`file://${process.env.DIALS_ACTION_PATH}/dials.mjs`);
+          const { keyless, readDials } = await import(`file://${process.env.DIALS_ACTION_PATH}/dials.mjs`);
           const pinned = {
             shadow_percent: process.env.DIALS_SHADOW_PERCENT,
             review_triage_mode: process.env.DIALS_REVIEW_TRIAGE_MODE,
@@ -195,7 +203,7 @@ runs:
             max_consecutive_tool_failures: process.env.DIALS_MAX_CONSECUTIVE_TOOL_FAILURES,
             max_repeated_tool_calls: process.env.DIALS_MAX_REPEATED_TOOL_CALLS,
           };
-          const answer = await readDials({
+          const answer = keyless(await readDials({
             endpoint: process.env.DIALS_ENDPOINT,
             audience: process.env.DIALS_AUDIENCE,
             model: process.env.DIALS_MODEL,
@@ -203,7 +211,7 @@ runs:
             pinned,
             mint: (audience) => core.getIDToken(audience),
             secret: (token) => core.setSecret(token),
-          });
+          }), process.env.DIALS_KEY_HELD);
           if (answer.served) {
             core.notice(`ksai is running on the fleet dials: model ${answer.model}, effort ${answer.effort}`);
           } else if (answer.why) {

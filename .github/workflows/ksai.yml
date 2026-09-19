@@ -912,6 +912,7 @@ jobs:
           job_timeout_minutes: ${{ inputs.job_timeout_minutes }}
           max_consecutive_tool_failures: ${{ inputs.max_consecutive_tool_failures }}
           max_repeated_tool_calls: ${{ inputs.max_repeated_tool_calls }}
+          key_held: ${{ secrets.ksai_private_key != '' }}
 
       - name: Read the dispatch record
         id: record
@@ -1069,7 +1070,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-help
           repository: Kong/ksai-public
-          ref: v3.98.0
+          ref: v3.98.1
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1522,7 +1523,7 @@ jobs:
         with:
           token: ${{ github.token }}
           repository: Kong/ksai-public
-          ref: v3.98.0
+          ref: v3.98.1
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1990,11 +1991,24 @@ jobs:
         with:
           egress-policy: audit
 
+      - name: Mint the token that withdraws the request
+        id: clear-token
+        if: ${{ needs.gate.result == 'success' && inputs.push_as_app }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          client-id: ${{ inputs.client_id || vars.KSAI_CLIENT_ID }}
+          private-key: ${{ secrets.ksai_private_key }}
+          permission-members: read
+          permission-pull-requests: write
+
       - uses: $/.github/actions/clear-review-request
         if: ${{ needs.gate.result == 'success' }}
         with:
           pr_number: ${{ inputs.pr || needs.gate.outputs.number }}
           team_slug: ${{ vars.KSAI_REVIEW_TEAM || 'ksai' }}
+          token: ${{ steps.clear-token.outputs.token }}
           client-id: ${{ inputs.client_id || vars.KSAI_CLIENT_ID }}
           private-key: ${{ secrets.ksai_private_key }}
           refused-actor: ${{ needs.gate.outputs.authorized != 'true' && inputs.actor || '' }}
@@ -2041,7 +2055,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-recover
           repository: Kong/ksai-public
-          ref: v3.98.0
+          ref: v3.98.1
           sparse-checkout: |
             .github/scripts
           persist-credentials: false

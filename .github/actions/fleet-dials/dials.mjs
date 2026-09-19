@@ -72,6 +72,11 @@ const held = (model, effort, pinned, why) => ({
   why,
 });
 
+export function keyless(answer, keyHeld) {
+  if (keyHeld === 'true') return answer;
+  return { ...answer, dials: { ...answer.dials, run_tokens: 'cp' } };
+}
+
 export function catalogOf(value) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
   const models = /** @type {{ models?: unknown }} */ (value).models;
