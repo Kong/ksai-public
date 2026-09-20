@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ksai.invalid/prompts/schemas/command-classifier.schema.json",
+  "title": "Owned command classifier prompt input",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "classifier",
+    "comment"
+  ],
+  "properties": {
+    "classifier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "commands",
+        "disabled_commands",
+        "surface"
+      ],
+      "properties": {
+        "commands": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 6,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "approve-nudge",
+              "fix",
+              "implement",
+              "review",
+              "revise",
+              "test"
+            ]
+          }
+        },
+        "disabled_commands": {
+          "type": "array",
+          "maxItems": 11,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "approve",
+              "fix",
+              "help",
+              "implement",
+              "pause",
+              "resume",
+              "review",
+              "revise",
+              "stop",
+              "test",
+              "unlock"
+            ]
+          }
+        },
+        "surface": {
+          "enum": [
+            "issue",
+            "own-pull",
+            "own-thread",
+            "pull",
+            "thread",
+            "unknown"
+          ]
+        }
+      }
+    },
+    "comment": {
+      "type": "string",
+      "maxLength": 65536
+    }
+  }
+}

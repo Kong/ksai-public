@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ksai.invalid/prompts/schemas/implement-adversarial.schema.json",
+  "title": "Independent implement adversarial review input",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "context",
+    "denied_paths",
+    "manifest",
+    "work"
+  ],
+  "properties": {
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "base_sha",
+        "branch",
+        "max_findings",
+        "phase",
+        "pr_number",
+        "repository"
+      ],
+      "properties": {
+        "base_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{7,64}$"
+        },
+        "branch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$"
+        },
+        "phase": {
+          "enum": [
+            "direct",
+            "do",
+            "fix",
+            "plan",
+            "revise",
+            "step"
+          ]
+        },
+        "pr_number": {
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^\\d*$"
+        },
+        "repository": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+        },
+        "max_findings": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        }
+      }
+    },
+    "denied_paths": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "string",
+        "maxLength": 4096
+      }
+    },
+    "manifest": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 131072
+    },
+    "work": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "changed_files",
+        "diff",
+        "prompt"
+      ],
+      "properties": {
+        "changed_files": {
+          "$ref": "#/$defs/artifact"
+        },
+        "diff": {
+          "$ref": "#/$defs/artifact"
+        },
+        "prompt": {
+          "$ref": "#/$defs/artifact"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bytes",
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 536870912
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    }
+  }
+}

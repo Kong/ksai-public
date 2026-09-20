@@ -1,3 +1,5 @@
+'use strict';
+
 const WHITESPACE = /[ \t\r\n]/;
 
 const at = (source, index, message) => new Error(`${message} at byte ${Buffer.byteLength(source.slice(0, index))}`);
@@ -122,7 +124,7 @@ function hasLoneSurrogate(value) {
 }
 
 /** Parse one strict UTF-8 I-JSON value, retaining duplicate-key refusal. */
-export function parseIJson(bytes, source = 'JSON') {
+function parseIJson(bytes, source = 'JSON') {
   const buffer = Buffer.isBuffer(bytes) ? bytes : Buffer.from(String(bytes));
   let text;
   try {
@@ -145,7 +147,7 @@ export function parseIJson(bytes, source = 'JSON') {
 }
 
 /** Encode an I-JSON value using RFC 8785 member ordering. */
-export function canonicalJson(value) {
+function canonicalJson(value) {
   if (value === null || typeof value === 'boolean' || typeof value === 'number') return JSON.stringify(value);
   if (typeof value === 'string') return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map((held) => canonicalJson(held)).join(',')}]`;
@@ -154,3 +156,5 @@ export function canonicalJson(value) {
   }
   throw new Error('value is not I-JSON');
 }
+
+module.exports = { canonicalJson, parseIJson };

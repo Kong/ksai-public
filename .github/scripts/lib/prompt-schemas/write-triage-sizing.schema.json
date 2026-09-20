@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ksai.invalid/prompts/schemas/write-triage-sizing.schema.json",
+  "title": "Plan-sizing triage input",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ask",
+    "checks",
+    "conversation",
+    "plan_step",
+    "request",
+    "review_threads",
+    "triage"
+  ],
+  "properties": {
+    "ask": {
+      "type": "string",
+      "maxLength": 8192
+    },
+    "checks": {
+      "type": "string",
+      "maxLength": 8192
+    },
+    "conversation": {
+      "type": "string",
+      "maxLength": 12288
+    },
+    "plan_step": {
+      "type": "string",
+      "maxLength": 2048
+    },
+    "request": {
+      "type": "string",
+      "maxLength": 8192
+    },
+    "review_threads": {
+      "type": "string",
+      "maxLength": 8192
+    },
+    "triage": {
+      "$ref": "#/$defs/triage"
+    }
+  },
+  "$defs": {
+    "triage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command",
+        "phase"
+      ],
+      "properties": {
+        "command": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[^\\x00\\r\\n<>]*$"
+        },
+        "phase": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[^\\x00\\r\\n<>]*$"
+        }
+      }
+    }
+  }
+}

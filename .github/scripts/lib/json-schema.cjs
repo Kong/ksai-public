@@ -1,9 +1,11 @@
-import { canonicalJson } from './json.mjs';
+'use strict';
+
+const { canonicalJson } = require('./json.cjs');
 
 const TYPE = new Set(['null', 'boolean', 'object', 'array', 'number', 'integer', 'string']);
-export const SCHEMA_KEYWORDS = Object.freeze([
+const SCHEMA_KEYWORDS = Object.freeze([
   '$schema', '$id', '$defs', '$ref', 'type', 'enum', 'const', 'required', 'properties',
-  'additionalProperties', 'items', 'minItems', 'maxItems', 'minLength', 'maxLength', 'pattern',
+  'additionalProperties', 'items', 'minItems', 'maxItems', 'maxProperties', 'uniqueItems', 'minLength', 'maxLength', 'pattern',
   'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'allOf', 'anyOf', 'oneOf',
   'description', 'title', 'default', 'examples', 'format',
 ]);
@@ -12,6 +14,17 @@ const DIALECT = 'https://json-schema.org/draft/2020-12/schema';
 
 const object = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 const same = (left, right) => canonicalJson(left) === canonicalJson(right);
+
+function overCodePoints(value, limit) {
+  if (value.length <= limit) return false;
+  if (value.length > limit * 2) return true;
+  let count = 0;
+  for (const at of value) {
+    count += Math.min(at.length, 1);
+    if (count > limit) return true;
+  }
+  return false;
+}
 
 function pointer(root, fragment, reference) {
   if (fragment === '' || fragment === '#') return root;
@@ -107,17 +120,17 @@ function inspect(schema, root, path, resolveReference, seen, resourceRoot, idBas
 }
 
 /** Check every supported local schema keyword, including branches fixtures do not reach. */
-export function validateSchemaDefinition(schema) {
+function validateSchemaDefinition(schema) {
   inspect(schema, schema, 'schema', undefined, new Set(['schema\0#']), true, false);
 }
 
 /** Check a schema closure with package-relative references. */
-export function validateSchemaDefinitionWithReferences(schema, path, resolveReference) {
+function validateSchemaDefinitionWithReferences(schema, path, resolveReference) {
   inspect(schema, schema, path, resolveReference, new Set([`${path}\0#`]), true, false);
 }
 
 /** List every schema ID in one document, including IDs on nested subschemas. */
-export function collectSchemaIds(schema, path = 'schema') {
+function collectSchemaIds(schema, path = 'schema') {
   const found = [];
   const walk = (held, location) => {
     if (typeof held === 'boolean') return;
@@ -173,7 +186,10 @@ function check(schema, value, root, path, where, problems, seen, resolveReferenc
     problems.push(`${where} must be ${types.join(' or ')}`);
     return blocked;
   }
-  if (Array.isArray(schema.enum) && !schema.enum.some((one) => same(one, value))) problems.push(`${where} is not an allowed value`);
+  if (Array.isArray(schema.enum)) {
+    const held = canonicalJson(value);
+    if (!schema.enum.some((one) => canonicalJson(one) === held)) problems.push(`${where} is not an allowed value`);
+  }
   if (Object.hasOwn(schema, 'const') && !same(schema.const, value)) problems.push(`${where} is not the required value`);
 
   for (const keyword of ['allOf', 'anyOf', 'oneOf']) {
@@ -192,8 +208,8 @@ function check(schema, value, root, path, where, problems, seen, resolveReferenc
   }
 
   if (typeof value === 'string') {
-    if (Number.isInteger(schema.minLength) && [...value].length < schema.minLength) problems.push(`${where} is too short`);
-    if (Number.isInteger(schema.maxLength) && [...value].length > schema.maxLength) problems.push(`${where} is too long`);
+    if (Number.isInteger(schema.minLength) && value.length < schema.minLength * 2 && [...value].length < schema.minLength) problems.push(`${where} is too short`);
+    if (Number.isInteger(schema.maxLength) && overCodePoints(value, schema.maxLength)) problems.push(`${where} is too long`);
     if (typeof schema.pattern === 'string' && !new RegExp(schema.pattern, 'u').test(value)) problems.push(`${where} does not match its pattern`);
   }
   if (typeof value === 'number') {
@@ -205,11 +221,13 @@ function check(schema, value, root, path, where, problems, seen, resolveReferenc
   if (Array.isArray(value)) {
     if (Number.isInteger(schema.minItems) && value.length < schema.minItems) problems.push(`${where} has too few items`);
     if (Number.isInteger(schema.maxItems) && value.length > schema.maxItems) problems.push(`${where} has too many items`);
+    if (schema.uniqueItems === true && new Set(value.map((one) => canonicalJson(one))).size !== value.length) problems.push(`${where} repeats an item`);
     if (schema.items !== undefined) value.forEach((item, index) => {
       if (check(schema.items, item, root, path, `${where}[${index}]`, problems, seen, resolveReference)) blocked = true;
     });
   }
   if (object(value)) {
+    if (Number.isInteger(schema.maxProperties) && Object.keys(value).length > schema.maxProperties) problems.push(`${where} carries too many properties`);
     const required = schema.required ?? [];
     if (!Array.isArray(required) || required.some((key) => typeof key !== 'string')) throw new Error(`${where} schema required is invalid`);
     for (const key of required) if (!Object.hasOwn(value, key)) problems.push(`${where}.${key} is required`);
@@ -231,15 +249,17 @@ function check(schema, value, root, path, where, problems, seen, resolveReferenc
 }
 
 /** Validate a value against the dependency-free runner schema subset. */
-export function validateSchema(schema, value, where = 'output') {
+function validateSchema(schema, value, where = 'output') {
   const problems = [];
   check(schema, value, schema, 'schema', where, problems, new Set(['schema\0#']), undefined);
   return problems;
 }
 
 /** Validate a value against a package-relative schema closure. */
-export function validateSchemaWithReferences(schema, value, where, path, resolveReference) {
+function validateSchemaWithReferences(schema, value, where, path, resolveReference) {
   const problems = [];
   check(schema, value, schema, path, where, problems, new Set([`${path}\0#`]), resolveReference);
   return problems;
 }
+
+module.exports = { SCHEMA_KEYWORDS, collectSchemaIds, validateSchema, validateSchemaDefinition, validateSchemaDefinitionWithReferences, validateSchemaWithReferences };

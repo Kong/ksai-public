@@ -354,8 +354,8 @@ function phaseInputs(phase, values) {
     issue,
     denied,
     failures,
+    component('retry', values.retry ?? null),
   ];
-  if (values.retry) inputs.push(component('retry', values.retry));
   return inputs;
 }
 

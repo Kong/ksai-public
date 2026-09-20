@@ -150,6 +150,8 @@ const surfaceForComment = ({ onOwnPull = null, onIssue = null, threadRootId = nu
   return where === THREAD_SURFACE ? OWN_THREAD_SURFACE : where;
 };
 
+const classifiable = (disabledCommands, surface = null) => answerable(disabledCommands, surface).length > 0;
+
 function commandClassifierRenderRequest({ comment = null, surface = null, disabledCommands = null, model = '' } = {}) {
   const asked = String(surface ?? '');
   if (asked !== '' && !SURFACES.includes(asked)) {
@@ -392,6 +394,7 @@ module.exports = {
   CLASSIFIER_SOURCE,
   EXAMPLES,
   answerable,
+  classifiable,
   commandClassifierRenderRequest,
   finalResult,
   renderCommandClassifierPrompt,

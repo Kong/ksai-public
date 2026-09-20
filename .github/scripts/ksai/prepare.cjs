@@ -17,6 +17,7 @@ const {
 const {
   CLARIFY_VERDICT,
   classifierModel,
+  classifiable,
   commandClassifierRenderRequest,
   renderClarification,
   renderClassifierSpend,
@@ -1079,6 +1080,9 @@ async function planClassification({ github, core, owner, repo, env }) {
     }),
     disabledCommands: env.DISABLED_COMMANDS,
   };
+  if (!classifiable(asked.disabledCommands, asked.surface)) {
+    return { outputs: { classify: 'false' }, notices: ['Every command this surface offers is disabled, so nothing was classified.'], warnings: [] };
+  }
   fs.writeFileSync(env.PROMPT_FILE, renderCommandClassifierPrompt(asked));
   const requestFile = `${env.PROMPT_FILE}.request.json`;
   writeRenderRequest(requestFile, commandClassifierRenderRequest({ ...asked, model: arm.model }));

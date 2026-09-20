@@ -2,8 +2,8 @@ import { createHash } from 'node:crypto';
 import { lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { join, posix, resolve, sep } from 'node:path';
 
-import { canonicalJson, parseIJson } from './json.mjs';
-import { collectSchemaIds, validateSchemaDefinitionWithReferences } from './schema.mjs';
+import { canonicalJson, parseIJson } from '../../lib/json.cjs';
+import { collectSchemaIds, validateSchemaDefinitionWithReferences } from '../../lib/json-schema.cjs';
 
 export const PROFILES = Object.freeze([
   'read', 'mutate', 'product-read', 'product-test', 'browser-read', 'browser-test',

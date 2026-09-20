@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ksai.invalid/prompts/schemas/review-discovery.schema.json",
+  "title": "Governed review discovery stage input",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "context",
+    "stage"
+  ],
+  "properties": {
+    "context": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000000
+    },
+    "stage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "changed_files_path",
+        "diff_path",
+        "focus",
+        "has_scope",
+        "research_seconds",
+        "scope_id",
+        "step_target"
+      ],
+      "properties": {
+        "changed_files_path": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "diff_path": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "focus": {
+          "type": "string",
+          "enum": [
+            "contracts",
+            "local"
+          ]
+        },
+        "has_scope": {
+          "type": "boolean"
+        },
+        "research_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 180
+        },
+        "scope_id": {
+          "type": "string",
+          "pattern": "^(?:|scope-[1-8])$"
+        },
+        "step_target": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        }
+      }
+    }
+  }
+}

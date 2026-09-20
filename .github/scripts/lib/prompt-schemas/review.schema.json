@@ -1,0 +1,245 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ksai.invalid/prompts/schemas/review.schema.json",
+  "title": "Owned review prompt input",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "additional_prompt",
+    "prior_findings",
+    "repo_rules",
+    "request",
+    "review"
+  ],
+  "properties": {
+    "additional_prompt": {
+      "type": "string",
+      "maxLength": 32768
+    },
+    "prior_findings": {
+      "type": "string",
+      "maxLength": 262144
+    },
+    "repo_rules": {
+      "type": "string",
+      "maxLength": 131072
+    },
+    "request": {
+      "type": "string",
+      "maxLength": 131072
+    },
+    "review": {
+      "$ref": "#/$defs/review"
+    }
+  },
+  "$defs": {
+    "boundedText": {
+      "type": "string",
+      "maxLength": 131072
+    },
+    "field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "body",
+        "injected",
+        "name",
+        "path",
+        "tag"
+      ],
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/boundedText"
+        },
+        "injected": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "maxLength": 128
+        },
+        "path": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "tag": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$",
+          "maxLength": 128
+        }
+      }
+    },
+    "reviewer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "agent",
+        "agent_path",
+        "body",
+        "fields",
+        "skill"
+      ],
+      "properties": {
+        "agent": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$",
+          "maxLength": 128
+        },
+        "agent_path": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "body": {
+          "$ref": "#/$defs/boundedText"
+        },
+        "fields": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/field"
+          }
+        },
+        "skill": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$",
+          "maxLength": 128
+        }
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "available",
+        "base_sha",
+        "budget",
+        "changed_files_path",
+        "channel",
+        "common",
+        "conventions_dir",
+        "diff_path",
+        "has_rules",
+        "has_shortstat",
+        "pipeline",
+        "reviewers",
+        "route",
+        "scope",
+        "shortstat",
+        "workspace"
+      ],
+      "properties": {
+        "available": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/reviewer"
+          }
+        },
+        "base_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "budget": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "minutes",
+            "stop_after_minutes"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "minutes": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "stop_after_minutes": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1440
+            }
+          }
+        },
+        "changed_files_path": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "channel": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "nonce"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "nonce": {
+              "type": "string",
+              "pattern": "^(?:[0-9a-f]{8,64})?$"
+            }
+          }
+        },
+        "common": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/field"
+          }
+        },
+        "conventions_dir": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "diff_path": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "has_rules": {
+          "type": "boolean"
+        },
+        "has_shortstat": {
+          "type": "boolean"
+        },
+        "pipeline": {
+          "type": "boolean"
+        },
+        "reviewers": {
+          "type": "array",
+          "maxItems": 2,
+          "items": {
+            "$ref": "#/$defs/reviewer"
+          }
+        },
+        "route": {
+          "type": "string",
+          "enum": [
+            "open",
+            "routed"
+          ]
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "languages",
+            "none",
+            "with-default"
+          ]
+        },
+        "shortstat": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "workspace": {
+          "type": "string",
+          "maxLength": 4096
+        }
+      }
+    }
+  }
+}

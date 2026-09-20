@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ksai.invalid/prompts/schemas/pr-test.schema.json",
+  "title": "Owned pull request test prompt input",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "additional_prompt",
+    "base_ref",
+    "base_sha",
+    "changed_files",
+    "criteria",
+    "environment",
+    "head_sha",
+    "test_run"
+  ],
+  "properties": {
+    "additional_prompt": {
+      "type": "string",
+      "maxLength": 32768
+    },
+    "base_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "base_sha": {
+      "$ref": "#/$defs/commit"
+    },
+    "changed_files": {
+      "type": "string",
+      "maxLength": 524288
+    },
+    "criteria": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 65536
+    },
+    "environment": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 65536
+    },
+    "head_sha": {
+      "$ref": "#/$defs/commit"
+    },
+    "test_run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_dir",
+        "verdict_path"
+      ],
+      "properties": {
+        "run_dir": {
+          "$ref": "#/$defs/runDirectory"
+        },
+        "verdict_path": {
+          "$ref": "#/$defs/path"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9A-Fa-f]{40}$"
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192,
+      "pattern": "^/"
+    },
+    "runDirectory": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^/"
+    }
+  }
+}

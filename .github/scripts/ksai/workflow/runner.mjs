@@ -3,11 +3,11 @@ import {
 } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 
-import { canonicalJson, parseIJson } from './json.mjs';
+import { canonicalJson, parseIJson } from '../../lib/json.cjs';
 import {
   loadManifest, manifestStage, packageDigest, packageFile, sha256, validDigest, validVersion, validWorkflowId,
 } from './manifest.mjs';
-import { validateSchemaWithReferences } from './schema.mjs';
+import { validateSchemaWithReferences } from '../../lib/json-schema.cjs';
 
 const RECORD_VERSION = 'ksai.konghq.com/stage-record/v1alpha1';
 const CANDIDATE_VERSION = 'ksai.konghq.com/stage-candidate/v1alpha1';

@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ksai.invalid/prompts/schemas/review-findings-audit.schema.json",
+  "title": "Governed review findings audit stage input",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "auditor_mandate",
+    "candidates",
+    "context",
+    "prior",
+    "stage"
+  ],
+  "properties": {
+    "auditor_mandate": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 262144
+    },
+    "candidates": {
+      "type": "array",
+      "maxItems": 4,
+      "items": {
+        "type": "object"
+      }
+    },
+    "context": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 524288
+    },
+    "prior": {
+      "type": "string",
+      "maxLength": 131072
+    },
+    "stage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "research_seconds",
+        "step_target"
+      ],
+      "properties": {
+        "research_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 180
+        },
+        "step_target": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        }
+      }
+    }
+  }
+}

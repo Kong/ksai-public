@@ -10,6 +10,7 @@ export const TOOL_PREFIX = 'static.runtime.opencode-tool-';
 export const REMINDER_ID = 'static.runtime.opencode-max-steps';
 const CLASSIFICATION = Object.freeze({ internal: 'internal', public: 'public' });
 export { SINKS, renderRequest, writeRenderRequest } from './render-request.cjs';
+import { schemaDigestFor } from './render-request.cjs';
 
 export const ARTIFACTS = Object.freeze({
   prompt: 'prompt.md',
@@ -129,6 +130,17 @@ function staticOf(answer, version, lockDigest, locked) {
   });
 }
 
+function heldContract(promptId, entry, version) {
+  const carried = String(entry?.schema_digest ?? '');
+  const here = schemaDigestFor(promptId);
+  if (carried === here || (!carried && here)) return;
+  throw new Error(
+    carried && here
+      ? `prompt release ${version} validates ${promptId} against a schema this release does not carry: it names ${carried} and this release checks ${here}`
+      : `prompt release ${version} validates ${promptId} against ${carried}, and this release carries no schema to check it with`,
+  );
+}
+
 function covering(files, locked, version) {
   const served = new Map();
   const seen = new Map();
@@ -218,6 +230,7 @@ export async function renderThroughControlPlane({
     return { lock, attestation: Buffer.from(await attestationAnswer.arrayBuffer()), locked: lockedOf(lock, version) };
   });
   const { lock, attestation, locked } = release;
+  heldContract(request.prompt_id, locked.get(request.prompt_id), version);
   const files = !statics ? [] : await readOnce(fetch, `${catalog}|${lockDigest}|static`, async () => {
     const answer = await asked(fetch, `${catalog}/static`, { headers, signal }, 'the static prompts', { retries: RETRIES, wait });
     return covering(staticOf(await answer.json(), version, lockDigest, locked), locked, version);

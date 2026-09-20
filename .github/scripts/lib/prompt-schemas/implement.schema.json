@@ -1,0 +1,1035 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ksai.invalid/prompts/schemas/implement.schema.json",
+  "title": "Owned implement prompt input",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/planInputs"
+    },
+    {
+      "$ref": "#/$defs/directInputs"
+    },
+    {
+      "$ref": "#/$defs/stepInputs"
+    },
+    {
+      "$ref": "#/$defs/fixInputs"
+    },
+    {
+      "$ref": "#/$defs/reviseInputs"
+    },
+    {
+      "$ref": "#/$defs/doInputs"
+    }
+  ],
+  "$defs": {
+    "additionalPrompt": {
+      "type": "string",
+      "maxLength": 32768
+    },
+    "boundedText": {
+      "type": "string",
+      "maxLength": 524288
+    },
+    "issue": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "maxProperties": 256
+        }
+      ]
+    },
+    "deniedPaths": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "string",
+        "maxLength": 4096
+      }
+    },
+    "goFailures": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "type": "string",
+        "maxLength": 4096
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "minutes",
+        "stop_after_minutes"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "minutes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "stop_after_minutes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        }
+      }
+    },
+    "channel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "nonce"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "nonce": {
+          "type": "string",
+          "pattern": "^(?:[0-9a-f]{8,64})?$"
+        }
+      }
+    },
+    "go": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "available",
+        "cache_warmed",
+        "incomplete",
+        "version"
+      ],
+      "properties": {
+        "available": {
+          "type": "boolean"
+        },
+        "cache_warmed": {
+          "type": "boolean"
+        },
+        "incomplete": {
+          "type": "boolean"
+        },
+        "version": {
+          "type": "string",
+          "maxLength": 256,
+          "pattern": "^[^\\x00\\r\\n<>]*$"
+        }
+      }
+    },
+    "merge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active",
+        "conflicted",
+        "has_conflicts",
+        "ref",
+        "sha",
+        "singular"
+      ],
+      "properties": {
+        "active": {
+          "type": "boolean"
+        },
+        "conflicted": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "has_conflicts": {
+          "type": "boolean"
+        },
+        "ref": {
+          "type": "string",
+          "maxLength": 1024,
+          "pattern": "^([A-Za-z0-9][A-Za-z0-9._/+@-]*)?$"
+        },
+        "sha": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^([0-9a-f]{7,64})?$"
+        },
+        "singular": {
+          "type": "boolean"
+        }
+      }
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "base_diff_available",
+        "base_diff_ref",
+        "base_sha",
+        "branch",
+        "budget",
+        "channel",
+        "checks",
+        "default_branch",
+        "deferred",
+        "go",
+        "has_deferred",
+        "has_guidance",
+        "has_request",
+        "has_retry",
+        "has_threads",
+        "issue_number",
+        "jira_key",
+        "major_bump",
+        "max_commits",
+        "merge",
+        "ordinal",
+        "package",
+        "phase",
+        "plan_path",
+        "pr_number",
+        "remaining",
+        "repository",
+        "show_issue",
+        "thread_scoped",
+        "total",
+        "writes_plan"
+      ],
+      "properties": {
+        "base_diff_available": {
+          "type": "boolean"
+        },
+        "base_diff_ref": {
+          "type": "string",
+          "maxLength": 1024,
+          "pattern": "^([A-Za-z0-9][A-Za-z0-9._/+@-]*)?$"
+        },
+        "base_sha": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^([0-9a-f]{7,64})?$"
+        },
+        "branch": {
+          "type": "string",
+          "maxLength": 1024,
+          "pattern": "^([A-Za-z0-9][A-Za-z0-9._/+@-]*)?$"
+        },
+        "budget": {
+          "$ref": "#/$defs/budget"
+        },
+        "channel": {
+          "$ref": "#/$defs/channel"
+        },
+        "checks": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cancelled_total",
+            "failing_total",
+            "list_truncated",
+            "running_total",
+            "stale",
+            "statuses_total",
+            "unreadable"
+          ],
+          "properties": {
+            "cancelled_total": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "failing_total": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "list_truncated": {
+              "type": "boolean"
+            },
+            "running_total": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "stale": {
+              "type": "boolean"
+            },
+            "statuses_total": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "unreadable": {
+              "type": "boolean"
+            }
+          }
+        },
+        "default_branch": {
+          "type": "string",
+          "maxLength": 1024,
+          "pattern": "^([A-Za-z0-9][A-Za-z0-9._/+@-]*)?$"
+        },
+        "deferred": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "go": {
+          "$ref": "#/$defs/go"
+        },
+        "has_guidance": {
+          "type": "boolean"
+        },
+        "has_deferred": {
+          "type": "boolean"
+        },
+        "has_request": {
+          "type": "boolean"
+        },
+        "has_threads": {
+          "type": "boolean"
+        },
+        "issue_number": {
+          "type": "string",
+          "pattern": "^[0-9]*$",
+          "maxLength": 32
+        },
+        "jira_key": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^([A-Z][A-Z0-9]{1,9}-[1-9][0-9]{0,9})?$"
+        },
+        "max_commits": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20
+        },
+        "merge": {
+          "$ref": "#/$defs/merge"
+        },
+        "ordinal": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "phase": {
+          "type": "string",
+          "enum": [
+            "direct",
+            "do",
+            "fix",
+            "plan",
+            "revise",
+            "step"
+          ]
+        },
+        "plan_path": {
+          "type": "string",
+          "maxLength": 4096,
+          "pattern": "^[^\\x00\\r\\n<>]*$"
+        },
+        "pr_number": {
+          "type": "string",
+          "pattern": "^[0-9]*$",
+          "maxLength": 32
+        },
+        "remaining": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "repository": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[^/\\x00\\r\\n<>]+/[^/\\x00\\r\\n<>]+$"
+        },
+        "show_issue": {
+          "type": "boolean"
+        },
+        "thread_scoped": {
+          "type": "boolean"
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "writes_plan": {
+          "type": "boolean"
+        },
+        "major_bump": {
+          "$ref": "#/$defs/majorBump"
+        },
+        "package": {
+          "$ref": "#/$defs/packageManager"
+        },
+        "has_retry": {
+          "type": "boolean"
+        }
+      }
+    },
+    "threadComment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "body",
+        "login"
+      ],
+      "properties": {
+        "body": {
+          "type": "string",
+          "maxLength": 1500
+        },
+        "login": {
+          "type": "string",
+          "maxLength": 256
+        }
+      }
+    },
+    "thread": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "comment_count",
+        "comments",
+        "id",
+        "line",
+        "outdated",
+        "path"
+      ],
+      "properties": {
+        "comment_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "comments": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/threadComment"
+          }
+        },
+        "id": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "line": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "outdated": {
+          "type": "boolean"
+        },
+        "path": {
+          "type": "string",
+          "maxLength": 4096
+        }
+      }
+    },
+    "threads": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "$ref": "#/$defs/thread"
+      }
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "app",
+        "conclusion",
+        "log",
+        "log_lines",
+        "log_truncated",
+        "name",
+        "summary",
+        "title",
+        "url"
+      ],
+      "properties": {
+        "app": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "conclusion": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "log": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 12288
+        },
+        "log_lines": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "log_truncated": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 8192
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "url": {
+          "type": "string",
+          "maxLength": 4096
+        }
+      }
+    },
+    "status": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "context",
+        "description",
+        "state",
+        "url"
+      ],
+      "properties": {
+        "context": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "state": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "url": {
+          "type": "string",
+          "maxLength": 4096
+        }
+      }
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cancelled_total",
+        "failing",
+        "failing_total",
+        "list_truncated",
+        "logged",
+        "logs_deferred",
+        "logs_unavailable",
+        "running",
+        "running_total",
+        "sha",
+        "statuses",
+        "statuses_total",
+        "statuses_truncated",
+        "statuses_unreadable",
+        "total",
+        "unreadable"
+      ],
+      "properties": {
+        "cancelled_total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failing": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "$ref": "#/$defs/check"
+          }
+        },
+        "failing_total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "list_truncated": {
+          "type": "boolean"
+        },
+        "logged": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "logs_deferred": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "logs_unavailable": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 2048
+        },
+        "running": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "maxLength": 512
+          }
+        },
+        "running_total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sha": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^([0-9a-f]{7,64})?$"
+        },
+        "statuses": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "$ref": "#/$defs/status"
+          }
+        },
+        "statuses_total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "statuses_truncated": {
+          "type": "boolean"
+        },
+        "statuses_unreadable": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 2048
+        },
+        "total": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "unreadable": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 2048
+        }
+      }
+    },
+    "phaseContext": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/context"
+        }
+      ]
+    },
+    "planInputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "additional_prompt",
+        "context",
+        "guidance",
+        "issue",
+        "jira"
+      ],
+      "properties": {
+        "additional_prompt": {
+          "$ref": "#/$defs/additionalPrompt"
+        },
+        "context": {
+          "$ref": "#/$defs/context",
+          "properties": {
+            "phase": {
+              "const": "plan"
+            }
+          }
+        },
+        "guidance": {
+          "$ref": "#/$defs/boundedText"
+        },
+        "issue": {
+          "$ref": "#/$defs/issue"
+        },
+        "jira": {
+          "$ref": "#/$defs/issue"
+        }
+      }
+    },
+    "directInputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "additional_prompt",
+        "context",
+        "denied_paths",
+        "go_failures",
+        "guidance",
+        "issue",
+        "jira"
+      ],
+      "properties": {
+        "additional_prompt": {
+          "$ref": "#/$defs/additionalPrompt"
+        },
+        "context": {
+          "$ref": "#/$defs/context",
+          "properties": {
+            "phase": {
+              "const": "direct"
+            }
+          }
+        },
+        "denied_paths": {
+          "$ref": "#/$defs/deniedPaths"
+        },
+        "go_failures": {
+          "$ref": "#/$defs/goFailures"
+        },
+        "guidance": {
+          "$ref": "#/$defs/boundedText"
+        },
+        "issue": {
+          "$ref": "#/$defs/issue"
+        },
+        "jira": {
+          "$ref": "#/$defs/issue"
+        }
+      }
+    },
+    "stepInputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "additional_prompt",
+        "context",
+        "denied_paths",
+        "go_failures",
+        "issue",
+        "jira",
+        "step_title"
+      ],
+      "properties": {
+        "additional_prompt": {
+          "$ref": "#/$defs/additionalPrompt"
+        },
+        "context": {
+          "$ref": "#/$defs/context",
+          "properties": {
+            "phase": {
+              "const": "step"
+            }
+          }
+        },
+        "denied_paths": {
+          "$ref": "#/$defs/deniedPaths"
+        },
+        "go_failures": {
+          "$ref": "#/$defs/goFailures"
+        },
+        "issue": {
+          "$ref": "#/$defs/issue"
+        },
+        "jira": {
+          "$ref": "#/$defs/issue"
+        },
+        "step_title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        }
+      }
+    },
+    "fixInputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "additional_prompt",
+        "context",
+        "denied_paths",
+        "go_failures",
+        "guidance",
+        "issue",
+        "threads"
+      ],
+      "properties": {
+        "additional_prompt": {
+          "$ref": "#/$defs/additionalPrompt"
+        },
+        "context": {
+          "$ref": "#/$defs/context",
+          "properties": {
+            "phase": {
+              "const": "fix"
+            }
+          }
+        },
+        "denied_paths": {
+          "$ref": "#/$defs/deniedPaths"
+        },
+        "go_failures": {
+          "$ref": "#/$defs/goFailures"
+        },
+        "guidance": {
+          "$ref": "#/$defs/boundedText"
+        },
+        "issue": {
+          "$ref": "#/$defs/issue"
+        },
+        "threads": {
+          "$ref": "#/$defs/threads",
+          "minItems": 1
+        }
+      }
+    },
+    "reviseInputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "additional_prompt",
+        "context",
+        "denied_paths",
+        "guidance",
+        "issue",
+        "jira",
+        "plan_document",
+        "threads"
+      ],
+      "properties": {
+        "additional_prompt": {
+          "$ref": "#/$defs/additionalPrompt"
+        },
+        "context": {
+          "$ref": "#/$defs/context",
+          "properties": {
+            "phase": {
+              "const": "revise"
+            }
+          }
+        },
+        "denied_paths": {
+          "$ref": "#/$defs/deniedPaths"
+        },
+        "guidance": {
+          "$ref": "#/$defs/boundedText"
+        },
+        "issue": {
+          "$ref": "#/$defs/issue"
+        },
+        "jira": {
+          "$ref": "#/$defs/issue"
+        },
+        "plan_document": {
+          "$ref": "#/$defs/boundedText"
+        },
+        "threads": {
+          "$ref": "#/$defs/threads",
+          "minItems": 1
+        }
+      }
+    },
+    "doInputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "additional_prompt",
+        "checks",
+        "context",
+        "denied_paths",
+        "go_failures",
+        "guidance",
+        "issue",
+        "threads"
+      ],
+      "properties": {
+        "additional_prompt": {
+          "$ref": "#/$defs/additionalPrompt"
+        },
+        "checks": {
+          "$ref": "#/$defs/checks"
+        },
+        "context": {
+          "$ref": "#/$defs/context",
+          "properties": {
+            "phase": {
+              "const": "do"
+            }
+          }
+        },
+        "denied_paths": {
+          "$ref": "#/$defs/deniedPaths"
+        },
+        "go_failures": {
+          "$ref": "#/$defs/goFailures"
+        },
+        "guidance": {
+          "$ref": "#/$defs/boundedText"
+        },
+        "issue": {
+          "$ref": "#/$defs/issue"
+        },
+        "threads": {
+          "$ref": "#/$defs/threads"
+        },
+        "retry": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/retry"
+            }
+          ]
+        }
+      }
+    },
+    "majorBump": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ambiguous",
+        "any",
+        "found",
+        "omitted",
+        "summary"
+      ],
+      "properties": {
+        "ambiguous": {
+          "type": "boolean"
+        },
+        "any": {
+          "type": "boolean"
+        },
+        "found": {
+          "type": "boolean"
+        },
+        "omitted": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 2000,
+          "pattern": "^[^\\x00\\r\\n<]*$"
+        }
+      }
+    },
+    "packageManager": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "failed",
+        "manager",
+        "present",
+        "version"
+      ],
+      "properties": {
+        "failed": {
+          "type": "boolean"
+        },
+        "manager": {
+          "enum": [
+            "",
+            "npm",
+            "pnpm",
+            "yarn"
+          ]
+        },
+        "present": {
+          "type": "boolean"
+        },
+        "version": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[0-9A-Za-z.+-]*$"
+        }
+      }
+    },
+    "retryFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "additions",
+        "deletions",
+        "patch",
+        "patch_cut",
+        "path",
+        "status"
+      ],
+      "properties": {
+        "additions": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "deletions": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "patch": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "patch_cut": {
+          "type": "boolean"
+        },
+        "path": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "status": {
+          "type": "string",
+          "maxLength": 20
+        }
+      }
+    },
+    "retry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "commit",
+        "files",
+        "report"
+      ],
+      "properties": {
+        "commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{7,64}$"
+        },
+        "files": {
+          "type": "array",
+          "maxItems": 12,
+          "items": {
+            "$ref": "#/$defs/retryFile"
+          }
+        },
+        "report": {
+          "type": "string",
+          "maxLength": 1000
+        }
+      }
+    }
+  }
+}

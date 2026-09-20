@@ -1,0 +1,142 @@
+{
+  "source": "kong-konnect/ksai-cp prompts/public/runtime",
+  "source_change": "kong-konnect/ksai-cp#461",
+  "inputs": {
+    "runtime.claude-generic": [
+      "request",
+      "workspace"
+    ],
+    "runtime.command-classifier": [
+      "classifier",
+      "comment"
+    ],
+    "runtime.dispute": [
+      "transcripts"
+    ],
+    "runtime.implement.adversarial": [
+      "context",
+      "denied_paths",
+      "manifest",
+      "work"
+    ],
+    "runtime.implement.direct": [
+      "additional_prompt",
+      "context",
+      "denied_paths",
+      "go_failures",
+      "guidance",
+      "issue",
+      "jira"
+    ],
+    "runtime.implement.do": [
+      "additional_prompt",
+      "checks",
+      "context",
+      "denied_paths",
+      "go_failures",
+      "guidance",
+      "issue",
+      "retry",
+      "threads"
+    ],
+    "runtime.implement.fix": [
+      "additional_prompt",
+      "context",
+      "denied_paths",
+      "go_failures",
+      "guidance",
+      "issue",
+      "threads"
+    ],
+    "runtime.implement.plan": [
+      "additional_prompt",
+      "context",
+      "guidance",
+      "issue",
+      "jira"
+    ],
+    "runtime.implement.repair": [
+      "context",
+      "denied_paths",
+      "findings",
+      "manifest",
+      "work"
+    ],
+    "runtime.implement.revise": [
+      "additional_prompt",
+      "context",
+      "denied_paths",
+      "guidance",
+      "issue",
+      "jira",
+      "plan_document",
+      "threads"
+    ],
+    "runtime.implement.step": [
+      "additional_prompt",
+      "context",
+      "denied_paths",
+      "go_failures",
+      "issue",
+      "jira",
+      "step_title"
+    ],
+    "runtime.pr-test": [
+      "additional_prompt",
+      "base_ref",
+      "base_sha",
+      "changed_files",
+      "criteria",
+      "environment",
+      "head_sha",
+      "test_run"
+    ],
+    "runtime.pr-test-criteria": [
+      "record"
+    ],
+    "runtime.pr-test-environment": [
+      "record"
+    ],
+    "runtime.review": [
+      "additional_prompt",
+      "prior_findings",
+      "repo_rules",
+      "request",
+      "review"
+    ],
+    "runtime.review-audit": [
+      "audit_context",
+      "auditor_mandate",
+      "candidate_review"
+    ],
+    "runtime.review-discovery": [
+      "context",
+      "stage"
+    ],
+    "runtime.review-findings-audit": [
+      "auditor_mandate",
+      "candidates",
+      "context",
+      "prior",
+      "stage"
+    ],
+    "runtime.write-triage-risk": [
+      "ask",
+      "checks",
+      "conversation",
+      "plan_step",
+      "request",
+      "review_threads",
+      "triage"
+    ],
+    "runtime.write-triage-sizing": [
+      "ask",
+      "checks",
+      "conversation",
+      "plan_step",
+      "request",
+      "review_threads",
+      "triage"
+    ]
+  }
+}

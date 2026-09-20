@@ -1,7 +1,7 @@
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { canonicalJson } from './json.mjs';
+import { canonicalJson } from '../../lib/json.cjs';
 import {
   buildPackage, conformancePackage, dryRunPackage, scaffoldPackage, validatePackage,
 } from './authoring.mjs';

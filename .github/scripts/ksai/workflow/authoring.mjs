@@ -4,13 +4,13 @@ import {
 } from 'node:fs';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 
-import { canonicalJson, parseIJson } from './json.mjs';
+import { canonicalJson, parseIJson } from '../../lib/json.cjs';
 import {
   loadManifest, loadSchema, manifestStage, packageArchive, packageDigest, sha256,
   validDigest, validVersion, validWorkflowId,
 } from './manifest.mjs';
 import { validateCandidate } from './runner.mjs';
-import { validateSchemaWithReferences } from './schema.mjs';
+import { validateSchemaWithReferences } from '../../lib/json-schema.cjs';
 
 const REQUEST_VERSION = 'ksai.konghq.com/local-stage-fixture/v1alpha1';
 const CAPTURE_VERSION = 'ksai.konghq.com/local-stage-capture/v1alpha1';

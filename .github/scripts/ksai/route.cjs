@@ -22,6 +22,7 @@ const {
   NO_VERDICT,
   NUDGE_VERDICT,
   classifierModel,
+  classifiable,
   commandClassifierRenderRequest,
   renderClassifierSpend,
   renderCommandClassifierPrompt,
@@ -396,6 +397,10 @@ async function route({ github, core, context, env }) {
   }
 
   const classified = { comment: target.comment, surface: surfaceForComment({ onOwnPull: bare, onIssue, threadRootId }), disabledCommands };
+  if (!classifiable(disabledCommands, classified.surface)) {
+    core.info('Every command this surface offers is disabled, so nothing was classified.');
+    return decision;
+  }
   fs.writeFileSync(env.PROMPT_FILE, renderCommandClassifierPrompt(classified));
   const requestFile = `${env.PROMPT_FILE}.request.json`;
   writeRenderRequest(requestFile, commandClassifierRenderRequest({ ...classified, model: arm.model }));

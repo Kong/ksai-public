@@ -1,0 +1,173 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ksai.invalid/prompts/schemas/pr-test-criteria.schema.json",
+  "title": "Owned pull request test criteria record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "record"
+  ],
+  "properties": {
+    "record": {
+      "$ref": "#/$defs/record"
+    }
+  },
+  "$defs": {
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9A-Fa-f]{40}$"
+    },
+    "issue": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/readableIssue"
+        },
+        {
+          "$ref": "#/$defs/unreadableIssue"
+        }
+      ]
+    },
+    "pullRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "base",
+        "base_sha",
+        "body",
+        "head_sha",
+        "number",
+        "title"
+      ],
+      "properties": {
+        "base": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "base_sha": {
+          "$ref": "#/$defs/commit"
+        },
+        "body": {
+          "type": "string",
+          "maxLength": 65536
+        },
+        "head_sha": {
+          "$ref": "#/$defs/commit"
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "readableIssue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "body",
+        "number",
+        "readable",
+        "repo",
+        "state",
+        "title"
+      ],
+      "properties": {
+        "body": {
+          "type": "string",
+          "maxLength": 65536
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "readable": {
+          "const": true
+        },
+        "repo": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 512,
+          "pattern": "^[^/\\r\\n]+/[^/\\r\\n]+$"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "CLOSED",
+            "OPEN"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "issues",
+        "pull_request",
+        "source"
+      ],
+      "properties": {
+        "issues": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/issue"
+          }
+        },
+        "pull_request": {
+          "$ref": "#/$defs/pullRequest"
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "closing_issue",
+            "pull_request"
+          ]
+        }
+      }
+    },
+    "unreadableIssue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "error",
+        "number",
+        "readable",
+        "repo"
+      ],
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "readable": {
+          "const": false
+        },
+        "repo": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 512,
+          "pattern": "^[^/\\r\\n]+/[^/\\r\\n]+$"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ksai.invalid/prompts/schemas/dispute.schema.json",
+  "title": "Review-thread dispute input",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "transcripts"
+  ],
+  "properties": {
+    "transcripts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10,
+      "items": {
+        "$ref": "#/$defs/transcript"
+      }
+    }
+  },
+  "$defs": {
+    "message": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "body",
+        "speaker"
+      ],
+      "properties": {
+        "body": {
+          "type": "string",
+          "maxLength": 600
+        },
+        "speaker": {
+          "type": "string",
+          "enum": [
+            "bot",
+            "person",
+            "reviewer"
+          ]
+        }
+      }
+    },
+    "transcript": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "messages",
+        "number"
+      ],
+      "properties": {
+        "messages": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/message"
+          }
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        }
+      }
+    }
+  }
+}

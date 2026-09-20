@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ksai.invalid/prompts/schemas/review-audit.schema.json",
+  "title": "Independent review audit input",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "audit_context",
+    "auditor_mandate",
+    "candidate_review"
+  ],
+  "properties": {
+    "audit_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "changed_files",
+        "diff",
+        "review_prompt"
+      ],
+      "properties": {
+        "changed_files": {
+          "$ref": "#/$defs/artifact"
+        },
+        "diff": {
+          "$ref": "#/$defs/artifact"
+        },
+        "review_prompt": {
+          "$ref": "#/$defs/artifact"
+        }
+      }
+    },
+    "auditor_mandate": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 262144
+    },
+    "candidate_review": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 524288
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bytes",
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 536870912
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    }
+  }
+}
