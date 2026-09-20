@@ -11,8 +11,12 @@ const CACHE_BOUNDARY = 'the request moved the provider cache boundary';
 
 function shape(value, required, optional, name) {
   const object = record(value, name);
-  if (required.some((key) => !Object.hasOwn(object, key)) || Object.keys(object).some((key) => !required.includes(key) && !optional.includes(key))) {
-    throw new Error(`${name} has an unsupported shape`);
+  const missing = required.filter((key) => !Object.hasOwn(object, key));
+  const unexpected = Object.keys(object).filter((key) => !required.includes(key) && !optional.includes(key));
+  if (missing.length || unexpected.length) {
+    const missed = missing.length ? `it names none of ${missing.join(', ')}` : '';
+    const added = unexpected.length ? `${missed ? 'it also names' : 'it names'} ${unexpected.join(', ')}` : '';
+    throw new Error(`${name} has an unsupported shape: ${[missed, added].filter(Boolean).join(', and ')}`);
   }
   return object;
 }
@@ -155,13 +159,13 @@ function finishBlock(block) {
 
 function messageDelta(event) {
   shape(event, ['type', 'delta'], ['context_management', 'usage'], 'message_delta');
-  const delta = shape(event.delta, ['stop_reason', 'stop_sequence'], ['container', 'stop_details'], 'the message_delta payload');
+  const delta = shape(event.delta, ['stop_reason'], ['stop_sequence', 'container', 'stop_details'], 'the message_delta payload');
   if ((delta.container ?? null) !== null || (delta.stop_details ?? null) !== null || (event.context_management ?? null) !== null) {
     throw new Error('message_delta does not answer the governed request');
   }
   const reason = identifier(delta.stop_reason, 'the stop reason');
   if (reason !== 'tool_use' && !TERMINAL_REASONS.has(reason)) throw new Error(`stop reason ${reason} is unsupported`);
-  if (delta.stop_sequence !== null) text(delta.stop_sequence, 'the stop sequence', 256);
+  if ((delta.stop_sequence ?? null) !== null) text(delta.stop_sequence, 'the stop sequence', 256);
   return reason;
 }
 
