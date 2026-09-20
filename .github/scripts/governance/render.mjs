@@ -54,8 +54,20 @@ function named(leaf, name) {
   return (leaf.subjectAltName ?? '').split(', ').some((entry) => entry === `URI:${name}` || entry === `DNS:${name}`);
 }
 
+function spki(key) {
+  return key.export({ type: 'spki', format: 'der' });
+}
+
 function signerKey(material, trust, now) {
   if (trust.kind === 'key') {
+    if (material.$case === 'certificate') {
+      const carrier = new X509Certificate(material.certificate.rawBytes);
+      if (!current(carrier, now)) throw new Error('the render certificate is not valid now');
+      if (!spki(carrier.publicKey).equals(spki(trust.key))) {
+        throw new Error('the render names a key other than the one trusted to sign renders');
+      }
+      return trust.key;
+    }
     if (material.$case !== 'publicKey' || material.publicKey.hint !== trust.hint) {
       throw new Error('the render names a key other than the one trusted to sign renders');
     }
