@@ -1,7 +1,7 @@
 {
   "source": "kong-konnect/ksai-cp/prompts/public/runtime",
-  "source_release": "v0.2.166",
-  "source_change": "kong-konnect/ksai-cp#453",
+  "source_release": "v0.2.167",
+  "source_change": "kong-konnect/ksai-cp#454",
   "inputs": {
     "runtime.claude-generic": [
       "request",

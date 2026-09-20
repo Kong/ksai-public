@@ -1,7 +1,7 @@
 {
   "source": "kong-konnect/ksai-cp/prompts/schemas",
-  "source_release": "v0.2.166",
-  "source_change": "kong-konnect/ksai-cp#453",
+  "source_release": "v0.2.167",
+  "source_change": "kong-konnect/ksai-cp#454",
   "prompts": {
     "runtime.claude-generic": "sha256:a537ddab33b47c0bf7f038de02bd8a9ce9b4a76127f7701ba338192592682b80",
     "runtime.command-classifier": "sha256:c750444017424af1446d1ea53f70a34cef67343d886ef4ab6aeca7317daddd0e",
