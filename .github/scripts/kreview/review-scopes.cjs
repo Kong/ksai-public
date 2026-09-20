@@ -1,6 +1,8 @@
 const { createHash } = require('node:crypto');
-const { mkdirSync, readFileSync, statSync, writeFileSync } = require('node:fs');
+const { mkdirSync, writeFileSync } = require('node:fs');
 const { dirname, join } = require('node:path');
+
+const { boundedBytes } = require('../lib/evidence.cjs');
 
 const SCOPE_LIMITS = Object.freeze({ count: 8, files: 8, bytes: 49_152, lines: 600, inputBytes: 16_777_216, inventoryBytes: 1_048_576, units: 4096 });
 const hash = (value) => createHash('sha256').update(value).digest('hex');
@@ -91,8 +93,7 @@ function scopePlan(patch, inventory) {
 }
 
 function readBounded(path, limit) {
-  if (statSync(path).size > limit) throw new Error('review scope input exceeds its bound');
-  return new TextDecoder('utf-8', { fatal: true }).decode(readFileSync(path));
+  return new TextDecoder('utf-8', { fatal: true }).decode(boundedBytes(path, 'review scope input', limit));
 }
 
 function materializeScopes(patchPath, inventoryPath) {

@@ -13,6 +13,7 @@ const {
   MAX_THREADS,
   UNCLEAR,
   disputeFromExecution,
+  disputeRenderRequest,
   renderDisputePrompt,
 } = require('./dispute.cjs');
 const {
@@ -29,6 +30,7 @@ const { spendFromExecution } = require('./write-report.cjs');
 const { scrub } = require('./plan.cjs');
 const { asAlert } = require('../lib/select-arm.cjs');
 const { renderedNotice } = require('../lib/cp-render.cjs');
+import { writeRenderRequest } from '../lib/render-request.cjs';
 
 const REPLY_KIND = Object.freeze({
   [LOCK_KIND]: 'thread_locked',
@@ -92,13 +94,15 @@ export function buildDispute(env = process.env) {
     const why =
       arm.error ??
       (edited > 0 ? 'Edited replies are not evidence of agreement, so those threads remain disputed' : '');
-    return { count: 0, file: '', roots: '', model: '', why };
+    return { count: 0, file: '', request_file: '', roots: '', model: '', why };
   }
   const file = join(String(env.PROMPT_DIR ?? env.RUNNER_TEMP ?? '/tmp'), 'ksai-dispute-prompt.txt');
   writeFileSync(file, renderDisputePrompt(threads, { botLogin: env.BOT_LOGIN }));
+  writeRenderRequest(`${file}.request.json`, disputeRenderRequest(threads, { botLogin: env.BOT_LOGIN, model: arm.model }));
   return {
     count: threads.length,
     file,
+    request_file: `${file}.request.json`,
     roots: threads.map((thread) => thread?.rootCommentId).join(','),
     model: arm.model,
     why: '',
@@ -188,7 +192,7 @@ export async function releaseThread({ github, core, owner, repo, env = process.e
 }
 
 export function main(env = process.env) {
-  let built = { count: 0, file: '', roots: '', model: '', why: '' };
+  let built = { count: 0, file: '', request_file: '', roots: '', model: '', why: '' };
   try {
     built = buildDispute(env);
   } catch (error) {
@@ -197,6 +201,7 @@ export function main(env = process.env) {
   writeOutputs(env.GITHUB_OUTPUT, {
     count: built.count,
     file: built.file,
+    request_file: built.request_file,
     roots: built.roots,
     model: built.model,
   });

@@ -1,12 +1,12 @@
 import { spawnSync } from 'node:child_process';
-import { closeSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { answer as streamAnswer, everything, parsed } from '../lib/opencode.mjs';
 import { extractReviewJson, readReviewOutput } from '../lib/review-output.cjs';
 import { hypothesesOf } from '../lib/review-hypotheses.mjs';
-import { EXPORT_BYTES, exportChildren } from './opencode-children.mjs';
+import { EXPORT_BYTES, exportChildren, exportedText } from './opencode-children.mjs';
 import { auditProblem, LIMITS, runPipeline } from './review-pipeline.cjs';
 import { collectSecrets, scrub } from './secrets.cjs';
 
@@ -180,12 +180,12 @@ export async function recoverReview({ flow, prompt, timeoutMs, invoke, budget = 
   return { ...second, code, usage, attempts };
 }
 
-export async function reviewSession({ env, events, prompt, run }) {
+export async function reviewSession({ env, events, prompt, run, resumable = true }) {
   const metadata = JSON.parse(readFileSync(`${env.PROMPT_FILE}.pipeline.json`, 'utf8'));
   const ledgerFile = `${events}.pipeline.json`;
   const reviewFile = `${events}.review.json`;
   const secrets = collectSecrets(env);
-  const result = await runPipeline({ strategy: env.REVIEW_STRATEGY, context: prompt, ...metadata, run,
+  const result = await runPipeline({ strategy: env.REVIEW_STRATEGY, context: prompt, ...metadata, resumable, run,
     checkpoint: (ledger) => writeFileSync(ledgerFile, scrub(JSON.stringify(ledger), secrets)),
   });
   writeFileSync(reviewFile, scrub(JSON.stringify(result.review), secrets));
@@ -206,8 +206,7 @@ export function readExport({ env, sandbox, id, timeoutMs = 15_000 }) {
     output = openSync(path, 'wx', 0o600);
     const result = spawnSync('bwrap', [...sandbox, 'opencode', 'export', id], { stdio: ['ignore', output, 'pipe'], timeout: timeoutMs, maxBuffer: EXPORT_BYTES });
     if (result.status !== 0) throw new Error('session export failed');
-    if (statSync(path).size > EXPORT_BYTES) throw new Error('session export exceeds its bound');
-    return readFileSync(path, 'utf8');
+    return exportedText(path);
   } finally {
     if (output !== undefined) closeSync(output);
     rmSync(dir, { recursive: true, force: true });

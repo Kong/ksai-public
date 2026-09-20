@@ -813,6 +813,7 @@ jobs:
       max_repeated_tool_calls: ${{ steps.dials.outputs.max_repeated_tool_calls }}
       triage_write: ${{ steps.dials.outputs.triage_write }}
       report_rendering: ${{ steps.dials.outputs.report_rendering }}
+      prompt_rendering: ${{ steps.dials.outputs.prompt_rendering }}
       dials_arm: ${{ !(inputs.dials_override && inputs.model != 'flagship') && (steps.record.outputs.model == '' && steps.dials.outputs.arm || '') || '' }}
       record_command: ${{ steps.record.outputs.command }}
       record_comment_id: ${{ steps.record.outputs.comment_id }}
@@ -1031,6 +1032,8 @@ jobs:
           write_access_commands: ${{ inputs.write_access_commands }}
           allowed_commands: ${{ inputs.allowed_commands }}
           classifier_model: ${{ inputs.classifier_model }}
+          prompt_rendering: ${{ steps.dials.outputs.prompt_rendering }}
+          prompt_endpoint: ${{ inputs.fleet_dials_endpoint }}
           bare_comments: ${{ inputs.bare_comments }}
           otel_endpoint: ${{ inputs.otel_endpoint }}
           datadog_key: ${{ secrets.datadog_key }}
@@ -1070,7 +1073,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-help
           repository: Kong/ksai-public
-          ref: v3.99.0
+          ref: v3.100.0
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1256,6 +1259,7 @@ jobs:
           triage: ${{ inputs.triage }}
           triage_write: ${{ needs.gate.outputs.triage_write }}
           report_rendering: ${{ needs.gate.outputs.report_rendering }}
+          prompt_rendering: ${{ needs.gate.outputs.prompt_rendering }}
           engine: ${{ inputs.engine }}
           opencode_version: ${{ inputs.opencode_version }}
           repo_rules: ${{ inputs.repo_rules }}
@@ -1424,6 +1428,7 @@ jobs:
           dials_arm: ${{ needs.gate.outputs.dials_arm }}
           fleet_dials_endpoint: ${{ inputs.fleet_dials_endpoint }}
           report_rendering: ${{ needs.gate.outputs.report_rendering }}
+          prompt_rendering: ${{ needs.gate.outputs.prompt_rendering }}
           effort: ${{ needs.gate.outputs.effort || inputs.effort }}
           allowed_models: ${{ needs.gate.outputs.allowed_models || inputs.allowed_models }}
           max_effort: ${{ needs.gate.outputs.max_effort || inputs.max_effort }}
@@ -1523,7 +1528,7 @@ jobs:
         with:
           token: ${{ github.token }}
           repository: Kong/ksai-public
-          ref: v3.99.0
+          ref: v3.100.0
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1630,6 +1635,7 @@ jobs:
           triage: ${{ inputs.triage }}
           triage_write: ${{ needs.gate.outputs.triage_write }}
           report_rendering: ${{ needs.gate.outputs.report_rendering }}
+          prompt_rendering: ${{ needs.gate.outputs.prompt_rendering }}
           opencode_version: ${{ inputs.opencode_version }}
           repo_rules: ${{ inputs.repo_rules }}
           repo_rules_max_bytes: ${{ inputs.repo_rules_max_bytes }}
@@ -1938,6 +1944,7 @@ jobs:
           triage: ${{ inputs.triage }}
           triage_write: ${{ needs.gate.outputs.triage_write }}
           report_rendering: ${{ needs.gate.outputs.report_rendering }}
+          prompt_rendering: ${{ needs.gate.outputs.prompt_rendering }}
           status_updates: ${{ inputs.status_updates }}
           status_history: ${{ inputs.status_history }}
           status_model: ${{ inputs.status_model }}
@@ -2055,7 +2062,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-recover
           repository: Kong/ksai-public
-          ref: v3.99.0
+          ref: v3.100.0
           sparse-checkout: |
             .github/scripts
           persist-credentials: false

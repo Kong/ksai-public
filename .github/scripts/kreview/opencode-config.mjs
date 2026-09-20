@@ -205,21 +205,33 @@ if (staged) {
     options: { thinking: { type: 'enabled', budgetTokens: LIMITS.finalizeThinkingTokens }, effort: 'low' }, prompt: finishPrompt };
 }
 const channel = String(process.env.KSAI_CHANNEL_NONCE ?? '').trim() === '' ? '' : CHANNEL_PLUGIN;
-const config = runtimeConfig({ channel, agents, skills, permission, auth, attribution,
+const governed = String(process.env.GOVERNANCE_OPTIONS_FILE ?? '').trim();
+if (governed && resultTransport !== 'text') {
+  console.log(`::error::a governed run answers in text, and this one asked for ${resultTransport}`);
+  process.exit(1);
+}
+const runtime = { channel, permission, auth, attribution,
   smallModel: model,
   plugin: isolatedTools ? '' : AUTH_PLUGIN,
   brokered: isolatedTools,
   shell: isolatedTools ? TOOL_SHELL : '',
   baseUrl: isolatedTools ? '{env:KSAI_PROVIDER_RELAY}/v1' : baseUrl,
-  plugins: [
-    ...(isolatedTools ? [TOOL_GUARD_PLUGIN, CHILD_TOOLS_PLUGIN] : []),
-    COMPACTION_PLUGIN,
-    ...(pty ? [PTY_PLUGIN] : []),
-    ...(resultTransport === 'tool' ? [REVIEW_RESULT_PLUGIN] : []),
-  ],
-});
-if (lsp) config.lsp = lsp;
-if (staged) config.default_agent = 'ksai-review-stage';
+};
+const config = governed
+  ? (await import('../governance/config.mjs')).governedConfig({ ...runtime, skills, governance: JSON.parse(readFileSync(governed, 'utf8')),
+    guards: isolatedTools ? [TOOL_GUARD_PLUGIN, CHILD_TOOLS_PLUGIN] : [],
+    ...(staged ? { agent: 'ksai-review-stage' } : {}) })
+  : runtimeConfig({ ...runtime, agents, skills,
+    plugins: [
+      ...(isolatedTools ? [TOOL_GUARD_PLUGIN, CHILD_TOOLS_PLUGIN] : []),
+      COMPACTION_PLUGIN,
+      ...(pty ? [PTY_PLUGIN] : []),
+      ...(resultTransport === 'tool' ? [REVIEW_RESULT_PLUGIN] : []),
+    ],
+  });
+if (lsp && !governed) config.lsp = lsp;
+if (governed) console.log(`this run is governed: it sends the model only the prompt ${governed} names, with its governed tools`);
+else if (staged) config.default_agent = 'ksai-review-stage';
 else if (phase === 'review' && resultTransport !== 'text') config.default_agent = 'ksai-review-submit';
 
 writeFileSync(destination, JSON.stringify(config, null, 2) + '\n');

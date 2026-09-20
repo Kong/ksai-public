@@ -1,6 +1,24 @@
 'use strict';
 
 const MINTED_SHAPE = /^[0-9a-f]{32}$/;
+const RENDERING_MODES = Object.freeze(['local', 'shadow', 'cp']);
+
+function renderingModeOf(value) {
+  const said = String(value ?? '').trim();
+  return RENDERING_MODES.includes(said) ? said : 'local';
+}
+
+const minter = ({ env, fetch, signal }) => async (audience) => {
+  const response = await fetch(`${env.ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${encodeURIComponent(audience)}`, {
+    headers: { authorization: `Bearer ${env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}` },
+    signal,
+  });
+  if (!response.ok) return '';
+  const body = await response.json();
+  return typeof body?.value === 'string' ? body.value : '';
+};
+
+const mask = (token) => process.stdout.write(`::add-mask::${token}\n`);
 
 function mintedId(value) {
   const said = String(value ?? '').trim().toLowerCase();
@@ -57,4 +75,10 @@ function unreached(error) {
   return `the control plane could not be reached: ${error?.cause?.code || error?.message || 'it said nothing'}`;
 }
 
-module.exports = { mintedId, reachControlPlane, postTo, unreached };
+function unanswered(error) {
+  return error?.name === 'TimeoutError' ? 'the control plane did not answer in time' : unreached(error);
+}
+
+module.exports = {
+  RENDERING_MODES, renderingModeOf, minter, mask, mintedId, reachControlPlane, postTo, unreached, unanswered,
+};

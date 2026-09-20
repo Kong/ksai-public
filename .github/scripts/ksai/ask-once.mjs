@@ -6,7 +6,7 @@ import { headerLines } from '../lib/opencode.mjs';
 import { authHeaders } from '../lib/opencode-token.mjs';
 import { FAILED, SUCCESS, TRUNCATED, resultRecord } from '../lib/execution-log.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
-import { postMessage, textOf } from './messages.mjs';
+import { postMessage, streamGovernedMessage, textOf } from './messages.mjs';
 import { report } from './otel.mjs';
 import { spendOf } from './prices.mjs';
 
@@ -37,10 +37,16 @@ export function resultLog({
   });
 }
 
-export async function ask({ env = process.env, fetchImpl = fetch, now = Date.now, mask = (_value = '') => {} } = {}) {
+async function governing(env, governed) {
+  const { governedAsk } = await import('./governed-ask.mjs');
+  return governedAsk(env, governed);
+}
+
+export async function ask({ env = process.env, fetchImpl = fetch, now = Date.now, mask = (_value = '') => {}, governed = {} } = {}) {
   const model = String(env.MODEL ?? '').trim();
   if (!model) throw new Error('MODEL names no model, so there is nothing to ask');
-  const prompt = readFileSync(String(env.PROMPT_FILE ?? ''), 'utf8');
+  const rendered = await governing(env, governed);
+  const prompt = rendered ? rendered.prompt : readFileSync(String(env.PROMPT_FILE ?? ''), 'utf8');
   if (prompt.trim() === '') throw new Error(`the prompt at ${env.PROMPT_FILE} is empty, so nothing was asked`);
 
   const origin = originOf(env);
@@ -49,7 +55,7 @@ export async function ask({ env = process.env, fetchImpl = fetch, now = Date.now
   mask(accessToken);
 
   const started = now();
-  const body = await postMessage({
+  const call = {
     origin,
     model,
     prompt,
@@ -57,7 +63,13 @@ export async function ask({ env = process.env, fetchImpl = fetch, now = Date.now
     effort: String(env.EFFORT ?? '').trim(),
     headers: { ...headerLines(env.ATTRIBUTION_HEADERS), ...authHeaders(accessToken, env) },
     fetchImpl,
-  });
+  };
+  let body;
+  try {
+    body = rendered ? await streamGovernedMessage({ ...call, governor: rendered.governor }) : await postMessage(call);
+  } finally {
+    if (rendered) await rendered.report().catch((error) => console.log(`::warning::what reached the model was not reported to the control plane: ${error?.message}`));
+  }
   return resultLog({
     text: textOf(body),
     usage: body.usage,

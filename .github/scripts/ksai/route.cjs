@@ -22,6 +22,7 @@ const {
   NO_VERDICT,
   NUDGE_VERDICT,
   classifierModel,
+  commandClassifierRenderRequest,
   renderClassifierSpend,
   renderCommandClassifierPrompt,
   surfaceForComment,
@@ -43,6 +44,7 @@ const { labelReaders, readLabelBasis, readReviewBasis, recordBasis } = require('
 const { classifyTarget } = require('./dispatch.cjs');
 const { bareMode, ownPull, ownSurface } = require('./bare.cjs');
 const loadKsaiConfig = require('./config.cjs');
+const { writeRenderRequest } = require('../lib/render-request.cjs');
 
 function unquoted(body) {
   return String(body ?? '')
@@ -393,16 +395,13 @@ async function route({ github, core, context, env }) {
     return decision;
   }
 
-  fs.writeFileSync(
-    env.PROMPT_FILE,
-    renderCommandClassifierPrompt({
-      comment: target.comment,
-      surface: surfaceForComment({ onOwnPull: bare, onIssue, threadRootId }),
-      disabledCommands,
-    }),
-  );
+  const classified = { comment: target.comment, surface: surfaceForComment({ onOwnPull: bare, onIssue, threadRootId }), disabledCommands };
+  fs.writeFileSync(env.PROMPT_FILE, renderCommandClassifierPrompt(classified));
+  const requestFile = `${env.PROMPT_FILE}.request.json`;
+  writeRenderRequest(requestFile, commandClassifierRenderRequest({ ...classified, model: arm.model }));
   core.setOutput('classify_model', arm.model);
   core.setOutput('classify_file', env.PROMPT_FILE);
+  core.setOutput('classify_request_file', requestFile);
   core.setOutput('classify', 'true');
   core.info(`Classifying the comment on ${arm.model}.`);
   return decision;

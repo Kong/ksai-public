@@ -415,7 +415,9 @@ export function runtimeConfig({
   attribution = {},
   smallModel = '',
 } = {}) {
-  const loadedPlugins = [plugin, channel, ...plugins].filter(Boolean).map((one) => asFileUrl(one));
+  const loadedPlugins = [plugin, channel, ...plugins]
+    .filter(Boolean)
+    .map((one) => (Array.isArray(one) ? [asFileUrl(one[0]), one[1]] : asFileUrl(one)));
   return {
     ...RUNTIME_CONFIG,
     ...(shell ? { shell } : {}),

@@ -166,6 +166,18 @@ inputs:
     description: arm the comment classifier runs on
     required: false
     default: ""
+  prompt_rendering:
+    description: >-
+      where the comment classifier's prompt comes from, as the ksai action reads it. `local` sends the text
+      this gate builds. `shadow` sends that text and also renders the prompt through the control plane named
+      by `prompt_endpoint`. `cp` sends only the prompt the control plane rendered and signed for this
+      run, verified before the call leaves, and fails rather than falling back.
+    required: false
+    default: ""
+  prompt_endpoint:
+    description: base URL of the control plane the classifier's prompt is rendered by, or empty
+    required: false
+    default: ""
   bare_comments:
     description: whether a comment naming no phrase on this flow's own pull request steers the run
     required: false
@@ -433,6 +445,15 @@ runs:
         set -euo pipefail
         node "${GITHUB_WORKSPACE}/_ksai/.github/scripts/ksai/attribution.mjs"
 
+    - name: Prepare what a governed prompt is verified with
+      id: governance_prepare
+      if: ${{ steps.trigger.outputs.classify == 'true' && inputs.prompt_rendering == 'cp' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.post_github_token }}
+        SCRIPTS: ${{ github.workspace }}/_ksai/.github/scripts
+      run: node "${SCRIPTS}/governance/prepare.mjs"
+
     - name: Classify the comment
       id: classify_run
       if: ${{ steps.trigger.outputs.classify == 'true' }}
@@ -442,6 +463,9 @@ runs:
         MODEL: ${{ steps.trigger.outputs.classify_model }}
         EFFORT: low
         PROMPT_FILE: ${{ steps.trigger.outputs.classify_file }}
+        REQUEST_FILE: ${{ steps.trigger.outputs.classify_request_file }}
+        KSAI_PROMPT_RENDERING: ${{ inputs.prompt_rendering }}
+        KSAI_CP_ENDPOINT: ${{ inputs.prompt_endpoint }}
         EXECUTION_FILE: ${{ runner.temp }}/ksai-gate-classify-execution.json
         ATTRIBUTION_HEADERS: ${{ steps.gate_headers.outputs.value }}
         ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}

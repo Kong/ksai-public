@@ -533,6 +533,18 @@ inputs:
       The control plane serves this dial; a caller does not pin it, and anything else reads as `local`.
     required: false
     default: ""
+  prompt_rendering:
+    description: >-
+      where this run's prompts come from. `local` sends the model the text this runner builds. `shadow`
+      runs on that text, and also renders the prompt through the control plane named by
+      `fleet_dials_endpoint` over this job's own OIDC token and fetches the release it came from. `cp`
+      sends the model only the prompt the control plane rendered and signed for this run, verified by the
+      governance plugin this action loads into opencode before any request leaves, and fails rather than
+      falling back.
+
+      The control plane serves this dial; a caller does not pin it, and anything else reads as `local`.
+    required: false
+    default: ""
   review_triage_mode:
     description: >-
       V4 control-plane authority for review triage: `local` keeps the local decision, `shadow` compares
@@ -989,17 +1001,19 @@ runs:
           done
         fi
 
-    - name: Say where this run's results are rendered
-      id: report_rendering
-      if: ${{ inputs.report_rendering != '' }}
+    - name: Say where this run's results and prompts are rendered
+      id: rendering
+      if: ${{ inputs.report_rendering != '' || inputs.prompt_rendering != '' }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
-        RENDERING: ${{ inputs.report_rendering }}
+        REPORT: ${{ inputs.report_rendering }}
+        PROMPT: ${{ inputs.prompt_rendering }}
         ENDPOINT: ${{ inputs.fleet_dials_endpoint }}
       with:
         script: |
-          core.exportVariable('KSAI_REPORT_RENDERING', process.env.RENDERING);
-          core.exportVariable('KSAI_REPORT_ENDPOINT', process.env.ENDPOINT);
+          core.exportVariable('KSAI_REPORT_RENDERING', process.env.REPORT);
+          core.exportVariable('KSAI_PROMPT_RENDERING', process.env.PROMPT);
+          core.exportVariable('KSAI_CP_ENDPOINT', process.env.ENDPOINT);
 
     - name: Validate pull request test inputs
       id: validate_test_inputs
@@ -1233,6 +1247,17 @@ runs:
         if ! grep -qxF '_ksai/' "${git_dir}/info/exclude" 2>/dev/null; then
           echo '_ksai/' >> "${git_dir}/info/exclude"
         fi
+
+    - name: Prepare what a governed prompt is verified with
+      id: governance_prepare
+      if: >-
+        ${{ inputs.prompt_rendering == 'cp' && inputs.flow != 'test-publish' &&
+        steps.staged_scripts.outcome == 'success' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      run: node "${SCRIPTS}/governance/prepare.mjs"
 
     - name: Resolve the status arm
       id: status_gate
@@ -1569,6 +1594,7 @@ runs:
         MODEL: ${{ steps.classify_gate.outputs.model }}
         EFFORT: low
         PROMPT_FILE: ${{ steps.classify_gate.outputs.file }}
+        REQUEST_FILE: ${{ steps.classify_gate.outputs.request_file }}
         EXECUTION_FILE: ${{ runner.temp }}/ksai-classify-execution.json
         ATTRIBUTION_HEADERS: ${{ steps.classify_headers.outputs.value }}
         ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
@@ -2293,6 +2319,34 @@ runs:
           const policy = toolPolicy('test');
           core.setOutput('allowed_tools', policy.allowed);
           core.setOutput('disallowed_tools', policy.disallowed);
+
+    - name: Ask the control plane for the tester's prompt
+      id: test_request
+      if: >-
+        ${{ inputs.flow == 'test' && inputs.prompt_rendering != '' && inputs.prompt_rendering != 'local' &&
+        steps.build_test.outcome == 'success' && steps.test_tools.outcome == 'success' }}
+      shell: bash
+      env:
+        BASE: ${{ steps.test_base.outputs.ref }}
+        RUN_DIR: ${{ steps.test_paths.outputs.dir }}
+        STAGE_RESULT: ${{ steps.workflow_stage.outputs.result }}
+        MODEL: ${{ steps.select_test.outputs.model }}
+        ADDITIONAL_PROMPT: ${{ inputs.additional_prompt }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      run: node "${SCRIPTS}/ksai/pr-test/render-request.mjs"
+
+    - name: Render the tester's prompt through the control plane
+      id: governed_test
+      if: ${{ steps.test_request.outcome == 'success' }}
+      shell: bash
+      env:
+        REQUEST_FILE: ${{ steps.test_request.outputs.request_file }}
+        GOVERNED_NAME: test
+        OPENCODE_ALLOWED: ${{ steps.test_tools.outputs.allowed_tools }}
+        OPENCODE_DISALLOWED: ${{ steps.test_tools.outputs.disallowed_tools }}
+        PROMPT_FILE: ${{ steps.build_test.outputs.file }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      run: node "${SCRIPTS}/kreview/governed-render.mjs" flow
 
     - name: Resolve the issue this run is about
       id: subject
@@ -3413,6 +3467,7 @@ runs:
         MODEL: ${{ steps.prepare_write_triage.outputs.model }}
         EFFORT: low
         PROMPT_FILE: ${{ steps.prepare_write_triage.outputs.file }}
+        REQUEST_FILE: ${{ steps.prepare_write_triage.outputs.request_file }}
         EXECUTION_FILE: ${{ runner.temp }}/ksai-write-triage-execution.json
         ATTRIBUTION_HEADERS: ${{ steps.write_triage_headers.outputs.value }}
         ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
@@ -3782,6 +3837,7 @@ runs:
         MODEL: ${{ steps.build_dispute.outputs.model }}
         EFFORT: low
         PROMPT_FILE: ${{ steps.build_dispute.outputs.file }}
+        REQUEST_FILE: ${{ steps.build_dispute.outputs.request_file }}
         EXECUTION_FILE: ${{ runner.temp }}/ksai-dispute-execution.json
         ATTRIBUTION_HEADERS: ${{ steps.dispute_headers.outputs.value }}
         ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
@@ -3997,6 +4053,21 @@ runs:
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: node "${SCRIPTS}/ksai/run-flow.mjs"
 
+    - name: Render the caller's prompt through the control plane
+      id: governed_run
+      if: >-
+        ${{ inputs.flow == 'run' && inputs.prompt_rendering != '' && inputs.prompt_rendering != 'local' &&
+        steps.build_run.outputs.agent == 'true' }}
+      shell: bash
+      env:
+        REQUEST_FILE: ${{ steps.build_run.outputs.request_file }}
+        GOVERNED_NAME: run
+        OPENCODE_ALLOWED: ${{ steps.build_run.outputs.allowed_tools }}
+        OPENCODE_DISALLOWED: ${{ steps.build_run.outputs.disallowed_tools }}
+        PROMPT_FILE: ${{ steps.build_run.outputs.file }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      run: node "${SCRIPTS}/kreview/governed-render.mjs" flow
+
     - name: Mark the install-cli phase
       if: ${{ always() }}
       shell: bash
@@ -4163,6 +4234,7 @@ runs:
         WORKSPACE: ${{ github.workspace }}
         CHECKS_FILE: ${{ steps.phase.outputs.checks_file }}
         PROMPT_FILE: ${{ steps.build_implement.outputs.file }}
+        PACKAGE_FACTS_FILE: ${{ runner.temp }}/ksai-package-facts.json
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
         GH_TOKEN:
         GITHUB_TOKEN:
@@ -4202,8 +4274,71 @@ runs:
         GO_MODULE_TOKENS: ${{ inputs.go_module_tokens }}
         IS_PRIVATE: ${{ steps.context.outputs.is_private }}
         PROMPT_FILE: ${{ steps.build_implement.outputs.file }}
+        GO_FACTS_FILE: ${{ runner.temp }}/ksai-go-facts.json
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: node "${SCRIPTS}/ksai/gomod-warm.mjs"
+
+    - name: Ask the control plane for this phase's prompt
+      id: implement_request
+      if: >-
+        ${{ inputs.flow == 'implement' && inputs.prompt_rendering != '' && inputs.prompt_rendering != 'local' &&
+        steps.build_implement.outcome == 'success' }}
+      shell: bash
+      env:
+        PHASE: ${{ steps.size.outputs.phase }}
+        MODEL: ${{ steps.write_arm.outputs.model }}
+        REPO: ${{ github.repository }}
+        ISSUE_NUM: ${{ steps.subject.outputs.number }}
+        PR_NUMBER: ${{ steps.phase.outputs.pr_number || steps.open_draft.outputs.pr_number }}
+        DEFAULT_BRANCH: ${{ steps.issue.outputs.default_branch || steps.context.outputs.default_branch }}
+        BRANCH: ${{ steps.open_draft.outputs.branch || steps.open_branch.outputs.branch || steps.phase.outputs.ref }}
+        BASE_SHA: ${{ steps.checkout_source.outputs.commit }}
+        BASE_DIFF_REF: ${{ steps.fetch_base.outputs.ref }}
+        MERGED_SHA: ${{ steps.merge_base.outputs.merged_sha }}
+        MERGED_REF: ${{ steps.merge_base.outputs.merged_ref }}
+        MERGE_CONFLICTED: ${{ steps.merge_base.outputs.conflicted }}
+        PLAN_DIR: ${{ inputs.plan_file_path }}
+        PLAN_FILE: ${{ steps.phase.outputs.plan_file }}
+        PLAN_PATH: ${{ steps.phase.outputs.plan_file }}
+        STEP_TITLE: ${{ steps.read_plan.outputs.step_title }}
+        REMAINING: ${{ steps.read_plan.outputs.remaining }}
+        TOTAL: ${{ steps.read_plan.outputs.total }}
+        DEFERRED: ${{ steps.phase.outputs.deferred }}
+        THREAD_ROOT_ID: ${{ steps.context.outputs.thread_root_id }}
+        THREADS_FILE: ${{ steps.phase.outputs.threads_file }}
+        CHECKS_FILE: ${{ steps.phase.outputs.checks_file }}
+        ISSUE_FILE: ${{ steps.conversation.outputs.file }}
+        JIRA_FILE: ${{ steps.fetch_jira.outputs.file }}
+        JIRA_KEY: ${{ steps.fetch_jira.outputs.key }}
+        GUIDANCE: ${{ steps.phase.outputs.request || inputs.work_guidance }}
+        ADDITIONAL_PROMPT: ${{ inputs.additional_prompt }}
+        DENIED_PATHS: ${{ inputs.denied_paths }}
+        JOB_TIMEOUT_MINUTES: ${{ inputs.job_timeout_minutes }}
+        CHANNEL_NONCE: ${{ steps.channel.outputs.nonce }}
+        GO_FACTS_FILE: ${{ runner.temp }}/ksai-go-facts.json
+        PACKAGE_FACTS_FILE: ${{ runner.temp }}/ksai-package-facts.json
+        RETRY_FILE: ${{ steps.phase.outputs.retry_file }}
+        MAJOR_BUMP: ${{ steps.major_bump.outputs.major }}
+        MAJOR_BUMP_SUMMARY: ${{ steps.major_bump.outputs.summary }}
+        MAJOR_BUMP_OMITTED: ${{ steps.major_bump.outputs.omitted }}
+        MAJOR_BUMP_AMBIGUOUS: ${{ steps.major_bump.outputs.ambiguous }}
+        PROMPT_FILE: ${{ steps.build_implement.outputs.file }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      run: node "${SCRIPTS}/ksai/implement-render-request.mjs"
+
+    - name: Render this phase's prompt through the control plane
+      id: governed_implement
+      if: ${{ steps.implement_request.outcome == 'success' }}
+      shell: bash
+      env:
+        REQUEST_FILE: ${{ steps.implement_request.outputs.request_file }}
+        GOVERNED_NAME: implement
+        GOVERNED_PLUGIN: ksai-implement
+        OPENCODE_ALLOWED: ${{ steps.build_implement.outputs.allowed_tools }}
+        OPENCODE_DISALLOWED: ${{ steps.build_implement.outputs.disallowed_tools }}
+        PROMPT_FILE: ${{ steps.build_implement.outputs.file }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      run: node "${SCRIPTS}/kreview/governed-render.mjs" flow
 
     - name: Assemble the review prompt
       id: build_review
@@ -4241,6 +4376,40 @@ runs:
           const { outputs, error } = buildReviewPrompt({ env: process.env });
           for (const [name, value] of Object.entries(outputs)) core.setOutput(name, value);
           if (error) core.setFailed(error);
+
+    - name: Render the review prompt through the control plane
+      id: governed_review
+      if: >-
+        ${{ inputs.flow == 'review' && steps.build_review.outcome == 'success' &&
+        (inputs.prompt_rendering == 'cp' || inputs.prompt_rendering == 'shadow') }}
+      shell: bash
+      env:
+        CHANNEL_NONCE: ${{ steps.channel.outputs.nonce }}
+        REVIEW_STRATEGY: ${{ inputs.review_strategy }}
+        REVIEW_EXPERIMENT: ${{ inputs.review_experiment }}
+        PUBLISH: ${{ inputs.publish }}
+        COMMIT_ID: ${{ steps.checkout_pr.outputs.commit }}
+        BASE_SHA: ${{ steps.diff.outputs.base_sha }}
+        PLUGIN_SHA: ${{ steps.diff.outputs.plugin_sha }}
+        RUNTIME_SHA: ${{ steps.staged_scripts.outputs.sha }}
+        ENGINE: ${{ steps.engine.outputs.name }}
+        PROMPT_FILE: ${{ runner.temp }}/kreview-prompt.md
+        BASE_REF: ${{ steps.base.outputs.ref }}
+        WORKSPACE: ${{ github.workspace }}
+        CONVENTIONS_DIR: ${{ steps.conventions.outputs.dir }}
+        REQUEST_HTML: ${{ steps.select_arm.outputs.prompt_content_html }}
+        PRIOR_FINDINGS: ${{ steps.prior.outputs.prior_findings }}
+        TRIAGE_SKILLS: ${{ steps.triage.outputs.skills }}
+        DIFF_PATCH: ${{ steps.diff.outputs.patch }}
+        DIFF_FILES: ${{ steps.diff.outputs.files_file }}
+        DIFF_STATUS: ${{ steps.diff.outputs.status_file }}
+        DIFF_SHORTSTAT: ${{ steps.diff.outputs.shortstat }}
+        REPO_RULES: ${{ steps.repo_rules.outputs.rules }}
+        JOB_TIMEOUT_MINUTES: ${{ inputs.job_timeout_minutes }}
+        MODEL: ${{ steps.select_arm.outputs.model }}
+        AUDITOR_MANDATE: ${{ github.workspace }}/_ksai/plugins/kreview/agents/findings-auditor.md
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      run: node "${SCRIPTS}/kreview/governed-render.mjs" review
 
     - name: Mark the sandbox phase
       if: ${{ always() }}
@@ -4481,10 +4650,13 @@ runs:
       shell: bash
       env:
         REVIEW_STRATEGY: ${{ inputs.review_strategy }}
-        REVIEW_RESULT_TRANSPORT: ${{ steps.build_review.outputs.result_transport || steps.build_run.outputs.result_transport }}
+        REVIEW_RESULT_TRANSPORT: ${{ steps.governed_review.outputs.options_file != '' && 'text' || steps.build_review.outputs.result_transport || steps.build_run.outputs.result_transport }}
         OPENCODE_LSP_TOOL: ${{ steps.build_review.outputs.lsp_tool }}
         OPENCODE_LSP_ROOT: ${{ steps.opencode_lsp.outputs.root }}
         OPENCODE_CONFIG: ${{ runner.temp }}/opencode-runtime.json
+        GOVERNANCE_OPTIONS_FILE: >-
+          ${{ steps.governed_review.outputs.options_file || steps.governed_implement.outputs.options_file ||
+          steps.governed_test.outputs.options_file || steps.governed_run.outputs.options_file }}
         OPENCODE_HOME: ${{ runner.temp }}/opencode-home
         OPENCODE_VERSION: ${{ steps.opencode_install.outputs.version }}
         KREVIEW_PLUGIN_ROOT: ${{ inputs.flow != 'run' && format('{0}/_ksai/plugins/kreview', github.workspace) || '' }}
@@ -4497,7 +4669,10 @@ runs:
         OPENCODE_DISALLOWED: >-
           ${{ steps.build_implement.outputs.disallowed_tools || steps.test_tools.outputs.disallowed_tools ||
           steps.build_review.outputs.disallowed_tools || steps.build_run.outputs.disallowed_tools }}
-        OPENCODE_SKILLS: ${{ inputs.flow == 'implement' && format('{0}/_ksai/plugins/ksai-implement/skills', github.workspace) || '' }}
+        OPENCODE_SKILLS: >-
+          ${{ steps.governed_implement.outputs.options_file != '' &&
+          format('{0}/ksai-governed/implement/plugins/ksai-implement/skills', runner.temp) ||
+          (inputs.flow == 'implement' && format('{0}/_ksai/plugins/ksai-implement/skills', github.workspace)) || '' }}
         KSAI_CHANNEL_NONCE: ${{ steps.channel.outputs.nonce }}
         ALLOWED_MODELS: ${{ inputs.allowed_models }}
         ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
@@ -4565,10 +4740,11 @@ runs:
       continue-on-error: true
       shell: bash
       env:
-        PROMPT_FILE: ${{ steps.build_test.outputs.file }}
+        PROMPT_FILE: ${{ steps.governed_test.outputs.prompt_file || steps.build_test.outputs.file }}
         MODEL: ${{ steps.select_test.outputs.model }}
         VARIANT: ${{ steps.select_test.outputs.effort }}
         OPENCODE_CONFIG: ${{ steps.opencode_config.outputs.file }}
+        KSAI_GOVERNED_DIR: ${{ steps.governance_prepare.outputs.dir }}
         OPENCODE_HOME: ${{ runner.temp }}/opencode-home
         OPENCODE_VERSION: ${{ steps.opencode_install.outputs.version }}
         ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
@@ -4915,6 +5091,7 @@ runs:
         MODEL: ${{ steps.build_run.outputs.model }}
         EFFORT: ${{ steps.build_run.outputs.effort }}
         PROMPT_FILE: ${{ steps.build_run.outputs.file }}
+        REQUEST_FILE: ${{ steps.build_run.outputs.request_file }}
         EXECUTION_FILE: ${{ runner.temp }}/ksai-run-execution.json
         ATTRIBUTION_HEADERS: ${{ steps.model_headers.outputs.value }}
         ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
@@ -4959,14 +5136,19 @@ runs:
       shell: bash
       env:
         REVIEW_STRATEGY: ${{ inputs.review_strategy }}
-        REVIEW_RESULT_TRANSPORT: ${{ steps.build_review.outputs.result_transport || steps.build_run.outputs.result_transport }}
-        PROMPT_FILE: ${{ steps.build_implement.outputs.file || steps.build_test.outputs.file || steps.build_review.outputs.file || steps.build_run.outputs.file }}
+        REVIEW_RESULT_TRANSPORT: ${{ steps.governed_review.outputs.options_file != '' && 'text' || steps.build_review.outputs.result_transport || steps.build_run.outputs.result_transport }}
+        PROMPT_FILE: >-
+          ${{ steps.governed_implement.outputs.prompt_file || steps.build_implement.outputs.file ||
+          steps.governed_test.outputs.prompt_file || steps.build_test.outputs.file ||
+          steps.governed_review.outputs.prompt_file || steps.build_review.outputs.file ||
+          steps.governed_run.outputs.prompt_file || steps.build_run.outputs.file }}
         MODEL: ${{ steps.write_arm.outputs.model || steps.select_test.outputs.model || steps.select_arm.outputs.model || steps.build_run.outputs.model }}
         VARIANT: ${{ steps.write_arm.outputs.effort || steps.select_test.outputs.effort || steps.select_arm.outputs.effort || steps.build_run.outputs.effort }}
         OPENCODE_CONFIG: ${{ steps.opencode_config.outputs.file }}
         OPENCODE_HOME: ${{ runner.temp }}/opencode-home
         OPENCODE_VERSION: ${{ steps.opencode_install.outputs.version }}
         OPENCODE_SDK_ROOT: ${{ runner.temp }}/ksai-opencode-sdk
+        KSAI_GOVERNED_DIR: ${{ steps.governance_prepare.outputs.dir }}
         KSAI_KILLED_FILE: ${{ runner.temp }}/ksai-engine-killed
         ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
         ANTHROPIC_AUTH: ${{ inputs.anthropic_auth }}
@@ -4988,7 +5170,10 @@ runs:
         KSAI_CHANNEL_WARN: ${{ steps.halt.outputs.warn || '0' }}
         OPENCODE_PTY: ${{ inputs.opencode_pty }}
         OPENCODE_PHASE: ${{ inputs.flow == 'review' && 'review' || steps.size.outputs.phase || steps.build_run.outputs.phase }}
-        OPENCODE_SKILLS: ${{ inputs.flow == 'implement' && format('{0}/_ksai/plugins/ksai-implement/skills', github.workspace) || '' }}
+        OPENCODE_SKILLS: >-
+          ${{ steps.governed_implement.outputs.options_file != '' &&
+          format('{0}/ksai-governed/implement/plugins/ksai-implement/skills', runner.temp) ||
+          (inputs.flow == 'implement' && format('{0}/_ksai/plugins/ksai-implement/skills', github.workspace)) || '' }}
         OPENCODE_RESUME_SESSION: ${{ steps.plan_session.outputs.session_id }}
         SUBPROCESS_ENV_SCRUB: "1"
         SANDBOX_ALLOW_WRITE: ${{ inputs.sandbox_allow_write }}
@@ -5008,6 +5193,417 @@ runs:
       working-directory: ${{ runner.temp }}
       run: node "${SCRIPTS}/kreview/opencode-run.mjs"
 
+    - name: Record what this pass committed for an independent reader
+      id: implement_adversarial_request
+      if: >-
+        ${{ steps.governed_implement.outputs.options_file != '' &&
+        steps.opencode.outcome == 'success' }}
+      shell: bash
+      env:
+        PHASE: ${{ steps.size.outputs.phase }}
+        MODEL: ${{ steps.write_arm.outputs.model }}
+        REPO: ${{ github.repository }}
+        BRANCH: ${{ steps.open_draft.outputs.branch || steps.open_branch.outputs.branch || steps.phase.outputs.ref }}
+        PR_NUMBER: ${{ steps.phase.outputs.pr_number || steps.open_draft.outputs.pr_number }}
+        BASE_SHA: ${{ steps.checkout_source.outputs.commit }}
+        PLAN_DIR: ${{ inputs.plan_file_path }}
+        PLAN_FILE: ${{ steps.phase.outputs.plan_file }}
+        DENIED_PATHS: ${{ inputs.denied_paths }}
+        PROMPT_FILE: ${{ steps.governed_implement.outputs.prompt_file }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      run: node "${SCRIPTS}/ksai/implement-adversarial.mjs"
+
+    - name: Render the independent adversarial review
+      id: governed_adversarial
+      if: >-
+        ${{ steps.implement_adversarial_request.outcome == 'success' &&
+        steps.implement_adversarial_request.outputs.request_file != '' }}
+      shell: bash
+      env:
+        REQUEST_FILE: ${{ steps.implement_adversarial_request.outputs.request_file }}
+        GOVERNED_NAME: adversarial
+        OPENCODE_ALLOWED: ${{ steps.implement_adversarial_request.outputs.allowed_tools }}
+        OPENCODE_DISALLOWED: ${{ steps.implement_adversarial_request.outputs.disallowed_tools }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      run: node "${SCRIPTS}/kreview/governed-render.mjs" flow
+
+    - name: Write the independent adversarial run's opencode config
+      id: governed_adversarial_config
+      if: ${{ steps.governed_adversarial.outcome == 'success' }}
+      shell: bash
+      env:
+        REVIEW_STRATEGY: ${{ inputs.review_strategy }}
+        REVIEW_RESULT_TRANSPORT: text
+        OPENCODE_LSP_TOOL: ${{ steps.build_review.outputs.lsp_tool }}
+        OPENCODE_LSP_ROOT: ${{ steps.opencode_lsp.outputs.root }}
+        OPENCODE_CONFIG: ${{ runner.temp }}/opencode-adversarial.json
+        GOVERNANCE_OPTIONS_FILE: ${{ steps.governed_adversarial.outputs.options_file }}
+        OPENCODE_HOME: ${{ runner.temp }}/opencode-home
+        OPENCODE_VERSION: ${{ steps.opencode_install.outputs.version }}
+        KREVIEW_PLUGIN_ROOT: ${{ inputs.flow != 'run' && format('{0}/_ksai/plugins/kreview', github.workspace) || '' }}
+        OPENCODE_MODEL: ${{ steps.write_arm.outputs.model || steps.select_test.outputs.model || steps.select_arm.outputs.model || steps.build_run.outputs.model }}
+        OPENCODE_PHASE: review
+        OPENCODE_PTY: ${{ inputs.opencode_pty }}
+        OPENCODE_ALLOWED: ${{ steps.implement_adversarial_request.outputs.allowed_tools }}
+        OPENCODE_DISALLOWED: ${{ steps.implement_adversarial_request.outputs.disallowed_tools }}
+        OPENCODE_SKILLS: ""
+        KSAI_CHANNEL_NONCE: ${{ steps.channel.outputs.nonce }}
+        ALLOWED_MODELS: ${{ inputs.allowed_models }}
+        ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
+        ANTHROPIC_AUTH: ${{ inputs.anthropic_auth }}
+        ATTRIBUTION_HEADERS: ${{ steps.model_headers.outputs.value }}
+        SANDBOX_ALLOW_WRITE: ${{ inputs.sandbox_allow_write }}
+        SANDBOX_DENY_WRITE: ${{ inputs.sandbox_deny_write }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      working-directory: ${{ runner.temp }}
+      run: |
+        set -euo pipefail
+        node "${SCRIPTS}/kreview/opencode-config.mjs"
+        echo "file=${OPENCODE_CONFIG}" >> "$GITHUB_OUTPUT"
+
+
+    - name: Attack this pass in its own opencode run
+      id: opencode_adversarial
+      if: ${{ steps.governed_adversarial_config.outcome == 'success' }}
+      shell: bash
+      env:
+        REVIEW_STRATEGY: ${{ inputs.review_strategy }}
+        REVIEW_RESULT_TRANSPORT: text
+        PROMPT_FILE: ${{ steps.governed_adversarial.outputs.prompt_file }}
+        MODEL: ${{ steps.write_arm.outputs.model || steps.select_test.outputs.model || steps.select_arm.outputs.model || steps.build_run.outputs.model }}
+        VARIANT: ${{ steps.write_arm.outputs.effort || steps.select_test.outputs.effort || steps.select_arm.outputs.effort || steps.build_run.outputs.effort }}
+        OPENCODE_CONFIG: ${{ steps.governed_adversarial_config.outputs.file }}
+        OPENCODE_HOME: ${{ runner.temp }}/opencode-home
+        OPENCODE_VERSION: ${{ steps.opencode_install.outputs.version }}
+        OPENCODE_SDK_ROOT: ${{ runner.temp }}/ksai-opencode-sdk
+        KSAI_GOVERNED_DIR: ${{ steps.governance_prepare.outputs.dir }}
+        KSAI_KILLED_FILE: ${{ runner.temp }}/ksai-engine-killed
+        ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
+        ANTHROPIC_AUTH: ${{ inputs.anthropic_auth }}
+        ANTHROPIC_FEDERATED_TOKEN: ${{ steps.mint.outputs.token }}
+        ANTHROPIC_FEDERATED_TOKEN_EXPIRES_AT: ${{ steps.mint.outputs.expires_at }}
+        ANTHROPIC_FEDERATION_RULE_ID: ${{ inputs.federation_rule_id }}
+        ANTHROPIC_ORGANIZATION_ID: ${{ inputs.organization_id }}
+        ANTHROPIC_SERVICE_ACCOUNT_ID: ${{ inputs.service_account_id }}
+        ANTHROPIC_WORKSPACE_ID: ${{ inputs.workspace_id }}
+        EVENTS_FILE: ${{ runner.temp }}/opencode-adversarial-events.jsonl
+        EXECUTION_FILE: ${{ runner.temp }}/opencode-adversarial-execution.json
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+        KSAI_CHANNEL_DIR: ${{ steps.channel.outputs.state_dir }}
+        KSAI_CHANNEL_KILL_AT: ${{ steps.watchdog.outputs.kill_at_ms || '0' }}
+        KSAI_CHANNEL_ARMED_AT: ${{ steps.watchdog.outputs.armed_at_ms || '0' }}
+        KSAI_CHANNEL_FLOW: ${{ inputs.flow || 'unknown' }}
+        FLOW: ${{ inputs.flow }}
+        KSAI_CHANNEL_NONCE: ${{ steps.channel.outputs.nonce || 'none' }}
+        KSAI_CHANNEL_WARN: ${{ steps.halt.outputs.warn || '0' }}
+        OPENCODE_PTY: ${{ inputs.opencode_pty }}
+        OPENCODE_PHASE: review
+        OPENCODE_SKILLS: ""
+        SUBPROCESS_ENV_SCRUB: "1"
+        SANDBOX_ALLOW_WRITE: ${{ inputs.sandbox_allow_write }}
+        SANDBOX_DENY_WRITE: ${{ inputs.sandbox_deny_write }}
+        SANDBOX_DENY_ENV: ${{ inputs.sandbox_deny_env }}
+        KSAI_JOB_INDEX: ${{ strategy.job-index || 0 }}
+        OTEL_EXPORTER_OTLP_ENDPOINT: ${{ inputs.otel_endpoint }}
+        OTEL_EXPORTER_OTLP_HEADERS: ${{ inputs.otel_headers }}
+        OTEL_RESOURCE_ATTRIBUTES: >-
+          team=${{ steps.telemetry.outputs.team }},repo=${{ github.repository }},workflow=${{
+          steps.telemetry.outputs.workflow }},intent_command=${{ steps.select.outputs.command || steps.select_arm.outputs.command }},intent_surface=${{
+          steps.select.outputs.route_surface || steps.select_arm.outputs.route_surface }},intent_source=${{ steps.select.outputs.route_source || steps.select_arm.outputs.route_source }}${{ inputs.otel_extra_attributes != '' &&
+          format(',{0}', inputs.otel_extra_attributes) || '' }}
+        OPENCODE_LSP_TOOL: ${{ steps.build_review.outputs.lsp_tool }}
+        OPENCODE_LSP_MEASURE: ${{ steps.build_review.outputs.lsp_measure }}
+        OPENCODE_LSP_ROOT: ${{ steps.opencode_lsp.outputs.root }}
+      working-directory: ${{ runner.temp }}
+      run: node "${SCRIPTS}/kreview/opencode-run.mjs"
+
+
+    - name: Ask what the independent run found
+      id: implement_repair_request
+      if: ${{ steps.opencode_adversarial.outputs.conclusion == 'success' }}
+      shell: bash
+      env:
+        ADVERSARIAL_EXECUTION: ${{ steps.opencode_adversarial.outputs.execution_file }}
+        DIFF_FILE: ${{ steps.implement_adversarial_request.outputs.diff_file }}
+        CHANGED_FILES_FILE: ${{ steps.implement_adversarial_request.outputs.changed_files_file }}
+        PHASE: ${{ steps.size.outputs.phase }}
+        MODEL: ${{ steps.write_arm.outputs.model }}
+        REPO: ${{ github.repository }}
+        BRANCH: ${{ steps.open_draft.outputs.branch || steps.open_branch.outputs.branch || steps.phase.outputs.ref }}
+        PR_NUMBER: ${{ steps.phase.outputs.pr_number || steps.open_draft.outputs.pr_number }}
+        BASE_SHA: ${{ steps.checkout_source.outputs.commit }}
+        PLAN_DIR: ${{ inputs.plan_file_path }}
+        PLAN_FILE: ${{ steps.phase.outputs.plan_file }}
+        DENIED_PATHS: ${{ inputs.denied_paths }}
+        PROMPT_FILE: ${{ steps.governed_implement.outputs.prompt_file }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      run: node "${SCRIPTS}/ksai/implement-repair.mjs"
+
+    - name: Render the repair of what the independent run found
+      id: governed_repair
+      if: >-
+        ${{ steps.implement_repair_request.outcome == 'success' &&
+        steps.implement_repair_request.outputs.needed == 'true' }}
+      shell: bash
+      env:
+        REQUEST_FILE: ${{ steps.implement_repair_request.outputs.request_file }}
+        GOVERNED_NAME: repair
+        GOVERNED_PLUGIN: ksai-implement
+        OPENCODE_ALLOWED: ${{ steps.build_implement.outputs.allowed_tools }}
+        OPENCODE_DISALLOWED: ${{ steps.build_implement.outputs.disallowed_tools }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      run: node "${SCRIPTS}/kreview/governed-render.mjs" flow
+
+    - name: Write the repair run's opencode config
+      id: governed_repair_config
+      if: ${{ steps.governed_repair.outcome == 'success' && steps.governed_repair.outputs.options_file != '' }}
+      shell: bash
+      env:
+        REVIEW_STRATEGY: ${{ inputs.review_strategy }}
+        REVIEW_RESULT_TRANSPORT: ${{ steps.governed_review.outputs.options_file != '' && 'text' || steps.build_review.outputs.result_transport || steps.build_run.outputs.result_transport }}
+        OPENCODE_LSP_TOOL: ${{ steps.build_review.outputs.lsp_tool }}
+        OPENCODE_LSP_ROOT: ${{ steps.opencode_lsp.outputs.root }}
+        OPENCODE_CONFIG: ${{ runner.temp }}/opencode-repair.json
+        GOVERNANCE_OPTIONS_FILE: ${{ steps.governed_repair.outputs.options_file }}
+        OPENCODE_HOME: ${{ runner.temp }}/opencode-home
+        OPENCODE_VERSION: ${{ steps.opencode_install.outputs.version }}
+        KREVIEW_PLUGIN_ROOT: ${{ inputs.flow != 'run' && format('{0}/_ksai/plugins/kreview', github.workspace) || '' }}
+        OPENCODE_MODEL: ${{ steps.write_arm.outputs.model || steps.select_test.outputs.model || steps.select_arm.outputs.model || steps.build_run.outputs.model }}
+        OPENCODE_PHASE: ${{ steps.size.outputs.phase }}
+        OPENCODE_PTY: ${{ inputs.opencode_pty }}
+        OPENCODE_ALLOWED: ${{ steps.build_implement.outputs.allowed_tools }}
+        OPENCODE_DISALLOWED: ${{ steps.build_implement.outputs.disallowed_tools }}
+        OPENCODE_SKILLS: >-
+          ${{ steps.governed_implement.outputs.options_file != '' &&
+          format('{0}/ksai-governed/implement/plugins/ksai-implement/skills', runner.temp) ||
+          (inputs.flow == 'implement' && format('{0}/_ksai/plugins/ksai-implement/skills', github.workspace)) || '' }}
+        KSAI_CHANNEL_NONCE: ${{ steps.channel.outputs.nonce }}
+        ALLOWED_MODELS: ${{ inputs.allowed_models }}
+        ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
+        ANTHROPIC_AUTH: ${{ inputs.anthropic_auth }}
+        ATTRIBUTION_HEADERS: ${{ steps.model_headers.outputs.value }}
+        SANDBOX_ALLOW_WRITE: ${{ inputs.sandbox_allow_write }}
+        SANDBOX_DENY_WRITE: ${{ inputs.sandbox_deny_write }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      working-directory: ${{ runner.temp }}
+      run: |
+        set -euo pipefail
+        node "${SCRIPTS}/kreview/opencode-config.mjs"
+        echo "file=${OPENCODE_CONFIG}" >> "$GITHUB_OUTPUT"
+
+
+    - name: Answer what the independent run found, in its own opencode run
+      id: opencode_repair
+      if: ${{ steps.governed_repair_config.outcome == 'success' }}
+      shell: bash
+      env:
+        REVIEW_STRATEGY: ${{ inputs.review_strategy }}
+        REVIEW_RESULT_TRANSPORT: ${{ steps.governed_review.outputs.options_file != '' && 'text' || steps.build_review.outputs.result_transport || steps.build_run.outputs.result_transport }}
+        PROMPT_FILE: ${{ steps.governed_repair.outputs.prompt_file }}
+        MODEL: ${{ steps.write_arm.outputs.model || steps.select_test.outputs.model || steps.select_arm.outputs.model || steps.build_run.outputs.model }}
+        VARIANT: ${{ steps.write_arm.outputs.effort || steps.select_test.outputs.effort || steps.select_arm.outputs.effort || steps.build_run.outputs.effort }}
+        OPENCODE_CONFIG: ${{ steps.governed_repair_config.outputs.file }}
+        OPENCODE_HOME: ${{ runner.temp }}/opencode-home
+        OPENCODE_VERSION: ${{ steps.opencode_install.outputs.version }}
+        OPENCODE_SDK_ROOT: ${{ runner.temp }}/ksai-opencode-sdk
+        KSAI_GOVERNED_DIR: ${{ steps.governance_prepare.outputs.dir }}
+        KSAI_KILLED_FILE: ${{ runner.temp }}/ksai-engine-killed
+        ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
+        ANTHROPIC_AUTH: ${{ inputs.anthropic_auth }}
+        ANTHROPIC_FEDERATED_TOKEN: ${{ steps.mint.outputs.token }}
+        ANTHROPIC_FEDERATED_TOKEN_EXPIRES_AT: ${{ steps.mint.outputs.expires_at }}
+        ANTHROPIC_FEDERATION_RULE_ID: ${{ inputs.federation_rule_id }}
+        ANTHROPIC_ORGANIZATION_ID: ${{ inputs.organization_id }}
+        ANTHROPIC_SERVICE_ACCOUNT_ID: ${{ inputs.service_account_id }}
+        ANTHROPIC_WORKSPACE_ID: ${{ inputs.workspace_id }}
+        EVENTS_FILE: ${{ runner.temp }}/opencode-repair-events.jsonl
+        EXECUTION_FILE: ${{ runner.temp }}/opencode-repair-execution.json
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+        KSAI_CHANNEL_DIR: ${{ steps.channel.outputs.state_dir }}
+        KSAI_CHANNEL_KILL_AT: ${{ steps.watchdog.outputs.kill_at_ms || '0' }}
+        KSAI_CHANNEL_ARMED_AT: ${{ steps.watchdog.outputs.armed_at_ms || '0' }}
+        KSAI_CHANNEL_FLOW: ${{ inputs.flow || 'unknown' }}
+        FLOW: ${{ inputs.flow }}
+        KSAI_CHANNEL_NONCE: ${{ steps.channel.outputs.nonce || 'none' }}
+        KSAI_CHANNEL_WARN: ${{ steps.halt.outputs.warn || '0' }}
+        OPENCODE_PTY: ${{ inputs.opencode_pty }}
+        OPENCODE_PHASE: ${{ steps.size.outputs.phase }}
+        OPENCODE_SKILLS: >-
+          ${{ steps.governed_implement.outputs.options_file != '' &&
+          format('{0}/ksai-governed/implement/plugins/ksai-implement/skills', runner.temp) ||
+          (inputs.flow == 'implement' && format('{0}/_ksai/plugins/ksai-implement/skills', github.workspace)) || '' }}
+        SUBPROCESS_ENV_SCRUB: "1"
+        SANDBOX_ALLOW_WRITE: ${{ inputs.sandbox_allow_write }}
+        SANDBOX_DENY_WRITE: ${{ inputs.sandbox_deny_write }}
+        SANDBOX_DENY_ENV: ${{ inputs.sandbox_deny_env }}
+        KSAI_JOB_INDEX: ${{ strategy.job-index || 0 }}
+        OTEL_EXPORTER_OTLP_ENDPOINT: ${{ inputs.otel_endpoint }}
+        OTEL_EXPORTER_OTLP_HEADERS: ${{ inputs.otel_headers }}
+        OTEL_RESOURCE_ATTRIBUTES: >-
+          team=${{ steps.telemetry.outputs.team }},repo=${{ github.repository }},workflow=${{
+          steps.telemetry.outputs.workflow }},intent_command=${{ steps.select.outputs.command || steps.select_arm.outputs.command }},intent_surface=${{
+          steps.select.outputs.route_surface || steps.select_arm.outputs.route_surface }},intent_source=${{ steps.select.outputs.route_source || steps.select_arm.outputs.route_source }}${{ inputs.otel_extra_attributes != '' &&
+          format(',{0}', inputs.otel_extra_attributes) || '' }}
+        OPENCODE_LSP_TOOL: ${{ steps.build_review.outputs.lsp_tool }}
+        OPENCODE_LSP_MEASURE: ${{ steps.build_review.outputs.lsp_measure }}
+        OPENCODE_LSP_ROOT: ${{ steps.opencode_lsp.outputs.root }}
+      working-directory: ${{ runner.temp }}
+      run: node "${SCRIPTS}/kreview/opencode-run.mjs"
+
+
+    - name: Render the independent audit of the governed review
+      id: governed_audit
+      if: >-
+        ${{ steps.governed_review.outputs.options_file != '' &&
+        inputs.review_strategy != 'evidence' && inputs.review_strategy != 'dual' &&
+        steps.opencode.outcome == 'success' }}
+      shell: bash
+      env:
+        REVIEW_EXECUTION: ${{ steps.opencode.outputs.execution_file }}
+        MODEL: ${{ steps.select_arm.outputs.model }}
+        DIFF_PATCH: ${{ steps.diff.outputs.patch }}
+        DIFF_FILES: ${{ steps.diff.outputs.files_file }}
+        REVIEW_PROMPT_FILE: ${{ steps.governed_review.outputs.prompt_file }}
+        AUDITOR_MANDATE: ${{ github.workspace }}/_ksai/plugins/kreview/agents/findings-auditor.md
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      run: node "${SCRIPTS}/kreview/governed-render.mjs" audit
+
+    - name: Write the governed audit's opencode config
+      id: governed_audit_config
+      if: ${{ steps.governed_audit.outcome == 'success' }}
+      shell: bash
+      env:
+        REVIEW_STRATEGY: ${{ inputs.review_strategy }}
+        REVIEW_RESULT_TRANSPORT: ${{ steps.governed_review.outputs.options_file != '' && 'text' || steps.build_review.outputs.result_transport || steps.build_run.outputs.result_transport }}
+        OPENCODE_LSP_TOOL: ${{ steps.build_review.outputs.lsp_tool }}
+        OPENCODE_LSP_ROOT: ${{ steps.opencode_lsp.outputs.root }}
+        OPENCODE_CONFIG: ${{ runner.temp }}/opencode-audit.json
+        GOVERNANCE_OPTIONS_FILE: ${{ steps.governed_audit.outputs.options_file }}
+        OPENCODE_HOME: ${{ runner.temp }}/opencode-home
+        OPENCODE_VERSION: ${{ steps.opencode_install.outputs.version }}
+        KREVIEW_PLUGIN_ROOT: ${{ inputs.flow != 'run' && format('{0}/_ksai/plugins/kreview', github.workspace) || '' }}
+        OPENCODE_MODEL: ${{ steps.write_arm.outputs.model || steps.select_test.outputs.model || steps.select_arm.outputs.model || steps.build_run.outputs.model }}
+        OPENCODE_PHASE: ${{ inputs.flow == 'review' && 'review' || inputs.flow == 'test' && 'test' || steps.size.outputs.phase || steps.build_run.outputs.phase }}
+        OPENCODE_PTY: ${{ inputs.opencode_pty }}
+        OPENCODE_ALLOWED: >-
+          ${{ steps.build_implement.outputs.allowed_tools || steps.test_tools.outputs.allowed_tools ||
+          steps.build_review.outputs.allowed_tools || steps.build_run.outputs.allowed_tools }}
+        OPENCODE_DISALLOWED: >-
+          ${{ steps.build_implement.outputs.disallowed_tools || steps.test_tools.outputs.disallowed_tools ||
+          steps.build_review.outputs.disallowed_tools || steps.build_run.outputs.disallowed_tools }}
+        OPENCODE_SKILLS: >-
+          ${{ steps.governed_implement.outputs.options_file != '' &&
+          format('{0}/ksai-governed/implement/plugins/ksai-implement/skills', runner.temp) ||
+          (inputs.flow == 'implement' && format('{0}/_ksai/plugins/ksai-implement/skills', github.workspace)) || '' }}
+        KSAI_CHANNEL_NONCE: ${{ steps.channel.outputs.nonce }}
+        ALLOWED_MODELS: ${{ inputs.allowed_models }}
+        ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
+        ANTHROPIC_AUTH: ${{ inputs.anthropic_auth }}
+        ATTRIBUTION_HEADERS: ${{ steps.model_headers.outputs.value }}
+        SANDBOX_ALLOW_WRITE: ${{ inputs.sandbox_allow_write }}
+        SANDBOX_DENY_WRITE: ${{ inputs.sandbox_deny_write }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      working-directory: ${{ runner.temp }}
+      run: |
+        set -euo pipefail
+        node "${SCRIPTS}/kreview/opencode-config.mjs"
+        echo "file=${OPENCODE_CONFIG}" >> "$GITHUB_OUTPUT"
+
+    - name: Check the audit reads the files it was rendered for
+      id: governed_audit_verify
+      if: ${{ steps.governed_audit_config.outcome == 'success' }}
+      shell: bash
+      env:
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      run: node "${SCRIPTS}/kreview/governed-check.mjs" verify
+
+    - name: Audit the governed review in its own opencode run
+      id: opencode_audit
+      if: ${{ steps.governed_audit_verify.outcome == 'success' }}
+      shell: bash
+      env:
+        REVIEW_STRATEGY: ${{ inputs.review_strategy }}
+        REVIEW_RESULT_TRANSPORT: ${{ steps.governed_review.outputs.options_file != '' && 'text' || steps.build_review.outputs.result_transport || steps.build_run.outputs.result_transport }}
+        PROMPT_FILE: ${{ steps.governed_audit.outputs.prompt_file }}
+        MODEL: ${{ steps.write_arm.outputs.model || steps.select_test.outputs.model || steps.select_arm.outputs.model || steps.build_run.outputs.model }}
+        VARIANT: ${{ steps.write_arm.outputs.effort || steps.select_test.outputs.effort || steps.select_arm.outputs.effort || steps.build_run.outputs.effort }}
+        OPENCODE_CONFIG: ${{ steps.governed_audit_config.outputs.file }}
+        OPENCODE_HOME: ${{ runner.temp }}/opencode-home
+        OPENCODE_VERSION: ${{ steps.opencode_install.outputs.version }}
+        OPENCODE_SDK_ROOT: ${{ runner.temp }}/ksai-opencode-sdk
+        KSAI_GOVERNED_DIR: ${{ steps.governance_prepare.outputs.dir }}
+        KSAI_KILLED_FILE: ${{ runner.temp }}/ksai-engine-killed
+        ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
+        ANTHROPIC_AUTH: ${{ inputs.anthropic_auth }}
+        ANTHROPIC_FEDERATED_TOKEN: ${{ steps.mint.outputs.token }}
+        ANTHROPIC_FEDERATED_TOKEN_EXPIRES_AT: ${{ steps.mint.outputs.expires_at }}
+        ANTHROPIC_FEDERATION_RULE_ID: ${{ inputs.federation_rule_id }}
+        ANTHROPIC_ORGANIZATION_ID: ${{ inputs.organization_id }}
+        ANTHROPIC_SERVICE_ACCOUNT_ID: ${{ inputs.service_account_id }}
+        ANTHROPIC_WORKSPACE_ID: ${{ inputs.workspace_id }}
+        EVENTS_FILE: ${{ runner.temp }}/opencode-audit-events.jsonl
+        EXECUTION_FILE: ${{ runner.temp }}/opencode-audit-execution.json
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+        KSAI_CHANNEL_DIR: ${{ steps.channel.outputs.state_dir }}
+        KSAI_CHANNEL_KILL_AT: ${{ steps.watchdog.outputs.kill_at_ms || '0' }}
+        KSAI_CHANNEL_ARMED_AT: ${{ steps.watchdog.outputs.armed_at_ms || '0' }}
+        KSAI_CHANNEL_FLOW: ${{ inputs.flow || 'unknown' }}
+        FLOW: ${{ inputs.flow }}
+        KSAI_CHANNEL_NONCE: ${{ steps.channel.outputs.nonce || 'none' }}
+        KSAI_CHANNEL_WARN: ${{ steps.halt.outputs.warn || '0' }}
+        OPENCODE_PTY: ${{ inputs.opencode_pty }}
+        OPENCODE_PHASE: ${{ inputs.flow == 'review' && 'review' || steps.size.outputs.phase || steps.build_run.outputs.phase }}
+        OPENCODE_SKILLS: >-
+          ${{ steps.governed_implement.outputs.options_file != '' &&
+          format('{0}/ksai-governed/implement/plugins/ksai-implement/skills', runner.temp) ||
+          (inputs.flow == 'implement' && format('{0}/_ksai/plugins/ksai-implement/skills', github.workspace)) || '' }}
+        OPENCODE_RESUME_SESSION: ${{ steps.plan_session.outputs.session_id }}
+        SUBPROCESS_ENV_SCRUB: "1"
+        SANDBOX_ALLOW_WRITE: ${{ inputs.sandbox_allow_write }}
+        SANDBOX_DENY_WRITE: ${{ inputs.sandbox_deny_write }}
+        SANDBOX_DENY_ENV: ${{ inputs.sandbox_deny_env }}
+        KSAI_JOB_INDEX: ${{ strategy.job-index || 0 }}
+        OTEL_EXPORTER_OTLP_ENDPOINT: ${{ inputs.otel_endpoint }}
+        OTEL_EXPORTER_OTLP_HEADERS: ${{ inputs.otel_headers }}
+        OTEL_RESOURCE_ATTRIBUTES: >-
+          team=${{ steps.telemetry.outputs.team }},repo=${{ github.repository }},workflow=${{
+          steps.telemetry.outputs.workflow }},intent_command=${{ steps.select.outputs.command || steps.select_arm.outputs.command }},intent_surface=${{
+          steps.select.outputs.route_surface || steps.select_arm.outputs.route_surface }},intent_source=${{ steps.select.outputs.route_source || steps.select_arm.outputs.route_source }}${{ inputs.otel_extra_attributes != '' &&
+          format(',{0}', inputs.otel_extra_attributes) || '' }}
+        OPENCODE_LSP_TOOL: ${{ steps.build_review.outputs.lsp_tool }}
+        OPENCODE_LSP_MEASURE: ${{ steps.build_review.outputs.lsp_measure }}
+        OPENCODE_LSP_ROOT: ${{ steps.opencode_lsp.outputs.root }}
+      working-directory: ${{ runner.temp }}
+      run: node "${SCRIPTS}/kreview/opencode-run.mjs"
+
+    - name: Publish only what the audit answered
+      id: governed_combine
+      if: >-
+        ${{ always() && steps.governed_review.outputs.options_file != '' &&
+        inputs.review_strategy != 'evidence' && inputs.review_strategy != 'dual' &&
+        steps.opencode.outcome != 'skipped' }}
+      shell: bash
+      env:
+        REVIEW_EXECUTION: ${{ steps.opencode.outputs.execution_file }}
+        AUDIT_EXECUTION: ${{ steps.opencode_audit.outputs.execution_file }}
+        AUDIT_CONCLUSION: ${{ steps.opencode_audit.outputs.conclusion }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      run: node "${SCRIPTS}/kreview/governed-combine.mjs" review
+
+    - name: Count what every governed pass of this phase spent
+      id: governed_passes
+      if: >-
+        ${{ always() && steps.governed_implement.outputs.options_file != '' &&
+        steps.opencode.outcome != 'skipped' }}
+      shell: bash
+      env:
+        PHASE_EXECUTION: ${{ steps.opencode.outputs.execution_file }}
+        ADVERSARIAL_EXECUTION: ${{ steps.opencode_adversarial.outputs.execution_file }}
+        REPAIR_EXECUTION: ${{ steps.opencode_repair.outputs.execution_file }}
+        REPAIR_CONCLUSION: ${{ steps.opencode_repair.outputs.conclusion }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      run: node "${SCRIPTS}/kreview/governed-combine.mjs" passes
+
     - name: Mark the publish phase
       if: ${{ always() }}
       shell: bash
@@ -5026,20 +5622,49 @@ runs:
       shell: bash
       env:
         CONCLUSION: >-
-          ${{ steps.opencode.outputs.conclusion || steps.opencode_test.outputs.conclusion ||
-          steps.run_once.outputs.conclusion }}
+          ${{ steps.governed_combine.outputs.conclusion || steps.governed_passes.outputs.conclusion ||
+          steps.opencode.outputs.conclusion || steps.opencode_test.outputs.conclusion || steps.run_once.outputs.conclusion }}
         OUTCOME: >-
           ${{ steps.opencode.outcome != 'skipped' && steps.opencode.outcome ||
           steps.opencode_test.outcome != 'skipped' && steps.opencode_test.outcome ||
           steps.run_once.outcome != 'skipped' && steps.run_once.outcome || '' }}
         EXECUTION: >-
-          ${{ steps.opencode.outputs.execution_file || steps.opencode_test.outputs.execution_file ||
+          ${{ steps.governed_combine.outputs.execution_file || steps.governed_passes.outputs.execution_file ||
+          steps.opencode.outputs.execution_file || steps.opencode_test.outputs.execution_file ||
           steps.run_once.outputs.execution_file }}
       run: |
         set -euo pipefail
         echo "conclusion=${CONCLUSION}" >> "$GITHUB_OUTPUT"
         echo "outcome=${OUTCOME}" >> "$GITHUB_OUTPUT"
         echo "execution_file=${EXECUTION}" >> "$GITHUB_OUTPUT"
+
+    - name: Hold a governed run to having been governed
+      id: governed_held
+      if: >-
+        ${{ steps.model_run.outputs.conclusion == 'success' &&
+        (steps.governed_review.outputs.options_file != '' ||
+        steps.governed_implement.outputs.options_file != '' ||
+        steps.governed_test.outputs.options_file != '' ||
+        steps.governed_run.outputs.options_file != '') }}
+      shell: bash
+      env:
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      run: node "${SCRIPTS}/kreview/governed-check.mjs" governed
+
+    - name: Report what reached the model to the control plane
+      id: governed_report
+      if: >-
+        ${{ always() && (steps.governed_review.outputs.options_file != '' ||
+        steps.governed_implement.outputs.options_file != '' ||
+        steps.governed_adversarial.outputs.options_file != '' ||
+        steps.governed_repair.outputs.options_file != '' ||
+        steps.governed_test.outputs.options_file != '' ||
+        steps.governed_run.outputs.options_file != '') }}
+      continue-on-error: true
+      shell: bash
+      env:
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      run: node "${SCRIPTS}/kreview/governed-check.mjs" report
 
     - name: Upload the opencode event stream
       if: >-
@@ -5053,6 +5678,18 @@ runs:
           ${{ steps.opencode.outputs.pipeline_file || steps.opencode_test.outputs.pipeline_file }}
           ${{ steps.opencode.outputs.children_file || steps.opencode_test.outputs.children_file }}
           ${{ steps.opencode.outputs.hypotheses_file || steps.opencode_test.outputs.hypotheses_file }}
+          ${{ steps.opencode_audit.outputs.events_file }}
+          ${{ steps.opencode_audit.outputs.pipeline_file }}
+          ${{ steps.opencode_audit.outputs.children_file }}
+          ${{ steps.opencode_audit.outputs.hypotheses_file }}
+          ${{ steps.opencode_adversarial.outputs.events_file }}
+          ${{ steps.opencode_adversarial.outputs.pipeline_file }}
+          ${{ steps.opencode_adversarial.outputs.children_file }}
+          ${{ steps.opencode_adversarial.outputs.hypotheses_file }}
+          ${{ steps.opencode_repair.outputs.events_file }}
+          ${{ steps.opencode_repair.outputs.pipeline_file }}
+          ${{ steps.opencode_repair.outputs.children_file }}
+          ${{ steps.opencode_repair.outputs.hypotheses_file }}
         retention-days: ${{ inputs.artifact_retention_days }}
         if-no-files-found: ignore
 

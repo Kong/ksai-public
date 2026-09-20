@@ -154,6 +154,15 @@ function neutralCut(value, max) {
   return kept.length > max ? `${kept.slice(0, max - 1).join('')}…` : line;
 }
 
+/** withinBytes cuts to a byte bound without splitting the character it lands in. */
+function withinBytes(value, limit) {
+  const said = String(value ?? '');
+  if (Buffer.byteLength(said, 'utf8') <= limit) return said;
+  const held = Buffer.from(said, 'utf8').subarray(0, limit).toString('utf8');
+
+  return held.endsWith('\uFFFD') ? held.slice(0, -1) : held;
+}
+
 module.exports = {
   CLOCK_COMMAND,
   CONSTRAINT_TAG,
@@ -163,4 +172,5 @@ module.exports = {
   neutralize,
   neutralizeSections,
   usableNonce,
+  withinBytes,
 };

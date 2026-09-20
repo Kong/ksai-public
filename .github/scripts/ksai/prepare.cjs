@@ -17,6 +17,7 @@ const {
 const {
   CLARIFY_VERDICT,
   classifierModel,
+  commandClassifierRenderRequest,
   renderClarification,
   renderClassifierSpend,
   renderCommandClassifierPrompt,
@@ -43,6 +44,7 @@ const {
 } = require('./context.cjs');
 const { classifyTarget, nextStep, resolveRequest } = require('./dispatch.cjs');
 const { approvalApplies, describeApproval, resolveApproval } = require('./gate.cjs');
+const { writeRenderRequest } = require('../lib/render-request.cjs');
 const {
   alreadyReleased,
   needsReleaseRead,
@@ -74,6 +76,7 @@ const {
   stripOwnComments,
 } = require('./prompt.cjs');
 const { MAX_DIRECT_COMMITS, PLAN_ONLY_PHASES, deniedFor, soleWritable } = require('./verify-chunk.cjs');
+const { implementRenderRequest, implementValues } = require('./implement-request.cjs');
 const { createScope, renderAllowed } = require('./change-scope.cjs');
 const { plansWork } = require('./write-triage.cjs');
 
@@ -1025,6 +1028,7 @@ async function planClassification({ github, core, owner, repo, env }) {
     classify: 'false',
     model: '',
     file: '',
+    request_file: '',
   };
 
   if (String(env.LEGACY_ALLOWED_COMMANDS ?? '').trim() !== '') {
@@ -1066,20 +1070,20 @@ async function planClassification({ github, core, owner, repo, env }) {
     };
   }
 
-  fs.writeFileSync(
-    env.PROMPT_FILE,
-    renderCommandClassifierPrompt({
-      comment: target.comment,
-      surface: surfaceForComment({
-        onOwnPull: env.ON_OWN_PULL,
-        onIssue: env.ON_ISSUE,
-        threadRootId: env.THREAD_ROOT_ID,
-      }),
-      disabledCommands: env.DISABLED_COMMANDS,
+  const asked = {
+    comment: target.comment,
+    surface: surfaceForComment({
+      onOwnPull: env.ON_OWN_PULL,
+      onIssue: env.ON_ISSUE,
+      threadRootId: env.THREAD_ROOT_ID,
     }),
-  );
+    disabledCommands: env.DISABLED_COMMANDS,
+  };
+  fs.writeFileSync(env.PROMPT_FILE, renderCommandClassifierPrompt(asked));
+  const requestFile = `${env.PROMPT_FILE}.request.json`;
+  writeRenderRequest(requestFile, commandClassifierRenderRequest({ ...asked, model: arm.model }));
   return {
-    outputs: { classify: 'true', model: arm.model, file: env.PROMPT_FILE },
+    outputs: { classify: 'true', model: arm.model, file: env.PROMPT_FILE, request_file: requestFile },
     notices: [`Classifying the comment on ${arm.model}.`],
     warnings: [],
   };
@@ -1692,6 +1696,31 @@ function buildPrompt({ env }) {
   return { outputs, failure: null };
 }
 
+function deniedPaths(env) {
+  const phase = String(env.PHASE ?? '');
+  if (!PHASES[phase]?.writes) return [];
+  const rule = deniedFor({
+    workdir: env.GITHUB_WORKSPACE,
+    baseSha: env.BASE_SHA,
+    deniedPaths: env.DENIED_PATHS,
+    planDir: planDirOf(env.PLAN_DIR),
+    onlyPath: soleWritable(phase, String(env.PLAN_FILE ?? '').trim()),
+  });
+  if (rule.unreadable || rule.truncated) throw new Error('the instruction files this step may not touch are not known');
+  return rule.stated;
+}
+
+function implementRequest({ env }) {
+  const phase = String(env.PHASE ?? '');
+  const record = PHASES[phase];
+  if (!record) throw new Error(`no prompt for phase: ${phase || '(none)'}`);
+  const named = String(env.PLAN_FILE ?? '').trim();
+  const denied = deniedPaths(env);
+  const planDocument = phase === 'revise' ? fs.readFileSync(path.join(String(env.GITHUB_WORKSPACE ?? ''), named), 'utf8') : '';
+  const values = implementValues(env, phase, { denied, planDocument });
+  return implementRenderRequest(phase, values, { model: env.MODEL });
+}
+
 async function resolveApprovalGate({ github, core, owner, repo, env, authorize, writeAccess }) {
   const outputs = {
     blocked: 'true',
@@ -1779,6 +1808,8 @@ async function resolveApprovalGate({ github, core, owner, repo, env, authorize, 
 }
 
 module.exports = {
+  deniedPaths,
+  implementRequest,
   validateExtraArgs,
   resolveBareGate,
   resolveCourierPull,

@@ -1,12 +1,10 @@
 'use strict';
 
 const { isDeepStrictEqual } = require('node:util');
-const { reachControlPlane, unreached } = require('./control-plane.cjs');
+const { renderingModeOf, mask, minter, reachControlPlane, unanswered } = require('./control-plane.cjs');
 const { annotation } = require('./text.cjs');
 
 const API_VERSION = 'report/v1';
-const MODES = Object.freeze(['local', 'shadow', 'cp']);
-const AUDIENCE = 'ksai-cp';
 const DEFAULT_TIMEOUT = 30_000;
 
 const RUN_REPORT_KEYS = Object.freeze([
@@ -32,13 +30,12 @@ const NOTICE_KEYS = Object.freeze([
 ]);
 
 const RENDER_ENV_KEYS = Object.freeze([
-  'KSAI_REPORT_RENDERING', 'KSAI_REPORT_ENDPOINT', 'ACTIONS_ID_TOKEN_REQUEST_URL', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN',
+  'KSAI_REPORT_RENDERING', 'KSAI_CP_ENDPOINT', 'ACTIONS_ID_TOKEN_REQUEST_URL', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN',
   'GITHUB_SERVER_URL', 'GITHUB_REPOSITORY', 'GITHUB_RUN_ID',
 ]);
 
 function renderingMode(env = process.env) {
-  const said = String(env?.KSAI_REPORT_RENDERING ?? '').trim();
-  return MODES.includes(said) ? said : 'local';
+  return renderingModeOf(env?.KSAI_REPORT_RENDERING);
 }
 
 function pick(env, names) {
@@ -75,24 +72,13 @@ async function settled(local) {
   }
 }
 
-const minter = ({ env, fetch, signal }) => async (audience) => {
-  const response = await fetch(`${env.ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${encodeURIComponent(audience)}`, {
-    headers: { authorization: `Bearer ${env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}` },
-    signal,
-  });
-  if (!response.ok) return '';
-  const body = await response.json();
-  return typeof body?.value === 'string' ? body.value : '';
-};
-
-const mask = (token) => process.stdout.write(`::add-mask::${token}\n`);
 
 async function askControlPlane({ kind, request, expect = null, accept, env, fetch, timeout, secret }) {
-  const endpoint = String(env.KSAI_REPORT_ENDPOINT ?? '').trim();
+  const endpoint = String(env.KSAI_CP_ENDPOINT ?? '').trim();
   if (endpoint === '') return { why: 'no control plane serves this repository' };
   if (!(timeout > 0)) return { why: 'the control plane did not answer in time' };
   const signal = AbortSignal.timeout(timeout);
-  const reached = await reachControlPlane({ endpoint, audience: AUDIENCE, env, mint: minter({ env, fetch, signal }), secret });
+  const reached = await reachControlPlane({ endpoint, env, mint: minter({ env, fetch, signal }), secret });
   if (reached.failure) return { why: reached.failure };
   try {
     const response = await fetch(`${reached.base}/v1/report/render`, {
@@ -108,7 +94,7 @@ async function askControlPlane({ kind, request, expect = null, accept, env, fetc
     }
     return { answer };
   } catch (error) {
-    return { why: error?.name === 'TimeoutError' ? 'the control plane did not answer in time' : unreached(error) };
+    return { why: unanswered(error) };
   }
 }
 

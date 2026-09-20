@@ -1,0 +1,10 @@
+{
+  "name": "ksai-opencode-governance-runtime",
+  "version": "0.0.0",
+  "private": true,
+  "dependencies": {
+    "@sigstore/bundle": "5.0.0",
+    "@sigstore/protobuf-specs": "0.5.2",
+    "@sigstore/verify": "4.1.2"
+  }
+}

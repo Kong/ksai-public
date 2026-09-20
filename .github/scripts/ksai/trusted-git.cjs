@@ -19,6 +19,8 @@ const {
 const { tmpdir } = require('node:os');
 const path = require('node:path');
 
+const { boundedBytes } = require('../lib/evidence.cjs');
+
 const GIT_CONFIG_OVERRIDES = Object.freeze([
   '-c',
   'core.commitGraph=false',
@@ -337,10 +339,10 @@ function plainRefs(root, namespace) {
         continue;
       }
       const ref = `refs/${namespace}/${childRelative}`;
-      if (!allowedRef(ref) || lstatSync(child).size > 256) return false;
+      if (!allowedRef(ref)) return false;
       let value;
       try {
-        value = readFileSync(child, 'utf8').replace(/\n$/, '');
+        value = boundedBytes(child, 'a loose ref', 256).toString('utf8').replace(/\n$/, '');
       } catch {
         return false;
       }
@@ -353,8 +355,7 @@ function plainRefs(root, namespace) {
 function filteredPackedRefs(file) {
   if (file === null) return { ok: true, body: '' };
   try {
-    if (lstatSync(file).size > MAX_PACKED_REFS_BYTES) return { ok: false };
-    const lines = readFileSync(file, 'utf8').split('\n');
+    const lines = boundedBytes(file, 'the packed refs', MAX_PACKED_REFS_BYTES).toString('utf8').split('\n');
     const kept = [];
     let header = '';
     let keepPeeled = false;
@@ -387,8 +388,7 @@ function filteredPackedRefs(file) {
 function selectedShallow(file) {
   if (file === null) return { ok: true, body: '' };
   try {
-    if (lstatSync(file).size > MAX_PACKED_REFS_BYTES) return { ok: false };
-    const lines = readFileSync(file, 'utf8').trimEnd().split('\n');
+    const lines = boundedBytes(file, 'the shallow list', MAX_PACKED_REFS_BYTES).toString('utf8').trimEnd().split('\n');
     return lines.length > 0 && lines.every((line) => /^[0-9a-f]{40}$/.test(line))
       ? { ok: true, body: `${[...new Set(lines)].join('\n')}\n` }
       : { ok: false };
@@ -402,8 +402,7 @@ function stateFile(root, name, required = false) {
   if (file === '' || (required && file === null)) return { ok: false, body: null };
   if (file === null) return { ok: true, body: null };
   try {
-    if (lstatSync(file).size > GIT_MAX_BUFFER) return { ok: false, body: null };
-    return { ok: true, body: readFileSync(file) };
+    return { ok: true, body: boundedBytes(file, `the ${name} state file`, GIT_MAX_BUFFER) };
   } catch {
     return { ok: false, body: null };
   }

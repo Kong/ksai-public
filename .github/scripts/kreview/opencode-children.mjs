@@ -1,5 +1,9 @@
+import { boundedBytes } from '../lib/evidence.cjs';
+
 export const CHILD_LIMIT = 16;
 export const EXPORT_BYTES = 8 * 1024 * 1024;
+
+export const exportedText = (path) => boundedBytes(path, 'the session export', EXPORT_BYTES).toString('utf8');
 
 export function childSessions(events) {
   const sessions = new Map();

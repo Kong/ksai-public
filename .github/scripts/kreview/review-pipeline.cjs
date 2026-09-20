@@ -186,7 +186,7 @@ function duplicateKey(finding) {
   return `${finding.path}\0${finding.root_cause}`.toLowerCase().replace(/\s+/g, ' ');
 }
 
-async function runPipeline({ strategy, context, prior = '', identity, scoping = null, resultTransport = 'text', run, now = Date.now, checkpoint = (_ledger) => {} }) {
+async function runPipeline({ strategy, context, prior = '', identity, scoping = null, resultTransport = 'text', resumable = true, run, now = Date.now, checkpoint = (_ledger) => {} }) {
   if (!['evidence', 'dual'].includes(strategy)) throw new Error('pipeline requires evidence or dual strategy');
   if (!['text', 'tool', 'structured'].includes(resultTransport)) throw new Error('pipeline needs a known result transport');
   if (scoping && (scoping.version !== 1 || !Array.isArray(scoping.scopes) || scoping.scopes.length > SCOPE_LIMITS.count || !Array.isArray(scoping.omitted))) throw new Error('invalid trusted review scope plan');
@@ -202,7 +202,7 @@ async function runPipeline({ strategy, context, prior = '', identity, scoping = 
   if (scoping && scopes.length === 0) missing.add('scopes:empty');
   const save = () => { ledger.incomplete_stages = [...missing]; checkpoint(ledger); };
   save();
-  const stage = async (name, prompt, allowance = Number(LIMITS.stageMs), scopeId = null, candidateIds = null, resumeSession = '') => {
+  const stage = async (name, prompt, spec, allowance = Number(LIMITS.stageMs), scopeId = null, candidateIds = null, resumeSession = '') => {
     missing.add(name);
     save();
     const began = now();
@@ -210,11 +210,11 @@ async function runPipeline({ strategy, context, prior = '', identity, scoping = 
     if (timeoutMs < LIMITS.minStageMs) return null;
     const researchMs = timeoutMs - Math.min(LIMITS.finalizeMs, Math.floor(timeoutMs / 3));
     const timedPrompt = `${prompt}\nResearch time allowance: ${Math.floor(researchMs / 1000)} seconds, including tool calls. The trusted runner reserves the remaining stage time for formatting. Return the assigned JSON before research ends; any uninvestigated assigned work means incomplete coverage.\n`;
-    const result = await run({ name, prompt: timedPrompt, timeoutMs, candidateIds, resumeSession });
+    const result = await run({ name, prompt: timedPrompt, timeoutMs, candidateIds, resumeSession, stage: { ...spec, research_seconds: Math.floor(researchMs / 1000), step_target: LIMITS.stageSteps } });
     const parsed = result.code === 0 ? packet(result.text) : null;
     const measured = result.usage ?? null;
     const coverage = parsed?.coverage === 'complete' ? 'complete' : 'incomplete';
-    ledger.stages.push({ name, scope_id: scopeId, attempt: 1 + ledger.stages.filter((entry) => entry.name === name).length, session_id: result.session_id, timed_out: result.timed_out === true, prompt_sha256: digest(timedPrompt), duration_ms: now() - began, timeout_ms: timeoutMs, exit_code: result.code, parse_ok: parsed !== null, coverage, usage: measured, invocations: result.invocations ?? [] });
+    ledger.stages.push({ name, scope_id: scopeId, attempt: 1 + ledger.stages.filter((entry) => entry.name === name).length, session_id: result.session_id, timed_out: result.timed_out === true, prompt_sha256: result.prompt_sha256 ?? digest(timedPrompt), duration_ms: now() - began, timeout_ms: timeoutMs, exit_code: result.code, parse_ok: parsed !== null, coverage, usage: measured, invocations: result.invocations ?? [] });
     if (measured === null) ledger.missing_usage += 1;
     if (parsed && coverage === 'complete') missing.delete(name);
     save();
@@ -224,7 +224,8 @@ async function runPipeline({ strategy, context, prior = '', identity, scoping = 
   const counts = { local: 0, contracts: 0 };
   const discoveryDeadline = started + LIMITS.totalMs - LIMITS.auditReserveMs;
   const discover = async ({ focus, scope, name }, allowance, resumeSession = '') => {
-    const result = await stage(name, discoveryPrompt(scope.context, focus, scope.id ? scope : null, resultTransport), allowance, scope.id, null, resumeSession);
+    const assigned = scope.id ? { id: scope.id, diffPath: scope.diffPath, changedFilesPath: scope.changedFilesPath } : null;
+    const result = await stage(name, discoveryPrompt(scope.context, focus, scope.id ? scope : null, resultTransport), { kind: 'discovery', focus, scope: assigned }, allowance, scope.id, null, resumeSession);
     if (!result) return;
     const coverage = ledger.scope_plan?.scopes.find((entry) => entry.id === scope.id);
     if (coverage && result.coverage === 'complete') {
@@ -248,7 +249,7 @@ async function runPipeline({ strategy, context, prior = '', identity, scoping = 
     return Math.min(remaining, Math.max(LIMITS.minStageMs, Math.floor(remaining / left)));
   };
   for (const [index, task] of tasks.entries()) await discover(task, allowanceFor(tasks.length - index));
-  const retry = tasks.filter(({ name }) => {
+  const retry = !resumable ? [] : tasks.filter(({ name }) => {
     const last = ledger.stages.findLast((entry) => entry.name === name);
     return last?.timed_out && [124, 137, 143].includes(last.exit_code) && /^ses_[a-zA-Z0-9]+$/.test(last.session_id ?? '');
   });
@@ -272,7 +273,7 @@ async function runPipeline({ strategy, context, prior = '', identity, scoping = 
   for (let start = 0; start < unique.length; start += LIMITS.batch) {
     const batch = unique.slice(start, start + LIMITS.batch);
     const name = `audit-${1 + start / LIMITS.batch}`;
-    const audited = await stage(name, auditPrompt(context, batch, prior, resultTransport), LIMITS.stageMs, null, batch.map((candidate) => candidate.id));
+    const audited = await stage(name, auditPrompt(context, batch, prior, resultTransport), { kind: 'audit', candidates: batch, prior }, LIMITS.stageMs, null, batch.map((candidate) => candidate.id));
     const decisions = audited?.decisions;
     const ids = new Set(batch.map((candidate) => candidate.id));
     const valid = Array.isArray(decisions) && decisions.length === batch.length && new Set(decisions.map((d) => d?.id)).size === batch.length && decisions.every((d) => ids.has(d?.id) && ['keep', 'remove', 'insufficient_evidence'].includes(d?.verdict) && text(d?.reason));

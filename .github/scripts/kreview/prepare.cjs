@@ -469,28 +469,7 @@ async function reviewCommandStatus(options) {
   return { error, skipped };
 }
 
-function buildReviewPrompt({ env }) {
-  const outputs = {
-    file: '',
-    allowed_tools: '',
-    disallowed_tools: '',
-    result_transport: '',
-    lsp_tool: '',
-    lsp_measure: '',
-    error: '',
-  };
-  const strategy = env.REVIEW_STRATEGY || 'baseline';
-  let experiment;
-  try {
-    if (!STRATEGIES.includes(strategy)) throw new Error('review_strategy must be baseline, evidence or dual');
-    if (env.RUNTIME_SHA && env.RUNTIME_SHA !== env.PLUGIN_SHA) throw new Error('review runtime and plugin checkouts disagree; retry against one immutable ref');
-    experiment = experimentOf(env.REVIEW_EXPERIMENT || '', { head: env.COMMIT_ID || '', base: env.BASE_SHA || '', plugin: env.PLUGIN_SHA || '', publish: env.PUBLISH !== 'false' });
-  } catch (error) {
-    outputs.error = error.message;
-    return { outputs, error: outputs.error };
-  }
-
-  const policy = toolPolicy('review');
+function reviewOptions(env, experiment) {
   const pluginRoot = `${env.WORKSPACE}/${PLUGIN_DIR}`;
   const routed = resolveReviewers(env.TRIAGE_SKILLS, pluginRoot);
   const open = routed.reviewers.length > 0 ? { reviewers: [], refused: [] } : availableReviewers(pluginRoot);
@@ -515,11 +494,6 @@ function buildReviewPrompt({ env }) {
               : !fs.existsSync(auditorPath)
                 ? `the plugin checkout carries no auditor mandate at ${auditorPath}`
                 : '';
-  if (refusal !== '') {
-    outputs.error = refusal;
-    return { outputs, error: refusal };
-  }
-
   const options = {
     baseRef: env.BASE_REF,
     workspace: env.WORKSPACE,
@@ -538,6 +512,36 @@ function buildReviewPrompt({ env }) {
     channelNonce: env.CHANNEL_NONCE,
     resultTransport: experiment.result_transport,
   };
+  return { options, refusal };
+}
+
+function buildReviewPrompt({ env }) {
+  const outputs = {
+    file: '',
+    allowed_tools: '',
+    disallowed_tools: '',
+    result_transport: '',
+    lsp_tool: '',
+    lsp_measure: '',
+    error: '',
+  };
+  const strategy = env.REVIEW_STRATEGY || 'baseline';
+  let experiment;
+  try {
+    if (!STRATEGIES.includes(strategy)) throw new Error('review_strategy must be baseline, evidence or dual');
+    if (env.RUNTIME_SHA && env.RUNTIME_SHA !== env.PLUGIN_SHA) throw new Error('review runtime and plugin checkouts disagree; retry against one immutable ref');
+    experiment = experimentOf(env.REVIEW_EXPERIMENT || '', { head: env.COMMIT_ID || '', base: env.BASE_SHA || '', plugin: env.PLUGIN_SHA || '', publish: env.PUBLISH !== 'false' });
+  } catch (error) {
+    outputs.error = error.message;
+    return { outputs, error: outputs.error };
+  }
+
+  const policy = toolPolicy('review');
+  const { options, refusal } = reviewOptions(env, experiment);
+  if (refusal !== '') {
+    outputs.error = refusal;
+    return { outputs, error: refusal };
+  }
   const prompt = (strategy === 'baseline' ? renderReviewPrompt : renderPipelineContext)(options);
   const context = renderPipelineContext({ ...options, channelNonce: null });
   const comparable = env.WORKSPACE ? context.replaceAll(env.WORKSPACE, '<workspace>') : context;
@@ -581,5 +585,6 @@ module.exports = {
   reviewCommandStatus,
   selectReviewArm,
   buildReviewPrompt,
+  reviewOptions,
   EXTRA_ARGS_REFUSAL,
 };

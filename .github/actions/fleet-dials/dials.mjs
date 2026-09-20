@@ -38,6 +38,7 @@ export const PINNED = {
   triage_write: (/** @type {string} */ value) => value === 'off' || value === 'cp',
   report_rendering: WHERE,
   run_tokens: WHERE,
+  prompt_rendering: WHERE,
 };
 
 /**

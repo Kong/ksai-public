@@ -4,6 +4,7 @@ const { neutralCut } = require('../lib/prompt-text.cjs');
 const { finalResult } = require('./classify.cjs');
 const { wasEdited } = require('./approval.cjs');
 const { isOwnLogin } = require('./threads.cjs');
+const { SINKS, renderRequest } = require('../lib/render-request.cjs');
 
 const VERDICTS = Object.freeze(['agree', 'disagree', 'unclear']);
 
@@ -21,19 +22,36 @@ const OPEN = '--- THREAD';
 
 const cut = (value) => neutralCut(value, MAX_COMMENT_CHARS);
 
-const speaker = (comment, botLogin, isRoot) =>
-  isOwnLogin(comment?.login, botLogin) ? 'the bot' : isRoot ? 'the reviewer' : 'a person';
+const SPEAKERS = Object.freeze({ bot: 'the bot', reviewer: 'the reviewer', person: 'a person' });
 
-/** threadTranscript renders one thread as the few lines a reader needs to tell agreement from pushback. */
-function threadTranscript(thread, { botLogin = null } = {}) {
+const speakerOf = (comment, botLogin, isRoot) => (isOwnLogin(comment?.login, botLogin) ? 'bot' : isRoot ? 'reviewer' : 'person');
+
+function transcriptMessages(thread, { botLogin = null } = {}) {
   const all = (thread?.comments ?? [])
     .map((comment, index) => ({ comment, index }))
     .filter(({ comment }) => !wasEdited(comment));
-  const from = Math.max(0, all.length - MAX_COMMENTS);
-  return all
-    .slice(from)
-    .map(({ comment, index }) => `[${speaker(comment, botLogin, index === 0)}] ${cut(comment?.body)}`)
+  return all.slice(Math.max(0, all.length - MAX_COMMENTS)).map(({ comment, index }) => ({ speaker: speakerOf(comment, botLogin, index === 0), body: cut(comment?.body) }));
+}
+
+/** threadTranscript renders one thread as the few lines a reader needs to tell agreement from pushback. */
+function threadTranscript(thread, { botLogin = null } = {}) {
+  return transcriptMessages(thread, { botLogin })
+    .map(({ speaker, body }) => `[${SPEAKERS[speaker]}] ${body}`)
     .join('\n');
+}
+
+function disputeRenderRequest(threads, { botLogin = null, model = '' } = {}) {
+  return renderRequest({
+    promptId: 'runtime.dispute',
+    sink: SINKS.classifier,
+    model: String(model ?? ''),
+    inputs: [
+      {
+        name: 'transcripts',
+        value: (threads ?? []).slice(0, MAX_THREADS).map((thread, index) => ({ number: index + 1, messages: transcriptMessages(thread, { botLogin }) })),
+      },
+    ],
+  });
 }
 
 /** renderDisputePrompt asks a cheap model whether each thread's last word accepts the answer it got. */
@@ -85,6 +103,7 @@ module.exports = {
   UNCLEAR,
   VERDICTS,
   disputeFromExecution,
+  disputeRenderRequest,
   disputeVerdicts,
   renderDisputePrompt,
   threadTranscript,

@@ -1,8 +1,10 @@
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import modelCatalog from '../lib/model-catalog.cjs';
 import { writeOutputs } from '../lib/outputs.mjs';
+import { SINKS, renderRequest, writeRenderRequest } from '../lib/render-request.cjs';
 
 const EFFORTS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
 
@@ -112,10 +114,27 @@ export function runPlan(env = {}, { exists = existsSync, regular = isFile } = {}
   return outputs;
 }
 
+export function runRequest(plan, env = {}) {
+  return renderRequest({
+    promptId: 'runtime.claude-generic',
+    sink: SINKS.generic,
+    model: plan.model,
+    inputs: [
+      { name: 'request', value: readFileSync(plan.file, 'utf8') },
+      { name: 'workspace', value: String(env.GITHUB_WORKSPACE ?? '') },
+    ],
+  });
+}
+
 export function main(env = process.env) {
-  const output = String(env.GITHUB_OUTPUT ?? '');
-  if (!output) throw new Error('GITHUB_OUTPUT names no file, so the plan would reach no step');
-  writeOutputs(output, runPlan(env));
+  if (!String(env.GITHUB_OUTPUT ?? '')) throw new Error('GITHUB_OUTPUT names no file, so the plan would reach no step');
+  const plan = runPlan(env);
+  const requestFile = join(String(env.RUNNER_TEMP ?? ''), 'ksai-run.request.json');
+  writeRenderRequest(requestFile, runRequest(plan, env));
+  writeOutputs(env.GITHUB_OUTPUT, {
+    ...plan,
+    request_file: requestFile,
+  });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

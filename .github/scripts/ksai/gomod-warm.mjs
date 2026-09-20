@@ -148,6 +148,9 @@ export function main(
       }
     }
     if (version !== '' && env.PROMPT_FILE) tellThePrompt(env.PROMPT_FILE, renderGoNote({ version, failed }));
+    if (env.GO_FACTS_FILE) {
+      writeFileSync(env.GO_FACTS_FILE, JSON.stringify({ available: version !== '', cache_warmed: version !== '' && failed.length === 0, version, failed }));
+    }
     return 0;
   };
 

@@ -17,6 +17,7 @@ import {
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+import { promptRendering } from '../lib/cp-prompts.mjs';
 import { conclusionOf, exitedOn, killedBySignal, stopReason } from '../lib/execution-log.mjs';
 import {
   DEFAULT_OPENCODE_MODEL,
@@ -635,6 +636,12 @@ export function sandboxArgs(
     }
     const sdk = String(env.OPENCODE_SDK_ROOT ?? '');
     if (sdk && exists(sdk)) args.push('--ro-bind', sdk, sdk);
+    const governed = String(env.KSAI_GOVERNED_DIR ?? '');
+    if (governed && exists(governed)) {
+      args.push('--ro-bind', governed, governed);
+      const report = join(governed, 'deliveries.jsonl');
+      if (exists(report)) args.push('--bind', report, report);
+    }
   }
 
   const resultDir = String(env.KSAI_REVIEW_RESULT_DIR ?? '');
@@ -864,6 +871,24 @@ export async function broker(at, env, write = writeToken) {
  * sandbox that never started, every tool call died at exec, and the empty event stream was
  * published as a reviewer that wrote nothing.
  */
+async function governedStageRun(env, invoke, context) {
+  const { governedStages } = await import('./governed-stages.mjs');
+  const render = governedStages(env, context);
+  return async (options) => {
+    let staged;
+    try {
+      staged = await render(options);
+    } catch (error) {
+      if (promptRendering(env) === 'cp') {
+        throw new Error(`the control plane rendered no governed prompt for ${options.name}, so this review covers less than it says: ${error?.message}`, { cause: error });
+      }
+      console.log(`::warning::the control plane rendered no governed prompt for ${options.name}: ${error?.message}`);
+      return { code: 1, text: null, usage: null };
+    }
+    return { ...(await invoke({ ...options, prompt: staged.prompt, resumeSession: '' })), prompt_sha256: staged.sha256 };
+  };
+}
+
 async function main(env = process.env, {
   probe: probeWith = spawnSync,
   startProvider = startProviderRelay,
@@ -1161,20 +1186,24 @@ async function main(env = process.env, {
         failure: streamFailure(segment), timed_out: timedOut,
         usage: spending(segment).length ? { ...result.usage, cost_usd: result.total_cost_usd, num_turns: result.num_turns } : null };
     };
-    const budget = { remaining: 1 };
+    const governed = String(env.KSAI_GOVERNED_DIR ?? '') !== '';
+    const budget = { remaining: governed ? 0 : 1 };
+    const prompt = readFileSync(String(env.PROMPT_FILE ?? ''), 'utf8');
+    const governedStage = pipeline && governed ? await governedStageRun(env, invoke, prompt) : null;
     const recovering = async (options) => {
       const result = await recoverReview({ ...options, flow: env.FLOW, invoke, budget });
       for (const attempt of result.attempts) writeSync(out, `${JSON.stringify({ type: 'ksai_review_attempt', ...attempt })}\n`);
       return result;
     };
-    const run = (options) => pipeline
-      ? completeStage({ ...options, resultTransport, invoke: recovering })
-      : env.FLOW === 'review' && resultTransport === 'structured'
-        ? completeFinal({ ...options, invoke: recovering })
-        : env.FLOW === 'review' ? recovering(options) : invoke(options);
-    const prompt = readFileSync(String(env.PROMPT_FILE ?? ''), 'utf8');
+    const run = (options) => governedStage
+      ? governedStage(options)
+      : pipeline
+        ? completeStage({ ...options, resultTransport, invoke: recovering })
+        : env.FLOW === 'review' && resultTransport === 'structured'
+          ? completeFinal({ ...options, invoke: recovering })
+          : env.FLOW === 'review' ? recovering(options) : invoke(options);
     if (pipeline) {
-      Object.assign(env, await reviewSession({ env, events, prompt, run }));
+      Object.assign(env, await reviewSession({ env, events, prompt, run, resumable: !governedStage }));
       code = Number(env.OPENCODE_REVIEW_EXIT);
     } else {
       const killAt = Number(env.KSAI_CHANNEL_KILL_AT);

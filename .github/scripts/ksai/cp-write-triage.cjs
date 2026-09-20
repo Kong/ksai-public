@@ -13,6 +13,7 @@ const {
   defaultEffortFor,
 } = require('../lib/select-arm.cjs');
 const { mintedId, postTo, reachControlPlane } = require('../lib/control-plane.cjs');
+const { withinBytes } = require('../lib/prompt-text.cjs');
 
 const API_VERSION = 'triage/v1';
 
@@ -64,15 +65,6 @@ function capabilityModels(env, configured) {
     if (one !== '' && MODEL_SHAPE.test(one) && !holds(kept, one)) kept.push(one);
   }
   return kept.slice(0, MAX_MODELS);
-}
-
-/** withinBytes cuts to a byte bound without splitting the character it lands in. */
-function withinBytes(value, limit) {
-  const text = String(value ?? '');
-  if (Buffer.byteLength(text, 'utf8') <= limit) return text;
-  const held = Buffer.from(text, 'utf8').subarray(0, limit).toString('utf8');
-
-  return held.endsWith('�') ? held.slice(0, -1) : held;
 }
 
 function boundedEvidence(evidence) {

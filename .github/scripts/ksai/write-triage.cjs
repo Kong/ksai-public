@@ -19,7 +19,8 @@ const {
   safeEcho,
   defaultEffortFor,
 } = require('../lib/select-arm.cjs');
-const { neutralCut } = require('../lib/prompt-text.cjs');
+const { neutralCut, withinBytes } = require('../lib/prompt-text.cjs');
+const { SINKS, renderRequest, writeRenderRequest } = require('../lib/render-request.cjs');
 
 const VERDICTS = Object.freeze(['routine', 'uncertain', 'critical']);
 const SIZING_VERDICTS = Object.freeze(['small', 'planned']);
@@ -2707,6 +2708,28 @@ function renderTriagePrompt(context, { sizing = false } = {}) {
   return [...lines, '', 'CONTEXT-BEGIN', context, 'CONTEXT-END'].join('\n');
 }
 
+const plainWithin = (value, limit) => {
+  const cut = withinBytes(value, limit);
+  return /[\0\r\n<>]/.test(cut) ? '' : cut;
+};
+
+function semanticRenderRequest(evidence, { sizing = false, model = '' } = {}) {
+  return renderRequest({
+    promptId: sizing ? 'runtime.write-triage-sizing' : 'runtime.write-triage-risk',
+    sink: SINKS.classifier,
+    model: String(model ?? ''),
+    inputs: [
+      { name: 'triage', value: { command: plainWithin(evidence.command, 128), phase: plainWithin(evidence.phase, 64) } },
+      { name: 'ask', value: evidence.ask },
+      { name: 'request', value: evidence.request },
+      { name: 'plan_step', value: evidence.plan_step },
+      { name: 'conversation', value: evidence.conversation },
+      { name: 'review_threads', value: evidence.threads },
+      { name: 'checks', value: evidence.checks },
+    ],
+  });
+}
+
 function planWriteTriage(env = process.env) {
   const sizing = sizingApplies({
     phase: env.PHASE,
@@ -2720,6 +2743,7 @@ function planWriteTriage(env = process.env) {
     verdict: '',
     reason: '',
     file: '',
+    request_file: '',
     model: '',
     sizing: sizing ? 'true' : 'false',
     prior_red: previousAttemptRed(env.CHECKS_FILE) ? 'true' : 'false',
@@ -2800,8 +2824,10 @@ function planWriteTriage(env = process.env) {
 
   const file = path.join(String(env.PROMPT_DIR ?? env.RUNNER_TEMP ?? '/tmp'), 'ksai-write-triage-prompt.txt');
   fs.writeFileSync(file, renderTriagePrompt(context, { sizing }));
+  const requestFile = `${file}.request.json`;
+  writeRenderRequest(requestFile, semanticRenderRequest(writeEvidence(env), { sizing, model: arm.model }));
   return {
-    outputs: { ...outputs, call: 'true', verdict: '', reason: '', file, model: arm.model },
+    outputs: { ...outputs, call: 'true', verdict: '', reason: '', file, request_file: requestFile, model: arm.model },
     warnings: [],
   };
 }
@@ -3115,6 +3141,7 @@ module.exports = {
   plansWork,
   readWriteTriage,
   selectWriteArm,
+  semanticRenderRequest,
   semanticVerdict,
   writeEvidence,
   sizingApplies,

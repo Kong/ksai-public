@@ -143,11 +143,27 @@ function tellPrompt(at, note) {
   }
 }
 
+function tellFacts(env, facts) {
+  if (!env.PACKAGE_FACTS_FILE) return;
+  try {
+    writeFileSync(env.PACKAGE_FACTS_FILE, JSON.stringify(facts), { mode: 0o600 });
+  } catch (error) {
+    warn(`the Node dependency state could not be recorded: ${error.message}`);
+  }
+}
+
 export function main(env = process.env, { run = execute, detect = packageOf } = {}) {
-  if (!hasFailingTarget(env.CHECKS_FILE)) return 0;
+  const absent = { present: false, manager: '', version: '', failed: false };
+  if (!hasFailingTarget(env.CHECKS_FILE)) {
+    tellFacts(env, absent);
+    return 0;
+  }
   const workspace = env.WORKSPACE || process.cwd();
   const found = detect(workspace);
-  if (!found) return 0;
+  if (!found) {
+    tellFacts(env, absent);
+    return 0;
+  }
 
   const temp = env.RUNNER_TEMP || '/tmp';
   const toolRoot = path.join(temp, 'ksai-package-manager');
@@ -169,6 +185,7 @@ export function main(env = process.env, { run = execute, detect = packageOf } = 
     );
   }
   if (env.PROMPT_FILE) tellPrompt(env.PROMPT_FILE, renderPackageNote({ ...found, failed }));
+  tellFacts(env, { present: true, manager: String(found.manager ?? ''), version: String(found.version ?? ''), failed });
   return 0;
 }
 

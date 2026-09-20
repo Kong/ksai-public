@@ -16,6 +16,7 @@ const {
 } = require('../lib/select-arm.cjs');
 const { counted } = require('../lib/text.cjs');
 const { docsLink } = require('../lib/docs.cjs');
+const { SINKS, renderRequest } = require('../lib/render-request.cjs');
 
 const NEVER_CLASSIFIED = Object.freeze([...NEVER_INFERRED].sort());
 
@@ -148,6 +149,29 @@ const surfaceForComment = ({ onOwnPull = null, onIssue = null, threadRootId = nu
   if (where === 'pull') return OWN_PULL_SURFACE;
   return where === THREAD_SURFACE ? OWN_THREAD_SURFACE : where;
 };
+
+function commandClassifierRenderRequest({ comment = null, surface = null, disabledCommands = null, model = '' } = {}) {
+  const asked = String(surface ?? '');
+  if (asked !== '' && !SURFACES.includes(asked)) {
+    throw new Error(`surface must be one of ${SURFACES.join(', ')}, or absent when unknown, got: ${asked}`);
+  }
+  return renderRequest({
+    promptId: 'runtime.command-classifier',
+    sink: SINKS.classifier,
+    model: String(model ?? ''),
+    inputs: [
+      {
+        name: 'classifier',
+        value: {
+          commands: answerable(disabledCommands, asked),
+          disabled_commands: [...new Set(parseDisabledCommands(disabledCommands))].filter((command) => COMMANDS.includes(command)).sort(),
+          surface: asked || 'unknown',
+        },
+      },
+      { name: 'comment', value: String(comment ?? '') },
+    ],
+  });
+}
 
 function renderCommandClassifierPrompt({ comment = null, surface = null, disabledCommands = null } = {}) {
   if (surface !== undefined && surface !== null && String(surface) !== '' && !SURFACES.includes(String(surface))) {
@@ -368,6 +392,7 @@ module.exports = {
   CLASSIFIER_SOURCE,
   EXAMPLES,
   answerable,
+  commandClassifierRenderRequest,
   finalResult,
   renderCommandClassifierPrompt,
   renderClarification,

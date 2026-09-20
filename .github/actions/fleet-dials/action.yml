@@ -159,6 +159,13 @@ outputs:
       passes no key, whatever the control plane serves. Nothing is pinned here, because a
       repository moves by being served this dial.
     value: ${{ steps.dials.outputs.run_tokens }}
+  prompt_rendering:
+    description: >-
+      where a run's prompts come from: `local` is the text this runner builds, `shadow` builds that
+      text and runs on it while also rendering through the control plane, and `cp` sends the model
+      only what the control plane rendered and signed, verified by the gateway plugin. Nothing is
+      pinned here, because a repository moves by being served this dial.
+    value: ${{ steps.dials.outputs.prompt_rendering }}
   catalog_path:
     description: >-
       the file the served model catalog was written to, or empty where the
