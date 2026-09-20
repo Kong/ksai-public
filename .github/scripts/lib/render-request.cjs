@@ -4,6 +4,7 @@ const { writeFileSync } = require('node:fs');
 
 const CONTRACTS = Object.assign(Object.create(null), require('./prompt-schemas/contracts.json').inputs);
 const DIGESTS = Object.assign(Object.create(null), require('./prompt-schemas/manifest.json').schemas);
+const PROMPT_DIGESTS = Object.assign(Object.create(null), require('./prompt-schemas/manifest.json').prompts);
 const { validateSchema } = require('./json-schema.cjs');
 
 const SCHEMAS = Object.assign(Object.create(null), {
@@ -96,8 +97,10 @@ function writeRenderRequest(at, request, { exclusive = false } = {}) {
 }
 
 const schemaDigestFor = (promptId) => {
-  const named = schemaNameFor(promptId);
-  return named ? (DIGESTS[`prompts/schemas/${named}.schema.json`] ?? '') : '';
+  const named = String(promptId ?? '');
+  if (Object.hasOwn(PROMPT_DIGESTS, named)) return PROMPT_DIGESTS[named];
+  const file = schemaNameFor(named);
+  return file ? (DIGESTS[`prompts/schemas/${file}.schema.json`] ?? '') : '';
 };
 
 module.exports = { CONTRACT_VERSION, schemaDigestFor, SINKS, checkRenderRequest, renderRequest, schemaFor, schemaNames, writeRenderRequest };

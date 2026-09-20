@@ -15,6 +15,7 @@ import {
   PROVIDER_POLICY_CONFIG,
   PROVIDER_POLICY_GITIGNORE,
   REVIEW_RESULT_PLUGIN,
+  ISOLATED_GUARDS,
   agentEntry,
   headerLines,
   isolatedToolPhase,
@@ -31,8 +32,6 @@ import {
 } from '../lib/opencode.mjs';
 import { ptyPilotEnabled } from './opencode-pty-core.mjs';
 
-const TOOL_GUARD_PLUGIN = fileURLToPath(new URL('./opencode-tool-guard.mjs', import.meta.url));
-const CHILD_TOOLS_PLUGIN = fileURLToPath(new URL('./opencode-child-tools.mjs', import.meta.url));
 const TOOL_SHELL = fileURLToPath(new URL('./opencode-tool-shell.mjs', import.meta.url));
 
 const destination = process.env.OPENCODE_CONFIG;
@@ -219,11 +218,11 @@ const runtime = { channel, permission, auth, attribution,
 };
 const config = governed
   ? (await import('../governance/config.mjs')).governedConfig({ ...runtime, skills, governance: JSON.parse(readFileSync(governed, 'utf8')),
-    guards: isolatedTools ? [TOOL_GUARD_PLUGIN, CHILD_TOOLS_PLUGIN] : [],
+    guards: isolatedTools ? [...ISOLATED_GUARDS] : [],
     ...(staged ? { agent: 'ksai-review-stage' } : {}) })
   : runtimeConfig({ ...runtime, agents, skills,
     plugins: [
-      ...(isolatedTools ? [TOOL_GUARD_PLUGIN, CHILD_TOOLS_PLUGIN] : []),
+      ...(isolatedTools ? ISOLATED_GUARDS : []),
       COMPACTION_PLUGIN,
       ...(pty ? [PTY_PLUGIN] : []),
       ...(resultTransport === 'tool' ? [REVIEW_RESULT_PLUGIN] : []),

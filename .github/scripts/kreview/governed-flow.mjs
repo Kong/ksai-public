@@ -3,9 +3,7 @@ import { dirname, isAbsolute, join } from 'node:path';
 
 import { deliveriesAt, governanceOptions, governedRoot, rendererFor, trustedRootAt } from '../governance/anchors.mjs';
 import { parityOf, promptRendering, renderThroughControlPlane } from '../lib/cp-prompts.mjs';
-import { opencodePermissions } from '../lib/opencode.mjs';
-
-const GOVERNED_TOOLS = Object.freeze(['bash', 'edit', 'glob', 'grep', 'read', 'skill', 'write']);
+import { GOVERNED_TOOLS, opencodePermissions } from '../lib/opencode.mjs';
 
 const NAME = /^[a-z][a-z0-9-]{0,31}$/;
 const PLUGIN = /^[a-z][a-z0-9-]{0,63}$/;

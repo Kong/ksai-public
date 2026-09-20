@@ -380,6 +380,13 @@ export const REVIEW_RESULT_PLUGIN = fileURLToPath(new URL('../kreview/opencode-r
 
 export const PTY_PLUGIN = fileURLToPath(new URL('../kreview/opencode-pty.mjs', import.meta.url));
 
+export const ISOLATED_GUARDS = Object.freeze([
+  fileURLToPath(new URL('../kreview/opencode-tool-guard.mjs', import.meta.url)),
+  fileURLToPath(new URL('../kreview/opencode-child-tools.mjs', import.meta.url)),
+]);
+
+export const GOVERNED_TOOLS = Object.freeze(['bash', 'edit', 'glob', 'grep', 'read', 'skill', 'write']);
+
 export const ISOLATED_TOOL_PHASES = Object.freeze(new Set(Object.keys(claudeArgs.TOOL_POLICY)));
 
 export const isolatedToolPhase = (phase) => ISOLATED_TOOL_PHASES.has(String(phase ?? '').trim());
