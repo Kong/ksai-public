@@ -1,26 +1,14 @@
 import { DIGEST, canonical, digest, sameDigest } from './artifacts.mjs';
 import { signedWithDigest, statementOf } from './render.mjs';
 import { TrustedRoot, Verifier, bundleFromJSON, toTrustMaterial } from './sigstore.mjs';
+import { compareVersions, versionParts } from './versions.mjs';
+
+export { compareVersions, versionParts };
 
 const LOCK_SUBJECT = /^ksai-cp-prompts-(v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))\.lock\.json$/;
-const VERSION = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const TOOL_NAME = /^[a-z][a-z0-9_-]{0,63}$/;
 const TOOL_PREFIX = 'static.runtime.opencode-tool-';
 const REMINDER_ID = 'static.runtime.opencode-max-steps';
-
-export function versionParts(version) {
-  const parts = VERSION.exec(version);
-  if (!parts) throw new Error(`${version} is not a release version`);
-  return [Number(parts[1]), Number(parts[2]), Number(parts[3])];
-}
-
-export function compareVersions(left, right) {
-  const [a, b] = [versionParts(left), versionParts(right)];
-  for (let index = 0; index < 3; index++) {
-    if (a[index] !== b[index]) return a[index] - b[index];
-  }
-  return 0;
-}
 
 function entriesOf(lock) {
   const parsed = JSON.parse(lock.toString('utf8'));
