@@ -1920,7 +1920,7 @@ runs:
 
     - name: Install mise without evaluating the pull request
       if: ${{ steps.test_base.outcome == 'success' }}
-      uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+      uses: Kong/jdx-mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
       with:
         install: false
         cache: false
