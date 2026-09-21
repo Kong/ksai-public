@@ -14,7 +14,7 @@ export function versionParts(version) {
   return [Number(parts[1]), Number(parts[2]), Number(parts[3])];
 }
 
-function compareVersions(left, right) {
+export function compareVersions(left, right) {
   const [a, b] = [versionParts(left), versionParts(right)];
   for (let index = 0; index < 3; index++) {
     if (a[index] !== b[index]) return a[index] - b[index];
