@@ -233,8 +233,13 @@ outputs:
     description: whether this comment reaches the implement flow
     value: ${{ steps.verdict.outputs.implement || steps.trigger.outputs.implement }}
   test:
-    description: whether this comment starts an adversarial test run
-    value: ${{ steps.verdict.outputs.test || steps.trigger.outputs.test }}
+    description: >-
+      whether this comment starts an adversarial test run. `false` where the pull request's base branch
+      declares no `.ksai/pr-test.json`, which the tester restores before it starts anything, so a request
+      that cannot run is answered with a notice rather than a failed job.
+    value: >-
+      ${{ steps.tester-contract.outputs.missing == 'true' && 'false' || steps.verdict.outputs.test ||
+      steps.trigger.outputs.test }}
   help:
     description: whether this comment asks for the command catalogue
     value: ${{ steps.trigger.outputs.help }}
@@ -508,11 +513,16 @@ runs:
         REVIEW: ${{ steps.trigger.outputs.review }}
         IMPLEMENT: ${{ steps.trigger.outputs.implement }}
         TEST: ${{ steps.trigger.outputs.test }}
+        ISSUE_NUMBER: >-
+          ${{ steps.trigger.outputs.issue_number || inputs.pr_number || github.event.issue.number ||
+          github.event.pull_request.number }}
         SCRIPTS: ${{ github.workspace }}/_ksai/.github/scripts
       with:
+        github-token: ${{ inputs.authorization_github_token }}
+        retries: 3
         script: |
           const { settle } = require(`${process.env.SCRIPTS}/ksai/route.cjs`);
-          settle({ core, env: process.env });
+          await settle({ github, context, core, env: process.env });
 
     - name: Apply the bar the asked command holds
       id: bar
@@ -523,7 +533,7 @@ runs:
         WRITE_ACCESS: ${{ steps.authz.outputs.write_access }}
         WRITE_ACCESS_COMMANDS: ${{ steps.trigger.outputs.write_access_commands }}
         COMMAND: ${{ steps.trigger.outputs.command }}
-        VERDICT: ${{ steps.verdict.outputs.verdict }}
+        VERDICT: ${{ steps.verdict.outputs.bar_verdict }}
         SCRIPTS: ${{ github.workspace }}/_ksai/.github/scripts
       with:
         script: |
@@ -609,9 +619,14 @@ runs:
         github-token: ${{ inputs.post_github_token }}
         retries: 3
         script: |
+          const issue_number = Number(process.env.ISSUE_NUMBER);
+          if (!Number.isInteger(issue_number) || issue_number <= 0) {
+            core.warning(`no issue or pull request number to say it on, got: ${process.env.ISSUE_NUMBER}`);
+            return;
+          }
           const { writerFor } = require(`${process.env.SCRIPTS}/lib/cp-effects.cjs`);
           await writerFor({ github, ...context.repo }).comment({
-            number: Number(process.env.ISSUE_NUMBER),
+            number: issue_number,
             body: process.env.BODY,
           });
 
@@ -673,4 +688,60 @@ runs:
           await writerFor({ github, ...context.repo }).comment({
             number: issue_number,
             body: renderNoFederation({ repo: process.env.REPO, triggerPhrase: process.env.TRIGGER }),
+          });
+
+    - name: Ask whether the base branch declares a pull request test contract
+      id: tester-contract
+      continue-on-error: true
+      if: >-
+        ${{ steps.bar.outputs.authorized == 'true' &&
+        (steps.verdict.outputs.test || steps.trigger.outputs.test) == 'true' }}
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        PR_NUMBER: >-
+          ${{ steps.trigger.outputs.issue_number || inputs.pr_number || github.event.issue.number ||
+          github.event.pull_request.number }}
+        SCRIPTS: ${{ github.workspace }}/_ksai/.github/scripts
+      with:
+        github-token: ${{ inputs.authorization_github_token }}
+        retries: 3
+        script: |
+          const { testerContract } = require(`${process.env.SCRIPTS}/ksai/config.cjs`);
+          await testerContract({
+            github,
+            core,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            prNumber: process.env.PR_NUMBER,
+          });
+
+    - name: Say the base branch declares no pull request test contract
+      continue-on-error: true
+      if: >-
+        ${{ steps.tester-contract.outputs.missing == 'true' && inputs.continuation != 'true' &&
+        !endsWith(inputs.requester, '[bot]') }}
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        ISSUE_NUMBER: >-
+          ${{ steps.trigger.outputs.issue_number || inputs.pr_number || github.event.issue.number ||
+          github.event.pull_request.number }}
+        REPO: ${{ github.repository }}
+        TRIGGER: ${{ inputs.trigger_phrase }}
+        SCRIPTS: ${{ github.workspace }}/_ksai/.github/scripts
+        KSAI_CP_ENDPOINT: ${{ inputs.prompt_endpoint }}
+        KSAI_GITHUB_CALLS: ${{ inputs.github_calls }}
+      with:
+        github-token: ${{ inputs.post_github_token }}
+        retries: 3
+        script: |
+          const { renderNoTestContract } = require(`${process.env.SCRIPTS}/lib/select-arm.cjs`);
+          const issue_number = Number(process.env.ISSUE_NUMBER);
+          if (!Number.isInteger(issue_number) || issue_number <= 0) {
+            core.warning(`no issue or pull request number to say it on, got: ${process.env.ISSUE_NUMBER}`);
+            return;
+          }
+          const { writerFor } = require(`${process.env.SCRIPTS}/lib/cp-effects.cjs`);
+          await writerFor({ github, ...context.repo }).comment({
+            number: issue_number,
+            body: renderNoTestContract({ repo: process.env.REPO, triggerPhrase: process.env.TRIGGER }),
           });

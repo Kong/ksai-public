@@ -4,6 +4,7 @@ const {
   EVERY_COMMAND,
   HELP_COMMAND,
   PLAN_MODES,
+  TEST_CONTRACT_PATH,
   canonicalCommand,
   deliveredCommand,
   safeEcho,
@@ -251,9 +252,10 @@ function parseConfig(text) {
   };
 }
 
-async function fetchConfig({ github, owner, repo, path }) {
+async function fetchConfig({ github, owner, repo, path, ref = '' }) {
+  const at = String(ref ?? '').trim();
   try {
-    const { data } = await github.rest.repos.getContent({ owner, repo, path });
+    const { data } = await github.rest.repos.getContent({ owner, repo, path, ...(at === '' ? {} : { ref: at }) });
     return { data };
   } catch (err) {
     if (err.status === 404) return { missing: true };
@@ -261,6 +263,54 @@ async function fetchConfig({ github, owner, repo, path }) {
       error: `cannot read \`${path}\` from ${owner}/${repo}; the token needs contents:read (${err.status ?? 'no status'}: ${safeText(err.message)})`,
     };
   }
+}
+
+async function declaresTesterContract({ github, core, owner, repo, prNumber }) {
+  const pull_number = Number(prNumber);
+  if (!Number.isInteger(pull_number) || pull_number <= 0) {
+    core.warning(
+      `no pull request number to read \`${TEST_CONTRACT_PATH}\` for, got: ${safeEcho(prNumber)}; the tester ` +
+        'decides for itself whether the base branch declares one.',
+    );
+    return true;
+  }
+
+  let base = '';
+  try {
+    const { data } = await github.rest.pulls.get({ owner, repo, pull_number });
+    base = String(data?.base?.ref ?? '').trim();
+  } catch (err) {
+    core.warning(
+      `cannot read the base branch of ${owner}/${repo}#${pull_number} (${err.status ?? 'no status'}: ` +
+        `${safeText(err.message)}); the tester decides for itself whether it declares \`${TEST_CONTRACT_PATH}\`.`,
+    );
+    return true;
+  }
+  if (base === '') {
+    core.warning(
+      `${owner}/${repo}#${pull_number} names no base branch, so the tester decides for itself whether one ` +
+        `declares \`${TEST_CONTRACT_PATH}\`.`,
+    );
+    return true;
+  }
+
+  const found = await fetchConfig({ github, owner, repo, path: TEST_CONTRACT_PATH, ref: base });
+  if (found.error) {
+    core.warning(`${found.error}; the tester decides for itself whether ${safeEcho(base)} declares one.`);
+    return true;
+  }
+  if (found.missing) {
+    core.info(`${safeEcho(base)} declares no ${TEST_CONTRACT_PATH}, so there is nothing for the tester to start.`);
+    return false;
+  }
+  core.info(`${safeEcho(base)} declares ${TEST_CONTRACT_PATH}, so a test request has a contract to run.`);
+  return true;
+}
+
+async function testerContract({ github, core, owner, repo, prNumber }) {
+  const declared = await declaresTesterContract({ github, core, owner, repo, prNumber });
+  core.setOutput('missing', declared ? 'false' : 'true');
+  return declared;
 }
 
 async function loadKsaiConfig({ github, core, owner, repo }) {
@@ -310,8 +360,7 @@ async function loadKsaiConfig({ github, core, owner, repo }) {
   };
 }
 
-module.exports = loadKsaiConfig;
-Object.assign(module.exports, {
+module.exports = Object.assign(loadKsaiConfig, {
   CONFIG_PATH,
   KEYS,
   LEGACY_CONFIG_PATH,
@@ -320,6 +369,9 @@ Object.assign(module.exports, {
   MAX_ALIAS_CHARS,
   MAX_BYTES,
   NO_ALIASES,
+  TEST_CONTRACT_PATH,
+  declaresTesterContract,
   parseConfig,
   safeText,
+  testerContract,
 });

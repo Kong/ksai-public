@@ -45,6 +45,7 @@ const { labelReaders, readLabelBasis, readReviewBasis, recordBasis } = require('
 const { classifyTarget } = require('./dispatch.cjs');
 const { bareMode, ownPull, ownSurface } = require('./bare.cjs');
 const loadKsaiConfig = require('./config.cjs');
+const { declaresTesterContract } = loadKsaiConfig;
 const { writeRenderRequest } = require('../lib/render-request.cjs');
 
 function unquoted(body) {
@@ -383,9 +384,9 @@ async function route({ github, core, context, env }) {
   });
   if (!target.classify) return decision;
 
-  const answerable =
+  const anybodyAuthorized =
     String(env.OWNERS ?? '') !== 'absent' || (String(env.WRITE_ACCESS ?? '') === 'true' && (await opened()) !== '');
-  if (!answerable) {
+  if (!anybodyAuthorized) {
     core.info('Nobody can be authorized on this repository, so the comment is not classified.');
     return decision;
   }
@@ -412,7 +413,18 @@ async function route({ github, core, context, env }) {
   return decision;
 }
 
-function settle({ core, env, readFile = (at) => fs.readFileSync(at, 'utf8') }) {
+async function testerRuns({ github, context, core, env }) {
+  if (!github || !context) return true;
+  return declaresTesterContract({
+    github,
+    core,
+    owner: context.repo.owner,
+    repo: context.repo.repo,
+    prNumber: env.ISSUE_NUMBER,
+  });
+}
+
+async function settle({ github = null, context = null, core, env, readFile = (at) => fs.readFileSync(at, 'utf8') }) {
   const onIssue = env.ON_ISSUE === 'true';
   const onOwnPull = env.ON_OWN_PULL === 'true';
   const surface = surfaceForComment({ onOwnPull, onIssue, threadRootId: env.THREAD_ROOT_ID });
@@ -424,10 +436,11 @@ function settle({ core, env, readFile = (at) => fs.readFileSync(at, 'utf8') }) {
     return publish({ review: false, implement: true, test: false });
   };
 
-  const publish = (answer) => {
+  const publish = (answer, barVerdict = '') => {
     core.setOutput('review', answer.review ? 'true' : 'false');
     core.setOutput('implement', answer.implement ? 'true' : 'false');
     core.setOutput('test', answer.test ? 'true' : 'false');
+    core.setOutput('bar_verdict', barVerdict);
     return answer;
   };
 
@@ -483,7 +496,15 @@ function settle({ core, env, readFile = (at) => fs.readFileSync(at, 'utf8') }) {
   }
 
   core.info(`The comment reads as \`${verdict}\`.`);
-  return publish(routeVerdict({ verdict, onIssue, disabledCommands }));
+  if (ownsCommand('tester', verdict) && !(await testerRuns({ github, context, core, env }))) {
+    core.info(
+      'The base branch declares no contract to run, so the verdict is dropped and the command it already ' +
+        'resolved to decides.',
+    );
+    core.setOutput('verdict', '');
+    return publish({ ...fallback, test: false });
+  }
+  return publish(routeVerdict({ verdict, onIssue, disabledCommands }), verdict);
 }
 
 function settleAuthorization({ core, env }) {

@@ -4,6 +4,8 @@ const MODEL_CATALOG = require('./model-catalog.cjs');
 const { extractGivenPlan } = require('./plan-given.cjs');
 const { DEFAULT_TRIGGER_PHRASE, triggerAlternation, triggerMatcher } = require('./text.cjs');
 
+const TEST_CONTRACT_PATH = '.ksai/pr-test.json';
+
 const ALLOWED_EFFORTS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
 
 const DEFAULT_MIN_EFFORT = 'medium';
@@ -553,6 +555,18 @@ function renderNoFederation({ repo = null, triggerPhrase = null } = {}) {
       'token can be minted for it. Add the repository to `federations/<team>.yaml` in the ksai source repository',
     'How a federation change proceeds',
     '/federation#changes',
+    triggerPhrase,
+  );
+}
+
+function renderNoTestContract({ repo = null, triggerPhrase = null } = {}) {
+  return prerequisite(
+    `Nothing ran, because ${namedRepo(repo)} declares no \`${TEST_CONTRACT_PATH}\` on this pull ` +
+      "request's base branch, and that is where the tester reads the contract it starts. It runs what " +
+      'the base branch declares and never what the pull request carries, so the contract is merged ' +
+      'there before a test request can start one',
+    'How to declare one',
+    '/test/setup',
     triggerPhrase,
   );
 }
@@ -1301,6 +1315,8 @@ module.exports = {
   renderNoOwners,
   renderNotInstalled,
   renderNoFederation,
+  renderNoTestContract,
+  TEST_CONTRACT_PATH,
   commandEnabled,
   CODEOWNERS_BAR,
   WRITE_BAR,
