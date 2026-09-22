@@ -11,7 +11,7 @@ const RUN_REPORT_KEYS = Object.freeze([
   'STAND_DOWN', 'DRY_RUN', 'VALIDATE_OUTCOME', 'PARSE_OUTCOME', 'AUTHORIZED', 'TRIAGE_SKIP', 'TRIAGE_SKIP_REASON',
   'SELECT_OUTCOME', 'SELECT_SKIPPED', 'RESULT_OUTCOME', 'WATCHDOG_FIRED', 'WATCHDOG_CAUSE', 'WATCHDOG_REASON',
   'CEILING', 'STOP_REASON', 'ENDED_ON', 'RULES_NOTICE', 'CONCLUSION', 'COMMIT_ID', 'MODEL', 'EFFORT', 'ENGINE',
-  'SELECTED_BY', 'DIALS_ARM', 'REQUESTER', 'TRIAGE_MODE', 'TRIAGE_FILES', 'TRIAGE_LINES', 'TRIAGE_RISK',
+  'SELECTED_BY', 'RUN_SETTINGS_ARM', 'REQUESTER', 'TRIAGE_MODE', 'TRIAGE_FILES', 'TRIAGE_LINES', 'TRIAGE_RISK',
   'TRIAGE_API_SURFACE', 'TRIAGE_SKILLS', 'TRIAGE_TIER', 'TRIAGE_WHY', 'REPO_RULES_MODE', 'REPO_RULES_ENABLED',
   'REPO_RULES_PATH', 'REPO_RULES_SHA', 'REPO_RULES_BYTES', 'REPO_RULES_PACKS', 'PROMPT_REPORT', 'REVIEW_PROTOCOL',
   'HAS_RESULT', 'DURATION', 'NUM_TURNS', 'INPUT_TOKENS', 'OUTPUT_TOKENS', 'UNCACHED_INPUT_TOKENS',
@@ -77,7 +77,11 @@ async function askControlPlane({ kind, request, expect = null, accept, env, fetc
   if (reached.why) return reached;
   const said = await answered(fetch, `${reached.base}/v1/report/render`, {
     token: reached.token,
-    body: JSON.stringify({ api_version: API_VERSION, [kind]: request, ...(expect === null ? {} : { expect }) }),
+    body: JSON.stringify({
+      api_version: API_VERSION,
+      [kind]: withFormerRunSettingsArm(request),
+      ...(expect === null ? {} : { expect }),
+    }),
     signal: reached.signal,
   });
   if (said.why) return { why: said.why };
@@ -89,6 +93,17 @@ async function askControlPlane({ kind, request, expect = null, accept, env, fetc
 }
 
 const plain = (value) => JSON.parse(JSON.stringify(value ?? null));
+
+function withFormerRunSettingsArm(value) {
+  if (Array.isArray(value)) return value.map((held) => withFormerRunSettingsArm(held));
+  if (value === null || typeof value !== 'object') return value;
+  const compatible = Object.fromEntries(
+    Object.entries(value).map(([name, held]) => [name, withFormerRunSettingsArm(held)]),
+  );
+  if (Object.hasOwn(compatible, 'RUN_SETTINGS_ARM')) compatible.DIALS_ARM = compatible.RUN_SETTINGS_ARM;
+  if (Object.hasOwn(compatible, 'run_settings_arm')) compatible.dials_arm = compatible.run_settings_arm;
+  return compatible;
+}
 
 async function rendered({
   kind,

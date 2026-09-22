@@ -1,0 +1,288 @@
+name: Run settings
+description: >-
+  Read the model and effort this run should use from the control plane, and hand back the values
+  pinned in this workflow whenever that does not work. Moving a model across the fleet is otherwise a
+  pull request in every repository, because the values live in each caller's pinned workflow.
+
+  Nothing here is a secret. The caller is named by a GitHub Actions OIDC token, whose repository
+  claim is signed by GitHub and cannot be changed from inside the job, so no credential has to reach
+  the repositories being served and none of them can ask for another's run settings.
+
+  Every service failure is a fallback rather than an error. The run settings are a preference; the run is the work.
+  A control plane that is down, slow, unreachable, or serving something this action will not read
+  costs the run nothing but the pinned values it would have used anyway.
+
+  What comes back is matched against the shapes this workflow will pass on. The model shape is the
+  one `.github/scripts/lib/select-arm.cjs` accepts, so a value this action passes on is one the
+  selector downstream will take rather than one it refuses later. Each setting is read as a JSON string
+  and no other type, so a setting of 123 is an answer this action does not understand rather than a
+  model named 123.
+
+  The logic ships beside this action.yml, so every caller already has it wherever it has the action,
+  and it is a module rather than a shell block so the refusals above are unit-testable.
+
+inputs:
+  endpoint:
+    description: >-
+      Base URL of the control plane, with no trailing path. Empty, which is the default, skips the
+      fetch and keeps the pinned values - which is what a repository no control plane serves wants,
+      and what every repository gets until its caller sets this.
+    required: false
+    default: ""
+  audience:
+    description: >-
+      Audience the OIDC token is minted for. Both ends have to name the same string, and the control
+      plane refuses a token minted for anything else.
+    required: false
+    default: ksai-cp
+  model:
+    description: model pinned in this workflow, used whenever the control plane does not answer with one
+    required: true
+  effort:
+    description: effort pinned in this workflow, used whenever the control plane does not answer with one; empty leaves it to the model's default
+    required: true
+  shadow_percent:
+    description: share of runs compared against the shadow engine, pinned in this workflow
+    required: false
+    default: ""
+  review_triage_mode:
+    description: local, shadow, or cp authority for V4 review triage, pinned in this workflow
+    required: false
+    default: "local"
+  allowed_models:
+    description: model ids a comment or an automatic selector may choose, pinned in this workflow
+    required: false
+    default: ""
+  max_effort:
+    description: highest effort a comment or an automatic selector may choose, pinned in this workflow
+    required: false
+    default: ""
+  min_effort:
+    description: lowest effort a comment or an automatic selector may choose, pinned in this workflow
+    required: false
+    default: ""
+  job_timeout_minutes:
+    description: >-
+      the job's own timeout, pinned in this workflow. It takes no default here for the reason it
+      takes none in the run action: a caller that agreed with the assumed ceiling and a caller that
+      never looked are the same run, and only the caller knows what it capped the job at.
+    required: false
+    default: ""
+  max_consecutive_tool_failures:
+    description: how many tool calls may fail in a row before the watchdog stops the run, pinned in this workflow
+    required: false
+    default: ""
+  max_repeated_tool_calls:
+    description: how many times one call may repeat before the watchdog stops the run, pinned in this workflow
+    required: false
+    default: ""
+  key_held:
+    description: >-
+      `true` where the caller passes the App key. A caller that passes none has nothing to mint
+      with, so `run_tokens` answers `cp` for it whatever the control plane serves, and every step
+      after it reads one mode.
+    required: false
+    default: "true"
+
+outputs:
+  model:
+    description: model this run should use
+    value: ${{ steps.run_settings.outputs.model }}
+  effort:
+    description: effort this run should use
+    value: ${{ steps.run_settings.outputs.effort }}
+  arm:
+    description: >-
+      the experiment arm the control plane assigned this repository, as
+      `<experiment>:<control|variant>`, or `baseline` where no experiment is
+      running. A result recorded without the arm that produced it cannot be read
+      back against it.
+
+      Empty means no arm produced this run's run settings, and deliberately does not
+      say which of three: the pinned values were kept, the control plane named
+      no arm, or it named one this action will not pass on. A consumer reads an
+      empty arm as "not part of an experiment" and is right every time. The
+      shape is the model's plus one colon, so an arm cannot carry a newline into
+      whatever records it.
+    value: ${{ steps.run_settings.outputs.arm }}
+  trigger_phrase:
+    description: >-
+      the phrase this repository answers beside `/ksai`, or empty where it named
+      none or named one this action will not pass on
+    value: ${{ steps.run_settings.outputs.trigger_phrase }}
+  runs_on:
+    description: >-
+      the runner this repository's work is carried out on, as one label or a
+      JSON list of them, or empty where it named none. A caller used to carry
+      this itself, which made the runner a repository's choice rather than an
+      operator's.
+    value: ${{ steps.run_settings.outputs.runs_on }}
+  continuation_workflow:
+    description: the caller file a successor is dispatched into, or empty
+    value: ${{ steps.run_settings.outputs.continuation_workflow }}
+  clear_request:
+    description: >-
+      `true` where this repository asks the review team from the sidebar, so the
+      withdrawal has something to withdraw, and empty otherwise
+    value: ${{ steps.run_settings.outputs.clear_request }}
+  federation_rule_id:
+    description: >-
+      the Konnect federation this run exchanges its OIDC token under. This and
+      the three below it are answered together or not at all, because a run
+      federating with one of them missing fails at the exchange.
+    value: ${{ steps.run_settings.outputs.federation_rule_id }}
+  organization_id:
+    description: the Konnect organization the federation belongs to, or empty
+    value: ${{ steps.run_settings.outputs.organization_id }}
+  service_account_id:
+    description: the Konnect service account the run federates as, or empty
+    value: ${{ steps.run_settings.outputs.service_account_id }}
+  workspace_id:
+    description: the Konnect workspace the run federates into, or empty
+    value: ${{ steps.run_settings.outputs.workspace_id }}
+  shadow_percent:
+    description: >-
+      share of runs to compare against the shadow engine. This output and the
+      six below it are the value the control plane served, or the one pinned in
+      this workflow where it served none - which is what the control plane
+      leaving a setting out means, and what it does with one served in a shape this
+      workflow would refuse later.
+    value: ${{ steps.run_settings.outputs.shadow_percent }}
+  review_triage_mode:
+    description: local, shadow, or cp authority for V4 review triage
+    value: ${{ steps.run_settings.outputs.review_triage_mode }}
+  allowed_models:
+    description: model ids a comment or an automatic selector may choose
+    value: ${{ steps.run_settings.outputs.allowed_models }}
+  max_effort:
+    description: highest effort a comment or an automatic selector may choose
+    value: ${{ steps.run_settings.outputs.max_effort }}
+  min_effort:
+    description: lowest effort a comment or an automatic selector may choose
+    value: ${{ steps.run_settings.outputs.min_effort }}
+  job_timeout_minutes:
+    description: >-
+      the job's own timeout. A caller passing this to the run action has to cap
+      the job at the same value, because an action cannot read the ceiling it is
+      running under.
+    value: ${{ steps.run_settings.outputs.job_timeout_minutes }}
+  max_consecutive_tool_failures:
+    description: how many tool calls may fail in a row before the watchdog stops the run
+    value: ${{ steps.run_settings.outputs.max_consecutive_tool_failures }}
+  max_repeated_tool_calls:
+    description: how many times one call may repeat before the watchdog stops the run
+    value: ${{ steps.run_settings.outputs.max_repeated_tool_calls }}
+  triage_write:
+    description: >-
+      who decides the model and effort a write run spends: `cp` is the control
+      plane, and anything else is this workflow, which is where every repository
+      starts. Nothing is pinned here, because a repository moves onto control-plane
+      decisions by being served this setting rather than by editing its own caller.
+    value: ${{ steps.run_settings.outputs.triage_write }}
+  report_rendering:
+    description: >-
+      where a run's results are rendered: `local` on this runner, `shadow` on this runner and
+      compared with the control plane's answer, or `cp` by the control plane, with a minimal report
+      when it cannot answer. The run posts every one of them itself either way. Nothing is pinned
+      here, because a repository moves by being served this setting.
+    value: ${{ steps.run_settings.outputs.report_rendering }}
+  run_tokens:
+    description: >-
+      where a `ksai-cp.yml` run gets its GitHub tokens: `local` mints them with the App key the
+      caller passes, `shadow` does that and also asks the control plane for each one and revokes
+      what it answers at once, and `cp` asks the control plane alone. It is `cp` for a caller that
+      passes no key, whatever the control plane serves. Nothing is pinned here, because a
+      repository moves by being served this setting.
+    value: ${{ steps.run_settings.outputs.run_tokens }}
+  prompt_rendering:
+    description: >-
+      where a run's prompts come from: `local` is the text this runner builds, `shadow` builds that
+      text and runs on it while also rendering through the control plane, and `cp` sends the model
+      only what the control plane rendered and signed, verified by the gateway plugin. Nothing is
+      pinned here, because a repository moves by being served this setting.
+    value: ${{ steps.run_settings.outputs.prompt_rendering }}
+  catalog_path:
+    description: >-
+      the file the served model catalog was written to, or empty where the
+      control plane served none this action will pass on. Every later step reads
+      it through `KSAI_MODEL_CATALOG`, which this action exports, and falls back
+      to the table shipped in this repository whenever it is empty or unreadable
+      - so a run that could not reach the control plane still resolves the model
+      it was dispatched with.
+    value: ${{ steps.run_settings.outputs.catalog_path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Read the run settings
+      id: run_settings
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        RUN_SETTINGS_ACTION_PATH: ${{ github.action_path }}
+        CONTROL_PLANE_ENDPOINT: ${{ inputs.endpoint }}
+        RUN_SETTINGS_AUDIENCE: ${{ inputs.audience }}
+        RUN_SETTINGS_MODEL: ${{ inputs.model }}
+        RUN_SETTINGS_EFFORT: ${{ inputs.effort }}
+        RUN_SETTINGS_SHADOW_PERCENT: ${{ inputs.shadow_percent }}
+        RUN_SETTINGS_REVIEW_TRIAGE_MODE: ${{ inputs.review_triage_mode }}
+        RUN_SETTINGS_ALLOWED_MODELS: ${{ inputs.allowed_models }}
+        RUN_SETTINGS_MAX_EFFORT: ${{ inputs.max_effort }}
+        RUN_SETTINGS_MIN_EFFORT: ${{ inputs.min_effort }}
+        RUN_SETTINGS_JOB_TIMEOUT_MINUTES: ${{ inputs.job_timeout_minutes }}
+        RUN_SETTINGS_MAX_CONSECUTIVE_TOOL_FAILURES: ${{ inputs.max_consecutive_tool_failures }}
+        RUN_SETTINGS_MAX_REPEATED_TOOL_CALLS: ${{ inputs.max_repeated_tool_calls }}
+        RUN_SETTINGS_KEY_HELD: ${{ inputs.key_held }}
+      with:
+        script: |
+          const { keyless, readRunSettings } = await import(`file://${process.env.RUN_SETTINGS_ACTION_PATH}/run-settings.mjs`);
+          const pinned = {
+            shadow_percent: process.env.RUN_SETTINGS_SHADOW_PERCENT,
+            review_triage_mode: process.env.RUN_SETTINGS_REVIEW_TRIAGE_MODE,
+            allowed_models: process.env.RUN_SETTINGS_ALLOWED_MODELS,
+            max_effort: process.env.RUN_SETTINGS_MAX_EFFORT,
+            min_effort: process.env.RUN_SETTINGS_MIN_EFFORT,
+            job_timeout_minutes: process.env.RUN_SETTINGS_JOB_TIMEOUT_MINUTES,
+            max_consecutive_tool_failures: process.env.RUN_SETTINGS_MAX_CONSECUTIVE_TOOL_FAILURES,
+            max_repeated_tool_calls: process.env.RUN_SETTINGS_MAX_REPEATED_TOOL_CALLS,
+          };
+          const answer = keyless(await readRunSettings({
+            endpoint: process.env.CONTROL_PLANE_ENDPOINT,
+            audience: process.env.RUN_SETTINGS_AUDIENCE,
+            model: process.env.RUN_SETTINGS_MODEL,
+            effort: process.env.RUN_SETTINGS_EFFORT,
+            pinned,
+            mint: (audience) => core.getIDToken(audience),
+            secret: (token) => core.setSecret(token),
+          }), process.env.RUN_SETTINGS_KEY_HELD);
+          if (answer.served) {
+            core.notice(`ksai is running on the served run settings: model ${answer.model}, effort ${answer.effort}`);
+          } else if (answer.why) {
+            core.notice(`ksai kept the run settings pinned in this workflow: ${answer.why}`);
+          }
+          if (answer.refused.length > 0) {
+            core.notice(`ksai kept these run settings pinned in this workflow, because the control plane served a shape it will not pass on: ${answer.refused.join(', ')}`);
+          }
+          core.setOutput('model', answer.model);
+          core.setOutput('effort', answer.effort);
+          core.setOutput('arm', answer.arm);
+          for (const [name, value] of Object.entries(answer.settings)) {
+            core.setOutput(name, value);
+          }
+          for (const [name, value] of Object.entries(answer.runSettings)) {
+            core.setOutput(name, value);
+          }
+
+          let at = '';
+          if (answer.catalog !== null) {
+            const { writeFileSync } = await import('node:fs');
+            const { join } = await import('node:path');
+            at = join(process.env.RUNNER_TEMP || process.env.HOME || '.', 'ksai-model-catalog.json');
+            try {
+              writeFileSync(at, JSON.stringify(answer.catalog));
+              core.exportVariable('KSAI_MODEL_CATALOG', at);
+            } catch (unwritten) {
+              at = '';
+              core.notice(`ksai read the models from the table it ships: the served catalog could not be written: ${unwritten?.message ?? 'it said nothing'}`);
+            }
+          }
+          core.setOutput('catalog_path', at);

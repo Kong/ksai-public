@@ -247,7 +247,7 @@ async function runTriage({ github, core, owner, repo, prNumber, env = process.en
     };
     const mode = TRIAGE_MODES.includes(env.REVIEW_TRIAGE_MODE) ? env.REVIEW_TRIAGE_MODE : 'local';
     const record = mintedId(env.RECORD_ID);
-    const remoteReady = env.FLEET_DIALS_ENDPOINT && record !== ''
+    const remoteReady = env.CONTROL_PLANE_ENDPOINT && record !== ''
       && SHA.test(env.RUN_HEAD_SHA ?? '') && SHA.test(pr.head?.sha ?? '');
     if (mode !== 'local' && remoteReady) {
       const models = [...new Set([env.CONFIGURED_MODEL, ...splitNames(env.ALLOWED_MODELS)].filter(Boolean))].slice(0, 16);
@@ -282,7 +282,7 @@ async function runTriage({ github, core, owner, repo, prNumber, env = process.en
       };
       try {
         remote = await requestReviewTriage({
-          core, endpoint: env.FLEET_DIALS_ENDPOINT, request,
+          core, endpoint: env.CONTROL_PLANE_ENDPOINT, request,
           mint: mint ?? ((audience) => core.getIDToken(audience)), call, rest,
         });
         policyVersion = remote.policy_version;

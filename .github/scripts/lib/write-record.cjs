@@ -4,7 +4,7 @@ const { createHash } = require('node:crypto');
 
 const {
   COMMANDS,
-  DIALS_ARM_SHAPE,
+  RUN_SETTINGS_ARM_SHAPE,
   MODEL_CORE,
   MODEL_SHAPE,
   SELECTION_SOURCES,
@@ -68,7 +68,7 @@ const ATTEMPT_FIELDS = Object.freeze([
   'route_source',
   'at',
   'reason',
-  'dials_arm',
+  'run_settings_arm',
   'verification',
   'commit_sha',
 ]);
@@ -155,7 +155,7 @@ function validAttempt(attempt) {
   if (attempt.route_source !== '' && !ROUTE_SOURCES.includes(attempt.route_source)) return false;
   if (attempt.at !== null && !(Number.isSafeInteger(attempt.at) && attempt.at > 0)) return false;
   if (attempt.reason !== null && !shaped(attempt.reason, REASON_SHAPE)) return false;
-  if (attempt.dials_arm !== null && !shaped(attempt.dials_arm, DIALS_ARM_SHAPE)) return false;
+  if (attempt.run_settings_arm !== null && !shaped(attempt.run_settings_arm, RUN_SETTINGS_ARM_SHAPE)) return false;
   if (!validVerification(attempt.verification)) return false;
   if (attempt.commit_sha !== null && attempt.commit_sha !== undefined && !shaped(attempt.commit_sha, /^[a-f0-9]{40}$/)) return false;
   return typeof attempt.selection === 'string' && attempt.selection.length <= 80;

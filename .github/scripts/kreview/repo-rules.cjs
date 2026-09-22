@@ -204,7 +204,7 @@ const scopeClaims = (scope, paths) =>
   scope?.pattern ? claimsAny(scope.pattern, paths) : claimsAnyGlob(scope?.globs, paths);
 
 
-function resolveDial({ name, value, unit, floor, ceiling, over = null }) {
+function resolveSetting({ name, value, unit, floor, ceiling, over = null }) {
   const asked = String(value ?? '').trim();
   if (asked === '') return { held: floor };
   const held = wholeNumber(asked);
@@ -219,7 +219,7 @@ function resolveDial({ name, value, unit, floor, ceiling, over = null }) {
 }
 
 function resolveRuleCount(value) {
-  const read = resolveDial({
+  const read = resolveSetting({
     name: 'repo_rules_max_rules',
     value,
     unit: 'rules',
@@ -231,7 +231,7 @@ function resolveRuleCount(value) {
 }
 
 function resolveBudget(value) {
-  const read = resolveDial({
+  const read = resolveSetting({
     name: 'repo_rules_max_bytes',
     value,
     unit: 'bytes',
@@ -242,7 +242,7 @@ function resolveBudget(value) {
 }
 
 function resolveFileCap(value, ceiling) {
-  const read = resolveDial({
+  const read = resolveSetting({
     name: 'repo_rules_max_file_bytes',
     value,
     unit: 'bytes',

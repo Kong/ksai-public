@@ -51,7 +51,7 @@ export function shadowEngine(engine, live) {
 /**
  * whyNone names the reason a run shadows nothing, so a missing row can be traced to a cause.
  *
- * **The dials are read before the engine.** A caller who set `shadow_model` and happened to match
+ * **The run settings are read before the engine.** A caller who set `shadow_model` and happened to match
  * the live arm was told "the Claude engine no longer runs here" - naming an input they never set,
  * on exactly the runs where triage picked their shadow model, and nothing they could act on.
  *
@@ -60,9 +60,9 @@ export function shadowEngine(engine, live) {
  * where the published default is already the only value most callers will ever have. Sharing one
  * message printed the same `claude` for both.
  */
-function whyNone({ engine, live, different, dialled }) {
+function whyNone({ engine, live, different, configured }) {
   if (different) return `the live arm runs on ${live}, which a shadow may not`;
-  if (dialled) return 'the shadow dials name what the live arm already runs';
+  if (configured) return 'the shadow run settings name what the live arm already runs';
   const asked = String(engine ?? '').trim();
   if (asked === 'claude') return 'the Claude engine no longer runs here, so it shadows nothing';
   if (asked === '') return 'no shadow engine was named';
@@ -73,18 +73,18 @@ function whyNone({ engine, live, different, dialled }) {
 /**
  * decide answers the whole question one step asks: whether to run a shadow, and on which engine.
  *
- * A dial shadow runs on the **live** engine rather than on `shadow_engine`. The two shadows share
- * one sampler, and reading the engine for both meant a dial comparison only ran while the engine
+ * A setting shadow runs on the **live** engine rather than on `shadow_engine`. The two shadows share
+ * one sampler, and reading the engine for both meant a setting comparison only ran while the engine
  * input happened to name an arm this could start - so narrowing `SHADOWABLE` would have taken the
  * model and strategy comparisons down with the Claude arm.
  */
 export function decide(env) {
   const live = String(env.LIVE_ENGINE ?? '').trim() || 'opencode';
-  const dialled = Boolean(env.SHADOW_MODEL || env.SHADOW_STRATEGY);
+  const configured = Boolean(env.SHADOW_MODEL || env.SHADOW_STRATEGY);
   const different = (env.SHADOW_MODEL && resolveModel(env.SHADOW_MODEL).toLowerCase() !== resolveModel(env.LIVE_MODEL || 'flagship').toLowerCase()) || (env.SHADOW_STRATEGY && env.SHADOW_STRATEGY !== (env.LIVE_STRATEGY || 'baseline'));
   const engine = different ? (SHADOWABLE.has(live) ? live : null) : shadowEngine(env.SHADOW_ENGINE, live);
   if (!engine) {
-    return { shadow: 'false', engine: '', why: whyNone({ engine: env.SHADOW_ENGINE, live, different, dialled }) };
+    return { shadow: 'false', engine: '', why: whyNone({ engine: env.SHADOW_ENGINE, live, different, configured }) };
   }
   if (!shouldShadow({ key: `${env.REPOSITORY}#${env.PR_NUMBER}@${env.HEAD_SHA}`, percent: env.SHADOW_PERCENT })) {
     return { shadow: 'false', engine: '', why: `not in the sampled ${String(env.SHADOW_PERCENT ?? 0)}%` };

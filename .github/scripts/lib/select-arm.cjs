@@ -95,7 +95,7 @@ const MODEL_CORE = `${SEGMENT}(?:\\/${SEGMENT}){0,2}`;
 
 const MODEL_SHAPE = new RegExp(`^${MODEL_CORE}$`);
 
-const DIALS_ARM_SHAPE = new RegExp(`^${SEGMENT}(?::${SEGMENT})?$`);
+const RUN_SETTINGS_ARM_SHAPE = new RegExp(`^${SEGMENT}(?::${SEGMENT})?$`);
 
 const shortModel = (model) =>
   String(model ?? '').trim().replace(/^zai-org\//, '').replace(/^claude-/, '').toLowerCase();
@@ -1333,7 +1333,7 @@ module.exports = {
   defaultCommandFor,
   MODEL_CORE,
   MODEL_SHAPE,
-  DIALS_ARM_SHAPE,
+  RUN_SETTINGS_ARM_SHAPE,
   KNOWN_MODELS,
   RECORDED_TIERS,
   VENDOR_ALIASES,

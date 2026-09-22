@@ -55,7 +55,7 @@ const {
   validLabelSource,
   writeStateMarker,
 } = require('../lib/write-record.cjs');
-const { DIALS_ARM_SHAPE, armLabel, asAlert } = require('../lib/select-arm.cjs');
+const { RUN_SETTINGS_ARM_SHAPE, armLabel, asAlert } = require('../lib/select-arm.cjs');
 const { counted, safeText } = require('../lib/text.cjs');
 const cpRender = require('../lib/cp-render.cjs');
 const cpReport = require('./cp-report.cjs');
@@ -437,9 +437,9 @@ function reasonToken(value) {
   return REASON_SHAPE.test(said) ? said : UNCLASSIFIED_REASON;
 }
 
-function dialsArm(value) {
+function runSettingsArm(value) {
   const named = oneLine(value ?? '').trim();
-  return named !== '' && DIALS_ARM_SHAPE.test(named) ? named : null;
+  return named !== '' && RUN_SETTINGS_ARM_SHAPE.test(named) ? named : null;
 }
 
 function spendOfEnv(env) {
@@ -502,7 +502,7 @@ function attemptOf(env = process.env, now = Date.now()) {
     route_source: String(env.ROUTE_SOURCE ?? ''),
     at: Number.isSafeInteger(now) && now > 0 ? Math.floor(now / 1000) : null,
     reason: reasonToken(env.REASON),
-    dials_arm: dialsArm(env.DIALS_ARM),
+    run_settings_arm: runSettingsArm(env.RUN_SETTINGS_ARM),
     verification: verificationOfEnv(env),
     commit_sha: /^[a-f0-9]{40}$/.test(String(env.COMMIT_SHA ?? '')) ? String(env.COMMIT_SHA) : null,
     ...spendOfEnv(env),

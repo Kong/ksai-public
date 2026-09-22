@@ -3010,7 +3010,7 @@ function offeredModel(model, allowed) {
  * A pinned axis withdraws the whole answer rather than half of it. The decision names a model and an
  * effort together and carries one reason for both, so honouring the unpinned half would publish a
  * selection reason for an arm the control plane did not choose. The gate already prefers an
- * overriding dispatch over this control plane's record and dials; this is the same rule one layer
+ * overriding dispatch over this control plane's record and run settings; this is the same rule one layer
  * down, where the write phase gets its second chance to move the arm.
  */
 function controlPlaneArm(env, early) {

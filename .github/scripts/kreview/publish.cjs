@@ -3,7 +3,7 @@ const { writerFor } = require('../lib/cp-effects.cjs');
 const { updateOrCreate } = require('../lib/comment.cjs');
 const { BLANK_CELL, historyLines, ksaiHeading, reportTable, runHeading, spendSaid } = require('../lib/run-progress.cjs');
 const { runStateMarker } = require('../lib/run-record.cjs');
-const { DIALS_ARM_SHAPE, MODEL_TIERS, armLabel } = require('../lib/select-arm.cjs');
+const { RUN_SETTINGS_ARM_SHAPE, MODEL_TIERS, armLabel } = require('../lib/select-arm.cjs');
 const { renderClassifierFooter } = require('../ksai/classify.cjs');
 const { href: markerHref } = require('../ksai/marker.cjs');
 const { scrub } = require('../ksai/plan.cjs');
@@ -221,7 +221,7 @@ function evalRunRecord(env, { now = new Date() } = {}) {
       trial_index: stagesOf(env.REVIEW_PROTOCOL)?.trial_index ?? 0,
       review_protocol: stagesOf(env.REVIEW_PROTOCOL),
       selected_by: armRecord(env),
-      dials_arm: dialsArmRecord(env),
+      run_settings_arm: runSettingsArmRecord(env),
       repo_rules: rulesRecord(env),
       channel_notes: channelRecord(env),
       status_updates: status?.updates ?? null,
@@ -366,7 +366,7 @@ function reviewRecord(env) {
     model: env.MODEL || null,
     effort: env.EFFORT || null,
     selected_by: armRecord(env),
-    dials_arm: dialsArmRecord(env),
+    run_settings_arm: runSettingsArmRecord(env),
     triage: env.TRIAGE_MODE === 'auto' ? triageRecord(env) : null,
     engine: env.ENGINE || 'claude',
     review_protocol: stagesOf(env.REVIEW_PROTOCOL),
@@ -437,9 +437,9 @@ function armRecord(env) {
   return 'input';
 }
 
-function dialsArmRecord(env) {
-  const named = String(env.DIALS_ARM ?? '').trim();
-  return named !== '' && DIALS_ARM_SHAPE.test(named) ? named : null;
+function runSettingsArmRecord(env) {
+  const named = String(env.RUN_SETTINGS_ARM ?? '').trim();
+  return named !== '' && RUN_SETTINGS_ARM_SHAPE.test(named) ? named : null;
 }
 
 function channelRecord(env) {

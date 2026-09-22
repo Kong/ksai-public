@@ -1,6 +1,7 @@
 'use strict';
 
 const { escapeForRegExp } = require('./text.cjs');
+const { runSettingsArmOf } = require('./run-settings-migration.cjs');
 
 const PREFIX = '<!-- ksai-run-state:';
 
@@ -18,7 +19,7 @@ const FIELDS = Object.freeze([
   'model',
   'effort',
   'selected_by',
-  'dials_arm',
+  'run_settings_arm',
   'triage',
   'engine',
   'review_protocol',
@@ -54,7 +55,7 @@ const markerJson = (value) => JSON.stringify(value).replace(/--/g, '-\\u002d');
 
 const only = (names, source) => Object.fromEntries(names.map((name) => [name, source?.[name] ?? null]));
 
-const shaped = (source) => only(FIELDS, source);
+const shaped = (source) => ({ ...only(FIELDS, source), run_settings_arm: runSettingsArmOf(source) });
 
 const runDetail = (source) => only(DETAIL, source);
 

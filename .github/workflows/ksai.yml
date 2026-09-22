@@ -223,9 +223,9 @@ on:
         required: false
         type: string
         default: "flagship"
-      dials_override:
+      run_settings_override:
         description: >-
-          let this dispatch's model and effort inputs win over the control plane's fleet dials, for
+          let this dispatch's model and effort inputs win over the control plane's run settings, for
           benchmark arms that name their model per run; the repo's own dispatch surface carries the
           same trust its pinned workflow file already does. An overridden axis is pinned for the
           whole run - review triage, write triage and the control plane's write arm all leave it
@@ -235,20 +235,30 @@ on:
         required: false
         type: boolean
         default: false
+      dials_override:
+        description: >-
+          Former name of `run_settings_override`, retained for callers pinned before the run settings
+          migration. When either input is true, the dispatch model and effort remain pinned.
+        required: false
+        type: boolean
+        default: false
       effort:
         description: "reasoning effort for the run: low, medium, high, xhigh, or max. Empty uses the model's default: max for GLM-5.3-Flash, high otherwise"
         required: false
         type: string
         default: ""
+      control_plane_endpoint:
+        description: >-
+          base URL of the control plane that serves this repository's run settings and dispatch
+          records, with no trailing path. Empty keeps the pinned settings and makes no call unless a
+          dispatch names a record, which cannot be read without its control plane.
+        required: false
+        type: string
+        default: ""
       fleet_dials_endpoint:
         description: >-
-          base URL of the control plane that serves this fleet's model and effort, and the record
-          it wrote for this run, with no trailing path. Empty, which is the default, keeps the model
-          and effort pinned above and makes no call - which is right only for a repository no
-          control plane serves. A dispatch that names a record with no endpoint fails the run,
-          because the record is what lets a dispatch sent again run once. Only the v4 caller
-          template names it: moving a model across the fleet is otherwise a pull request in every
-          repository, because these values live in each caller.
+          former name of `control_plane_endpoint`, retained for callers pinned before the run
+          settings migration
         required: false
         type: string
         default: ""
@@ -452,7 +462,7 @@ on:
 
           **`claude`, the declared default, shadows nothing.** That engine no longer runs here, and
           the default is kept only because changing one breaks every pinned consumer. So a review is
-          shadowed only when `shadow_model` or `shadow_strategy` names a dial to compare, which runs
+          shadowed only when `shadow_model` or `shadow_strategy` names a setting to compare, which runs
           the second review on the live engine, or when this input names an engine the live arm is
           not already running. `shadow_percent` still bounds the share, and `0` turns it off
           outright.
@@ -479,7 +489,7 @@ on:
       review_triage_mode:
         description: >-
           Review-triage authority: local, shadow, or cp. V3 defaults local; the generated V4 entrypoint
-          defaults shadow. The fleet dial changes only the generated V4 entrypoint; this workflow runs
+          defaults shadow. The fleet setting changes only the generated V4 entrypoint; this workflow runs
           the caller's input.
         required: false
         type: string
@@ -689,7 +699,7 @@ on:
       record_id:
         description: >-
           the record the control plane wrote before it dispatched this run, read back over the run's own
-          OIDC token from `fleet_dials_endpoint`. Empty, which is every standalone dispatch, makes no call
+          OIDC token from the control-plane endpoint. Empty, which is every standalone dispatch, makes no call
           and the run goes ahead on its other inputs. Only the v4 caller forwards it.
         required: false
         type: string
@@ -751,7 +761,7 @@ jobs:
       - name: Say the hosts a job that blocks its egress has to reach
         id: endpoints
         env:
-          ENDPOINT: ${{ inputs.fleet_dials_endpoint }}
+          ENDPOINT: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
           BASE_URL: ${{ inputs.anthropic_base_url || secrets.model_gateway_url }}
         run: |
           set -euo pipefail
@@ -801,20 +811,20 @@ jobs:
       classifier_output_tokens: ${{ steps.gate.outputs.classifier_output_tokens }}
       classifier_turns: ${{ steps.gate.outputs.classifier_turns }}
       classifier_duration: ${{ steps.gate.outputs.classifier_duration }}
-      model: ${{ (inputs.dials_override && inputs.model != 'flagship') && inputs.model || steps.record.outputs.model || steps.dials.outputs.model }}
-      effort: ${{ (inputs.dials_override && inputs.effort != '') && inputs.effort || steps.record.outputs.effort || steps.dials.outputs.effort }}
-      shadow_percent: ${{ steps.dials.outputs.shadow_percent }}
-      review_triage_mode: ${{ steps.dials.outputs.review_triage_mode }}
-      allowed_models: ${{ steps.dials.outputs.allowed_models }}
-      max_effort: ${{ steps.dials.outputs.max_effort }}
-      min_effort: ${{ steps.dials.outputs.min_effort }}
-      job_timeout_minutes: ${{ steps.dials.outputs.job_timeout_minutes }}
-      max_consecutive_tool_failures: ${{ steps.dials.outputs.max_consecutive_tool_failures }}
-      max_repeated_tool_calls: ${{ steps.dials.outputs.max_repeated_tool_calls }}
-      triage_write: ${{ steps.dials.outputs.triage_write }}
-      report_rendering: ${{ steps.dials.outputs.report_rendering }}
-      prompt_rendering: ${{ steps.dials.outputs.prompt_rendering }}
-      dials_arm: ${{ !(inputs.dials_override && inputs.model != 'flagship') && (steps.record.outputs.model == '' && steps.dials.outputs.arm || '') || '' }}
+      model: ${{ ((inputs.run_settings_override || inputs.dials_override) && inputs.model != 'flagship') && inputs.model || steps.record.outputs.model || steps.run_settings.outputs.model }}
+      effort: ${{ ((inputs.run_settings_override || inputs.dials_override) && inputs.effort != '') && inputs.effort || steps.record.outputs.effort || steps.run_settings.outputs.effort }}
+      shadow_percent: ${{ steps.run_settings.outputs.shadow_percent }}
+      review_triage_mode: ${{ steps.run_settings.outputs.review_triage_mode }}
+      allowed_models: ${{ steps.run_settings.outputs.allowed_models }}
+      max_effort: ${{ steps.run_settings.outputs.max_effort }}
+      min_effort: ${{ steps.run_settings.outputs.min_effort }}
+      job_timeout_minutes: ${{ steps.run_settings.outputs.job_timeout_minutes }}
+      max_consecutive_tool_failures: ${{ steps.run_settings.outputs.max_consecutive_tool_failures }}
+      max_repeated_tool_calls: ${{ steps.run_settings.outputs.max_repeated_tool_calls }}
+      triage_write: ${{ steps.run_settings.outputs.triage_write }}
+      report_rendering: ${{ steps.run_settings.outputs.report_rendering }}
+      prompt_rendering: ${{ steps.run_settings.outputs.prompt_rendering }}
+      run_settings_arm: ${{ !((inputs.run_settings_override || inputs.dials_override) && inputs.model != 'flagship') && (steps.record.outputs.model == '' && steps.run_settings.outputs.arm || '') || '' }}
       record_command: ${{ steps.record.outputs.command }}
       record_comment_id: ${{ steps.record.outputs.comment_id }}
       record_comment_kind: ${{ steps.record.outputs.comment_kind }}
@@ -898,11 +908,11 @@ jobs:
             exit 1
           fi
 
-      - name: Read the fleet dials
-        id: dials
-        uses: $/.github/actions/fleet-dials
+      - name: Read the run settings
+        id: run_settings
+        uses: $/.github/actions/run-settings
         with:
-          endpoint: ${{ inputs.fleet_dials_endpoint }}
+          endpoint: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
           model: ${{ inputs.model }}
           effort: ${{ inputs.effort }}
           shadow_percent: ${{ inputs.shadow_percent }}
@@ -919,7 +929,7 @@ jobs:
         id: record
         uses: $/.github/actions/dispatch-record
         with:
-          endpoint: ${{ inputs.fleet_dials_endpoint }}
+          endpoint: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
           record_id: ${{ inputs.record_id }}
 
       - name: Say whether this repository may be handed the work item
@@ -1021,7 +1031,7 @@ jobs:
           record_pr: ${{ steps.record.outputs.pr }}
           record_head_sha: ${{ steps.record.outputs.head_sha }}
           record_autofix_capability: ${{ steps.record.outputs.autofix_capability }}
-          record_endpoint: ${{ inputs.fleet_dials_endpoint }}
+          record_endpoint: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
           record_id: ${{ inputs.record_id }}
           requester: >-
             ${{ inputs.actor || github.event.comment.user.login ||
@@ -1032,8 +1042,8 @@ jobs:
           write_access_commands: ${{ inputs.write_access_commands }}
           allowed_commands: ${{ inputs.allowed_commands }}
           classifier_model: ${{ inputs.classifier_model }}
-          prompt_rendering: ${{ steps.dials.outputs.prompt_rendering }}
-          prompt_endpoint: ${{ inputs.fleet_dials_endpoint }}
+          prompt_rendering: ${{ steps.run_settings.outputs.prompt_rendering }}
+          prompt_endpoint: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
           bare_comments: ${{ inputs.bare_comments }}
           otel_endpoint: ${{ inputs.otel_endpoint }}
           datadog_key: ${{ secrets.datadog_key }}
@@ -1073,7 +1083,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-help
           repository: Kong/ksai-public
-          ref: v3.104.0
+          ref: v3.104.1
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1241,10 +1251,10 @@ jobs:
           classifier_duration: ${{ needs.gate.outputs.classifier_duration }}
           otel_endpoint: ${{ inputs.otel_endpoint }}
           model: ${{ needs.gate.outputs.model || inputs.model }}
-          model_pinned: ${{ (inputs.dials_override && inputs.model != 'flagship') && 'true' || '' }}
-          effort_pinned: ${{ (inputs.dials_override && inputs.effort != '') && 'true' || '' }}
-          dials_arm: ${{ needs.gate.outputs.dials_arm }}
-          fleet_dials_endpoint: ${{ inputs.fleet_dials_endpoint }}
+          model_pinned: ${{ ((inputs.run_settings_override || inputs.dials_override) && inputs.model != 'flagship') && 'true' || '' }}
+          effort_pinned: ${{ ((inputs.run_settings_override || inputs.dials_override) && inputs.effort != '') && 'true' || '' }}
+          run_settings_arm: ${{ needs.gate.outputs.run_settings_arm }}
+          control_plane_endpoint: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
           record_id: ${{ inputs.record_id }}
           review_triage_mode: ${{ inputs.review_triage_mode }}
           effort: ${{ needs.gate.outputs.effort || inputs.effort }}
@@ -1423,10 +1433,10 @@ jobs:
           classifier_duration: ${{ needs.gate.outputs.classifier_duration }}
           otel_endpoint: ${{ inputs.otel_endpoint }}
           model: ${{ needs.gate.outputs.model || inputs.model }}
-          model_pinned: ${{ (inputs.dials_override && inputs.model != 'flagship') && 'true' || '' }}
-          effort_pinned: ${{ (inputs.dials_override && inputs.effort != '') && 'true' || '' }}
-          dials_arm: ${{ needs.gate.outputs.dials_arm }}
-          fleet_dials_endpoint: ${{ inputs.fleet_dials_endpoint }}
+          model_pinned: ${{ ((inputs.run_settings_override || inputs.dials_override) && inputs.model != 'flagship') && 'true' || '' }}
+          effort_pinned: ${{ ((inputs.run_settings_override || inputs.dials_override) && inputs.effort != '') && 'true' || '' }}
+          run_settings_arm: ${{ needs.gate.outputs.run_settings_arm }}
+          control_plane_endpoint: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
           report_rendering: ${{ needs.gate.outputs.report_rendering }}
           prompt_rendering: ${{ needs.gate.outputs.prompt_rendering }}
           effort: ${{ needs.gate.outputs.effort || inputs.effort }}
@@ -1485,6 +1495,7 @@ jobs:
           classifier_output_tokens: ${{ needs.gate.outputs.classifier_output_tokens }}
           classifier_turns: ${{ needs.gate.outputs.classifier_turns }}
           classifier_duration: ${{ needs.gate.outputs.classifier_duration }}
+          control_plane_endpoint: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
           run_id: ${{ inputs.run_id }}
           run_attempt: >-
             ${{ inputs.run_id == '' && (needs.test.outputs.artifact_attempt || github.run_attempt) || inputs.run_attempt }}
@@ -1492,7 +1503,7 @@ jobs:
   # The paired half of a comparison. It reviews the same diff as the job above on a second arm and
   # publishes nothing, so the corpus fills with matched rows while the pull request sees one review.
   #
-  # Only a dial comparison reaches it now. `shadow_engine: claude` names an engine this repository
+  # Only a setting comparison reaches it now. `shadow_engine: claude` names an engine this repository
   # no longer runs, and it is the declared default, so the condition below skips the job outright
   # rather than starting a runner to mint a token, check this repository out and decide no.
   #
@@ -1528,7 +1539,7 @@ jobs:
         with:
           token: ${{ github.token }}
           repository: Kong/ksai-public
-          ref: v3.104.0
+          ref: v3.104.1
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1616,10 +1627,10 @@ jobs:
           verdict: ${{ needs.gate.outputs.verdict }}
           otel_endpoint: ${{ inputs.otel_endpoint }}
           model: ${{ needs.gate.outputs.model || inputs.model }}
-          model_pinned: ${{ (inputs.dials_override && inputs.model != 'flagship') && 'true' || '' }}
-          effort_pinned: ${{ (inputs.dials_override && inputs.effort != '') && 'true' || '' }}
-          dials_arm: ${{ needs.gate.outputs.dials_arm }}
-          fleet_dials_endpoint: ${{ inputs.fleet_dials_endpoint }}
+          model_pinned: ${{ ((inputs.run_settings_override || inputs.dials_override) && inputs.model != 'flagship') && 'true' || '' }}
+          effort_pinned: ${{ ((inputs.run_settings_override || inputs.dials_override) && inputs.effort != '') && 'true' || '' }}
+          run_settings_arm: ${{ needs.gate.outputs.run_settings_arm }}
+          control_plane_endpoint: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
           record_id: ${{ inputs.record_id }}
           review_triage_mode: ${{ inputs.review_triage_mode }}
           shadow_model: ${{ inputs.shadow_model }}
@@ -1763,7 +1774,7 @@ jobs:
       - name: Refuse a call that blocks every destination and names none
         env:
           ALLOWED: ${{ inputs.harden_runner_allowed_endpoints }}
-          ENDPOINT: ${{ inputs.fleet_dials_endpoint }}
+          ENDPOINT: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
           DESTINATION: ${{ needs.endpoints.outputs.endpoint }}
           GATEWAY: ${{ needs.endpoints.outputs.gateway }}
         run: |
@@ -1931,10 +1942,10 @@ jobs:
           keep_plan_file: ${{ inputs.keep_plan_file }}
           plan_mode: ${{ inputs.plan_mode }}
           model: ${{ needs.gate.outputs.model || inputs.model }}
-          model_pinned: ${{ (inputs.dials_override && inputs.model != 'flagship') && 'true' || '' }}
-          effort_pinned: ${{ (inputs.dials_override && inputs.effort != '') && 'true' || '' }}
-          dials_arm: ${{ needs.gate.outputs.dials_arm }}
-          fleet_dials_endpoint: ${{ inputs.fleet_dials_endpoint }}
+          model_pinned: ${{ ((inputs.run_settings_override || inputs.dials_override) && inputs.model != 'flagship') && 'true' || '' }}
+          effort_pinned: ${{ ((inputs.run_settings_override || inputs.dials_override) && inputs.effort != '') && 'true' || '' }}
+          run_settings_arm: ${{ needs.gate.outputs.run_settings_arm }}
+          control_plane_endpoint: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
           effort: ${{ needs.gate.outputs.effort || inputs.effort }}
           allowed_models: ${{ needs.gate.outputs.allowed_models || inputs.allowed_models }}
           max_effort: ${{ needs.gate.outputs.max_effort || inputs.max_effort }}
@@ -2062,7 +2073,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-recover
           repository: Kong/ksai-public
-          ref: v3.104.0
+          ref: v3.104.1
           sparse-checkout: |
             .github/scripts
           persist-credentials: false

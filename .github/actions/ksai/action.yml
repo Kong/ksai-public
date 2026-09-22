@@ -244,12 +244,16 @@ inputs:
       words carried in `comment_body`.
     required: false
     default: ""
+  control_plane_endpoint:
+    description: >-
+      Base URL of the control plane that serves this repository's run settings and dispatch records,
+      with no trailing path
+    required: false
+    default: ""
   fleet_dials_endpoint:
     description: >-
-      Base URL of the control plane that dispatched this run, or empty. The dispatch record is read from it
-      with `record_id` over the run's own OIDC token, so the record names only what the control plane
-      decided for this run, and this run reports what it cost back to it - a budget can only refuse a
-      run against spend the control plane was told about
+      former name of `control_plane_endpoint`, retained for callers pinned before the run settings
+      migration
     required: false
     default: ""
   record_id:
@@ -365,12 +369,18 @@ inputs:
       `model_pinned`, on the other axis.
     required: false
     default: ""
-  dials_arm:
+  run_settings_arm:
     description: >-
       experiment arm the control plane assigned this run, as `<experiment>:<control|variant>`, or
       `baseline` where no experiment is running. Empty, the default, means no arm produced this
-      run's dials. It steers nothing: it is recorded beside the result so a later reading can group
+      run's run settings. It steers nothing: it is recorded beside the result so a later reading can group
       by the arm that produced it.
+    required: false
+    default: ""
+  dials_arm:
+    description: >-
+      Former name of `run_settings_arm`, retained for callers pinned before the run settings
+      migration. Passing both arm inputs is refused instead of attributing the run ambiguously.
     required: false
     default: ""
   allowed_models:
@@ -512,11 +522,11 @@ inputs:
     default: "auto"
   triage_write:
     description: >-
-      who decides the model and effort a write run spends. `cp` asks the control plane named by
-      `fleet_dials_endpoint`, over this job's own OIDC token, and acts on what it answers. Anything else,
+      who decides the model and effort a write run spends. `cp` asks the control plane over this
+      job's own OIDC token and acts on what it answers. Anything else,
       which is every repository the control plane has not moved, keeps the decision on this runner.
 
-      The control plane serves this dial; a caller does not pin it. Whatever it says, this action still checks
+      The control plane serves this setting; a caller does not pin it. Whatever it says, this action still checks
       the answer against `allowed_models`, `min_effort` and `max_effort` before acting on it, and a control
       plane that is down, slow, stale or answering something this action will not act on costs the run nothing
       but the profile it would have chosen on its own.
@@ -526,17 +536,17 @@ inputs:
     description: >-
       where this run's results are rendered: the review, its run report and notice, the write report, the
       notices and the thread replies. `local` renders them on this runner. `shadow` renders them here too, asks
-      the control plane named by `fleet_dials_endpoint` over this job's own OIDC token, and records whether the
+      the control plane over this job's own OIDC token, and records whether the
       two agreed. `cp` posts what the control plane renders and, when it cannot answer, a minimal comment that
       names why. This runner posts every one of them with its own token whichever it is.
 
-      The control plane serves this dial; a caller does not pin it, and anything else reads as `local`.
+      The control plane serves this setting; a caller does not pin it, and anything else reads as `local`.
     required: false
     default: ""
   github_calls:
     description: >-
-      where this run's GitHub calls are made. `cp` sends them to the control plane named by
-      `fleet_dials_endpoint` over this job's own OIDC token: that service renders and posts the report,
+      where this run's GitHub calls are made. `cp` sends them to the control plane over this job's own
+      OIDC token: that service renders and posts the report,
       rewrites it or splices it into the pull request's own description, and reads the check runs,
       commit statuses and failing job logs this run is given as evidence. This runner then needs no
       token of its own for any of it. Anything else leaves every call on this runner.
@@ -547,13 +557,13 @@ inputs:
   prompt_rendering:
     description: >-
       where this run's prompts come from. `local` sends the model the text this runner builds. `shadow`
-      runs on that text, and also renders the prompt through the control plane named by
-      `fleet_dials_endpoint` over this job's own OIDC token and fetches the release it came from. `cp`
+      runs on that text, and also renders the prompt through the control plane over this job's own
+      OIDC token and fetches the release it came from. `cp`
       sends the model only the prompt the control plane rendered and signed for this run, verified by the
       governance plugin this action loads into opencode before any request leaves, and fails rather than
       falling back.
 
-      The control plane serves this dial; a caller does not pin it, and anything else reads as `local`.
+      The control plane serves this setting; a caller does not pin it, and anything else reads as `local`.
     required: false
     default: ""
   review_triage_mode:
@@ -823,7 +833,7 @@ inputs:
   continuation_workflow:
     description: >-
       the caller's own workflow filename, e.g. `ksai.yml`. Set it to turn on the continuation chain: one run
-      does one plan step. Where `fleet_dials_endpoint` names a control plane the repository is enrolled with,
+      does one plan step. Where the control-plane entrypoint enrolls the repository,
       that control plane decides whether the chain goes on and starts the next run itself. Otherwise this is
       what the run dispatches to start the next: the
       workflow must declare `workflow_dispatch` with the continuation inputs below and the job needs
@@ -997,8 +1007,21 @@ runs:
         SANDBOX_ALLOW_WRITE: ${{ inputs.sandbox_allow_write }}
         SANDBOX_DENY_WRITE: ${{ inputs.sandbox_deny_write }}
         SANDBOX_DENY_ENV: ${{ inputs.sandbox_deny_env }}
+        CONTROL_PLANE_ENDPOINT: ${{ inputs.control_plane_endpoint }}
+        FORMER_CONTROL_PLANE_ENDPOINT: ${{ inputs.fleet_dials_endpoint }}
+        RUN_SETTINGS_ARM: ${{ inputs.run_settings_arm }}
+        FORMER_RUN_SETTINGS_ARM: ${{ inputs.dials_arm }}
       run: |
         set -euo pipefail
+        if [[ -n "${CONTROL_PLANE_ENDPOINT:-}" && -n "${FORMER_CONTROL_PLANE_ENDPOINT:-}" ]] &&
+          [[ "${CONTROL_PLANE_ENDPOINT}" != "${FORMER_CONTROL_PLANE_ENDPOINT}" ]]; then
+          echo "::error::control_plane_endpoint and its former name fleet_dials_endpoint disagree; remove fleet_dials_endpoint"
+          exit 1
+        fi
+        if [[ -n "${RUN_SETTINGS_ARM:-}" && -n "${FORMER_RUN_SETTINGS_ARM:-}" ]]; then
+          echo "::error::run_settings_arm and its former name dials_arm are both set; remove dials_arm"
+          exit 1
+        fi
         case "${FLOW}" in
           review|implement|test|test-publish|run) ;;
           *) echo "::error::flow must be one of review, implement, test, test-publish, run, got: ${FLOW}"; exit 1 ;;
@@ -1020,7 +1043,7 @@ runs:
         REPORT: ${{ inputs.report_rendering }}
         PROMPT: ${{ inputs.prompt_rendering }}
         WRITING: ${{ inputs.github_calls }}
-        ENDPOINT: ${{ inputs.fleet_dials_endpoint }}
+        ENDPOINT: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
       with:
         script: |
           core.exportVariable('KSAI_REPORT_RENDERING', process.env.REPORT);
@@ -1350,7 +1373,7 @@ runs:
         inputs.flow != 'test' && inputs.flow != 'test-publish' && inputs.flow != 'run' }}
       uses: ./_ksai/.github/actions/dispatch-record
       with:
-        endpoint: ${{ inputs.fleet_dials_endpoint }}
+        endpoint: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
         record_id: ${{ inputs.record_id }}
 
     - name: Resolve the run context
@@ -1366,7 +1389,7 @@ runs:
         RECORD_LABEL: ${{ steps.dispatch_record.outputs.label }}
         RECORD_PR: ${{ steps.dispatch_record.outputs.pr }}
         RECORD_HEAD_SHA: ${{ steps.dispatch_record.outputs.head_sha }}
-        RECORD_ENDPOINT: ${{ inputs.fleet_dials_endpoint }}
+        RECORD_ENDPOINT: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
         RECORD_ID: ${{ inputs.record_id }}
         RECORD_AUDIENCE: ksai-cp
         RECORD_ACTION_PATH: ${{ runner.temp }}/ksai-scripts/dispatch-record
@@ -1762,7 +1785,7 @@ runs:
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
         PR_NUMBER: ${{ steps.context.outputs.issue_number }}
         REVIEW_TRIAGE_MODE: ${{ inputs.review_triage_mode }}
-        FLEET_DIALS_ENDPOINT: ${{ inputs.fleet_dials_endpoint }}
+        CONTROL_PLANE_ENDPOINT: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
         RECORD_ID: ${{ inputs.record_id }}
         RUN_HEAD_SHA: ${{ github.sha }}
         TRIAGE_MODE: ${{ inputs.triage }}
@@ -3281,7 +3304,7 @@ runs:
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         WORKFLOW: ${{ inputs.continuation_workflow }}
-        CONTINUE_ENDPOINT: ${{ inputs.fleet_dials_endpoint }}
+        CONTINUE_ENDPOINT: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
         PHASE: ${{ steps.phase.outputs.phase }}
         ISSUE_NUM: ${{ steps.subject.outputs.number }}
         KSAI_ASK: ${{ inputs.ask }}
@@ -3389,12 +3412,13 @@ runs:
       id: cp_write_triage
       if: >-
         ${{ inputs.flow == 'implement' && inputs.triage_write == 'cp' &&
-        inputs.fleet_dials_endpoint != '' && steps.prepare_write_triage.outcome == 'success' }}
+        (inputs.control_plane_endpoint != '' || inputs.fleet_dials_endpoint != '') &&
+        steps.prepare_write_triage.outcome == 'success' }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         TRIAGE: ${{ inputs.triage }}
         TRIAGE_WRITE: ${{ inputs.triage_write }}
-        ENDPOINT: ${{ inputs.fleet_dials_endpoint }}
+        ENDPOINT: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
         RECORD_ID: ${{ inputs.record_id }}
         RUN_HEAD_SHA: ${{ github.sha }}
         HEAD_SHA: ${{ steps.phase.outputs.pr_number != '' && steps.dispatch_record.outputs.head_sha || github.sha }}
@@ -3685,7 +3709,7 @@ runs:
         EFFORT: ${{ steps.write_arm.outputs.effort || steps.select.outputs.effort }}
         MODEL_SOURCE: ${{ steps.write_arm.outputs.model_source || steps.select.outputs.model_source }}
         EFFORT_SOURCE: ${{ steps.write_arm.outputs.effort_source || steps.select.outputs.effort_source }}
-        DIALS_ARM: ${{ inputs.dials_arm }}
+        RUN_SETTINGS_ARM: ${{ (inputs.run_settings_arm || inputs.dials_arm) }}
         SELECTION: write context collected; final selection pending
         ROUTE_COMMAND: ${{ steps.select.outputs.command }}
         ROUTE_SURFACE: ${{ steps.select.outputs.route_surface }}
@@ -3938,7 +3962,7 @@ runs:
         EFFORT: ${{ steps.write_arm.outputs.effort }}
         MODEL_SOURCE: ${{ steps.write_arm.outputs.model_source }}
         EFFORT_SOURCE: ${{ steps.write_arm.outputs.effort_source }}
-        DIALS_ARM: ${{ inputs.dials_arm }}
+        RUN_SETTINGS_ARM: ${{ (inputs.run_settings_arm || inputs.dials_arm) }}
         SELECTION: ${{ steps.write_arm.outputs.selection }}
         ROUTE_COMMAND: ${{ steps.select.outputs.command }}
         ROUTE_SURFACE: ${{ steps.select.outputs.route_surface }}
@@ -6164,7 +6188,7 @@ runs:
         steps.record_do.outputs.status == 'blocked') }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
-        CONTINUE_ENDPOINT: ${{ inputs.fleet_dials_endpoint }}
+        CONTINUE_ENDPOINT: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
         PHASE: ${{ steps.size.outputs.phase }}
         ISSUE_NUM: ${{ steps.subject.outputs.number }}
         JIRA_KEY: ${{ steps.subject.outputs.jira_key || steps.context.outputs.jira_key }}
@@ -6344,7 +6368,7 @@ runs:
         EFFORT: ${{ steps.write_arm.outputs.effort || steps.select.outputs.effort }}
         MODEL_SOURCE: ${{ steps.write_arm.outputs.model_source || steps.select.outputs.model_source }}
         EFFORT_SOURCE: ${{ steps.write_arm.outputs.effort_source || steps.select.outputs.effort_source }}
-        DIALS_ARM: ${{ inputs.dials_arm }}
+        RUN_SETTINGS_ARM: ${{ (inputs.run_settings_arm || inputs.dials_arm) }}
         SELECTION: >-
           ${{ steps.write_arm.outputs.selection || 'write selection did not complete' }}
         ROUTE_COMMAND: ${{ steps.select.outputs.command }}
@@ -6655,7 +6679,7 @@ runs:
         RUN_EFFORT: ${{ steps.build_run.outputs.effort }}
         ENGINE: ${{ steps.engine.outputs.name }}
         SELECTED_BY: ${{ steps.select_arm.outputs.selected_by }}
-        DIALS_ARM: ${{ inputs.dials_arm }}
+        RUN_SETTINGS_ARM: ${{ (inputs.run_settings_arm || inputs.dials_arm) }}
         SHADOW: ${{ inputs.publish == 'false' && 'true' || 'false' }}
         TRIAGE_MODE: ${{ inputs.triage }}
         TRIAGE_TIER: ${{ steps.triage.outputs.tier }}
@@ -6807,7 +6831,7 @@ runs:
         EFFORT: ${{ steps.select_arm.outputs.effort }}
         ENGINE: ${{ steps.engine.outputs.name }}
         SELECTED_BY: ${{ steps.select_arm.outputs.selected_by }}
-        DIALS_ARM: ${{ inputs.dials_arm }}
+        RUN_SETTINGS_ARM: ${{ (inputs.run_settings_arm || inputs.dials_arm) }}
         REQUESTER: ${{ steps.context.outputs.commenter }}
         TRIAGE_MODE: ${{ inputs.triage }}
         TRIAGE_FILES: ${{ steps.triage.outputs.files }}
@@ -7015,13 +7039,13 @@ runs:
 
     - name: Report what this run cost
       if: >-
-        ${{ always() && inputs.fleet_dials_endpoint != '' &&
+        ${{ always() && (inputs.control_plane_endpoint != '' || inputs.fleet_dials_endpoint != '') &&
         (steps.write_report.outputs.spend_usd != '' || steps.write_progress.outputs.spend_usd != '' ||
         steps.write_comment.outputs.spend_usd != '' || steps.eval_record.outputs.spend_usd != '' ||
         steps.test_artifact.outputs.spend_usd != '') }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
-        SPEND_ENDPOINT: ${{ inputs.fleet_dials_endpoint }}
+        SPEND_ENDPOINT: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
         SPEND_ATTEMPT: ${{ github.run_id }}:${{ github.run_attempt }}:${{ github.job }}:${{ strategy.job-index || 0 }}
         SPEND_COST: >-
           ${{ steps.write_report.outputs.spend_usd || steps.write_progress.outputs.spend_usd ||
