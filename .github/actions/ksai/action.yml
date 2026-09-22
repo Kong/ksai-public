@@ -533,6 +533,17 @@ inputs:
       The control plane serves this dial; a caller does not pin it, and anything else reads as `local`.
     required: false
     default: ""
+  github_calls:
+    description: >-
+      where this run's GitHub calls are made. `cp` sends them to the control plane named by
+      `fleet_dials_endpoint` over this job's own OIDC token: that service renders and posts the report,
+      rewrites it or splices it into the pull request's own description, and reads the check runs,
+      commit statuses and failing job logs this run is given as evidence. This runner then needs no
+      token of its own for any of it. Anything else leaves every call on this runner.
+
+      The release line serves this, not a dial and not a caller.
+    required: false
+    default: ""
   prompt_rendering:
     description: >-
       where this run's prompts come from. `local` sends the model the text this runner builds. `shadow`
@@ -1003,16 +1014,18 @@ runs:
 
     - name: Say where this run's results and prompts are rendered
       id: rendering
-      if: ${{ inputs.report_rendering != '' || inputs.prompt_rendering != '' }}
+      if: ${{ inputs.report_rendering != '' || inputs.prompt_rendering != '' || inputs.github_calls != '' }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         REPORT: ${{ inputs.report_rendering }}
         PROMPT: ${{ inputs.prompt_rendering }}
+        WRITING: ${{ inputs.github_calls }}
         ENDPOINT: ${{ inputs.fleet_dials_endpoint }}
       with:
         script: |
           core.exportVariable('KSAI_REPORT_RENDERING', process.env.REPORT);
           core.exportVariable('KSAI_PROMPT_RENDERING', process.env.PROMPT);
+          core.exportVariable('KSAI_GITHUB_CALLS', process.env.WRITING);
           core.exportVariable('KSAI_CP_ENDPOINT', process.env.ENDPOINT);
 
     - name: Validate pull request test inputs

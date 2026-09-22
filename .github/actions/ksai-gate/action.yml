@@ -178,6 +178,13 @@ inputs:
     description: base URL of the control plane the classifier's prompt is rendered by, or empty
     required: false
     default: ""
+  github_calls:
+    description: >-
+      where this gate's GitHub writes are made. `cp` posts what it says through the control plane
+      named by `prompt_endpoint` over this job's own OIDC token, so the gate needs no write scope of
+      its own. Anything else leaves the write on this runner.
+    required: false
+    default: ""
   bare_comments:
     description: whether a comment naming no phrase on this flow's own pull request steers the run
     required: false
@@ -400,6 +407,8 @@ runs:
         REPO: ${{ github.repository }}
         TRIGGER: ${{ inputs.trigger_phrase }}
         SCRIPTS: ${{ github.workspace }}/_ksai/.github/scripts
+        KSAI_CP_ENDPOINT: ${{ inputs.prompt_endpoint }}
+        KSAI_GITHUB_CALLS: ${{ inputs.github_calls }}
       with:
         github-token: ${{ inputs.post_github_token }}
         retries: 3
@@ -410,9 +419,9 @@ runs:
             core.warning(`no issue or pull request number to say it on, got: ${process.env.ISSUE_NUMBER}`);
             return;
           }
-          await github.rest.issues.createComment({
-            ...context.repo,
-            issue_number,
+          const { writerFor } = require(`${process.env.SCRIPTS}/lib/cp-effects.cjs`);
+          await writerFor({ github, ...context.repo }).comment({
+            number: issue_number,
             body: renderNotInstalled({ repo: process.env.REPO, triggerPhrase: process.env.TRIGGER }),
           });
 
@@ -593,13 +602,16 @@ runs:
       env:
         ISSUE_NUMBER: ${{ steps.render-refusal.outputs.issue_number }}
         BODY: ${{ steps.render-refusal.outputs.body }}
+        SCRIPTS: ${{ github.workspace }}/_ksai/.github/scripts
+        KSAI_CP_ENDPOINT: ${{ inputs.prompt_endpoint }}
+        KSAI_GITHUB_CALLS: ${{ inputs.github_calls }}
       with:
         github-token: ${{ inputs.post_github_token }}
         retries: 3
         script: |
-          await github.rest.issues.createComment({
-            ...context.repo,
-            issue_number: Number(process.env.ISSUE_NUMBER),
+          const { writerFor } = require(`${process.env.SCRIPTS}/lib/cp-effects.cjs`);
+          await writerFor({ github, ...context.repo }).comment({
+            number: Number(process.env.ISSUE_NUMBER),
             body: process.env.BODY,
           });
 
@@ -630,6 +642,8 @@ runs:
         ANTHROPIC_SERVICE_ACCOUNT_ID: ${{ inputs.service_account_id }}
         ANTHROPIC_WORKSPACE_ID: ${{ inputs.workspace_id }}
         SCRIPTS: ${{ github.workspace }}/_ksai/.github/scripts
+        KSAI_CP_ENDPOINT: ${{ inputs.prompt_endpoint }}
+        KSAI_GITHUB_CALLS: ${{ inputs.github_calls }}
       run: timeout 30 node "${SCRIPTS}/ksai/federation-preflight.mjs"
 
     - name: Say this repository is not in its team's federation
@@ -643,6 +657,8 @@ runs:
         REPO: ${{ github.repository }}
         TRIGGER: ${{ inputs.trigger_phrase }}
         SCRIPTS: ${{ github.workspace }}/_ksai/.github/scripts
+        KSAI_CP_ENDPOINT: ${{ inputs.prompt_endpoint }}
+        KSAI_GITHUB_CALLS: ${{ inputs.github_calls }}
       with:
         github-token: ${{ inputs.post_github_token }}
         retries: 3
@@ -653,8 +669,8 @@ runs:
             core.warning(`no issue or pull request number to say it on, got: ${process.env.ISSUE_NUMBER}`);
             return;
           }
-          await github.rest.issues.createComment({
-            ...context.repo,
-            issue_number,
+          const { writerFor } = require(`${process.env.SCRIPTS}/lib/cp-effects.cjs`);
+          await writerFor({ github, ...context.repo }).comment({
+            number: issue_number,
             body: renderNoFederation({ repo: process.env.REPO, triggerPhrase: process.env.TRIGGER }),
           });

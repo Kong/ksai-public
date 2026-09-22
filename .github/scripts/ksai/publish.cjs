@@ -1,3 +1,4 @@
+const { writerFor } = require('../lib/cp-effects.cjs');
 const fs = require('node:fs');
 const { react } = require('../lib/react.cjs');
 const { updateOrCreate } = require('../lib/comment.cjs');
@@ -70,7 +71,7 @@ async function say({ github, owner, repo, target, notice, request, env, warnings
   try {
     const stopped = { kind: 'chain_stopped', ...request };
     const body = await renderedNotice({ notice: stopped, env, local, what: 'why this chain stopped', fetch });
-    await github.rest.issues.createComment({ owner, repo, issue_number: Number(target), body });
+    await writerFor({ github, owner, repo }).comment({ number: Number(target), body });
   } catch (error) {
     warnings.push(`the chain stopped and this could not say so: ${error.message}`);
   }
@@ -263,7 +264,7 @@ async function publishNotice({ github, owner, repo, env, fetch = globalThis.fetc
     what: 'why this run stopped before the model',
     fetch,
   });
-  await github.rest.issues.createComment({ owner, repo, issue_number: target, body });
+  await writerFor({ github, owner, repo }).comment({ number: target, body });
   outputs.posted = 'true';
   return { outputs, notices: [`published the notice for a run that stopped before the model, on #${target}`] };
 }
@@ -293,7 +294,7 @@ async function publishTesterNotice({ github, owner, repo, env, fetch = globalThi
     fetch,
   });
   try {
-    await github.rest.issues.createComment({ owner, repo, issue_number: target, body });
+    await writerFor({ github, owner, repo }).comment({ number: target, body });
   } catch (error) {
     /*
      * The tester's own job holds read-only GitHub access on purpose, so the token it comments with
@@ -356,8 +357,9 @@ async function releaseCheckpoint({ github, core, owner, repo, env, fetch = globa
     what: 'this release',
     fetch,
   });
-  await github.rest.issues.createComment({ owner, repo, issue_number: pull_number, body });
-  await github.rest.pulls.update({ owner, repo, pull_number, body: spent.body });
+  const writer = writerFor({ github, owner, repo });
+  await writer.comment({ number: pull_number, body });
+  await writer.setDescription({ number: pull_number, body: spent.body });
   core?.info?.(`released the phase behind \`${env.STEP_TITLE}\`, ${left} ${plural(left, 'box', 'boxes')} left`);
   return { outputs, notices: [], failure: null };
 }
@@ -380,7 +382,7 @@ async function publishAwaiting({ github, owner, repo, env, fetch = globalThis.fe
     what: 'why this plan is waiting',
     fetch,
   });
-  await github.rest.issues.createComment({ owner, repo, issue_number: Number(env.PR_NUMBER), body });
+  await writerFor({ github, owner, repo }).comment({ number: Number(env.PR_NUMBER), body });
   return { notices: [`the plan is waiting on an approver (${env.REASON})`] };
 }
 
@@ -403,7 +405,7 @@ async function publishRefusedRelease({ github, owner, repo, env, fetch = globalT
     what: 'why this plan was not released',
     fetch,
   });
-  await github.rest.issues.createComment({ owner, repo, issue_number: Number(env.PR_NUMBER), body });
+  await writerFor({ github, owner, repo }).comment({ number: Number(env.PR_NUMBER), body });
   return { notices: [`the plan was not released: ${said}`] };
 }
 
@@ -428,7 +430,7 @@ async function publishWaiting({ github, owner, repo, env, fetch = globalThis.fet
     what: 'why this phase is waiting',
     fetch,
   });
-  await github.rest.issues.createComment({ owner, repo, issue_number: Number(env.PR_NUMBER), body });
+  await writerFor({ github, owner, repo }).comment({ number: Number(env.PR_NUMBER), body });
   return { notices: [`the phase is waiting on an approver (${env.REASON})`] };
 }
 
@@ -602,7 +604,7 @@ async function publishRunFailed({ github, owner, repo, env, fetch = globalThis.f
     what: 'why this run did not complete',
     fetch,
   });
-  await github.rest.issues.createComment({ owner, repo, issue_number: Number(target), body });
+  await writerFor({ github, owner, repo }).comment({ number: Number(target), body });
   return { notices: [`reported the run as incomplete (watchdog fired: ${fired})`] };
 }
 

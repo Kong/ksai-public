@@ -1,4 +1,5 @@
 const { react } = require('../lib/react.cjs');
+const { writerFor } = require('../lib/cp-effects.cjs');
 const { updateOrCreate } = require('../lib/comment.cjs');
 const { BLANK_CELL, historyLines, ksaiHeading, reportTable, runHeading, spendSaid } = require('../lib/run-progress.cjs');
 const { runStateMarker } = require('../lib/run-record.cjs');
@@ -631,10 +632,8 @@ async function publishReviewNotice({ github, owner, repo, env, fetch = globalThi
   const kind = String(value?.kind ?? '');
   if (kind === '') return nothing;
 
-  await github.rest.issues.createComment({
-    owner,
-    repo,
-    issue_number: Number(env.PR_NUMBER),
+  await writerFor({ github, owner, repo }).comment({
+    number: Number(env.PR_NUMBER),
     body: String(value.body ?? ''),
   });
   return { notices: [`published the \`${kind}\` notice`] };

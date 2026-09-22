@@ -70,6 +70,7 @@ const LEGACY_DO_MARKER_PREFIX = '<!-- muthur-do:';
  * The pull request number needs no shape here at all: `resolvePullTarget` checks it before any call, which is why
  * this module stopped importing `NUMBER_SHAPE` rather than keeping it for a second reader.
  */
+const { writerFor } = require('../lib/cp-effects.cjs');
 const { markerValue, POSITIVE_ID_SHAPE } = require('./plan.cjs');
 const { counted } = require('../lib/text.cjs');
 const { neutralCut, neutralize } = require('../lib/prompt-text.cjs');
@@ -485,7 +486,7 @@ async function createPushedReceipt({
     core?.warning?.(`Could not read the head signature (${error?.message ?? error}), so the receipt is posted anyway.`);
   }
   try {
-    await github.rest.issues.createComment({ owner, repo, issue_number: number, body });
+    await writerFor({ github, owner, repo }).comment({ number, body });
     return { recorded: true };
   } catch (error) {
     core?.warning?.(

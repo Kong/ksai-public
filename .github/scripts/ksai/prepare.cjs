@@ -1,3 +1,4 @@
+const { writerFor } = require('../lib/cp-effects.cjs');
 const fs = require('node:fs');
 const { EXTRA_ARGS_REFUSAL, toolPolicy, validateExtraArgs } = require('../lib/claude-args.cjs');
 const { ceilingMinutes } = require('../lib/watchdog.cjs');
@@ -1208,7 +1209,7 @@ async function releaseHold({ github, owner, repo, prNumber }) {
   const next = withoutHold(pull?.body ?? '');
   if (!next.changed) return { released: false };
   try {
-    await github.rest.pulls.update({ owner, repo, pull_number: Number(prNumber), body: next.body });
+    await writerFor({ github, owner, repo }).setDescription({ number: Number(prNumber), body: next.body });
   } catch (error) {
     return { error: `the hold could not be released, so no step ran (${error.message})` };
   }

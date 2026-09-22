@@ -1,11 +1,10 @@
 'use strict';
 
 const { isDeepStrictEqual } = require('node:util');
-const { renderingModeOf, mask, minter, reachControlPlane, unanswered } = require('./control-plane.cjs');
+const { DEFAULT_TIMEOUT, renderingModeOf, mask, answered, reachedFor } = require('./control-plane.cjs');
 const { annotation } = require('./text.cjs');
 
 const API_VERSION = 'report/v1';
-const DEFAULT_TIMEOUT = 30_000;
 
 const RUN_REPORT_KEYS = Object.freeze([
   'PR_NUMBER', 'RUN_ID', 'COMMAND', 'TRIGGER', 'CANCELLED', 'SELECT_ERROR', 'SELECT_ERROR_NOTICE', 'BUILD_ERROR',
@@ -74,28 +73,19 @@ async function settled(local) {
 
 
 async function askControlPlane({ kind, request, expect = null, accept, env, fetch, timeout, secret }) {
-  const endpoint = String(env.KSAI_CP_ENDPOINT ?? '').trim();
-  if (endpoint === '') return { why: 'no control plane serves this repository' };
-  if (!(timeout > 0)) return { why: 'the control plane did not answer in time' };
-  const signal = AbortSignal.timeout(timeout);
-  const reached = await reachControlPlane({ endpoint, env, mint: minter({ env, fetch, signal }), secret });
-  if (reached.failure) return { why: reached.failure };
-  try {
-    const response = await fetch(`${reached.base}/v1/report/render`, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${reached.token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ api_version: API_VERSION, [kind]: request, ...(expect === null ? {} : { expect }) }),
-      signal,
-    });
-    if (!response.ok) return { why: `the control plane answered ${response.status}` };
-    const answer = await response.json();
-    if (answer === null || typeof answer !== 'object' || Array.isArray(answer) || !accept(answer)) {
-      return { why: 'the control plane answered with nothing this run could post' };
-    }
-    return { answer };
-  } catch (error) {
-    return { why: unanswered(error) };
+  const reached = await reachedFor({ env, fetch, timeout, secret });
+  if (reached.why) return reached;
+  const said = await answered(fetch, `${reached.base}/v1/report/render`, {
+    token: reached.token,
+    body: JSON.stringify({ api_version: API_VERSION, [kind]: request, ...(expect === null ? {} : { expect }) }),
+    signal: reached.signal,
+  });
+  if (said.why) return { why: said.why };
+  const { answer } = said;
+  if (answer === null || typeof answer !== 'object' || Array.isArray(answer) || !accept(answer)) {
+    return { why: 'the control plane answered with nothing this run could post' };
   }
+  return { answer };
 }
 
 const plain = (value) => JSON.parse(JSON.stringify(value ?? null));

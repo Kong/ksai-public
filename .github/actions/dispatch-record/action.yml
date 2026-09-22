@@ -13,14 +13,17 @@ description: >-
   before the control plane has tied the record gets a 503 and asks again like any other failure that
   can pass.
 
-  A dispatch naming no record skips the read. One naming a record is read or the run fails, and nothing
-  falls back to the dispatch inputs. The control plane sends a dispatch whose answer was lost again
-  under the same record, so a run that carried on without reading it could be the second run of that
-  dispatch doing the work twice, or a run answering a different question than the one decided. A
-  failure that can pass - the token mint, the network, a body that does not parse, a 408, a 429 or a
-  5xx - is tried again first, and a run that still cannot read its record fails after at most about two
-  and a half minutes, however long the control plane asks it to wait. A refusal that would answer the same again,
-  and a record named with no endpoint to read it from, fail the run at once.
+  A caller naming no control plane skips the read. Every other run asks for the record its own token
+  names, and reads it or fails, and nothing falls back to the dispatch inputs. The control plane sends
+  a dispatch whose answer was lost again under the same record, so a run that carried on without
+  reading it could be the second run of that dispatch doing the work twice, or a run answering a
+  different question than the one decided. A control plane holding no record for this run says so on
+  its 404, and the run reads nothing rather than failing; a 404 it did not mark fails the run, because
+  a failover or an older route answers the same way and neither means the record is gone. A failure
+  that can pass - the token mint, the network, a body that does not parse, a 408, a 429 or a 5xx - is
+  tried again first, and a run that still cannot read its record fails after at most about two and a
+  half minutes, however long the control plane asks it to wait. A refusal that would answer the same
+  again fails the run at once.
 
   What comes back is read, never relayed. Every field is matched against the shape this workflow will
   pass on, and one it will not refuses the whole record: a record is one decision, so dropping a model
@@ -42,14 +45,16 @@ description: >-
 inputs:
   endpoint:
     description: >-
-      Base URL of the control plane, with no trailing path. Empty, which is the default, is right only
-      where no dispatch names a record: a record named with no endpoint fails the run.
+      Base URL of the control plane, with no trailing path. Empty, which is the default, reads nothing
+      at all, so it is right only for a caller no control plane serves.
     required: false
     default: ""
   record_id:
     description: >-
-      The record the dispatch named. Empty, which is every dispatch from a control plane that writes
-      none, skips the read.
+      The record a caller named, which only the standalone core does. A run is handed the record its
+      own dispatch was tied to, so the id itself is read by nothing - but naming one says this run
+      carries its work in dispatch inputs too, and may carry on where a 404 the control plane did not
+      mark leaves it with no record.
     required: false
     default: ""
   audience:
@@ -61,8 +66,33 @@ inputs:
 
 outputs:
   read:
-    description: "`true` where the record was read, `false` where the dispatch named none"
+    description: "`true` where a record was read, `false` where no control plane wrote one for this run"
     value: ${{ steps.record.outputs.read }}
+  record_id:
+    description: >-
+      the record the control plane served, as it named itself, or empty where none was read. The run
+      never chooses it; it is what the endpoints a run goes on to call about the same record take.
+    value: ${{ steps.record.outputs.record_id }}
+  issue_number:
+    description: the issue a plan continuation is for, or empty
+    value: ${{ steps.record.outputs.issue_number }}
+  actor:
+    description: >-
+      the login the control plane says asked, for the run to authorize against CODEOWNERS itself. It
+      names who asked and grants nothing: the run can only refuse on it, never admit on it
+    value: ${{ steps.record.outputs.actor }}
+  work_ref:
+    description: the work to do where there is no GitHub issue, as `jira/<KEY>`, or empty
+    value: ${{ steps.record.outputs.work_ref }}
+  attempt:
+    description: runs already spent by this continuation chain, or empty
+    value: ${{ steps.record.outputs.attempt }}
+  stall:
+    description: consecutive runs of this chain that completed no step, or empty
+    value: ${{ steps.record.outputs.stall }}
+  prev_remaining:
+    description: unchecked boxes the predecessor saw, with empty distinct from zero
+    value: ${{ steps.record.outputs.prev_remaining }}
   command:
     description: >-
       the command the control plane decided this run is for, or empty where it decided none - which is
@@ -166,8 +196,8 @@ runs:
       env:
         RECORD_ACTION_PATH: ${{ github.action_path }}
         RECORD_ENDPOINT: ${{ inputs.endpoint }}
-        RECORD_ID: ${{ inputs.record_id }}
         RECORD_AUDIENCE: ${{ inputs.audience }}
+        RECORD_NAMED: ${{ inputs.record_id }}
       with:
         script: |
           const { escapeHtml, isPolicyRefusal, readRecord, reportPolicyRefusal } =
@@ -176,8 +206,8 @@ runs:
           try {
             answer = await readRecord({
               endpoint: process.env.RECORD_ENDPOINT,
-              recordId: process.env.RECORD_ID,
               audience: process.env.RECORD_AUDIENCE,
+              named: process.env.RECORD_NAMED !== '',
               mint: (audience) => core.getIDToken(audience),
               secret: (token) => core.setSecret(token),
               note: (why, wait) => core.info(`ksai could not read the dispatch record yet, trying again in ${Math.round(wait / 1000)}s: ${why}`),
@@ -187,8 +217,7 @@ runs:
               try {
                 await reportPolicyRefusal({
                   endpoint: process.env.RECORD_ENDPOINT,
-                  recordId: process.env.RECORD_ID,
-                  audience: process.env.RECORD_AUDIENCE,
+                      audience: process.env.RECORD_AUDIENCE,
                   mint: (audience) => core.getIDToken(audience),
                   secret: (token) => core.setSecret(token),
                 });
@@ -203,7 +232,9 @@ runs:
             core.notice(`ksai read the dispatch record${answer.command ? `: command ${answer.command}` : ''}`);
           }
           core.setOutput('read', answer.read ? 'true' : 'false');
-          for (const [name, held] of [['command', 'command'], ['autofix_capability', 'autofixCapability'],
+          for (const [name, held] of [['record_id', 'recordId'], ['issue_number', 'issueNumber'],
+            ['actor', 'actor'], ['work_ref', 'workRef'], ['attempt', 'attempt'], ['stall', 'stall'],
+            ['prev_remaining', 'prevRemaining'], ['command', 'command'], ['autofix_capability', 'autofixCapability'],
             ['comment_id', 'commentId'], ['comment_kind', 'commentKind'], ['label', 'label'], ['pr', 'pr'],
             ['head_sha', 'head_sha'], ['scope', 'scope'], ['trigger', 'trigger'],
             ['trigger_run', 'triggerRun'], ['trigger_attempt', 'triggerAttempt'],

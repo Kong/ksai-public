@@ -1,5 +1,8 @@
 'use strict';
 
+const cpReport = require('./cp-report.cjs');
+const { usingControlPlane } = require('../lib/control-plane.cjs');
+
 /*
  * What CI says about one commit, bounded, and never a reason to fail a run.
  *
@@ -300,6 +303,64 @@ function head(value, limit) {
   return chars.length <= limit ? chars.join('') : chars.slice(0, limit).join('');
 }
 
+function surfacesFor({ github, owner, repo, env, fetch, maxPages = MAX_CHECK_PAGES }) {
+  if (usingControlPlane(env)) return controlPlaneSurfaces({ env, fetch, maxPages });
+  if (!github?.rest?.checks || !github?.rest?.repos) return null;
+  return {
+    checkRuns: ({ sha }) => readCheckRuns({ github, owner, repo, sha, maxPages }),
+    statuses: ({ sha }) => readStatuses({ github, owner, repo, sha }),
+    async jobLog({ jobId }) {
+      try {
+        const { data } = await github.rest.actions.downloadJobLogsForWorkflowRun({ owner, repo, job_id: jobId });
+        return { log: logText(data), unavailable: null, refused: false };
+      } catch (error) {
+        const status = error?.status ?? 0;
+        return { log: '', unavailable: text(error?.message) || `HTTP ${status}`, refused: status === 401 || status === 403 };
+      }
+    },
+  };
+}
+
+function controlPlaneSurfaces({ env, fetch, maxPages }) {
+  const held = new Map();
+  const evidence = ({ sha }) => {
+    if (!held.has(sha)) held.set(sha, cpReport.readEvidence({ sha, pages: maxPages, env, fetch }));
+    return held.get(sha);
+  };
+  return {
+    async checkRuns(asked) {
+      const got = await evidence(asked);
+      if (got.why) return { runs: [], total: null, listTruncated: true, unreadable: got.why };
+      const checks = got.answer?.checks ?? {};
+      return {
+        runs: Array.isArray(checks.runs) ? checks.runs : [],
+        total: Number.isInteger(checks.total) ? checks.total : null,
+        listTruncated: checks.list_truncated === true,
+        unreadable: text(checks.unreadable) || null,
+      };
+    },
+    async statuses(asked) {
+      const got = await evidence(asked);
+      if (got.why) return { statuses: [], truncated: false, unreadable: got.why };
+      const statuses = got.answer?.statuses ?? {};
+      return {
+        statuses: Array.isArray(statuses.statuses) ? statuses.statuses : [],
+        truncated: statuses.truncated === true,
+        unreadable: text(statuses.unreadable) || null,
+      };
+    },
+    async jobLog({ jobId }) {
+      const got = await cpReport.readJobLog({ jobId, env, fetch });
+      if (got.why) return { log: '', unavailable: got.why, refused: false };
+      return {
+        log: text(got.answer?.log),
+        unavailable: text(got.answer?.unavailable) || null,
+        refused: got.answer?.refused === true,
+      };
+    },
+  };
+}
+
 /**
  * The check runs on one commit.
  *
@@ -425,6 +486,8 @@ async function readFailingChecks({
   repo = null,
   sha = null,
   maxPages = MAX_CHECK_PAGES,
+  env = process.env,
+  fetch = globalThis.fetch,
 } = {}) {
   const commit = text(sha);
   const empty = {
@@ -451,7 +514,8 @@ async function readFailingChecks({
    * step is a failed run on the evidence path, the one path that must not be able to fail a run. So it comes
    * back as unreadable, loudly, with the reason naming what is missing rather than an API message.
    */
-  if (!github?.rest?.checks || !github?.rest?.repos) {
+  const reading = surfacesFor({ github, owner, repo, env, fetch, maxPages });
+  if (reading === null) {
     core?.warning?.('No GitHub client capable of reading checks was passed, so this run has no CI evidence.');
     return { ...empty, unreadable: 'no checks-capable GitHub client was passed' };
   }
@@ -461,8 +525,8 @@ async function readFailingChecks({
   }
 
   const [checks, statuses] = await Promise.all([
-    readCheckRuns({ github, owner, repo, sha: commit, maxPages }),
-    readStatuses({ github, owner, repo, sha: commit }),
+    reading.checkRuns({ sha: commit }),
+    reading.statuses({ sha: commit }),
   ]);
 
   const failed = [];
@@ -566,25 +630,13 @@ async function readFailingChecks({
       continue;
     }
     fetched += 1;
-    let raw;
-    try {
-      ({ data: raw } = await github.rest.actions.downloadJobLogsForWorkflowRun({ owner, repo, job_id: entry.jobId }));
-    } catch (error) {
-      /*
-       * A 403 is the token and a 404 is this job, and collapsing them costs one of the two things worth knowing.
-       *
-       * `source_org_github_token` is a GitHub App installation token, and whether the App holds `actions: read`
-       * is organisation configuration this repository cannot assert - so 401 or 403 means no job's log is
-       * readable, it is recorded once, and the remaining fetches are skipped rather than repeating one refusal
-       * three times. Anything else is one job: logs expire with the repository's retention, so a run whose logs
-       * have aged out sits beside jobs whose logs have not.
-       */
-      const status = error?.status ?? 0;
-      if (status === 401 || status === 403) logsUnavailable = text(error?.message) || `HTTP ${status}`;
+    const read = await reading.jobLog({ jobId: entry.jobId });
+    if (read.unavailable !== null) {
+      if (read.refused) logsUnavailable = read.unavailable;
       logsDeferred += 1;
       continue;
     }
-    const tail = tailOf(logText(raw), { maxChars: Math.min(MAX_LOG_CHARS_PER_JOB, budget) });
+    const tail = tailOf(read.log, { maxChars: Math.min(MAX_LOG_CHARS_PER_JOB, budget) });
     /*
      * A log with nothing in it is not a log, so it is not attached and it is counted as one the prompt did not
      * get. A job that failed at startup has nothing captured, and recording it as logged would leave the prompt

@@ -1,11 +1,6 @@
 'use strict';
 
-const READY_MUTATION = `mutation($id: ID!) {
-  markPullRequestReadyForReview(input: { pullRequestId: $id }) {
-    pullRequest { isDraft }
-  }
-}`;
-
+const { writerFor } = require('../lib/cp-effects.cjs');
 const { marked } = require('./marker.cjs');
 const { LOGIN_SHAPE, scrub } = require('./plan.cjs');
 
@@ -38,8 +33,8 @@ async function markReady({ github = null, core = null, owner = null, repo = null
     return { ready: false, reason: `pull request #${prNumber} reported no node id to mark ready` };
   }
   try {
-    const result = await github.graphql(READY_MUTATION, { id: nodeId });
-    const isDraft = result?.markPullRequestReadyForReview?.pullRequest?.isDraft;
+    const result = await writerFor({ github, owner, repo }).markReady({ node: nodeId });
+    const isDraft = result.ready === null ? null : !result.ready;
     if (isDraft === true) {
       return { ready: false, reason: `#${prNumber} is still a draft after the mutation reported no error` };
     }
@@ -91,7 +86,7 @@ async function finish({
     ask,
   });
   try {
-    await github.rest.issues.createComment({ owner, repo, issue_number: Number(prNumber), body });
+    await writerFor({ github, owner, repo }).comment({ number: Number(prNumber), body });
   } catch (error) {
     core?.warning?.(`could not comment on #${prNumber}: ${error.message}`);
     return { ready: readied.ready, reason: readied.reason ?? null, notified: null, body };

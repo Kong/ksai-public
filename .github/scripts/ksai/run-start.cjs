@@ -1,5 +1,6 @@
 'use strict';
 
+const { writerFor } = require('../lib/cp-effects.cjs');
 const { writeFileSync } = require('node:fs');
 const { join } = require('node:path');
 
@@ -158,8 +159,8 @@ async function publishRunStart({ github, core, owner, repo, env, write = writeFi
   }
 
   try {
-    const posted = await github.rest.issues.createComment({ owner, repo, issue_number: target, body });
-    const id = Number(posted?.data?.id);
+    const posted = await writerFor({ github, owner, repo }).comment({ number: target, body });
+    const id = Number(posted?.id);
     outputs.comment_id = Number.isInteger(id) && id > 0 ? String(id) : '';
     const notices = [`said the run had started on #${target}`];
     if (carry(stamped, outputs.comment_id, { write })) notices.push('and left what a live status re-renders from');
@@ -178,7 +179,7 @@ async function dropRunStart({ github, core, owner, repo, env }) {
   }
 
   try {
-    await github.rest.issues.deleteComment({ owner, repo, comment_id: id });
+    await writerFor({ github, owner, repo }).deleteComment({ comment: id });
     return { notices: ['removed the comment this run opened with, because nothing replaced it'] };
   } catch (error) {
     core?.warning?.(`the comment this run opened with could not be removed (${error.message}).`);

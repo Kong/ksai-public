@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import controlPlane from './control-plane.cjs';
 
-const { mask, minter, reachControlPlane, renderingModeOf, unanswered } = controlPlane;
+const { mask, reachedFor, renderingModeOf, unanswered } = controlPlane;
 
 export const TOOL_PREFIX = 'static.runtime.opencode-tool-';
 export const REMINDER_ID = 'static.runtime.opencode-max-steps';
@@ -202,14 +202,9 @@ export async function renderThroughControlPlane({
     throw new Error(`the governed tools are not distinct tool names: ${tools.join(', ')}`);
   }
   if (request?.run !== undefined) throw new Error('a render request names no run; the control plane reads it from this job\'s token');
-  const signal = AbortSignal.timeout(timeout);
-  const reached = await reachControlPlane({
-    endpoint: env.KSAI_CP_ENDPOINT,
-    env,
-    mint: minter({ env, fetch, signal }),
-    secret,
-  });
-  if (reached.failure) throw new Error(reached.failure);
+  const reached = await reachedFor({ env, fetch, timeout, secret });
+  if (reached.why) throw new Error(reached.why);
+  const { signal } = reached;
   const headers = { authorization: `Bearer ${reached.token}` };
   const answered = await asked(fetch, `${reached.base}/v1/prompts/render`, {
     method: 'POST',
@@ -356,14 +351,9 @@ export async function reportDeliveries({
     console.log(`::warning::${written.length - deliveries.length} delivery lines name no render this job made, so they are not reported`);
   }
   if (deliveries.length === 0) return { reported: 0 };
-  const signal = AbortSignal.timeout(timeout);
-  const reached = await reachControlPlane({
-    endpoint: env.KSAI_CP_ENDPOINT,
-    env,
-    mint: minter({ env, fetch, signal }),
-    secret,
-  });
-  if (reached.failure) throw new Error(reached.failure);
+  const reached = await reachedFor({ env, fetch, timeout, secret });
+  if (reached.why) throw new Error(reached.why);
+  const { signal } = reached;
   for (let at = 0; at < deliveries.length; at += REPORT_BATCH) {
     await asked(fetch, `${reached.base}/v1/prompts/receipts`, {
       method: 'POST',

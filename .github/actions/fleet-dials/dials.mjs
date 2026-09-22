@@ -67,11 +67,78 @@ const held = (model, effort, pinned, why) => ({
   effort,
   arm: '',
   dials: kept(pinned),
+  settings: NO_SETTINGS,
   catalog: /** @type {unknown} */ (null),
   refused: /** @type {string[]} */ ([]),
   served: false,
   why,
 });
+
+const NO_SETTINGS = Object.freeze({
+  trigger_phrase: '',
+  runs_on: '',
+  continuation_workflow: '',
+  clear_request: '',
+  federation_rule_id: '',
+  organization_id: '',
+  service_account_id: '',
+  workspace_id: '',
+});
+
+const RUNNER_LABEL = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+const WORKFLOW_FILE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}\.ya?ml$/;
+
+const PHRASE = /^\/[A-Za-z0-9._-]{1,64}$|^@[A-Za-z0-9._-]{1,64}$/;
+
+const FEDERATION = Object.freeze({
+  federation_rule_id: /^fdrl_[A-Za-z0-9]{1,64}$/,
+  organization_id: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+  service_account_id: /^svac_[A-Za-z0-9]{1,64}$/,
+  workspace_id: /^wrkspc_[A-Za-z0-9]{1,64}$/,
+});
+
+/**
+ * @param {Record<string, unknown>} served
+ */
+function settingsOf(served) {
+  /** @type {Record<string, string>} */
+  const settings = { ...NO_SETTINGS };
+  const phrase = served.trigger_phrase;
+  if (typeof phrase === 'string' && PHRASE.test(phrase)) settings.trigger_phrase = phrase;
+
+  const workflow = served.continuation_workflow;
+  if (typeof workflow === 'string' && WORKFLOW_FILE.test(workflow)) settings.continuation_workflow = workflow;
+
+  if (served.clear_request === true) settings.clear_request = 'true';
+
+  const labels = served.runs_on;
+  if (typeof labels === 'string' && labels !== '') {
+    /** @type {unknown} */
+    let named = [labels];
+    if (labels.startsWith('[')) {
+      try {
+        named = JSON.parse(labels);
+      } catch {
+        named = [];
+      }
+    }
+    if (Array.isArray(named) && named.length > 0
+      && named.every((one) => typeof one === 'string' && RUNNER_LABEL.test(one))) {
+      settings.runs_on = labels;
+    }
+  }
+
+  for (const [name, shape] of Object.entries(FEDERATION)) {
+    const value = served[name];
+    if (typeof value === 'string' && shape.test(value)) settings[name] = value;
+  }
+  if (Object.keys(FEDERATION).some((name) => settings[name] === '')) {
+    for (const name of Object.keys(FEDERATION)) settings[name] = '';
+  }
+
+  return settings;
+}
 
 export function keyless(answer, keyHeld) {
   if (keyHeld === 'true') return answer;
@@ -205,5 +272,8 @@ export async function readDials({
     }
   }
 
-  return { model: servedModel, effort: servedEffort, arm, dials, catalog, refused, served: true, why: '' };
+  return {
+    model: servedModel, effort: servedEffort, arm, dials, settings: settingsOf(served),
+    catalog, refused, served: true, why: '',
+  };
 }

@@ -5,6 +5,7 @@ const { finalResult } = require('./classify.cjs');
 const { readWorkRef } = require('./context.cjs');
 const { doRequestOf, renderDoMarker } = require('./do.cjs');
 const { href, marker, positive } = require('./marker.cjs');
+const { usingControlPlane } = require('../lib/control-plane.cjs');
 const { STATUS_BEGIN, STATUS_END, URL_SHAPE, locateStatus, oneLine, scrub, spliceStatus } = require('./plan.cjs');
 const { probeComments } = require('./pages.cjs');
 const { LOCK_TIMEOUT_MS, withIssueLock } = require('./write-lock.cjs');
@@ -57,6 +58,7 @@ const {
 const { DIALS_ARM_SHAPE, armLabel, asAlert } = require('../lib/select-arm.cjs');
 const { counted, safeText } = require('../lib/text.cjs');
 const cpRender = require('../lib/cp-render.cjs');
+const cpReport = require('./cp-report.cjs');
 const { STATUS_TABLE, reporting } = require('./publish.cjs');
 
 const MAX_PAGES = 20;
@@ -342,27 +344,61 @@ function refusalOf(error) {
   return code > 0 ? `${code} ${reason}` : reason;
 }
 
-async function planHeldBy({ github, actionsGithub = null, owner, repo, state, attempt, unreadable = [] }) {
+async function planHeldBy({
+  github, actionsGithub = null, owner, repo, state, attempt, unreadable = [],
+  env = process.env, fetch = globalThis.fetch,
+}) {
   const client = actionsGithub ?? github;
   const mine = runOfAttempt(attempt.id);
   const working = state.attempts
     .filter((entry) => WORKING_OUTCOMES.includes(entry.outcome))
     .map((entry) => runOfAttempt(entry.id))
     .filter((runId) => runId !== '' && runId !== mine);
-  for (const runId of new Set(working)) {
-    let status;
-    try {
-      status = (await client.rest.actions.getWorkflowRun({ owner, repo, run_id: Number(runId) }))?.data?.status;
-    } catch (error) {
+  const asked = [...new Set(working)];
+  if (asked.length === 0) return '';
+
+  for (const { runId, status, why } of await runStates({ client, owner, repo, runs: asked, env, fetch })) {
+    if (why !== '') {
       unreadable.push(
-        `the plan claim could not read whether run ${runId} is still working this plan (${refusalOf(error)}), ` +
+        `the plan claim could not read whether run ${runId} is still working this plan (${why}), ` +
         'so it was treated as finished and this run went ahead',
       );
       continue;
     }
-    if (typeof status === 'string' && status !== '' && status !== 'completed') return runId;
+    if (status !== '' && status !== 'completed') return runId;
   }
   return '';
+}
+
+async function runStates({ client, owner, repo, runs, env = process.env, fetch = globalThis.fetch }) {
+  if (usingControlPlane(env)) {
+    const read = await cpReport.readRunStates({ runs, env, fetch });
+    if (read.why) return runs.map((runId) => ({ runId: String(runId), status: '', why: read.why }));
+    const answered = Array.isArray(read.answer?.runs) ? read.answer.runs : [];
+    const held = answered.map((one) => ({
+      runId: String(one?.run ?? ''),
+      status: String(one?.status ?? ''),
+      why: String(one?.unreadable ?? ''),
+    }));
+    const named = new Set(held.map((one) => one.runId));
+    for (const runId of runs) {
+      if (!named.has(String(runId))) {
+        held.push({ runId: String(runId), status: '', why: 'the control plane answered nothing for this run' });
+      }
+    }
+    return held;
+  }
+
+  const held = [];
+  for (const runId of runs) {
+    try {
+      const { data } = await client.rest.actions.getWorkflowRun({ owner, repo, run_id: Number(runId) });
+      held.push({ runId: String(runId), status: String(data?.status ?? ''), why: '' });
+    } catch (error) {
+      held.push({ runId: String(runId), status: '', why: refusalOf(error) });
+    }
+  }
+  return held;
 }
 
 function armModel(value) {
@@ -838,24 +874,36 @@ function renderBudget(now) {
   return () => Math.max(0, until - now());
 }
 
+function writing(store) {
+  if (store.write) return store;
+  return {
+    ...store,
+    write: async (ref, args, opts) => store.save(ref, await renderedReport(args, opts)),
+  };
+}
+
+function reportRequest(args) {
+  return {
+    state: args.state,
+    current: String(args.current ?? ''),
+    issue: String(args.issue ?? ''),
+    run: String(args.run ?? ''),
+    trigger: String(args.triggerPhrase ?? ''),
+    command: String(args.command ?? ''),
+    ask: String(args.ask ?? ''),
+    do_request: String(args.doRequest ?? ''),
+    budget: args.budget ?? null,
+    live: args.live ?? null,
+    history_mode: String(args.historyMode ?? ''),
+    paused: args.paused === true,
+    standing: args.standing === true,
+  };
+}
+
 async function renderedReport(args, { env = process.env, fetch = globalThis.fetch, timeout = LOCKED_RENDER_BUDGET } = {}) {
   const { value } = await cpRender.rendered({
     kind: 'write_report',
-    request: {
-      state: args.state,
-      current: String(args.current ?? ''),
-      issue: String(args.issue ?? ''),
-      run: String(args.run ?? ''),
-      trigger: String(args.triggerPhrase ?? ''),
-      command: String(args.command ?? ''),
-      ask: String(args.ask ?? ''),
-      do_request: String(args.doRequest ?? ''),
-      budget: args.budget ?? null,
-      live: args.live ?? null,
-      history_mode: String(args.historyMode ?? ''),
-      paused: args.paused === true,
-      standing: args.standing === true,
-    },
+    request: reportRequest(args),
     local: () => ({ body: renderWriteReport(args) }),
     fallback: (why, mine) => ({
       body: mine
@@ -1034,8 +1082,58 @@ function storesInBody(identity) {
   return identity?.kind === PLAN_IDENTITY_KIND && positive(identity?.pr) !== null;
 }
 
-async function storeFor({ github, owner, repo, identity, botLogin, knownId = null, phase = '', thread = null }) {
-  if (storesInBody(identity)) {
+function controlPlaneStore({ identity, number, where, env = process.env, fetch = globalThis.fetch }) {
+  const kind = 'write_report';
+  const asking = { state: { identity } };
+  return {
+    idOf: (ref) => String(ref?.id ?? ''),
+    budget: () => PUBLISHED_LIMIT,
+    async load() {
+      const held = await cpReport.heldReport({ kind, request: asking, number, where, env, fetch });
+      if (held.none) return { ref: null, state: null };
+      if (held.why) return { error: held.why };
+      const parsed = parseState(held.body, identity);
+      return parsed.error ? parsed : { ref: { id: held.comment, body: held.body }, state: parsed.state };
+    },
+    /**
+     * @param {{ id?: number, body?: string } | null} ref
+     * @param {*} args
+     * @param {{ fetch?: typeof globalThis.fetch, timeout?: number }} [asked]
+     */
+    async write(ref, args, { fetch: called = fetch, timeout } = {}) {
+      const said = await cpReport.sayReport({
+        kind,
+        request: reportRequest(args),
+        number,
+        where,
+        env,
+        fetch: called,
+        ...(timeout > 0 ? { timeout } : {}),
+      });
+      if (said.why) return { error: said.why };
+      if (said.none) return { missing: true };
+      return { ref: { id: said.comment, body: said.body }, unchanged: String(ref?.body ?? '') === said.body };
+    },
+  };
+}
+
+async function storeFor({
+  github, owner, repo, identity, botLogin, knownId = null, phase = '', thread = null,
+  env = process.env, fetch = globalThis.fetch,
+}) {
+  const inBody = storesInBody(identity);
+  if (usingControlPlane(env)) {
+    return {
+      store: controlPlaneStore({
+        identity,
+        number: reportThread(identity, thread),
+        where: inBody ? 'description' : 'comment',
+        env,
+        fetch,
+      }),
+    };
+  }
+  if (inBody) {
     const mayCreate = String(phase ?? '') === PLAN_PHASE;
     return { store: bodyStore({ github, owner, repo, identity, mayCreate }) };
   }
@@ -1068,9 +1166,11 @@ async function updateWriteProgressUnlocked({
     botLogin: env.BOT_LOGIN,
     knownId: env.COMMENT_ID,
     thread: env.ISSUE_NUM,
+    env,
+    fetch,
   });
   if (chosen.error) return { outputs: blank, failure: chosen.error };
-  const store = chosen.store;
+  const store = writing(chosen.store);
   const renderLeft = renderBudget(now);
 
   for (let pass = 0; pass < MAX_PASSES; pass += 1) {
@@ -1084,7 +1184,7 @@ async function updateWriteProgressUnlocked({
     const grown = note === null
       ? historyOf(read.state)
       : noted(read.state, currentText(note.said, env.TRIGGER), note.at ?? now(), env.TRIGGER);
-    const rendered = await renderedReport({
+    const saved = await store.write(read.ref, {
       state: { ...read.state, history: grown },
       current: note === null ? current : note.said,
       issue: env.ISSUE_NUM,
@@ -1098,7 +1198,6 @@ async function updateWriteProgressUnlocked({
       historyMode: env.STATUS_HISTORY,
       standing: standingHold(env),
     }, { env, fetch, timeout: renderLeft() });
-    const saved = await store.save(read.ref, rendered);
     if (saved.missing) return { outputs: blank, failure: 'the durable write report disappeared during its live update' };
     if (saved.error) return { outputs: blank, failure: `the durable write report could not publish live progress (${saved.error})` };
     const landed = { recorded: 'true' };
@@ -1135,9 +1234,11 @@ async function mutateWriteReportUnlocked({
     botLogin: env.BOT_LOGIN,
     phase: env.PHASE,
     thread: env.ISSUE_NUM,
+    env,
+    fetch,
   });
   if (chosen.error) return { outputs: {}, failure: chosen.error };
-  const store = chosen.store;
+  const store = writing(chosen.store);
   const renderLeft = renderBudget(now);
 
   for (let pass = 0; pass < MAX_PASSES; pass += 1) {
@@ -1161,6 +1262,8 @@ async function mutateWriteReportUnlocked({
         state: held,
         attempt: attempted.attempt,
         unreadable,
+        env,
+        fetch,
       });
       if (holder !== '') {
         const where = `${attempted.run_base}/${holder}`;
@@ -1175,7 +1278,7 @@ async function mutateWriteReportUnlocked({
     const before = held.attempts.map((entry) => entry.id);
     const current = currentOfEnv(env);
     const noteAt = numberOrNull(env.CURRENT_AT) ?? now();
-    const rendered = await renderedReport({
+    const saved = await store.write(read.ref, {
       state: { ...merged.state, history: noted(merged.state, currentText(current, env.TRIGGER), noteAt, env.TRIGGER) },
       current,
       issue: env.ISSUE_NUM,
@@ -1189,7 +1292,6 @@ async function mutateWriteReportUnlocked({
       paused: String(env.HELD ?? '') === 'true',
       standing: standingHold(env),
     }, { env, fetch, timeout: renderLeft() });
-    const saved = await store.save(read.ref, rendered);
     if (saved.missing) continue;
     if (saved.error) return { outputs: {}, failure: `the durable write report could not be updated (${saved.error})` };
     const verified = await store.load();
@@ -1279,7 +1381,7 @@ async function updateWriteProgress({
   return { ...result, outputs };
 }
 
-async function planHolder({ github, actionsGithub = null, owner, repo, env = process.env }) {
+async function planHolder({ github, actionsGithub = null, owner, repo, env = process.env, fetch = globalThis.fetch }) {
   const outputs = {
     held_by: '',
   };
@@ -1293,6 +1395,8 @@ async function planHolder({ github, actionsGithub = null, owner, repo, env = pro
     botLogin: env.BOT_LOGIN,
     phase: env.PHASE,
     thread: env.ISSUE_NUM,
+    env,
+    fetch,
   });
   if (chosen.error) return { outputs, notices: [chosen.error] };
   const read = await chosen.store.load();
@@ -1308,6 +1412,8 @@ async function planHolder({ github, actionsGithub = null, owner, repo, env = pro
     state: read.state,
     attempt: { id: attemptId(env) },
     unreadable,
+    env,
+    fetch,
   });
   if (holder === '') return { outputs, notices: unreadable };
   outputs.held_by = `${read.state.run_base}/${holder}`;
@@ -1361,6 +1467,7 @@ module.exports = {
   armTotals,
   attemptOf,
   findReport,
+  controlPlaneStore,
   identityMarker,
   identityOf,
   liveIdentityOf,

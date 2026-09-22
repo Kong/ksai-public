@@ -7,6 +7,7 @@ import { writeOutputs } from '../lib/outputs.mjs';
 
 const require = createRequire(import.meta.url);
 const { classifierModel } = require('./classify.cjs');
+const { writerFor } = require('../lib/cp-effects.cjs');
 const { counted, plural } = require('../lib/text.cjs');
 const {
   DISAGREE,
@@ -146,17 +147,16 @@ export async function lockDisputed({ github, core, owner, repo, env = process.en
     }
     return replies.get(kind);
   };
+  const writer = writerFor({ github, owner, repo, env, fetch });
   for (const [index, root] of roots.entries()) {
     const verdict = verdicts[index];
     if (verdict === DISAGREE && root === scoped) held = true;
     const kind = verdict === DISAGREE ? LOCK_KIND : verdict === UNCLEAR ? UNCLEAR_KIND : AGREED_KIND;
     const body = await replyFor(kind);
     try {
-      await github.rest.pulls.createReplyForReviewComment({
-        owner,
-        repo,
-        pull_number: Number(env.PR_NUMBER),
-        comment_id: root,
+      await writer.replyInThread({
+        number: Number(env.PR_NUMBER),
+        comment: root,
         body,
       });
       if (verdict === DISAGREE) locked += 1;
@@ -180,11 +180,9 @@ export async function releaseThread({ github, core, owner, repo, env = process.e
     fetch,
     local: () => marked(scrub(RELEASED, { triggerPhrase: env.TRIGGER }), payloadFor(env, { kind: UNLOCK_KIND })),
   });
-  await github.rest.pulls.createReplyForReviewComment({
-    owner,
-    repo,
-    pull_number: Number(env.PR_NUMBER),
-    comment_id: root,
+  await writerFor({ github, owner, repo, env, fetch }).replyInThread({
+    number: Number(env.PR_NUMBER),
+    comment: root,
     body,
   });
   core?.info?.(`thread ${root} was released, so the next pass may work it.`);

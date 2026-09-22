@@ -8,6 +8,7 @@
 // produced does not reach the PR, and it happens in trusted code with no model in the loop.
 
 const { parseHunks } = require('../lib/hunks.cjs');
+const { writerFor } = require('../lib/cp-effects.cjs');
 const { readReviewOutput, REPAIRED } = require('../lib/review-output.cjs');
 const { applySuppression } = require('./suppress.cjs');
 const { DIGEST_CHARS, MATCH_VERSION } = require('./match-id.cjs');
@@ -421,7 +422,8 @@ module.exports = async ({
   const head = String(pull?.head?.sha ?? '');
   const moved = publish && head !== commitId;
   const note = moved ? movedNote(commitId, head) : '';
-  const postComment = (args) => github.rest.issues.createComment(args);
+  const writer = writerFor({ github, owner, repo });
+  const postComment = (said) => writer.comment({ number: prNumber, body: said });
   const read = readReviewOutput(runResult);
   const { review: parsed } = read;
   if (reviewStrategy !== 'baseline' && parsed) {
@@ -483,7 +485,7 @@ module.exports = async ({
       core.warning('Structured review output missing or unparseable; posting a single comment.');
     }
     if (publish) {
-      await postComment({ owner, repo, issue_number: prNumber, body: planned.comment });
+      await postComment(planned.comment);
     }
     return {
       parse_ok: false,
@@ -534,47 +536,44 @@ module.exports = async ({
 
   if (planned.comment !== undefined) {
     if (publish) {
-      await postComment({ owner, repo, issue_number: prNumber, body: planned.comment });
+      await postComment(planned.comment);
     }
     return summarize({ inline: 0, posted_as: publish ? 'issue-comment' : 'none' });
   }
 
-  const postReview = (reviewBody, comments) =>
-    github.rest.pulls.createReview({
-      owner,
-      repo,
-      pull_number: prNumber,
-      commit_id: commitId,
-      event: 'COMMENT',
-      body: reviewBody,
-      ...(comments ? { comments } : {}),
-    });
+  const postReview = async (reviewBody, comments) => (await writer.review({
+    number: prNumber,
+    commit: commitId,
+    event: 'COMMENT',
+    body: reviewBody,
+    ...(comments ? { comments } : {}),
+  })).review;
 
   // Short-circuited above every posting path, so no shadow run can reach a `createReview` at all.
   if (!publish) return summarize({ review_id: null, posted_as: 'none' });
 
   if (inline.length === 0) {
     try {
-      const res = await postReview(body);
-      return summarize({ inline: 0, review_id: res?.data?.id ?? null });
+      const review = await postReview(body);
+      return summarize({ inline: 0, review_id: review });
     } catch (e) {
       core.warning(`Body-only review failed (${e.status ?? '?'}): ${e.message}. Plain comment.`);
-      await postComment({ owner, repo, issue_number: prNumber, body });
+      await postComment(body);
       return summarize({ inline: 0, posted_as: 'issue-comment' });
     }
   }
 
   try {
-    const res = await postReview(body, inline);
-    return summarize({ review_id: res?.data?.id ?? null });
+    const review = await postReview(body, inline);
+    return summarize({ review_id: review });
   } catch (e1) {
     // The reviews API rejects the whole batch if one comment is unanchorable, and a stray
     // multi-line range is the usual culprit; retry with single-line comments before giving up.
     core.warning(`Inline review failed (${e1.status ?? '?'}): ${e1.message}. Retrying single-line.`);
     const singles = inline.map(({ start_line, start_side, ...c }) => c);
     try {
-      const res = await postReview(body, singles);
-      return summarize({ review_id: res?.data?.id ?? null, retried: 'single-line' });
+      const review = await postReview(body, singles);
+      return summarize({ review_id: review, retried: 'single-line' });
     } catch (e2) {
       core.warning(`Single-line retry failed (${e2.status ?? '?'}): ${e2.message}. Body only.`);
       const later = moved
@@ -587,16 +586,11 @@ module.exports = async ({
         replanned.whole_body ??
         (later && later !== commitId ? `${planned.whole_body}\n\n${movedNote(commitId, later)}` : planned.whole_body);
       try {
-        const res = await postReview(wholeBody);
-        return summarize({ inline: 0, folded: planned.findings_total, review_id: res?.data?.id ?? null, retried: 'body-only', ...reshadowed });
+        const review = await postReview(wholeBody);
+        return summarize({ inline: 0, folded: planned.findings_total, review_id: review, retried: 'body-only', ...reshadowed });
       } catch (e3) {
         core.warning(`Body-only review failed (${e3.status ?? '?'}): ${e3.message}. Plain comment.`);
-        await postComment({
-          owner,
-          repo,
-          issue_number: prNumber,
-          body: wholeBody,
-        });
+        await postComment(wholeBody);
         return summarize({ inline: 0, folded: planned.findings_total, posted_as: 'issue-comment', retried: 'body-only', ...reshadowed });
       }
     }

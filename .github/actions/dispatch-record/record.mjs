@@ -57,11 +57,45 @@ const WORK_ITEM_MAX = 16384;
 
 const TOLD_MAX = 300;
 
+const NO_RECORD_HEADER = 'Ksai-No-Record';
+
 const WHY_STATUS = Object.freeze({
   401: 'the control plane could not tell which run this is',
   403: 'the control plane refused this run its record',
   404: 'the control plane holds no readable record for this run - it may have expired, or this repository may not be enrolled',
   503: 'the control plane could not reach its records, or has not tied this record to a run yet',
+});
+
+const NO_RECORD = Object.freeze({
+  read: false,
+  recordId: '',
+  issueNumber: '',
+  actor: '',
+  workRef: '',
+  attempt: '',
+  stall: '',
+  prevRemaining: '',
+  command: '',
+  label: '',
+  pr: '',
+  head_sha: '',
+  scope: '',
+  autofixCapability: '',
+  commentId: '',
+  commentKind: '',
+  trigger: '',
+  triggerRun: '',
+  triggerAttempt: '',
+  triggerState: '',
+  triggerName: '',
+  requester: '',
+  approver: '',
+  approvalId: '',
+  model: '',
+  effort: '',
+  guidance: '',
+  workItem: '',
+  ask: '',
 });
 
 const PR_SHAPE = /^[1-9][0-9]{0,9}$/;
@@ -105,6 +139,10 @@ const NAME_BOUND = 256;
 const CUT_MARK = '\u2026';
 
 const COUNT_SHAPE = /^[1-9][0-9]{0,18}$/;
+
+const CHAIN_SHAPE = /^[0-9]{1,6}$/;
+
+const WORK_REF_SHAPE = /^jira\/[A-Za-z][A-Za-z0-9_]*-[0-9]{1,10}$/;
 
 const COMMENT_KINDS = Object.freeze(['issue', 'review', 'submitted_review']);
 
@@ -165,22 +203,25 @@ const told = (answer) =>
     .then((said) => said || 'it said nothing');
 
 /**
- * bare reports whether an endpoint is an https URL with a host and nothing a request would carry
- * past its path. The token goes out in a header, so a query, a fragment or credentials would put the
- * read somewhere other than the control plane: a bare `https://` resolves `/run` as a host, and a
- * query string swallows the path the read appends.
+ * baseOf answers the origin and path a route may be appended to, or an empty string where the
+ * endpoint is not an https URL with a host and nothing a request would carry past its path. The
+ * token goes out in a header, so a query, a fragment or credentials would put the read somewhere
+ * other than the control plane. It is built from what was parsed rather than from what was typed,
+ * because an endpoint ending in a bare `?` or `#` parses with neither and still swallows the route
+ * appended to the raw string.
  *
  * @param {string} endpoint
  */
-function bare(endpoint) {
+function baseOf(endpoint) {
   let url;
   try {
     url = new URL(endpoint);
   } catch {
-    return false;
+    return '';
   }
-  return url.protocol === 'https:' && url.hostname !== '' && url.search === '' && url.hash === ''
+  const bare = url.protocol === 'https:' && url.hostname !== '' && url.search === '' && url.hash === ''
     && url.username === '' && url.password === '';
+  return bare ? `${url.origin}${url.pathname}`.replace(/\/+$/, '') : '';
 }
 
 /**
@@ -218,10 +259,11 @@ function because(thrown) {
  *   secret: (token: string) => void,
  *   fetch: typeof globalThis.fetch,
  *   timeout: number,
+ *   named?: boolean,
  * }} asked
- * @returns {Promise<{ served: unknown } | { retry: string, asked: number | null }>}
+ * @returns {Promise<{ served: unknown } | { none: true } | { retry: string, asked: number | null }>}
  */
-async function attempt({ url, audience, mint, secret, fetch, timeout }) {
+async function attempt({ url, audience, mint, secret, fetch, timeout, named = false }) {
   let token = '';
   try {
     token = await mint(audience);
@@ -251,6 +293,12 @@ async function attempt({ url, audience, mint, secret, fetch, timeout }) {
   if (answer.status === 403) {
     throw stopped(`${why}: ${await told(answer)}`);
   }
+  if (answer.status === 404) {
+    const mine = answer.headers?.get?.(NO_RECORD_HEADER) === '1';
+    await release(answer);
+    if (mine || named) return { none: true };
+    throw stopped(why);
+  }
   if (!answer.ok) {
     await release(answer);
     throw stopped(why);
@@ -275,18 +323,38 @@ function recordFrom(served) {
   }
 
   const {
+    record_id: recordId,
+    issue_number: issueNumber, actor, work_ref: workRef,
+    attempt: spent, stall, prev_remaining: prevRemaining,
     command, label, pr, head_sha: headSha, scope, requester, approver, approval_id: approvalId,
     model, effort, guidance, work_item: workItem, ask,
     autofix_capability: autofixCapability, comment_id: commentId, comment_kind: commentKind,
     trigger, trigger_run: triggerRun, trigger_attempt: triggerAttempt,
     trigger_state: triggerState, trigger_name: triggerName,
   } = /** @type {Record<string, unknown>} */ (served);
+  if (recordId !== undefined && (typeof recordId !== 'string' || !RECORD_ID.test(recordId))) {
+    throw policyStopped('the record names itself as something the control plane could not have minted');
+  }
   const securedFix = command === SECURED_FIX_COMMAND;
   if (command !== undefined && (typeof command !== 'string' || (!COMMANDS.includes(command) && !securedFix))) {
     throw policyStopped('the record names a command this runner does not answer');
   }
   if (label !== undefined && (typeof label !== 'string' || label === '' || label.length > LABEL_MAX || hasControl(label))) {
     throw policyStopped('the record names a label GitHub could not hold');
+  }
+  if (issueNumber !== undefined && (typeof issueNumber !== 'string' || !PR_SHAPE.test(issueNumber))) {
+    throw policyStopped('the record names an issue that is not a number');
+  }
+  if (actor !== undefined && (typeof actor !== 'string' || !REQUESTER.test(actor))) {
+    throw policyStopped('the record names an actor GitHub could not have');
+  }
+  if (workRef !== undefined && (typeof workRef !== 'string' || !WORK_REF_SHAPE.test(workRef))) {
+    throw policyStopped('the record names work this runner cannot address');
+  }
+  for (const [name, count] of [['attempt', spent], ['stall', stall], ['prev_remaining', prevRemaining]]) {
+    if (count !== undefined && (typeof count !== 'string' || !CHAIN_SHAPE.test(count))) {
+      throw policyStopped(`the record names a ${name} that is not a count`);
+    }
   }
   if (pr !== undefined && (typeof pr !== 'string' || !PR_SHAPE.test(pr))) {
     throw policyStopped('the record names a pull request that is not a number');
@@ -368,6 +436,13 @@ function recordFrom(served) {
     triggerState: oneOf(triggerState, TRIGGER_STATES),
     triggerName: showable(triggerName),
     requester: text(requester),
+    recordId: text(recordId),
+    issueNumber: text(issueNumber),
+    actor: text(actor),
+    workRef: text(workRef),
+    attempt: text(spent),
+    stall: text(stall),
+    prevRemaining: text(prevRemaining),
     approver: text(approver),
     approvalId: text(approvalId),
     model: text(model),
@@ -379,13 +454,14 @@ function recordFrom(served) {
 }
 
 /** Report one authenticated, body-free policy refusal without changing the original failure. */
-export async function reportPolicyRefusal({ endpoint, recordId, audience, mint, secret, fetch = globalThis.fetch }) {
-  if (!bare(endpoint) || !RECORD_ID.test(recordId)) return false;
+export async function reportPolicyRefusal({ endpoint, audience, mint, secret, fetch = globalThis.fetch }) {
+  const base = baseOf(endpoint);
+  if (base === '') return false;
   const token = await mint(audience);
   if (typeof token !== 'string' || token === '') return false;
   secret(token);
   const answer = await fetch(
-    `${endpoint.replace(/\/$/, '')}/run/${recordId}/security-refusal`,
+    `${base}/v1/run/security-refusal`,
     {
       method: 'POST',
       headers: { authorization: `Bearer ${token}` },
@@ -407,9 +483,11 @@ function sayable(value, limit) {
 }
 
 /**
- * readRecord reads what the control plane decided for this run. A dispatch naming no record skips the
- * read; one naming a record is read, or this throws with the reason, and nothing falls back to the
- * dispatch inputs.
+ * readRecord reads what the control plane decided for this run. A caller naming no control plane
+ * reads nothing; every other run asks for the record its own OIDC token names, and reads it or this
+ * throws with the reason, and nothing falls back to the dispatch inputs. A control plane holding no
+ * record says so on its 404, which reads as nothing rather than throwing, and a 404 it did not mark
+ * throws unless the caller named a record of its own.
  *
  * A failure that can pass - the token mint, the network, a body that did not parse, a 408, a 429 or a
  * 5xx - is tried again on the delays given, waiting longer where the control plane asks to, up to the
@@ -419,7 +497,6 @@ function sayable(value, limit) {
  *
  * @param {{
  *   endpoint?: string,
- *   recordId?: string,
  *   audience?: string,
  *   env?: Record<string, string | undefined>,
  *   mint: (audience: string) => Promise<string>,
@@ -429,14 +506,15 @@ function sayable(value, limit) {
  *   delays?: readonly number[],
  *   sleep?: (ms: number) => Promise<void>,
  *   note?: (why: string, wait: number) => void,
+ *   named?: boolean,
  *   budget?: number,
  *   now?: () => number,
  * }} asked
  */
 export async function readRecord({
   endpoint = '',
-  recordId = '',
   audience = 'ksai-cp',
+  named = false,
   env = process.env,
   mint,
   secret = () => {},
@@ -448,44 +526,19 @@ export async function readRecord({
   budget = BUDGET,
   now = Date.now,
 }) {
-  if (recordId === '') {
-    return {
-      read: false,
-      command: '',
-      label: '',
-      pr: '',
-      head_sha: '',
-      scope: '',
-      autofixCapability: '',
-      commentId: '',
-      commentKind: '',
-      trigger: '',
-      triggerRun: '',
-      triggerAttempt: '',
-      triggerState: '',
-      triggerName: '',
-      requester: '',
-      approver: '',
-      approvalId: '',
-      model: '',
-      effort: '',
-      guidance: '',
-      workItem: '',
-      ask: '',
-    };
-  }
-  if (endpoint === '') throw stopped('the dispatch names a record but this workflow names no control plane endpoint');
-  if (!bare(endpoint)) throw stopped('the control plane endpoint is not a bare https URL');
-  if (!RECORD_ID.test(recordId)) throw stopped('the record id is not one the control plane mints');
+  if (endpoint === '') return NO_RECORD;
+  const base = baseOf(endpoint);
+  if (base === '') throw stopped('the control plane endpoint is not a bare https URL');
   if (!env.ACTIONS_ID_TOKEN_REQUEST_URL || !env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) {
     throw stopped('this job holds no id-token: write, so it cannot say which run it is');
   }
 
-  const asked = { url: `${endpoint.replace(/\/+$/, '')}/run/${recordId}`, audience, mint, secret, fetch };
+  const asked = { url: `${base}/v1/run`, audience, mint, secret, fetch, named };
   const longest = Math.max(0, ...delays);
   const started = now();
   const tries = async (left) => {
     const outcome = await attempt({ ...asked, timeout: Math.max(1, Math.min(timeout, budget - (now() - started))) });
+    if ('none' in outcome) return NO_RECORD;
     if ('served' in outcome) return recordFrom(outcome.served);
     if (left.length === 0) {
       throw stopped(`${outcome.retry}, on the last of ${delays.length + 1} attempts`);

@@ -1,5 +1,6 @@
 'use strict';
 
+const { writerFor } = require('../lib/cp-effects.cjs');
 const { openPlanThreads } = require('./revise.cjs');
 const { ANSWERED, threadState } = require('./threads.cjs');
 const { marked } = require('./marker.cjs');
@@ -75,6 +76,7 @@ async function resolveOverriddenThreads({
     said[answeredThread] ??= renderedOverride({ ...override, answered: answeredThread });
     return said[answeredThread];
   };
+  const writer = writerFor({ github, owner, repo, env, fetch });
   const notices = [];
   let answered = 0;
   let resolved = 0;
@@ -83,11 +85,9 @@ async function resolveOverriddenThreads({
     const root = Number(thread?.rootCommentId);
     if (Number.isInteger(root) && root > 0) {
       try {
-        await github.rest.pulls.createReplyForReviewComment({
-          owner,
-          repo,
-          pull_number: Number(prNumber),
-          comment_id: root,
+        await writer.replyInThread({
+          number: Number(prNumber),
+          comment: root,
           body: await reply(threadState(thread, { botLogin }) === ANSWERED),
         });
         answered += 1;
@@ -102,7 +102,7 @@ async function resolveOverriddenThreads({
       continue;
     }
     try {
-      await github.graphql(RESOLVE, { threadId: id });
+      await writer.resolveThread({ thread: id });
       resolved += 1;
     } catch (error) {
       notices.push(`thread ${id} could not be resolved: ${error?.message ?? error}`);

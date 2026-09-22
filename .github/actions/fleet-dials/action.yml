@@ -105,6 +105,41 @@ outputs:
       shape is the model's plus one colon, so an arm cannot carry a newline into
       whatever records it.
     value: ${{ steps.dials.outputs.arm }}
+  trigger_phrase:
+    description: >-
+      the phrase this repository answers beside `/ksai`, or empty where it named
+      none or named one this action will not pass on
+    value: ${{ steps.dials.outputs.trigger_phrase }}
+  runs_on:
+    description: >-
+      the runner this repository's work is carried out on, as one label or a
+      JSON list of them, or empty where it named none. A caller used to carry
+      this itself, which made the runner a repository's choice rather than an
+      operator's.
+    value: ${{ steps.dials.outputs.runs_on }}
+  continuation_workflow:
+    description: the caller file a successor is dispatched into, or empty
+    value: ${{ steps.dials.outputs.continuation_workflow }}
+  clear_request:
+    description: >-
+      `true` where this repository asks the review team from the sidebar, so the
+      withdrawal has something to withdraw, and empty otherwise
+    value: ${{ steps.dials.outputs.clear_request }}
+  federation_rule_id:
+    description: >-
+      the Konnect federation this run exchanges its OIDC token under. This and
+      the three below it are answered together or not at all, because a run
+      federating with one of them missing fails at the exchange.
+    value: ${{ steps.dials.outputs.federation_rule_id }}
+  organization_id:
+    description: the Konnect organization the federation belongs to, or empty
+    value: ${{ steps.dials.outputs.organization_id }}
+  service_account_id:
+    description: the Konnect service account the run federates as, or empty
+    value: ${{ steps.dials.outputs.service_account_id }}
+  workspace_id:
+    description: the Konnect workspace the run federates into, or empty
+    value: ${{ steps.dials.outputs.workspace_id }}
   shadow_percent:
     description: >-
       share of runs to compare against the shadow engine. This output and the
@@ -230,6 +265,9 @@ runs:
           core.setOutput('model', answer.model);
           core.setOutput('effort', answer.effort);
           core.setOutput('arm', answer.arm);
+          for (const [name, value] of Object.entries(answer.settings)) {
+            core.setOutput(name, value);
+          }
           for (const [name, value] of Object.entries(answer.dials)) {
             core.setOutput(name, value);
           }
