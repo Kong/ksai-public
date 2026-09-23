@@ -109,7 +109,7 @@ const carriesEval = (args, short, long = []) => args.some((arg) =>
   long.some((flag) => arg === flag || arg.startsWith(`${flag}=`))
   || /^-[^-]/.test(arg) && short.split('').some((flag) => arg.slice(1).includes(flag)));
 
-const canonicalRuntimeLock = (value) => {
+export const canonicalRuntimeLock = (value) => {
   if (Array.isArray(value)) return value.map((one) => canonicalRuntimeLock(one));
   if (!value || typeof value !== 'object') return value;
   return Object.fromEntries(Object.keys(value)
