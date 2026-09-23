@@ -1,3 +1,4 @@
+import { setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 
 import { runCommand } from './run.mjs';
@@ -13,15 +14,29 @@ const NUMBER_SHAPE = /^[1-9][0-9]{0,9}$/;
 
 const API_TIMEOUT_MS = 30_000;
 
+const API_ATTEMPTS = 3;
+
+const RETRY_DELAY_MS = 2_000;
+
 const distance = (value) => (Number.isSafeInteger(value) && value >= 0 ? value : null);
 
-async function getJson(fetchImpl, url, token) {
-  const response = await fetchImpl(url, {
-    headers: { accept: 'application/vnd.github+json', authorization: `Bearer ${token}`, 'x-github-api-version': '2022-11-28' },
-    signal: AbortSignal.timeout(API_TIMEOUT_MS),
-  });
-  if (!response.ok) throw new Error(`GitHub answered ${response.status}`);
-  return response.json();
+async function getJson(fetchImpl, url, token, sleep) {
+  for (let attempt = 1; ; attempt += 1) {
+    let response;
+    try {
+      response = await fetchImpl(url, {
+        headers: { accept: 'application/vnd.github+json', authorization: `Bearer ${token}`, 'x-github-api-version': '2022-11-28' },
+        signal: AbortSignal.timeout(API_TIMEOUT_MS),
+      });
+    } catch (error) {
+      if (attempt >= API_ATTEMPTS) throw error;
+      await sleep(attempt * RETRY_DELAY_MS);
+      continue;
+    }
+    if (response.ok) return response.json();
+    if (response.status < 500 || attempt >= API_ATTEMPTS) throw new Error(`GitHub answered ${response.status}`);
+    await sleep(attempt * RETRY_DELAY_MS);
+  }
 }
 
 /**
@@ -40,12 +55,13 @@ export async function fetchReviewBase({
   fetchImpl = fetch,
   run = runCommand,
   log = console.log,
+  sleep = delay,
 } = {}) {
   if (!REPO_SHAPE.test(repo) || !NUMBER_SHAPE.test(String(number))) {
     throw new Error('the review names no pull request this step can read its base from');
   }
   const api = String(apiUrl).replace(/\/+$/, '');
-  const pull = await getJson(fetchImpl, `${api}/repos/${repo}/pulls/${number}`, token);
+  const pull = await getJson(fetchImpl, `${api}/repos/${repo}/pulls/${number}`, token, sleep);
   const ref = String(pull?.base?.ref ?? '');
   if (!REF_SHAPE.test(ref) || ref.includes('..')) throw new Error('the pull request names a base branch this step will not fetch');
 
@@ -64,7 +80,7 @@ export async function fetchReviewBase({
   let compare = null;
   try {
     const segments = ref.split('/').map((segment) => encodeURIComponent(segment)).join('/');
-    compare = await getJson(fetchImpl, `${api}/repos/${repo}/compare/${segments}...${head}?per_page=1`, token);
+    compare = await getJson(fetchImpl, `${api}/repos/${repo}/compare/${segments}...${head}?per_page=1`, token, sleep);
   } catch (error) {
     log(`::notice::the merge base could not be read (${error.message}), so the review fetches full history`);
   }
