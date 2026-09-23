@@ -9,6 +9,7 @@
 
 const { parseHunks } = require('../lib/hunks.cjs');
 const { writerFor } = require('../lib/cp-effects.cjs');
+const { usingControlPlane } = require('../lib/control-plane.cjs');
 const { readReviewOutput, REPAIRED } = require('../lib/review-output.cjs');
 const { applySuppression } = require('./suppress.cjs');
 const { DIGEST_CHARS, MATCH_VERSION } = require('./match-id.cjs');
@@ -422,8 +423,8 @@ module.exports = async ({
   const head = String(pull?.head?.sha ?? '');
   const moved = publish && head !== commitId;
   const note = moved ? movedNote(commitId, head) : '';
-  const writer = writerFor({ github, owner, repo });
-  const postComment = (said) => writer.comment({ number: prNumber, body: said });
+  const writer = writerFor({ github, owner, repo, env, fetch });
+  const throughCP = usingControlPlane(env);
   const read = readReviewOutput(runResult);
   const { review: parsed } = read;
   if (reviewStrategy !== 'baseline' && parsed) {
@@ -453,23 +454,27 @@ module.exports = async ({
     : null;
   const named = new Set((parsed?.findings ?? []).filter((f) => f && typeof f === 'object').map((f) => f.path));
   const sent = files === null ? null : files.filter((file) => named.has(file?.filename));
+  const reviewFacts = (later) => ({
+    run_result: String(runResult ?? ''),
+    conclusion: String(conclusion ?? SUCCESS),
+    pr: prNumber,
+    commit: commitId,
+    publish,
+    head,
+    later,
+    files: sent === null ? null : sent.map((file) => ({ filename: String(file?.filename ?? ''), patch: String(file?.patch ?? '') })),
+    suppression:
+      gate === null
+        ? null
+        : { reviewer_id: String(gate.reviewerId), run_id: String(gate.runId ?? ''), fired_at: gate.firedAt, rules: gate.rules ?? [] },
+  });
+  const postComment = (said, later = '') => throughCP
+    ? writer.reviewFromFacts({ number: prNumber, review: reviewFacts(later), mode: 'comment' })
+    : writer.comment({ number: prNumber, body: said });
   const plan = (later) =>
     rendered({
       kind: 'review',
-      request: {
-        run_result: String(runResult ?? ''),
-        conclusion: String(conclusion ?? SUCCESS),
-        pr: prNumber,
-        commit: commitId,
-        publish,
-        head,
-        later,
-        files: sent === null ? null : sent.map((file) => ({ filename: String(file?.filename ?? ''), patch: String(file?.patch ?? '') })),
-        suppression:
-          gate === null
-            ? null
-            : { reviewer_id: String(gate.reviewerId), run_id: String(gate.runId ?? ''), fired_at: gate.firedAt, rules: gate.rules ?? [] },
-      },
+      request: reviewFacts(later),
       local: () => planReview({ owner, repo, prNumber, commitId, runResult, read, conclusion, suppression: gate, files: sent, note, later }),
       fallback: (why, mine) => unrenderedReview(why, env, mine),
       accept: (answer) => typeof answer.parse_ok === 'boolean' && Array.isArray(answer.inline),
@@ -541,13 +546,18 @@ module.exports = async ({
     return summarize({ inline: 0, posted_as: publish ? 'issue-comment' : 'none' });
   }
 
-  const postReview = async (reviewBody, comments) => (await writer.review({
-    number: prNumber,
-    commit: commitId,
-    event: 'COMMENT',
-    body: reviewBody,
-    ...(comments ? { comments } : {}),
-  })).review;
+  const postReview = async (reviewBody, comments, mode = 'normal', later = '') => {
+    const posted = throughCP
+      ? await writer.reviewFromFacts({ number: prNumber, review: reviewFacts(later), mode })
+      : await writer.review({
+          number: prNumber,
+          commit: commitId,
+          event: 'COMMENT',
+          body: reviewBody,
+          ...(comments ? { comments } : {}),
+        });
+    return posted.review;
+  };
 
   // Short-circuited above every posting path, so no shadow run can reach a `createReview` at all.
   if (!publish) return summarize({ review_id: null, posted_as: 'none' });
@@ -572,7 +582,7 @@ module.exports = async ({
     core.warning(`Inline review failed (${e1.status ?? '?'}): ${e1.message}. Retrying single-line.`);
     const singles = inline.map(({ start_line, start_side, ...c }) => c);
     try {
-      const review = await postReview(body, singles);
+      const review = await postReview(body, singles, 'single-line');
       return summarize({ review_id: review, retried: 'single-line' });
     } catch (e2) {
       core.warning(`Single-line retry failed (${e2.status ?? '?'}): ${e2.message}. Body only.`);
@@ -586,11 +596,11 @@ module.exports = async ({
         replanned.whole_body ??
         (later && later !== commitId ? `${planned.whole_body}\n\n${movedNote(commitId, later)}` : planned.whole_body);
       try {
-        const review = await postReview(wholeBody);
+        const review = await postReview(wholeBody, undefined, 'body-only', later);
         return summarize({ inline: 0, folded: planned.findings_total, review_id: review, retried: 'body-only', ...reshadowed });
       } catch (e3) {
         core.warning(`Body-only review failed (${e3.status ?? '?'}): ${e3.message}. Plain comment.`);
-        await postComment(wholeBody);
+        await postComment(wholeBody, later);
         return summarize({ inline: 0, folded: planned.findings_total, posted_as: 'issue-comment', retried: 'body-only', ...reshadowed });
       }
     }

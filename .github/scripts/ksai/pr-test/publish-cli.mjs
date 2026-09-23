@@ -8,10 +8,10 @@ import { renderReview, testerRecord } from './review.mjs';
 import { validateVerdict, verificationRecord } from './verdict.mjs';
 import { readHypotheses } from '../../lib/review-hypotheses.mjs';
 
-const usage = `Usage: publish-cli [--run-dir <path>] [--pr <number>] [--head-sha <sha>] [--base-ref <ref>] [--base-sha <sha>] [--trigger-phrase <phrase>] [--stdout]
+const usage = `Usage: publish-cli [--run-dir <path>] [--pr <number>] [--head-sha <sha>] [--base-ref <ref>] [--base-sha <sha>] [--trigger-phrase <phrase>] [--stdout] [--verify-only]
 
 Reads .pr-test-verdict.json, criteria.json and environments.json from the run
-directory, and writes review.md beside them. Exits 3 when the verdict is one this
+directory, and writes review.md beside them unless --verify-only is set. Exits 3 when the verdict is one this
 publisher will not publish, which is a review that says so rather than silence.
 `;
 
@@ -57,6 +57,10 @@ async function main(argv) {
   ];
   const verification = verificationRecord(verdict, hypotheses, problems);
   await writeFile(join(runDir, 'verification.json'), JSON.stringify(verification, null, 2) + '\n', 'utf8');
+  if (options['verify-only']) {
+    if (problems.length > 0) process.exitCode = 3;
+    return;
+  }
   const spend = await readJson(join(runDir, 'spend.json')).catch(() => null);
   const rendered = renderReview({
     verdict: verdict ?? {},

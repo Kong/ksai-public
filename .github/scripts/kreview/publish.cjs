@@ -11,6 +11,7 @@ const { stoppedBy, watchdogDetail } = require('../lib/watchdog.cjs');
 const { collectSecrets, scrub: scrubSecrets } = require('./secrets.cjs');
 const { counted } = require('../lib/text.cjs');
 const { RUN_REPORT_KEYS, pick, rendered, unrendered, withMarkers } = require('../lib/cp-render.cjs');
+const { usingControlPlane } = require('../lib/control-plane.cjs');
 
 const MISSING_COST = 'Claude execution output omitted total_cost_usd; defaulting total cost to 0.0000.';
 
@@ -620,6 +621,12 @@ async function publishReviewNotice({ github, owner, repo, env, fetch = globalThi
   const due = reviewNoticeDue(env);
   const nothing = { notices: [due.why || 'nothing was due beside this review, so no notice was published'] };
   if (due.kind === '') return nothing;
+  if (usingControlPlane(env)) {
+    await writerFor({ github, owner, repo, env, fetch }).reviewNoticeComment({
+      number: Number(env.PR_NUMBER), report: pick(env, RUN_REPORT_KEYS),
+    });
+    return { notices: [`published the \`${due.kind}\` notice`] };
+  }
   const { value } = await rendered({
     kind: 'review_notice',
     request: pick(env, RUN_REPORT_KEYS),
@@ -644,6 +651,25 @@ async function publishRunReport({ github, core, owner, repo, env, fetch = global
     replaced: 'false',
     published: 'false',
   };
+  if (usingControlPlane(env)) {
+    const writer = writerFor({ github, owner, repo, env, fetch });
+    const report = pick(env, RUN_REPORT_KEYS);
+    const id = Number(env.START_COMMENT_ID);
+    let mode = 'created';
+    if (Number.isInteger(id) && id > 0) {
+      try {
+        await writer.runReportEdit({ comment: id, report });
+        mode = 'updated';
+      } catch (error) {
+        core?.warning?.(`the comment this run opened with could not be updated (${error.message}); posting a new one.`);
+      }
+    }
+    if (mode === 'created') await writer.runReportComment({ number: Number(env.PR_NUMBER), report });
+    outputs.replaced = mode === 'updated' ? 'true' : 'false';
+    outputs.published = 'true';
+    const carried = carriedKind(env) === null ? '' : ', carrying the notice for what went wrong';
+    return { outputs, notices: [`${mode} the run report${carried}`] };
+  }
   const { value } = await rendered({
     kind: 'run_report',
     request: pick(env, RUN_REPORT_KEYS),
@@ -667,8 +693,8 @@ async function publishRunReport({ github, core, owner, repo, env, fetch = global
   return { outputs, notices: [`${out.mode} the run report${carried}`] };
 }
 
-async function reactOnResult({ github, core, owner, repo, env }) {
-  const out = await react({ github, core, owner, repo, commentId: env.COMMENT_ID, threadRootId: env.THREAD_ROOT_ID });
+async function reactOnResult({ github, core, owner, repo, env, fetch = globalThis.fetch }) {
+  const out = await react({ github, core, owner, repo, commentId: env.COMMENT_ID, threadRootId: env.THREAD_ROOT_ID, env, fetch });
   return { outputs: { reacted: out.reacted ? 'true' : 'false' }, notices: [] };
 }
 

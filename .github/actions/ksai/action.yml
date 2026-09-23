@@ -1899,6 +1899,7 @@ runs:
       env:
         THREAD_NUM: ${{ steps.context.outputs.issue_number }}
         NOTICE: ${{ steps.select_test.outputs.notice }}
+        NOTICE_FACTS: ${{ steps.select_test.outputs.notice_facts }}
         NOTICE_KIND: ${{ steps.select_test.outputs.notice_kind }}
         KSAI_ASK: ${{ inputs.ask }}
         JIRA_KEY: ${{ steps.context.outputs.jira_key }}
@@ -1972,6 +1973,7 @@ runs:
       env:
         THREAD_NUM: ${{ steps.context.outputs.issue_number }}
         NOTICE: ${{ steps.select_test.outputs.receipt }}
+        NOTICE_FACTS: ${{ steps.select_test.outputs.receipt_facts }}
         KSAI_ASK: ${{ inputs.ask }}
         JIRA_KEY: ${{ steps.context.outputs.jira_key }}
         NOTICE_KIND: receipt
@@ -2719,6 +2721,23 @@ runs:
       with:
         github-token: ${{ inputs.source_org_github_token }}
         script: |
+          const { usingControlPlane } = require(`${process.env.SCRIPTS}/lib/control-plane.cjs`);
+          if (usingControlPlane(process.env)) {
+            const { writerFor } = require(`${process.env.SCRIPTS}/lib/cp-effects.cjs`);
+            await writerFor({ env: process.env }).surfaceComment({
+              number: Number(process.env.THREAD),
+              surface: { approval: {
+                reference: process.env.APPROVAL_REF,
+                approver: process.env.APPROVER,
+                issue: process.env.ISSUE_NUM,
+                pull: process.env.PR_NUMBER,
+                run: process.env.RUN_ID,
+                trigger: process.env.TRIGGER,
+                ask: process.env.KSAI_ASK,
+              } },
+            });
+            return;
+          }
           const { renderApprovalReceipt } = require(`${process.env.SCRIPTS}/ksai/approval.cjs`);
           await github.rest.issues.createComment({
             owner: context.repo.owner,
@@ -2745,6 +2764,8 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.source_org_github_token }}
+        KSAI_GITHUB_CALLS: ${{ inputs.github_calls }}
+        KSAI_CP_ENDPOINT: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
         REPO: ${{ github.repository }}
         PR_NUMBER: ${{ steps.phase.outputs.pr_number }}
         RELEASE_REF: ${{ steps.approval.outputs.released_by }}
@@ -3204,21 +3225,28 @@ runs:
         CONTEXT_NOTICE: ${{ steps.context.outputs.refusal }}
         REFUSED_ON: ${{ steps.context.outputs.refused_on }}
         SELECT_NOTICE: ${{ steps.select.outputs.notice }}
+        SELECT_FACTS: ${{ steps.select.outputs.notice_facts }}
         SELECT_NOTICE_KIND: ${{ steps.select.outputs.notice_kind }}
         SUBJECT_NOTICE: ${{ steps.subject.outputs.stop_notice }}
+        SUBJECT_FACTS: ${{ steps.subject.outputs.stop_facts }}
         CLOSED_NOTICE: ${{ steps.issue.outputs.closed_notice }}
+        CLOSED_FACTS: ${{ steps.issue.outputs.closed_facts }}
         STOP_NOTICE: ${{ steps.phase.outputs.stop_notice }}
+        STOP_FACTS: ${{ steps.phase.outputs.stop_facts }}
         PHASE_NOTICE: ${{ steps.phase.outputs.notice }}
+        PHASE_FACTS: ${{ steps.phase.outputs.notice_facts }}
         MERGE_NOTICE: ${{ steps.merge_base.outputs.error }}
         KSAI_ASK: ${{ inputs.ask }}
         JIRA_KEY: ${{ steps.subject.outputs.jira_key || steps.context.outputs.jira_key }}
         JIRA_ERROR: ${{ steps.fetch_jira.outputs.error }}
+        HELD_BY: ${{ steps.holder.outputs.held_by }}
         HELD_NOTICE: >-
           ${{ steps.holder.outputs.held_by != '' &&
           format('another run is already working this plan ({0}), so this one stopped before writing
           anything. Ask again once that run has finished.', steps.holder.outputs.held_by) || '' }}
         TRIGGER: ${{ inputs.trigger_phrase }}
         PLAN_NOTICE: ${{ steps.read_plan.outputs.error_notice }}
+        PLAN_FACTS: ${{ steps.read_plan.outputs.error_facts }}
         COMMAND: ${{ steps.select.outputs.command }}
         ROUTE_SOURCE: ${{ steps.select.outputs.route_source }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
@@ -3246,6 +3274,8 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.source_org_github_token }}
+        KSAI_GITHUB_CALLS: ${{ inputs.github_calls }}
+        KSAI_CP_ENDPOINT: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
         REPO: ${{ github.repository }}
         PR_NUMBER: ${{ steps.phase.outputs.pr_number }}
         ISSUE_NUM: ${{ steps.subject.outputs.issue }}
@@ -3277,6 +3307,7 @@ runs:
       env:
         PR_NUMBER: ${{ steps.phase.outputs.pr_number }}
         MESSAGE_FILE: ${{ steps.release_plan.outputs.message_file }}
+        REFUSAL_FILE: ${{ steps.release_plan.outputs.refusal_file }}
         KSAI_ASK: ${{ inputs.ask }}
         JIRA_KEY: ${{ steps.subject.outputs.jira_key || steps.context.outputs.jira_key }}
         COMMAND: ${{ steps.select.outputs.command }}
@@ -3639,6 +3670,8 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.source_org_github_token }}
+        KSAI_GITHUB_CALLS: ${{ inputs.github_calls }}
+        KSAI_CP_ENDPOINT: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
         REPO: ${{ github.repository }}
         ISSUE_NUM: ${{ steps.subject.outputs.number }}
         RUN_ID: ${{ github.run_id }}
@@ -3664,7 +3697,8 @@ runs:
     - name: Comment what this run opened on the issue
       id: notice_opened
       if: >-
-        ${{ (steps.open_draft.outputs.message_file || steps.open_branch.outputs.message_file) != '' &&
+        ${{ inputs.github_calls != 'cp' &&
+        (steps.open_draft.outputs.message_file || steps.open_branch.outputs.message_file) != '' &&
         steps.subject.outputs.number != '' }}
       shell: bash
       env:
@@ -3675,6 +3709,47 @@ runs:
       run: |
         set -euo pipefail
         gh issue comment "$ISSUE_NUM" --repo "$REPO" --body-file "${MESSAGE_FILE}"
+
+    - name: Have the control plane explain what this run opened
+      id: notice_opened_cp
+      if: >-
+        ${{ inputs.github_calls == 'cp' && inputs.dry_run == 'false' &&
+        (steps.open_draft.outputs.message_file || steps.open_branch.outputs.message_file) != '' &&
+        steps.subject.outputs.number != '' }}
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        ISSUE_NUM: ${{ steps.subject.outputs.number }}
+        MODE: ${{ steps.open_draft.outputs.message_file != '' && 'draft' || 'branch' }}
+        STATUS: ${{ steps.open_draft.outputs.status || steps.open_branch.outputs.status }}
+        REASON: ${{ steps.open_draft.outputs.notice_reason || steps.open_branch.outputs.notice_reason }}
+        DETAIL: ${{ steps.open_draft.outputs.notice_detail || steps.open_branch.outputs.notice_detail }}
+        PR_URL: ${{ steps.open_draft.outputs.pr_url }}
+        PR_NUMBER: ${{ steps.open_draft.outputs.pr_number }}
+        RUN_ID: ${{ github.run_id }}
+        TRIGGER: ${{ inputs.trigger_phrase }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      with:
+        script: |
+          const { usingControlPlane } = require(`${process.env.SCRIPTS}/lib/control-plane.cjs`);
+          const { writerFor } = require(`${process.env.SCRIPTS}/lib/cp-effects.cjs`);
+          if (!usingControlPlane(process.env)) {
+            core.warning('this step publishes through the control plane, and KSAI_GITHUB_CALLS is not `cp`');
+            return;
+          }
+          await writerFor({ env: process.env }).surfaceComment({
+            number: Number(process.env.ISSUE_NUM),
+            surface: { opened: {
+              mode: process.env.MODE,
+              status: process.env.STATUS,
+              reason: process.env.REASON,
+              detail: process.env.DETAIL,
+              pull_url: process.env.PR_URL,
+              issue: process.env.ISSUE_NUM,
+              pull: process.env.PR_NUMBER,
+              run: process.env.RUN_ID,
+              trigger: process.env.TRIGGER,
+            } },
+          });
 
     - name: Initialize the durable write report
       id: write_comment
@@ -4494,6 +4569,8 @@ runs:
         EFFORT: ${{ steps.select_arm.outputs.effort }}
         COMMAND: ${{ steps.select_arm.outputs.command }}
         RECEIPT: ${{ steps.select_arm.outputs.receipt }}
+        ROUTE_SOURCE: ${{ steps.select_arm.outputs.route_source }}
+        ROUTE_SURFACE: ${{ steps.select_arm.outputs.route_surface }}
         TRIGGER: ${{ inputs.trigger_phrase }}
         CHANNEL_DIR: ${{ steps.channel.outputs.state_dir }}
         TEAM: ${{ steps.telemetry.outputs.team }}
@@ -5035,6 +5112,7 @@ runs:
         RUN_DIR: ${{ runner.temp }}/pr-test-download
         SOURCE_RUN: ${{ inputs.run_id || github.run_id }}
         RENDERED_OUTCOME: ${{ steps.render_test.outputs.outcome }}
+        PHRASE: ${{ inputs.trigger_phrase }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: |
         set -euo pipefail
@@ -5923,6 +6001,8 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.source_org_github_token }}
+        KSAI_GITHUB_CALLS: ${{ inputs.github_calls }}
+        KSAI_CP_ENDPOINT: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
         REPO: ${{ github.repository }}
         ISSUE_NUM: ${{ steps.subject.outputs.issue }}
         PR_NUMBER: ${{ steps.phase.outputs.pr_number || steps.open_draft.outputs.pr_number }}
@@ -5957,6 +6037,8 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.source_org_github_token }}
+        KSAI_GITHUB_CALLS: ${{ inputs.github_calls }}
+        KSAI_CP_ENDPOINT: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
         REPO: ${{ github.repository }}
         ISSUE_NUM: ${{ steps.subject.outputs.issue }}
         RUN_ID: ${{ github.run_id }}
@@ -5974,6 +6056,7 @@ runs:
         CO_AUTHOR: ${{ steps.identity.outputs.coauthor }}
         KSAI_ASK: ${{ inputs.ask }}
         JIRA_KEY: ${{ steps.jira_ref.outputs.step_key || steps.jira_ref.outputs.plan_key }}
+        JIRA_SITE: ${{ steps.fetch_jira.outputs.site || inputs.jira_site }}
         COMMIT_AUTHOR_NAME: ${{ steps.identity.outputs.author_name }}
         COMMIT_AUTHOR_EMAIL: ${{ steps.identity.outputs.author_email }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
@@ -6030,6 +6113,8 @@ runs:
         STEP_TITLE: ${{ steps.read_plan.outputs.step_title }}
         REMAINING: ${{ steps.read_plan.outputs.remaining }}
         REMAINING_STEPS: ${{ steps.read_plan.outputs.remaining_steps }}
+        KSAI_CP_ENDPOINT: ${{ inputs.control_plane_endpoint }}
+        KSAI_GITHUB_CALLS: ${{ inputs.github_calls }}
         TRIGGER: ${{ inputs.trigger_phrase }}
         DENIED_PATHS: ${{ steps.bare_gate.outputs.denied_paths || inputs.denied_paths }}
         PLAN_DIR: ${{ inputs.plan_file_path }}
@@ -6151,6 +6236,7 @@ runs:
             repo: context.repo.repo,
             prNumber: process.env.PR_NUMBER,
             sha: process.env.PUSHED_SHA,
+            env: process.env,
           });
 
     - name: Keep the work a push gate refused
@@ -6260,7 +6346,6 @@ runs:
         retries: 3
         script: |
           const { heldPlan } = require(`${process.env.SCRIPTS}/ksai/stop-due.mjs`);
-          const { withHold } = require(`${process.env.SCRIPTS}/ksai/plan.cjs`);
           const fs = require('node:fs');
           let held = false;
           try {
@@ -6270,6 +6355,14 @@ runs:
           }
           if (!held) return;
           const number = Number(process.env.PR_NUMBER);
+          const { usingControlPlane } = require(`${process.env.SCRIPTS}/lib/control-plane.cjs`);
+          if (usingControlPlane(process.env)) {
+            const { writerFor } = require(`${process.env.SCRIPTS}/lib/cp-effects.cjs`);
+            await writerFor({ env: process.env }).holdPlan({ number, run: process.env.RUN_ID });
+            core.setOutput('held', 'true');
+            return;
+          }
+          const { withHold } = require(`${process.env.SCRIPTS}/ksai/plan.cjs`);
           const { data } = await github.rest.pulls.get({ ...context.repo, pull_number: number });
           const next = withHold(data.body ?? '', process.env.RUN_ID);
           if (next === null) {
@@ -6363,6 +6456,7 @@ runs:
           ${{ steps.publish.outputs.status || steps.publish_direct.outputs.status || steps.record.outputs.status ||
           steps.record_fix.outputs.status || steps.record_do.outputs.status ||
           steps.release_plan.outputs.status || 'failed' }}
+        STEP_TITLE: ${{ steps.read_plan.outputs.step_title }}
         REASON: >-
           ${{ steps.disarm_watchdog.outputs.cause || steps.approval.outputs.reason ||
           (steps.checkpoint.outputs.waiting == 'true' && steps.checkpoint.outputs.reason) || '' }}
@@ -6449,6 +6543,7 @@ runs:
       env:
         REPORT_NUM: >-
           ${{ steps.phase.outputs.pr_number || steps.open_draft.outputs.pr_number ||
+          steps.publish_direct.outputs.pr_number ||
           steps.context.outputs.issue_number }}
         COMMENT_ID: ${{ steps.context.outputs.comment_id }}
         THREAD_ROOT_ID: ${{ steps.context.outputs.thread_root_id }}
@@ -6457,13 +6552,16 @@ runs:
         REPORTED: "true"
         ALREADY_SAID: "success"
         ISSUE_NUM: ${{ steps.subject.outputs.number }}
-        PR_NUMBER: ${{ steps.phase.outputs.pr_number || steps.open_draft.outputs.pr_number }}
+        PR_NUMBER: >-
+          ${{ steps.phase.outputs.pr_number || steps.open_draft.outputs.pr_number ||
+          steps.publish_direct.outputs.pr_number }}
         PHASE: ${{ steps.size.outputs.phase }}
         RUN_ID: ${{ github.run_id }}
         MESSAGE_FILE: >-
           ${{ steps.publish.outputs.message_file || steps.publish_direct.outputs.message_file ||
           steps.record.outputs.message_file || steps.record_fix.outputs.message_file ||
           steps.record_do.outputs.message_file || steps.release_plan.outputs.message_file }}
+        RESULT_FACTS_FILE: ${{ steps.record.outputs.result_facts_file }}
         STATUS: >-
           ${{ steps.publish.outputs.status || steps.publish_direct.outputs.status || steps.record.outputs.status ||
           steps.record_fix.outputs.status || steps.record_do.outputs.status ||

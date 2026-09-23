@@ -5,6 +5,8 @@ import { pathToFileURL } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const { payloadFor } = require('./marker.cjs');
+const { usingControlPlane } = require('../lib/control-plane.cjs');
+const { writerFor } = require('../lib/cp-effects.cjs');
 const {
   carryRecords,
   oneLine,
@@ -54,6 +56,8 @@ export function publishPlan({
   planDir = null,
   commitFile = null,
   noun = 'Planning',
+  throughControlPlane = false,
+  publishToControlPlane = null,
   recordPushed = (_sha) => {},
   run = runCommand,
 } = {}) {
@@ -90,7 +94,7 @@ export function publishPlan({
     return block(`I could not name a plan document under \`${safeEcho(String(planDir ?? ''))}\`, so nothing was published.`);
   }
 
-  const waiting = renderPlanWaiting({
+  const waiting = throughControlPlane ? null : renderPlanWaiting({
     issueNumber: Number(issueNumber),
     requestedBy: recorded ?? requestedBy,
     summary: manifest?.summary,
@@ -100,7 +104,7 @@ export function publishPlan({
     triggerPhrase,
     jira,
   });
-  if (waiting.error) return block(`The plan could not be published: ${waiting.error}`);
+  if (waiting?.error) return block(`The plan could not be published: ${waiting.error}`);
 
   let document;
   try {
@@ -178,6 +182,30 @@ export function publishPlan({
   }
   recordPushed(published.sha);
 
+  if (throughControlPlane) {
+    const blob = git(['rev-parse', `${published.sha}:${planPath}`]);
+    const blobSha = blob.ok ? String(blob.stdout).trim() : '';
+    if (!/^[0-9a-f]{40}$/.test(blobSha)) {
+      return block(`I could not name the content of \`${planPath}\` that was pushed, so the plan was not offered for approval.`);
+    }
+    const facts = {
+      title, summary: String(manifest?.summary ?? ''), path: planPath, branch,
+      head_sha: published.sha, blob_sha: blobSha, checkpoints: runnable.checkpoints,
+      issue: Number(issueNumber), requester: recorded ?? requestedBy, trigger: triggerPhrase,
+      jira_key: jira?.key ?? '', jira_site: jira?.site ?? '',
+      command: marker?.command ?? '', run: String(marker?.run ?? ''), ask: marker?.ask ?? '',
+    };
+    const { prUrl, message } = filesLinked(
+      'The plan is [the plan document](LINK). Review it there and approve it, and it becomes the task list ' +
+        'that drives the work - one commit per step. Nothing is implemented until then',
+      runnable, { serverUrl, repo, number, triggerPhrase },
+    );
+    return Promise.resolve().then(() => publishToControlPlane({ number: Number(number), facts })).then(
+      () => ({ status: 'planned', pushedSha: published.sha, planFile: planPath, prUrl, message }),
+      () => block('The plan document is on the branch and the control plane could not offer it for approval - see the workflow run.'),
+    );
+  }
+
   if (!editPullBody({ repo, number, title, bodyFile, body: carryRecords(current, waiting.body), run })) {
     return block('The plan document is on the branch and the pull request would not take its body - see the workflow run.');
   }
@@ -219,11 +247,12 @@ export function publishPlan({
   return { status: 'planned', pushedSha: published.sha, planFile: planPath, prUrl, message };
 }
 
-export function main(env = process.env, { run = runCommand } = {}) {
+export async function main(env = process.env, { run = runCommand,
+  publishToControlPlane = (facts) => writerFor({ env }).publishPlan(facts) } = {}) {
   const tmp = env.RUNNER_TEMP || '/tmp';
   const messageFile = path.join(tmp, 'ksai-message.txt');
 
-  const result = publishPlan({
+  const result = await publishPlan({
     manifestPath: env.MANIFEST,
     prNumber: env.PR_NUMBER,
     issueNumber: env.ISSUE_NUM,
@@ -242,6 +271,8 @@ export function main(env = process.env, { run = runCommand } = {}) {
     deniedPaths: env.DENIED_PATHS,
     planDir: env.PLAN_DIR,
     noun: env.PLAN_GIVEN === 'true' ? 'The requester' : 'Planning',
+    throughControlPlane: usingControlPlane(env),
+    publishToControlPlane,
     recordPushed: (sha) => writeOutputs(env.GITHUB_OUTPUT, {
       pushed_sha: sha,
       pr_number: env.PR_NUMBER,
@@ -252,7 +283,7 @@ export function main(env = process.env, { run = runCommand } = {}) {
   writeFileSync(messageFile, `${result.message}\n`);
   writeOutputs(env.GITHUB_OUTPUT, {
     status: result.status,
-    pr_url: result.prUrl,
+    ...('prUrl' in result ? { pr_url: result.prUrl } : {}),
     message_file: messageFile,
   });
   process.stdout.write(`${result.message}\n`);
@@ -260,5 +291,5 @@ export function main(env = process.env, { run = runCommand } = {}) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  process.exit(main());
+  process.exitCode = await main();
 }

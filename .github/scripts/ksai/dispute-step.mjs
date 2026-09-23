@@ -30,7 +30,8 @@ const { marked, payloadFor } = require('./marker.cjs');
 const { spendFromExecution } = require('./write-report.cjs');
 const { scrub } = require('./plan.cjs');
 const { asAlert } = require('../lib/select-arm.cjs');
-const { renderedNotice } = require('../lib/cp-render.cjs');
+const { NOTICE_KEYS, pick, renderedNotice } = require('../lib/cp-render.cjs');
+const { usingControlPlane } = require('../lib/control-plane.cjs');
 import { writeRenderRequest } from '../lib/render-request.cjs';
 
 const REPLY_KIND = Object.freeze({
@@ -152,13 +153,15 @@ export async function lockDisputed({ github, core, owner, repo, env = process.en
     const verdict = verdicts[index];
     if (verdict === DISAGREE && root === scoped) held = true;
     const kind = verdict === DISAGREE ? LOCK_KIND : verdict === UNCLEAR ? UNCLEAR_KIND : AGREED_KIND;
-    const body = await replyFor(kind);
+    const throughCP = usingControlPlane(env);
+    const body = throughCP ? null : await replyFor(kind);
     try {
-      await writer.replyInThread({
-        number: Number(env.PR_NUMBER),
-        comment: root,
-        body,
-      });
+      if (throughCP) {
+        await writer.noticeReplyInThread({ number: Number(env.PR_NUMBER), comment: root,
+          notice: { kind: REPLY_KIND[kind], env: pick(env, NOTICE_KEYS) } });
+      } else {
+        await writer.replyInThread({ number: Number(env.PR_NUMBER), comment: root, body });
+      }
       if (verdict === DISAGREE) locked += 1;
     } catch (error) {
       notices.push(`thread ${root} could not have its dispute recorded: ${error?.message ?? error}`);
@@ -174,17 +177,19 @@ export async function releaseThread({ github, core, owner, repo, env = process.e
   const threads = readThreadsFile(env.THREADS_FILE);
   const held = lockedThreads(threads, { botLogin: env.BOT_LOGIN }).some((thread) => thread?.rootCommentId === root);
   if (!held) return { released: false, why: 'that thread is not held, so there is nothing to release' };
-  const body = await renderedReply({
-    kind: UNLOCK_KIND,
-    env,
-    fetch,
-    local: () => marked(scrub(RELEASED, { triggerPhrase: env.TRIGGER }), payloadFor(env, { kind: UNLOCK_KIND })),
-  });
-  await writerFor({ github, owner, repo, env, fetch }).replyInThread({
-    number: Number(env.PR_NUMBER),
-    comment: root,
-    body,
-  });
+  const writer = writerFor({ github, owner, repo, env, fetch });
+  if (usingControlPlane(env)) {
+    await writer.noticeReplyInThread({ number: Number(env.PR_NUMBER), comment: root,
+      notice: { kind: REPLY_KIND[UNLOCK_KIND], env: pick(env, NOTICE_KEYS) } });
+  } else {
+    const body = await renderedReply({
+      kind: UNLOCK_KIND,
+      env,
+      fetch,
+      local: () => marked(scrub(RELEASED, { triggerPhrase: env.TRIGGER }), payloadFor(env, { kind: UNLOCK_KIND })),
+    });
+    await writer.replyInThread({ number: Number(env.PR_NUMBER), comment: root, body });
+  }
   core?.info?.(`thread ${root} was released, so the next pass may work it.`);
   return { released: true, why: '' };
 }

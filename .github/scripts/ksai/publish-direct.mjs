@@ -4,6 +4,8 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const require = createRequire(import.meta.url);
+const { usingControlPlane } = require('../lib/control-plane.cjs');
+const { writerFor } = require('../lib/cp-effects.cjs');
 const {
   linked,
   oneLine,
@@ -37,6 +39,9 @@ export function publishDirect({
   commitFile = null,
   recordPushed = (_sha) => {},
   recordPull = (_number) => {},
+  throughControlPlane = false,
+  jiraKey = null,
+  jiraSite = null,
   readEdits = readExpectationEdits,
   run = runCommand,
 } = {}) {
@@ -69,7 +74,9 @@ export function publishDirect({
     triggerPhrase,
     warning,
   });
-  let rendered = bodyFor();
+  let rendered = throughControlPlane ? null : bodyFor();
+  const summaryLength = Array.from(String(manifest?.summary ?? '')).length;
+  const summaryShortened = summaryLength > 500 ? summaryLength : undefined;
 
   rmSync(manifestPath, { force: true });
 
@@ -84,8 +91,23 @@ export function publishDirect({
     maxCommits: MAX_DIRECT_COMMITS,
   });
   if (!verified.ok) return block(`I did not push this work: ${verified.reason}`);
-  const warning = expectationWarning({ readEdits, git, from: baseSha, to: verified.sha, noun: 'This run' });
-  if (warning !== '') rendered = bodyFor(warning);
+  let warning = '';
+  let expectationEdits = null;
+  if (throughControlPlane) {
+    try {
+      const found = readEdits({ git, from: baseSha, to: verified.sha });
+      if (found?.ok && Array.isArray(found.edited) && found.edited.length > 0) {
+        expectationEdits = { lines: found.lines, edited: found.edited };
+      } else if (!found?.ok) {
+        process.stderr.write(`Note: the existing test expectation scan did not run: ${found?.reason ?? 'no answer'}.\n`);
+      }
+    } catch {
+      process.stderr.write('Note: the existing test expectation scan did not run: the scan threw.\n');
+    }
+  } else {
+    warning = expectationWarning({ readEdits, git, from: baseSha, to: verified.sha, noun: 'This run' });
+  }
+  if (warning !== '' && !throughControlPlane) rendered = bodyFor(warning);
 
   const published = publishCommit({
     cwd,
@@ -103,6 +125,13 @@ export function publishDirect({
     return block(`The work did not reach the remote: ${published.reason} - see the workflow run.`);
   }
   recordPushed(published.sha);
+
+  if (throughControlPlane) {
+    return { status: 'pending', pushedSha: published.sha, summaryShortened,
+      facts: { kind: 'direct', base: defaultBranch, head: branch, issue: Number(issueNumber),
+        title, summary: manifest?.summary, requester: requestedBy, trigger: triggerPhrase,
+        jira_key: jiraKey, jira_site: jiraSite, expectation_edits: expectationEdits } };
+  }
 
   writeFileSync(bodyFile, rendered.body);
   const created = createPull({ repo, base: defaultBranch, head: branch, title, bodyFile, run });
@@ -132,7 +161,8 @@ export function publishDirect({
   };
 }
 
-export function main(env = process.env, { run = runCommand } = {}) {
+export function main(env = process.env, { run = runCommand,
+  open = (facts) => writerFor({ env }).openPull(facts), readEdits = readExpectationEdits } = {}) {
   const tmp = env.RUNNER_TEMP || '/tmp';
   const messageFile = path.join(tmp, 'ksai-message.txt');
 
@@ -158,19 +188,36 @@ export function main(env = process.env, { run = runCommand } = {}) {
     recordPull: (number) => writeOutputs(env.GITHUB_OUTPUT, {
       pr_number: number,
     }),
+    throughControlPlane: usingControlPlane(env),
+    jiraKey: env.JIRA_KEY,
+    jiraSite: env.JIRA_SITE,
+    readEdits,
     run,
   });
 
-  writeFileSync(messageFile, `${result.message}\n`);
-  writeOutputs(env.GITHUB_OUTPUT, {
-    status: result.status,
-    pr_url: result.prUrl ?? '',
-    message_file: messageFile,
-  });
-  process.stdout.write(`${result.message}\n`);
-  return 0;
+  const finish = (resolved) => {
+    writeFileSync(messageFile, `${resolved.message}\n`);
+    writeOutputs(env.GITHUB_OUTPUT, {
+      status: resolved.status,
+      pr_url: resolved.prUrl ?? '',
+      message_file: messageFile,
+    });
+    process.stdout.write(`${resolved.message}\n`);
+    return 0;
+  };
+  if (result.status === 'pending') {
+    return Promise.resolve().then(() => open(result.facts)).then(({ prNumber, prUrl }) => {
+      writeOutputs(env.GITHUB_OUTPUT, { pr_number: prNumber });
+      return finish({ status: 'built', prUrl,
+        message: linked(scrub('This was small enough to build without a plan, so the whole change is in ' +
+          `[one pull request](LINK), open for review${shortenedNote(null, result.summaryShortened)}`,
+        { triggerPhrase: env.TRIGGER }), prUrl) });
+    }, () => finish({ status: 'blocked',
+      message: `The work is pushed to \`${safeEcho(env.BRANCH)}\`, but the control plane could not open its pull request.` }));
+  }
+  return finish(result);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  process.exit(main());
+  process.exitCode = await main();
 }

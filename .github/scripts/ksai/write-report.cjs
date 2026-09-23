@@ -9,6 +9,7 @@ const { usingControlPlane } = require('../lib/control-plane.cjs');
 const { STATUS_BEGIN, STATUS_END, URL_SHAPE, locateStatus, oneLine, scrub, spliceStatus } = require('./plan.cjs');
 const { probeComments } = require('./pages.cjs');
 const { LOCK_TIMEOUT_MS, withIssueLock } = require('./write-lock.cjs');
+const { withControlPlaneLock } = require('./cp-lock.cjs');
 
 const MAX_SELECTION_CHARS = 80;
 
@@ -885,7 +886,7 @@ function writing(store) {
 function reportRequest(args) {
   return {
     state: args.state,
-    current: String(args.current ?? ''),
+    ...(args.event ? { event: args.event } : { current: String(args.current ?? '') }),
     issue: String(args.issue ?? ''),
     run: String(args.run ?? ''),
     trigger: String(args.triggerPhrase ?? ''),
@@ -1172,6 +1173,7 @@ async function updateWriteProgressUnlocked({
   if (chosen.error) return { outputs: blank, failure: chosen.error };
   const store = writing(chosen.store);
   const renderLeft = renderBudget(now);
+  const cp = usingControlPlane(env);
 
   for (let pass = 0; pass < MAX_PASSES; pass += 1) {
     const read = await store.load();
@@ -1181,12 +1183,13 @@ async function updateWriteProgressUnlocked({
     const before = read.state.attempts.map((entry) => entry.id);
     const existingRequest = doRequestOf(read.ref.body);
     const doRequest = existingRequest === String(identity.request) ? existingRequest : null;
-    const grown = note === null
+    const grown = cp || note === null
       ? historyOf(read.state)
       : noted(read.state, currentText(note.said, env.TRIGGER), note.at ?? now(), env.TRIGGER);
     const saved = await store.write(read.ref, {
       state: { ...read.state, history: grown },
-      current: note === null ? current : note.said,
+      current: cp ? '' : note === null ? current : note.said,
+      ...(cp ? { event: { kind: 'progress', at: note?.at ?? now(), stage: note?.stage ?? '' } } : {}),
       issue: env.ISSUE_NUM,
       run: env.RUN_ID,
       triggerPhrase: env.TRIGGER,
@@ -1240,6 +1243,7 @@ async function mutateWriteReportUnlocked({
   if (chosen.error) return { outputs: {}, failure: chosen.error };
   const store = writing(chosen.store);
   const renderLeft = renderBudget(now);
+  const cp = usingControlPlane(env);
 
   for (let pass = 0; pass < MAX_PASSES; pass += 1) {
     const read = await store.load();
@@ -1276,11 +1280,13 @@ async function mutateWriteReportUnlocked({
     const merged = mergeAttempt(held, attempted.attempt);
     if (merged.error) return { outputs: {}, failure: merged.error };
     const before = held.attempts.map((entry) => entry.id);
-    const current = currentOfEnv(env);
+    const current = cp ? '' : currentOfEnv(env);
     const noteAt = numberOrNull(env.CURRENT_AT) ?? now();
     const saved = await store.write(read.ref, {
-      state: { ...merged.state, history: noted(merged.state, currentText(current, env.TRIGGER), noteAt, env.TRIGGER) },
+      state: { ...merged.state, history: cp ? historyOf(merged.state) :
+        noted(merged.state, currentText(current, env.TRIGGER), noteAt, env.TRIGGER) },
       current,
+      ...(cp ? { event: { kind: 'result', at: noteAt, step_title: env.STEP_TITLE ?? '' } } : {}),
       issue: env.ISSUE_NUM,
       run: env.RUN_ID,
       triggerPhrase: env.TRIGGER,
@@ -1313,31 +1319,30 @@ async function mutateWriteReportUnlocked({
   return { outputs: {}, failure: 'the durable write report kept changing and could not be merged safely' };
 }
 
-async function lockedMutation({ github, owner, repo, env, sleep, lockKind, recoverKinds, releaseRequired, task }) {
+async function lockedMutation({ github, owner, repo, env, fetch, sleep, now, lockKind, recoverKinds, releaseRequired, task }) {
   const identified = identityOf(env);
   if (identified.error) return { outputs: {}, failure: identified.error };
-  const context = await reportContext({
-    github,
-    owner,
-    repo,
-    identity: identified.identity,
-    botLogin: env.BOT_LOGIN,
-  });
-  if (context.error) return { outputs: {}, failure: context.error };
   const lockOwner = String(env.ATTEMPT_ID || attemptId(env));
-  const locked = await withIssueLock({
-    github,
-    owner,
-    repo,
-    issueNumber: reportThread(identified.identity, env.ISSUE_NUM),
-    lockOwner,
-    lockKind,
-    recoverKinds,
-    accept: (comment) => trusted(comment, context.logins),
-    triggerPhrase: env.TRIGGER,
-    sleep,
-    task,
-  });
+  const issueNumber = reportThread(identified.identity, env.ISSUE_NUM);
+  let locked;
+  if (usingControlPlane(env)) {
+    locked = await withControlPlaneLock({ env, fetch, issueNumber, lockOwner, lockKind, recoverKinds,
+      sleep, now, task });
+  } else {
+    const context = await reportContext({
+      github,
+      owner,
+      repo,
+      identity: identified.identity,
+      botLogin: env.BOT_LOGIN,
+    });
+    if (context.error) return { outputs: {}, failure: context.error };
+    locked = await withIssueLock({
+      github, owner, repo, issueNumber, lockOwner, lockKind, recoverKinds,
+      accept: (comment) => trusted(comment, context.logins), triggerPhrase: env.TRIGGER,
+      sleep, task,
+    });
+  }
   if (locked.error) return { outputs: {}, failure: locked.error };
   const result = locked.value;
   if (locked.releasePending) {
@@ -1369,7 +1374,9 @@ async function updateWriteProgress({
     owner,
     repo,
     env: liveEnv(env),
+    fetch,
     sleep,
+    now,
     lockKind: 'live',
     recoverKinds: [],
     releaseRequired: false,
@@ -1435,7 +1442,9 @@ async function mutateWriteReport({
     owner,
     repo,
     env,
+    fetch,
     sleep,
+    now,
     lockKind: 'report',
     recoverKinds: ['live'],
     releaseRequired: true,

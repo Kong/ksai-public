@@ -12,9 +12,11 @@ const require = createRequire(import.meta.url);
 const { appendHistory, stageOf } = require('../lib/run-progress.cjs');
 const { classifierModel } = require('./classify.cjs');
 const { runUrl } = require('./plan.cjs');
-const { CARRIED_FILE, armOf, renderRunProgress, saidFor } = require('./run-start.cjs');
+const { CARRIED_FILE, armOf, renderRunProgress, saidFor, startFacts } = require('./run-start.cjs');
 const { identityOf, storesInBody, updateWriteProgress } = require('./write-report.cjs');
 const { RENDER_ENV_KEYS, pick } = require('../lib/cp-render.cjs');
+const { usingControlPlane } = require('../lib/control-plane.cjs');
+const { writerFor } = require('../lib/cp-effects.cjs');
 
 const DEFAULT_API_URL = 'https://api.github.com';
 
@@ -232,6 +234,18 @@ function writeGithubOver(token, apiUrl, fetchImpl) {
 }
 
 export async function publishStatus({ held, reading, token, apiUrl = DEFAULT_API_URL, fetchImpl = fetch, sleep, rendering = {} }) {
+  const cpEnv = { ...held, ...pick(rendering, RENDER_ENV_KEYS) };
+  if (held.FLOW === 'review' && usingControlPlane(cpEnv)) {
+    if (!Number.isSafeInteger(Number(held.COMMENT_ID)) || Number(held.COMMENT_ID) <= 0) return false;
+    try {
+      await writerFor({ env: cpEnv, fetch: fetchImpl, pause: sleep }).runProgress({
+        comment: Number(held.COMMENT_ID), start: startFacts(held, reading),
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
   const body = renderRunProgress(held, reading);
   if (body === '') return false;
   if (held.FLOW !== 'implement') {
@@ -253,7 +267,7 @@ export async function publishStatus({ held, reading, token, apiUrl = DEFAULT_API
     owner: parts[0],
     repo: parts[1],
     env: { ...held, ...pick(rendering, RENDER_ENV_KEYS) },
-    note: latest ? { at: latest.at, said: latest.said } : null,
+    note: latest ? { at: latest.at, said: latest.said, stage: latest.stage } : null,
     live: {
       arm: armOf(held),
       cells: reading?.cells,

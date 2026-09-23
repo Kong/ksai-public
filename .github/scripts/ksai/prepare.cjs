@@ -69,6 +69,7 @@ const {
 } = require('./phase.cjs');
 const path = require('node:path');
 const { isPlanFile, planDirOf, planFilePathFor, readRelease, scrub, withoutHold } = require('./plan.cjs');
+const { usingControlPlane } = require('../lib/control-plane.cjs');
 const {
   renderDirectPrompt,
   renderDoPrompt,
@@ -174,6 +175,18 @@ async function resolveCourierPull({ github, core, owner, repo, env }) {
   return { outputs, notices: [], failure: null };
 }
 
+function selectionNoticeFacts(out, env, answersRejection) {
+  if (out.error && answersRejection) return { reason: 'invalid', detail: out.error };
+  if (out.help) return {
+    reason: 'help', on_issue: env.ON_ISSUE, thread_root_id: env.THREAD_ROOT_ID,
+    disabled_commands: env.DISABLED_COMMANDS,
+  };
+  if (out.nudge) return { reason: 'nudge' };
+  if (out.unaddressed) return { reason: 'unaddressed', unaddressed: out.unaddressed };
+  const facts = testerNoticeFacts(out, env);
+  return facts === null ? null : { ...facts, on_issue: env.ON_ISSUE, thread_root_id: env.THREAD_ROOT_ID };
+}
+
 async function selectImplementArm({ github, core, owner, repo, env }) {
   const out = await resolveRequest({
     github,
@@ -271,6 +284,7 @@ async function selectImplementArm({ github, core, owner, repo, env }) {
     write_access_commands: '',
     mine: out.mine ? 'true' : 'false',
     notice,
+    notice_facts: notice === '' ? '' : JSON.stringify(selectionNoticeFacts(out, env, answersRejection)),
     notice_kind: out.help ? 'guide' : '',
   };
 
@@ -327,6 +341,7 @@ async function selectImplementArm({ github, core, owner, repo, env }) {
     });
     if (planning.error) {
       outputs.notice = asAlert('WARNING', scrub(`**${planning.error}**`, { triggerPhrase: env.TRIGGER }));
+      outputs.notice_facts = JSON.stringify({ reason: 'invalid', detail: planning.error });
       return { outputs, notices, failure: planning.error };
     }
     outputs.plan_mode = planning.mode;
@@ -360,6 +375,21 @@ async function selectImplementArm({ github, core, owner, repo, env }) {
 function testModeFor(asked, configured) {
   if (asked === true) return 'dry-run';
   return String(configured ?? '') === '' ? 'test' : String(configured);
+}
+
+function testerNoticeFacts(out, env) {
+  if (out.error && out.mine) return { reason: 'invalid', detail: out.error };
+  if (out.unimplemented) return { reason: 'unimplemented', command: out.unimplemented, classified: out.classified === true };
+  if (out.disabled) return { reason: 'disabled', command: out.disabled };
+  if (out.unauthorized) return {
+    reason: 'unauthorized', command: out.unauthorized.command, bar: out.unauthorized.bar,
+    undecided: out.unauthorized.undecided === true, write: env.WRITE_ACCESS,
+    write_access_commands: [...out.unauthorized.writeAccessCommands].join(','),
+  };
+  if (out.clarify) return { reason: 'clarify', disabled_commands: env.DISABLED_COMMANDS };
+  if (out.wrongSurface) return { reason: 'wrong_surface', command: out.wrongSurface.command };
+  if (out.unnamed) return { reason: 'unnamed', disabled_commands: env.DISABLED_COMMANDS };
+  return null;
 }
 
 async function selectTesterArm({ github, core, owner, repo, env }) {
@@ -434,11 +464,13 @@ async function selectTesterArm({ github, core, owner, repo, env }) {
     effort: '',
     mine: out.mine ? 'true' : 'false',
     notice,
+    notice_facts: notice === '' ? '' : JSON.stringify(testerNoticeFacts(out, env)),
     notice_kind: out.help ? 'guide' : '',
     command: out.command ?? '',
     route_source: out.routeSource ?? '',
     route_surface: out.routeSurface ?? '',
     receipt: '',
+    receipt_facts: '',
     test_mode: testModeFor(out.dryRun, env.TEST_MODE),
   };
   const notices = [];
@@ -477,6 +509,7 @@ async function selectTesterArm({ github, core, owner, repo, env }) {
       model: out.model,
       effort: out.effort,
       receipt: out.receipt,
+      receipt_facts: out.receipt === '' ? '' : JSON.stringify({ reason: 'receipt' }),
       test_mode: testModeFor(out.dryRun, env.TEST_MODE),
     });
   }
@@ -699,7 +732,7 @@ function resolveAuth(env) {
 }
 
 async function resolveRunSubject({ github, owner, repo, env }) {
-  const outputs = { number: '', issue: '', jira_key: '', stop_notice: '' };
+  const outputs = { number: '', issue: '', jira_key: '', stop_notice: '', stop_facts: '' };
 
   const out = await resolveSubject({
     command: env.COMMAND,
@@ -712,6 +745,7 @@ async function resolveRunSubject({ github, owner, repo, env }) {
 
   if (out.error) {
     outputs.stop_notice = renderSubjectStop(out.error, { triggerPhrase: env.TRIGGER });
+    outputs.stop_facts = JSON.stringify({ source: 'subject', detail: out.error });
     return { outputs, notices: [`The subject could not be resolved: ${out.error}`] };
   }
 
@@ -909,6 +943,7 @@ async function decidePhase({ github, core, owner, repo, env, authorize, writeAcc
 
   const outputs = {
     stop_notice: '',
+    stop_facts: '',
     notice: '',
     phase: '',
     request: '',
@@ -916,6 +951,7 @@ async function decidePhase({ github, core, owner, repo, env, authorize, writeAcc
     is_draft: '',
     pr_number: '',
     pending: '',
+    notice_facts: '',
     deferred: '',
     disputed: '',
     base_ref: '',
@@ -936,15 +972,21 @@ async function decidePhase({ github, core, owner, repo, env, authorize, writeAcc
       triggerPhrase: env.TRIGGER,
       onIssue: env.ON_ISSUE,
     });
+    outputs.stop_facts = JSON.stringify({ source: 'phase', command: env.COMMAND, on_issue: env.ON_ISSUE, detail: out.error });
     return { notices: [`The phase could not be decided: ${out.error}`], outputs };
   }
 
   const dispatched = out.phase === 'plan' ? plannedByDispatch(env) : '';
   if (dispatched) {
     outputs.stop_notice = asAlert('WARNING', scrub(dispatched, { triggerPhrase: env.TRIGGER }));
+    outputs.stop_facts = JSON.stringify({ source: 'dispatch', command: env.COMMAND, on_issue: env.ON_ISSUE });
     return { notices: [`This run may not start work: ${dispatched}`], outputs };
   }
 
+  const phaseSaid = phaseNotice(out, env);
+  const noticeFacts = phaseSaid.notice === '' ? '' : JSON.stringify({
+    source: 'phase_notice', reason: out.phase, pending: out.pending, scope: env.RECORD_SCOPE,
+  });
   Object.assign(outputs, {
     phase: out.phase,
     request: out.request,
@@ -964,7 +1006,8 @@ async function decidePhase({ github, core, owner, repo, env, authorize, writeAcc
     plan_file: out.planFile,
     held: out.held,
     conflicting: out.conflicting,
-    ...phaseNotice(out, env),
+    ...phaseSaid,
+    notice_facts: noticeFacts,
   });
   return { notices: outputs.quiet === 'true' ? [REVIEW_QUIET] : [], outputs };
 }
@@ -1215,7 +1258,14 @@ const PLAN_REFUSAL = Object.freeze(
   }),
 );
 
-async function releaseHold({ github, owner, repo, prNumber }) {
+async function releaseHold({ github, owner, repo, prNumber, env = process.env, fetch = globalThis.fetch }) {
+  if (usingControlPlane(env)) {
+    try {
+      return await writerFor({ env, fetch }).releaseHold({ number: prNumber });
+    } catch (error) {
+      return { error: `the hold could not be released by the control plane, so no step ran (${error.message})` };
+    }
+  }
   let pull;
   try {
     pull = (await github.rest.pulls.get({ owner, repo, pull_number: Number(prNumber) })).data;
@@ -1225,17 +1275,18 @@ async function releaseHold({ github, owner, repo, prNumber }) {
   const next = withoutHold(pull?.body ?? '');
   if (!next.changed) return { released: false };
   try {
-    await writerFor({ github, owner, repo }).setDescription({ number: Number(prNumber), body: next.body });
+    await writerFor({ github, owner, repo, env }).setDescription({ number: Number(prNumber), body: next.body });
   } catch (error) {
     return { error: `the hold could not be released, so no step ran (${error.message})` };
   }
   return { released: true };
 }
 
-async function readPlan({ github, owner, repo, env }) {
+async function readPlan({ github, owner, repo, env, fetch = globalThis.fetch }) {
   const outputs = {
     error: '',
     error_notice: '',
+    error_facts: '',
     total: '',
     remaining: '',
     remaining_steps: '',
@@ -1251,7 +1302,7 @@ async function readPlan({ github, owner, repo, env }) {
   };
 
   if (isResume(env.COMMAND)) {
-    const released = await releaseHold({ github, owner, repo, prNumber: env.PR_NUMBER });
+    const released = await releaseHold({ github, owner, repo, prNumber: env.PR_NUMBER, env, fetch });
     if (released.error) return { outputs: { ...outputs, error: released.error } };
     outputs.released_hold = released.released ? 'true' : 'false';
   }
@@ -1267,6 +1318,7 @@ async function readPlan({ github, owner, repo, env }) {
         { triggerPhrase: env.TRIGGER },
       ),
     );
+    outputs.error_facts = JSON.stringify({ source: 'plan', reason: 'paused', held_by: out.held });
     return { outputs };
   }
   if (out.error) {
@@ -1275,6 +1327,7 @@ async function readPlan({ github, owner, repo, env }) {
       'WARNING',
       scrub(`${PLAN_REFUSAL[out.errorKind] ?? PLAN_REFUSAL.unreadable} ${out.error}`, { triggerPhrase: env.TRIGGER }),
     );
+    outputs.error_facts = JSON.stringify({ source: 'plan', reason: out.errorKind ?? 'unreadable', detail: out.error });
     return { outputs };
   }
 
@@ -1363,6 +1416,7 @@ async function fetchIssue({ github, core, owner, repo, env }) {
     state: '',
     default_branch: '',
     closed_notice: '',
+    closed_facts: '',
   };
 
   const issue_number = Number(env.ISSUE_NUM);
@@ -1377,6 +1431,7 @@ async function fetchIssue({ github, core, owner, repo, env }) {
       triggerPhrase: env.TRIGGER,
       onIssue: env.ON_ISSUE,
     });
+    outputs.closed_facts = JSON.stringify({ source: 'closed', command: env.COMMAND, on_issue: env.ON_ISSUE, state });
     if (outputs.closed_notice === '') {
       return { outputs, notices: [], failure: `no closed notice for command: ${env.COMMAND}` };
     }
@@ -1829,6 +1884,7 @@ async function resolveApprovalGate({ github, core, owner, repo, env, authorize, 
 }
 
 module.exports = {
+  releaseHold,
   deniedPaths,
   implementRequest,
   validateExtraArgs,

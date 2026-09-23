@@ -27,13 +27,13 @@ async function askControlPlane(effects, { env, fetch, timeout, secret, pause = h
     if (tries > 0) await pause(backoffFor(tries));
     const said = await answered(fetch, `${reached.base}${EFFECTS}`, { token: reached.token, body, timeout });
     if (said.why) {
-      last = { why: said.why };
+      last = { why: said.why, unavailable: said.status === undefined || said.status >= 500 || said.status === 429 };
       if (said.status !== undefined && said.status < 500 && said.status !== 429) return last;
       continue;
     }
     const done = Array.isArray(said.answer?.done) ? said.answer.done : [];
     if (done.length < effects.length) {
-      return { why: `the control plane did ${done.length} of ${effects.length} effects`, done };
+      return { why: `the control plane did ${done.length} of ${effects.length} effects`, unavailable: false, done };
     }
     return { done };
   }
@@ -52,10 +52,15 @@ const name = (effect) => {
 };
 
 function controlPlaneWriter({ env, fetch, timeout, secret, pause = held }) {
+  const rawCopy = async () => {
+    throw new Error('the control plane needs structured facts to publish user-facing copy');
+  };
   const sendRaw = async (effect) => {
     const asked = { ...effect, id: name(effect) };
     const said = await askControlPlane([asked], { env, fetch, timeout, secret, pause });
-    if (said.why) throw new Error(said.why);
+    if (said.why) {
+      throw Object.assign(new Error(said.why), { cpUnavailable: said.unavailable !== false });
+    }
     const [done] = said.done;
     if (text(done?.refused) !== '') throw new Error(done.refused);
     return done ?? {};
@@ -65,24 +70,84 @@ function controlPlaneWriter({ env, fetch, timeout, secret, pause = held }) {
     return { id: Number(done.comment ?? 0) || null, review: Number(done.review ?? 0) || null };
   };
   return {
-    comment: ({ number, body }) => send({ kind: 'comment', number: Number(number), body: String(body) }),
-    editComment: ({ comment, body }) => send({ kind: 'edit_comment', comment: Number(comment), body: String(body) }),
+    comment: rawCopy,
+    surfaceComment: ({ number, surface }) => send({ kind: 'surface_comment', number: Number(number), surface }),
+    noticeComment: ({ number, notice }) => send({ kind: 'notice_comment', number: Number(number), notice }),
+    noticeEdit: ({ comment, notice }) => send({ kind: 'notice_edit', comment: Number(comment), notice }),
+    editComment: rawCopy,
     deleteComment: ({ comment }) => send({ kind: 'delete_comment', comment: Number(comment) }),
     react: ({ comment, on, content }) =>
       send({ kind: 'react', comment: Number(comment), on: String(on), content: String(content) }),
-    review: ({ number, body, event, commit = '', comments = [] }) => send({
-      kind: 'review',
-      number: Number(number),
-      body: String(body),
-      event: String(event),
-      ...(text(commit) === '' ? {} : { commit: text(commit) }),
-      ...(comments.length === 0 ? {} : { comments }),
+    review: rawCopy,
+    reviewFromFacts: ({ number, review, mode }) => send({
+      kind: 'review_publish', number: Number(number), review_facts: review, mode,
     }),
-    replyInThread: ({ number, comment, body }) =>
-      send({ kind: 'reply_thread', number: Number(number), comment: Number(comment), body: String(body) }),
+    replyInThread: rawCopy,
+    noticeReplyInThread: ({ number, comment, notice }) =>
+      send({ kind: 'notice_reply_thread', number: Number(number), comment: Number(comment), notice }),
+    runStart: ({ number, start }) => send({ kind: 'run_start_comment', number: Number(number), start }),
+    runProgress: ({ comment, start }) => send({ kind: 'run_progress_edit', comment: Number(comment), start }),
+    runReportEdit: ({ comment, report }) => send({ kind: 'run_report_edit', comment: Number(comment), report }),
+    runReportComment: ({ number, report }) => send({ kind: 'run_report_comment', number: Number(number), report }),
+    reviewNoticeComment: ({ number, report }) => send({ kind: 'review_notice_comment', number: Number(number), report }),
     resolveThread: ({ thread }) => send({ kind: 'resolve_thread', thread: String(thread) }),
-    setDescription: ({ number, body }) =>
-      send({ kind: 'set_description', number: Number(number), body: String(body) }),
+    setDescription: rawCopy,
+    holdPlan: ({ number, run }) => send({ kind: 'hold_plan', number: Number(number), run: String(run) }),
+    async releaseHold({ number }) {
+      const said = await sendRaw({ kind: 'release_hold', number: Number(number) });
+      return { released: said.released === true };
+    },
+    async tickStep({ number, title, head }) {
+      const said = await sendRaw({ kind: 'tick_step', number: Number(number), step: String(title), commit: String(head) });
+      return { changed: said.changed === true, remaining: Number(said.remaining) };
+    },
+    async openPull(facts) {
+      const said = await sendRaw({ kind: 'open_pull', open_pull: facts });
+      const prNumber = Number(said.pull ?? 0);
+      const prUrl = String(said.pull_url ?? '');
+      if (!Number.isInteger(prNumber) || prNumber <= 0 || !/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/[1-9][0-9]*$/.test(prUrl)) {
+        throw new Error('the control plane returned no pull request');
+      }
+      return { prNumber, prUrl };
+    },
+    async publishPlan({ number, facts }) {
+      const said = await sendRaw({ kind: 'publish_plan', number: Number(number), plan_publish: facts });
+      const id = Number(said.comment ?? 0);
+      if (!Number.isInteger(id) || id <= 0) throw new Error('the control plane returned no plan offer');
+      return { id };
+    },
+    async releasePlan({ number, facts }) {
+      const said = await sendRaw({ kind: 'release_plan', number: Number(number), plan_release: facts });
+      if (said.released !== true) throw new Error('the control plane did not release the plan');
+      return { released: true, remaining: Number(said.remaining ?? 0) };
+    },
+    async recordRelease({ number, ref, url }) {
+      const said = await sendRaw({ kind: 'record_release', number: Number(number),
+        release: { ref: String(ref), url: String(url ?? '') } });
+      return { released: said.released === true, changed: said.changed === true };
+    },
+    async releaseCheckpoint({ number, title, token, notice }) {
+      const said = await sendRaw({ kind: 'release_checkpoint', number: Number(number), checkpoint: {
+        title: String(title), token: String(token),
+      }, notice });
+      return { released: said.released === true, remaining: Number(said.remaining ?? 0), at: Number(said.at ?? 0) };
+    },
+    async acquireReportLock({ number, owner, kind, nonce, recoverLive = false }) {
+      const said = await sendRaw({ kind: 'report_lock_acquire', number: Number(number), lock: {
+        owner: String(owner), kind: String(kind), nonce: String(nonce), recover_live: recoverLive,
+      } });
+      return said.acquired === true;
+    },
+    async releaseReportLock({ number, owner, kind, nonce }) {
+      const said = await sendRaw({ kind: 'report_lock_release', number: Number(number), lock: {
+        owner: String(owner), kind: String(kind), nonce: String(nonce),
+      } });
+      return said.released === true;
+    },
+    async publishTestReview({ number, testReview }) {
+      const said = await sendRaw({ kind: 'test_review_publish', number: Number(number), test_review: testReview });
+      return { id: Number(said.comment ?? 0) || null, outcome: String(said.outcome ?? 'rejected') };
+    },
     async markReady({ node }) {
       const said = await sendRaw({ kind: 'mark_ready', node: String(node) });
       return { id: null, review: null, ready: typeof said.ready === 'boolean' ? said.ready : null };

@@ -24,7 +24,34 @@ const { decideFinish } = require('./phase.cjs');
 const { checkStep, creditOf, scrub } = require('./plan.cjs');
 const { asAlert } = require('../lib/select-arm.cjs');
 const { renderClassifierFooter } = require('./classify.cjs');
-const { renderedNotice } = require('../lib/cp-render.cjs');
+const { NOTICE_KEYS, pick, renderedNotice } = require('../lib/cp-render.cjs');
+const { usingControlPlane } = require('../lib/control-plane.cjs');
+
+async function commentNotice({ github, owner, repo, env, fetch, number, notice, local, what }) {
+  const writer = writerFor({ github, owner, repo, env, fetch });
+  const viaControlPlane = usingControlPlane(env);
+  if (viaControlPlane) {
+    try {
+      const facts = pick(env, NOTICE_KEYS);
+      if (notice.kind === 'tester_facts') {
+        delete facts.NOTICE;
+        delete facts.NOTICE_KIND;
+      }
+      if (notice.kind === 'stopped_selection' || notice.kind === 'stopped_preflight') {
+        for (const ordered of NOTICE_ORDER) delete facts[ordered.body];
+      }
+      return await writer.noticeComment({ number, notice: { ...notice, env: facts } });
+    } catch (error) {
+      if (error.cpUnavailable !== true) throw error;
+      process.stdout.write(`::warning::the control plane would not take this notice: ${error.message}\n`);
+    }
+  }
+  const body = await renderedNotice({ notice, env, local, what, fetch });
+  const fallback = viaControlPlane
+    ? writerFor({ github, owner, repo, env: { ...env, KSAI_GITHUB_CALLS: 'local' }, fetch })
+    : writer;
+  return fallback.comment({ number, body });
+}
 
 function decideFinished(env) {
   const out = decideFinish({
@@ -39,7 +66,7 @@ function decideFinished(env) {
   return { outputs, notices: [`finish=${out.finish} (${out.reason})`] };
 }
 
-async function markReady({ github, core, owner, repo, env }) {
+async function markReady({ github, core, owner, repo, env, fetch = globalThis.fetch }) {
   const { data: pull } = await github.rest.pulls.get({
     owner,
     repo,
@@ -60,6 +87,8 @@ async function markReady({ github, core, owner, repo, env }) {
     command: env.COMMAND,
     ask: env.KSAI_ASK,
     dryRun: env.DRY_RUN === 'true',
+    env,
+    fetch,
   });
 
   if (out.error) return { outputs: {}, notices: [], failure: out.error };
@@ -70,8 +99,8 @@ async function say({ github, owner, repo, target, notice, request, env, warnings
   const local = () => ({ body: marked(notice, payloadFor(env, { kind: 'chain-stopped' })) });
   try {
     const stopped = { kind: 'chain_stopped', ...request };
-    const body = await renderedNotice({ notice: stopped, env, local, what: 'why this chain stopped', fetch });
-    await writerFor({ github, owner, repo }).comment({ number: Number(target), body });
+    await commentNotice({ github, owner, repo, env, fetch, number: Number(target), notice: stopped,
+      local, what: 'why this chain stopped' });
   } catch (error) {
     warnings.push(`the chain stopped and this could not say so: ${error.message}`);
   }
@@ -237,6 +266,27 @@ const NOTICE_ORDER = Object.freeze([
   Object.freeze({ body: 'HELD_NOTICE', at: 'REPORT_NUM', reason: true, kind: '' }),
 ]);
 
+function preflightNoticeFacts(said, env) {
+  const serialized = {
+    SUBJECT_NOTICE: 'SUBJECT_FACTS', CLOSED_NOTICE: 'CLOSED_FACTS', STOP_NOTICE: 'STOP_FACTS',
+    PHASE_NOTICE: 'PHASE_FACTS', PLAN_NOTICE: 'PLAN_FACTS',
+  }[said.body];
+  if (serialized) {
+    const facts = JSON.parse(String(env[serialized] ?? ''));
+    if (facts === null || typeof facts !== 'object' || typeof facts.source !== 'string') {
+      throw new Error('the stopped preflight has no structured facts');
+    }
+    return facts;
+  }
+  switch (said.body) {
+    case 'CONTEXT_NOTICE': return { source: 'context', detail: String(env.CONTEXT_NOTICE) };
+    case 'MERGE_NOTICE': return { source: 'merge', detail: String(env.MERGE_NOTICE) };
+    case 'JIRA_ERROR': return { source: 'jira', detail: String(env.JIRA_ERROR) };
+    case 'HELD_NOTICE': return { source: 'held', held_by: String(env.HELD_BY ?? '') };
+    default: throw new Error('the stopped preflight has no known source');
+  }
+}
+
 async function publishNotice({ github, owner, repo, env, fetch = globalThis.fetch }) {
   const outputs = { posted: 'false' };
   const said = NOTICE_ORDER.find((notice) => String(env[notice.body] ?? '').trim() !== '');
@@ -255,8 +305,19 @@ async function publishNotice({ github, owner, repo, env, fetch = globalThis.fetc
     : String(env[said.body]);
   const named = said.kind ? String(env[said.kind] ?? '').trim() : '';
   const footer = renderClassifierFooter(env.ROUTE_SOURCE, { triggerPhrase: env.TRIGGER });
-  const body = await renderedNotice({
-    notice: { kind: 'stopped' },
+  let selected = { kind: 'stopped' };
+  if (usingControlPlane(env) && said.body === 'SELECT_NOTICE') {
+    const selection = JSON.parse(String(env.SELECT_FACTS ?? ''));
+    if (selection === null || typeof selection !== 'object' || typeof selection.reason !== 'string') {
+      throw new Error('the stopped selection has no structured facts');
+    }
+    selected = { kind: 'stopped_selection', selection, repository: `${owner}/${repo}` };
+  } else if (usingControlPlane(env)) {
+    selected = { kind: 'stopped_preflight', preflight: preflightNoticeFacts(said, env) };
+  }
+  await commentNotice({
+    github, owner, repo, number: target,
+    notice: selected,
     env,
     local: () => ({
       body: marked(footer ? `${text}\n\n${footer}` : text, payloadFor(env, { kind: KINDS.includes(named) ? named : 'notice' })),
@@ -264,7 +325,6 @@ async function publishNotice({ github, owner, repo, env, fetch = globalThis.fetc
     what: 'why this run stopped before the model',
     fetch,
   });
-  await writerFor({ github, owner, repo }).comment({ number: target, body });
   outputs.posted = 'true';
   return { outputs, notices: [`published the notice for a run that stopped before the model, on #${target}`] };
 }
@@ -281,20 +341,27 @@ async function publishTesterNotice({ github, owner, repo, env, fetch = globalThi
 
   const named = String(env.NOTICE_KIND ?? '').trim();
   const footer = renderClassifierFooter(env.ROUTE_SOURCE, { triggerPhrase: env.TRIGGER });
-  const body = await renderedNotice({
-    notice: { kind: 'tester' },
-    env,
-    local: () => ({
+  try {
+    const viaControlPlane = usingControlPlane(env);
+    const facts = viaControlPlane ? JSON.parse(String(env.NOTICE_FACTS ?? '')) : null;
+    if (viaControlPlane && (facts === null || typeof facts !== 'object' || typeof facts.reason !== 'string')) {
+      throw new Error('the tester notice has no structured facts');
+    }
+    await commentNotice({
+      github, owner, repo, number: target,
+      notice: viaControlPlane
+        ? { kind: 'tester_facts', tester: facts, repository: `${owner}/${repo}` }
+        : { kind: 'tester' },
+      env,
+      local: () => ({
       body: marked(
         footer ? `${notice}\n\n${footer}` : notice,
         payloadFor(env, { kind: KINDS.includes(named) ? named : 'notice', pr: env.THREAD_NUM }),
       ),
-    }),
-    what: "the tester's notice",
-    fetch,
-  });
-  try {
-    await writerFor({ github, owner, repo }).comment({ number: target, body });
+      }),
+      what: "the tester's notice",
+      fetch,
+    });
   } catch (error) {
     /*
      * The tester's own job holds read-only GitHub access on purpose, so the token it comments with
@@ -313,6 +380,19 @@ async function publishTesterNotice({ github, owner, repo, env, fetch = globalThi
 async function releaseCheckpoint({ github, core, owner, repo, env, fetch = globalThis.fetch }) {
   const pull_number = Number(env.PR_NUMBER);
   const outputs = { remaining: '' };
+  if (usingControlPlane(env)) {
+    const released = await writerFor({ env, fetch }).releaseCheckpoint({
+      number: pull_number, title: env.STEP_TITLE, token: env.COMMENT_ID,
+      notice: { kind: 'released', env: pick(env, NOTICE_KEYS) },
+    });
+    if (!released.released) {
+      core?.info?.(`\`${env.STEP_TITLE}\` was already ticked, so this release paid for no checkpoint and none was recorded`);
+      return { outputs, notices: [], failure: null };
+    }
+    outputs.remaining = String(released.remaining);
+    core?.info?.(`released the phase behind \`${env.STEP_TITLE}\`, ${released.remaining} ${plural(released.remaining, 'box', 'boxes')} left`);
+    return { outputs, notices: [], failure: null };
+  }
   const { data: pull } = await github.rest.pulls.get({ owner, repo, pull_number });
   const flipped = checkStep(pull.body ?? '', env.STEP_TITLE, { triggerPhrase: env.TRIGGER });
   if (flipped.error) return { outputs, notices: [], failure: `the checkpoint could not be ticked: ${flipped.error}` };
@@ -339,8 +419,17 @@ async function releaseCheckpoint({ github, core, owner, repo, env, fetch = globa
 
   const left = flipped.remaining;
   outputs.remaining = String(left);
-  const body = await renderedNotice({
-    notice: { kind: 'released', remaining: String(left), at: String(at) },
+  await sayReleased({ github, owner, repo, env, fetch, number: pull_number, remaining: left, at });
+  const writer = writerFor({ github, owner, repo });
+  await writer.setDescription({ number: pull_number, body: spent.body });
+  core?.info?.(`released the phase behind \`${env.STEP_TITLE}\`, ${left} ${plural(left, 'box', 'boxes')} left`);
+  return { outputs, notices: [], failure: null };
+}
+
+async function sayReleased({ github, owner, repo, env, fetch, number, remaining, at }) {
+  await commentNotice({
+    github, owner, repo, number,
+    notice: { kind: 'released', remaining: String(remaining), at: String(at) },
     env,
     local: () => ({
       body: marked(
@@ -348,24 +437,20 @@ async function releaseCheckpoint({ github, core, owner, repo, env, fetch = globa
           approvedBy: env.APPROVED_BY,
           commentId: env.COMMENT_ID,
           triggerPhrase: env.TRIGGER,
-          remaining: left + 1,
+          remaining: remaining + 1,
           at,
         }),
-        payloadFor(env, { kind: releaseKind(left + 1), pr: pull_number }),
+        payloadFor(env, { kind: releaseKind(remaining + 1), pr: number }),
       ),
     }),
     what: 'this release',
     fetch,
   });
-  const writer = writerFor({ github, owner, repo });
-  await writer.comment({ number: pull_number, body });
-  await writer.setDescription({ number: pull_number, body: spent.body });
-  core?.info?.(`released the phase behind \`${env.STEP_TITLE}\`, ${left} ${plural(left, 'box', 'boxes')} left`);
-  return { outputs, notices: [], failure: null };
 }
 
 async function publishAwaiting({ github, owner, repo, env, fetch = globalThis.fetch }) {
-  const body = await renderedNotice({
+  await commentNotice({
+    github, owner, repo, number: Number(env.PR_NUMBER),
     notice: { kind: 'awaiting' },
     env,
     local: () => ({
@@ -382,7 +467,6 @@ async function publishAwaiting({ github, owner, repo, env, fetch = globalThis.fe
     what: 'why this plan is waiting',
     fetch,
   });
-  await writerFor({ github, owner, repo }).comment({ number: Number(env.PR_NUMBER), body });
   return { notices: [`the plan is waiting on an approver (${env.REASON})`] };
 }
 
@@ -396,8 +480,12 @@ async function publishRefusedRelease({ github, owner, repo, env, fetch = globalT
   if (said === '') {
     return { notices: ['the release was refused and left no message, so nothing was published'] };
   }
-  const body = await renderedNotice({
-    notice: { kind: 'refused_release', message: said },
+  const notice = usingControlPlane(env)
+    ? { kind: 'refused_release', refusal: JSON.parse(fs.readFileSync(String(env.REFUSAL_FILE ?? ''), 'utf8')) }
+    : { kind: 'refused_release', message: said };
+  await commentNotice({
+    github, owner, repo, number: Number(env.PR_NUMBER),
+    notice,
     env,
     local: () => ({
       body: marked(asAlert('WARNING', scrub(said, { triggerPhrase: env.TRIGGER })), payloadFor(env, { kind: 'plan-blocked' })),
@@ -405,7 +493,6 @@ async function publishRefusedRelease({ github, owner, repo, env, fetch = globalT
     what: 'why this plan was not released',
     fetch,
   });
-  await writerFor({ github, owner, repo }).comment({ number: Number(env.PR_NUMBER), body });
   return { notices: [`the plan was not released: ${said}`] };
 }
 
@@ -414,7 +501,8 @@ async function publishWaiting({ github, owner, repo, env, fetch = globalThis.fet
     return { notices: ['this approval already released a phase, so there is nothing to say again'] };
   }
 
-  const body = await renderedNotice({
+  await commentNotice({
+    github, owner, repo, number: Number(env.PR_NUMBER),
     notice: { kind: 'waiting' },
     env,
     local: () => {
@@ -430,7 +518,6 @@ async function publishWaiting({ github, owner, repo, env, fetch = globalThis.fet
     what: 'why this phase is waiting',
     fetch,
   });
-  await writerFor({ github, owner, repo }).comment({ number: Number(env.PR_NUMBER), body });
   return { notices: [`the phase is waiting on an approver (${env.REASON})`] };
 }
 
@@ -477,23 +564,49 @@ async function publishResult({ github, core, owner, repo, env, fetch = globalThi
   const at = String(env.MESSAGE_FILE ?? '');
   const said = env.ALREADY_SAID === 'success';
   if (at !== '' && !said) {
-    const message = fs.readFileSync(at, 'utf8');
-    const body = await renderedNotice({
-      notice: { kind: 'result', message },
-      env,
-      local: () => ({ body: marked(message, payloadFor(env, { kind: resultKind(env) })) }),
-      what: 'what this run did',
-      fetch,
-    });
-    const out = await updateOrCreate({
-      github,
-      core,
-      owner,
-      repo,
-      issueNumber: env.REPORT_NUM,
-      body,
-      commentId: env.START_COMMENT_ID,
-    });
+    let out;
+    if (usingControlPlane(env)) {
+      const writer = writerFor({ github, owner, repo, env, fetch });
+      const workResult = ['planned', 'released', 'built'].includes(String(env.STATUS ?? ''));
+      let notice;
+      if (workResult) {
+        notice = { kind: 'work_result', repository: `${owner}/${repo}`, env: pick(env, NOTICE_KEYS) };
+      } else if (env.STATUS === 'stepped') {
+        const facts = JSON.parse(fs.readFileSync(String(env.RESULT_FACTS_FILE ?? ''), 'utf8'));
+        notice = { kind: 'step_result', ...facts, env: pick(env, NOTICE_KEYS) };
+      } else {
+        notice = { kind: 'status_result', env: pick(env, NOTICE_KEYS) };
+      }
+      const id = Number(env.START_COMMENT_ID);
+      out = { mode: 'created' };
+      if (Number.isInteger(id) && id > 0) {
+        try {
+          await writer.noticeEdit({ comment: id, notice });
+          out = { mode: 'updated' };
+        } catch (error) {
+          core?.warning?.(`the comment this run opened with could not be updated (${error.message}); posting a new one.`);
+        }
+      }
+      if (out.mode === 'created') await writer.noticeComment({ number: Number(env.REPORT_NUM), notice });
+    } else {
+      const message = fs.readFileSync(at, 'utf8');
+      const body = await renderedNotice({
+        notice: { kind: 'result', message },
+        env,
+        local: () => ({ body: marked(message, payloadFor(env, { kind: resultKind(env) })) }),
+        what: 'what this run did',
+        fetch,
+      });
+      out = await updateOrCreate({
+        github,
+        core,
+        owner,
+        repo,
+        issueNumber: env.REPORT_NUM,
+        body,
+        commentId: env.START_COMMENT_ID,
+      });
+    }
     outputs.posted = 'true';
     outputs.replaced = out.mode === 'updated' ? 'true' : 'false';
   }
@@ -502,7 +615,7 @@ async function publishResult({ github, core, owner, repo, env, fetch = globalThi
   const spoke = outputs.posted === 'true' || env.REPORTED === 'true' || said || SILENT.includes(status);
   if (!spoke || !REACTABLE.includes(status)) return { outputs, notices: [] };
 
-  const out = await react({ github, core, owner, repo, commentId: env.COMMENT_ID, threadRootId: env.THREAD_ROOT_ID });
+  const out = await react({ github, core, owner, repo, commentId: env.COMMENT_ID, threadRootId: env.THREAD_ROOT_ID, env, fetch });
   return { outputs, notices: [`reacted=${out.reacted}${out.reason === '' ? '' : ` (${out.reason})`}`] };
 }
 
@@ -597,14 +710,14 @@ async function publishRunFailed({ github, owner, repo, env, fetch = globalThis.f
     };
   }
 
-  const body = await renderedNotice({
+  await commentNotice({
+    github, owner, repo, number: Number(target),
     notice: { kind: 'run_failed' },
     env,
     local: () => ({ body: marked(scrub(said, { triggerPhrase: env.TRIGGER }), payloadFor(env, { kind: notice.kind })) }),
     what: 'why this run did not complete',
     fetch,
   });
-  await writerFor({ github, owner, repo }).comment({ number: Number(target), body });
   return { notices: [`reported the run as incomplete (watchdog fired: ${fired})`] };
 }
 

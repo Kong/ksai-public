@@ -6,7 +6,8 @@ const { ANSWERED, threadState } = require('./threads.cjs');
 const { marked } = require('./marker.cjs');
 const { scrub } = require('./plan.cjs');
 const { counted } = require('../lib/text.cjs');
-const { renderedNotice } = require('../lib/cp-render.cjs');
+const { NOTICE_KEYS, pick, renderedNotice } = require('../lib/cp-render.cjs');
+const { usingControlPlane } = require('../lib/control-plane.cjs');
 
 const OVERRIDE_KIND = 'thread-overridden';
 
@@ -85,11 +86,17 @@ async function resolveOverriddenThreads({
     const root = Number(thread?.rootCommentId);
     if (Number.isInteger(root) && root > 0) {
       try {
-        await writer.replyInThread({
-          number: Number(prNumber),
-          comment: root,
-          body: await reply(threadState(thread, { botLogin }) === ANSWERED),
-        });
+        const answeredThread = threadState(thread, { botLogin }) === ANSWERED;
+        if (usingControlPlane(env)) {
+          await writer.noticeReplyInThread({
+            number: Number(prNumber),
+            comment: root,
+            notice: { kind: 'thread_overridden', answered: answeredThread,
+              env: pick({ ...env, COMMAND: command, PR_NUMBER: prNumber, TRIGGER: triggerPhrase, KSAI_ASK: ask }, NOTICE_KEYS) },
+          });
+        } else {
+          await writer.replyInThread({ number: Number(prNumber), comment: root, body: await reply(answeredThread) });
+        }
         answered += 1;
       } catch (error) {
         notices.push(`thread ${root} could not be answered: ${error?.message ?? error}`);

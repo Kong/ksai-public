@@ -6,8 +6,11 @@ import { pathToFileURL } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const { marked } = require('./marker.cjs');
-const { cap, expectedPlanFile: planFileFor, planDirOf, scrub, retargetPermalinks, POSITIVE_ID_SHAPE } =
+const { cap, expectedPlanFile: planFileFor, planDirOf, planDocMarker, scrub, retargetPermalinks, POSITIVE_ID_SHAPE } =
   require('./plan.cjs');
+const { writerFor } = require('../lib/cp-effects.cjs');
+const { NOTICE_KEYS, pick } = require('../lib/cp-render.cjs');
+const { usingControlPlane } = require('../lib/control-plane.cjs');
 const { safeEcho, soleWritable, verifyChunk, gitVia, noChangeLeftBehind } = require('./verify-chunk.cjs');
 const { readScope, writeScopeResult } = require('./change-scope.cjs');
 const { MAX_ANSWERABLE: MAX_REPLIES, MAX_REPLY_CHARS } = require('./threads.cjs');
@@ -113,6 +116,7 @@ export function recordFix({
   bodyFile = null,
   commitFile = null,
   changeScopePath = null,
+  throughControlPlane = false,
   recordScope = writeScopeResult,
   recordPushed = (_sha) => {},
   run = runCommand,
@@ -150,6 +154,7 @@ export function recordFix({
   let sha = '';
   let localSha = '';
   let offeredDoc = '';
+  let planOfferSHA = '';
   if (pushing) {
     const verified = verifyChunk({
       cwd,
@@ -220,30 +225,39 @@ export function recordFix({
     }
 
     if (onlyPath) {
-      const offer = offerPlanDoc({
-        git: gitVia(run, cwd),
-        run,
-        repo,
-        prNumber,
-        sha: verified.sha,
-        path: onlyPath,
-        lead:
-          'This comment records the exact content of the plan document now being offered. An approval is only ' +
-          'honoured while the document still reads as it does here.',
-        fields: marker,
-        flow: marker.flow,
-        command: phase,
-        triggerPhrase,
-      });
-      if (!offer.doc) {
-        return block(`I could not name the content of \`${onlyPath}\` that was pushed, so it was not offered for approval.`);
-      }
-      offeredDoc = offer.doc;
-      if (!offer.posted) {
-        return block(
-          `\`${onlyPath}\` is on the branch and which content was offered could not be recorded, so an approval ` +
-            'would have nothing to check against - see the workflow run. Re-request and I will offer it again.',
-        );
+      if (throughControlPlane) {
+        const blob = gitVia(run, cwd)(['rev-parse', `${verified.sha}:${onlyPath}`]);
+        planOfferSHA = blob.ok ? String(blob.stdout ?? '').trim().toLowerCase() : '';
+        offeredDoc = planDocMarker(planOfferSHA) ?? '';
+        if (offeredDoc === '') {
+          return block(`I could not name the content of \`${onlyPath}\` that was pushed, so it was not offered for approval.`);
+        }
+      } else {
+        const offer = offerPlanDoc({
+          git: gitVia(run, cwd),
+          run,
+          repo,
+          prNumber,
+          sha: verified.sha,
+          path: onlyPath,
+          lead:
+            'This comment records the exact content of the plan document now being offered. An approval is only ' +
+            'honoured while the document still reads as it does here.',
+          fields: marker,
+          flow: marker.flow,
+          command: phase,
+          triggerPhrase,
+        });
+        if (!offer.doc) {
+          return block(`I could not name the content of \`${onlyPath}\` that was pushed, so it was not offered for approval.`);
+        }
+        offeredDoc = offer.doc;
+        if (!offer.posted) {
+          return block(
+            `\`${onlyPath}\` is on the branch and which content was offered could not be recorded, so an approval ` +
+              'would have nothing to check against - see the workflow run. Re-request and I will offer it again.',
+          );
+        }
       }
     }
   } else {
@@ -268,8 +282,14 @@ export function recordFix({
 
   const footer = renderFooter({ sha, triggerPhrase });
   const answered = [];
+  const replyFacts = [];
   let failure = null;
   for (const reply of replies) {
+    if (throughControlPlane) {
+      replyFacts.push({ comment: Number(reply.commentId), content: reply.body, path: reply.path });
+      answered.push(reply);
+      continue;
+    }
     const answer = marked(`${reply.body}\n\n${footer}${offeredDoc ? `\n\n${offeredDoc}` : ''}`, { ...marker, kind: pass.kind });
     writeFileSync(bodyFile, `${JSON.stringify({ body: answer })}\n`);
     const posted = run('gh', [
@@ -322,6 +342,7 @@ export function recordFix({
     answered: answered.length,
     remaining,
     message: summary ? `${headline}\n\n${summary}` : headline,
+    ...(throughControlPlane ? { replyFacts, planOfferSHA } : {}),
   };
 }
 
@@ -329,7 +350,38 @@ export function expectedPlanFile(env) {
   return planFileFor({ planFile: env.PLAN_FILE, branch: env.BRANCH, dir: env.PLAN_DIR });
 }
 
-export function main(env = process.env, { run = runCommand } = {}) {
+export async function publishReviewReplies(result, env, writer = writerFor({ env })) {
+  if (!Array.isArray(result.replyFacts) || result.replyFacts.length === 0) return result;
+  const number = Number(env.PR_NUMBER);
+  const noticeEnv = pick({ ...env, COMMAND: env.PHASE }, NOTICE_KEYS);
+  let answered = 0;
+  try {
+    if (result.planOfferSHA) {
+      await writer.noticeComment({ number, notice: {
+        kind: 'revised_plan_offer', review_reply: { phase: 'revise', plan_doc_sha: result.planOfferSHA }, env: noticeEnv,
+      } });
+    }
+    for (const reply of result.replyFacts) {
+      await writer.noticeReplyInThread({ number, comment: reply.comment, notice: {
+        kind: 'fix_reply', review_reply: {
+          phase: env.PHASE, content: reply.content, commit: result.pushedSha || '', plan_doc_sha: result.planOfferSHA,
+        }, env: noticeEnv,
+      } });
+      answered += 1;
+    }
+    return result;
+  } catch (error) {
+    return {
+      ...result,
+      status: 'blocked',
+      answered,
+      remaining: Number(result.remaining ?? 0) + result.replyFacts.length - answered,
+      message: `The change reached the branch, but ${answered} of ${result.replyFacts.length} review replies were posted. The control plane could not finish publishing them (${error.message}). Re-request to pick up the rest.`,
+    };
+  }
+}
+
+export async function main(env = process.env, { run = runCommand, publish = publishReviewReplies } = {}) {
   const tmp = env.RUNNER_TEMP || '/tmp';
   const messageFile = path.join(tmp, 'ksai-message.txt');
 
@@ -351,7 +403,7 @@ export function main(env = process.env, { run = runCommand } = {}) {
     pending = parsedPending;
   }
 
-  const result = recordFix({
+  let result = recordFix({
     manifestPath: env.MANIFEST,
     cwd: env.GITHUB_WORKSPACE,
     branch: env.BRANCH,
@@ -372,12 +424,15 @@ export function main(env = process.env, { run = runCommand } = {}) {
     bodyFile: path.join(tmp, 'ksai-reply.json'),
     commitFile: path.join(tmp, 'ksai-commit.json'),
     changeScopePath: env.CHANGE_SCOPE_FILE,
+    throughControlPlane: usingControlPlane(env),
     recordPushed: (sha) => writeOutputs(env.GITHUB_OUTPUT, {
       pushed_sha: sha,
       pr_number: env.PR_NUMBER,
     }),
     run,
   });
+
+  if (usingControlPlane(env)) result = await publish(result, env);
 
   process.stdout.write(
     `note: ${result.pushed ? 'a commit was pushed' : 'nothing was pushed'}; ` +
@@ -395,5 +450,5 @@ export function main(env = process.env, { run = runCommand } = {}) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  process.exit(main());
+  process.exitCode = await main();
 }

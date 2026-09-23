@@ -10,6 +10,7 @@ const { collectSecrets, scrub: scrubSecrets } = require('../kreview/secrets.cjs'
 const { href: markerHref, marker } = require('./marker.cjs');
 const { oneLine, runUrl, scrub } = require('./plan.cjs');
 const { identityOf, storesInBody } = require('./write-report.cjs');
+const { usingControlPlane } = require('../lib/control-plane.cjs');
 const EFFORT_SHAPE = /^[a-z]{1,16}$/;
 
 const CARRIED = Object.freeze([
@@ -33,6 +34,10 @@ const CARRIED = Object.freeze([
   'COMMAND',
   'RECEIPT',
   'RECEIPT_AT',
+  'ROUTE_SOURCE',
+  'ROUTE_SURFACE',
+  'ROUTE_LABEL',
+  'ROUTE_REVIEW',
   'REQUEST_LABEL',
   'REQUEST_HEAD',
   'JIRA_KEY',
@@ -109,6 +114,28 @@ function renderRunStart(env, live = null) {
   return `${body}\n\n${marker(fields)}\n`;
 }
 
+function startFacts(env, live = null) {
+  return {
+    flow: String(env.FLOW ?? ''),
+    server: String(env.SERVER_URL ?? ''),
+    repository: String(env.REPOSITORY ?? ''),
+    run: String(env.RUN_ID ?? ''),
+    issue: String(env.ISSUE_NUM ?? ''),
+    pull: String(env.PR_NUMBER ?? ''),
+    command: String(env.COMMAND ?? ''),
+    model: String(env.MODEL ?? ''),
+    effort: String(env.EFFORT ?? ''),
+    trigger: String(env.TRIGGER ?? ''),
+    receipt_at: String(env.RECEIPT_AT ?? ''),
+    route_source: String(env.ROUTE_SOURCE ?? ''),
+    route_surface: String(env.ROUTE_SURFACE ?? ''),
+    route_label: String(env.ROUTE_LABEL ?? ''),
+    route_review: String(env.ROUTE_REVIEW ?? '') === 'true',
+    history_mode: String(env.STATUS_HISTORY ?? ''),
+    ...(live === null ? {} : { live }),
+  };
+}
+
 function recoverRecord(env, commentId) {
   return {
     v: RECOVER_VERSION,
@@ -147,19 +174,25 @@ function carry(env, commentId, { write = writeFileSync } = {}) {
   return true;
 }
 
-async function publishRunStart({ github, core, owner, repo, env, write = writeFileSync, now = Date.now }) {
+async function publishRunStart({ github, core, owner, repo, env, write = writeFileSync, now = Date.now, fetch = globalThis.fetch }) {
   const outputs = { comment_id: '' };
   const stamped = { ...env, RECEIPT_AT: String(now()) };
-  const body = renderRunStart(stamped);
   const target = Number(stamped.REPORT_NUM);
+  const throughCP = usingControlPlane(env);
+  const body = throughCP ? '' : renderRunStart(stamped);
 
-  if (body === '') return { outputs, notices: ['this run had no run link to publish, so it said nothing'] };
+  if (throughCP ? runUrl({ serverUrl: stamped.SERVER_URL, repository: stamped.REPOSITORY, runId: stamped.RUN_ID }) === '' : body === '') {
+    return { outputs, notices: ['this run had no run link to publish, so it said nothing'] };
+  }
   if (!Number.isInteger(target) || target <= 0) {
     return { outputs, notices: ['this run had nowhere to say it had started'] };
   }
 
   try {
-    const posted = await writerFor({ github, owner, repo }).comment({ number: target, body });
+    const writer = writerFor({ github, owner, repo, env, fetch });
+    const posted = throughCP
+      ? await writer.runStart({ number: target, start: startFacts(stamped) })
+      : await writer.comment({ number: target, body });
     const id = Number(posted?.id);
     outputs.comment_id = Number.isInteger(id) && id > 0 ? String(id) : '';
     const notices = [`said the run had started on #${target}`];
@@ -171,7 +204,7 @@ async function publishRunStart({ github, core, owner, repo, env, write = writeFi
   }
 }
 
-async function dropRunStart({ github, core, owner, repo, env }) {
+async function dropRunStart({ github, core, owner, repo, env, fetch = globalThis.fetch }) {
   const id = Number(env.COMMENT_ID);
   if (!Number.isInteger(id) || id <= 0) return { notices: ['this run opened with no comment to remove'] };
   if (REPLACERS.some((name) => String(env[name] ?? '') === 'true')) {
@@ -179,7 +212,7 @@ async function dropRunStart({ github, core, owner, repo, env }) {
   }
 
   try {
-    await writerFor({ github, owner, repo }).deleteComment({ comment: id });
+    await writerFor({ github, owner, repo, env, fetch }).deleteComment({ comment: id });
     return { notices: ['removed the comment this run opened with, because nothing replaced it'] };
   } catch (error) {
     core?.warning?.(`the comment this run opened with could not be removed (${error.message}).`);
@@ -201,6 +234,7 @@ module.exports = {
   publishRunStart,
   renderRunProgress,
   renderRunStart,
+  startFacts,
   saidFor,
   REPLACERS,
 };

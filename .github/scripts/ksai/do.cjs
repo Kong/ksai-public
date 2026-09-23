@@ -71,6 +71,7 @@ const LEGACY_DO_MARKER_PREFIX = '<!-- muthur-do:';
  * this module stopped importing `NUMBER_SHAPE` rather than keeping it for a second reader.
  */
 const { writerFor } = require('../lib/cp-effects.cjs');
+const { usingControlPlane } = require('../lib/control-plane.cjs');
 const { markerValue, POSITIVE_ID_SHAPE } = require('./plan.cjs');
 const { counted } = require('../lib/text.cjs');
 const { neutralCut, neutralize } = require('../lib/prompt-text.cjs');
@@ -471,6 +472,8 @@ async function createPushedReceipt({
   repo = null,
   prNumber = null,
   sha = null,
+  env = {},
+  fetch = globalThis.fetch,
 } = {}) {
   const body = renderPushedMarker(sha);
   const number = Number(prNumber);
@@ -486,11 +489,27 @@ async function createPushedReceipt({
     core?.warning?.(`Could not read the head signature (${error?.message ?? error}), so the receipt is posted anyway.`);
   }
   try {
-    await writerFor({ github, owner, repo }).comment({ number, body });
+    const writer = writerFor({ github, owner, repo, env, fetch });
+    if (usingControlPlane(env)) {
+      await writer.surfaceComment({ number, surface: { pushed: { commit: String(sha).toLowerCase() } } });
+    } else {
+      await writer.comment({ number, body });
+    }
     return { recorded: true };
   } catch (error) {
+    let failure = error;
+    if (usingControlPlane(env) && error.cpUnavailable === true) {
+      core?.warning?.(`The control plane could not record the pushed head (${error.message}).`);
+      try {
+        await writerFor({ github, owner, repo, env: { ...env, KSAI_GITHUB_CALLS: 'local' }, fetch })
+          .comment({ number, body });
+        return { recorded: true };
+      } catch (fallbackError) {
+        failure = fallbackError;
+      }
+    }
     core?.warning?.(
-      `The pushed head could not be recorded immutably (${error?.message ?? error}), so a later red run will not ` +
+      `The pushed head could not be recorded immutably (${failure?.message ?? failure}), so a later red run will not ` +
         'treat it as a retry.',
     );
     return { recorded: false };

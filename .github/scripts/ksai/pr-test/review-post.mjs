@@ -2,10 +2,15 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createRequire } from 'node:module';
 
 import { writeOutputs } from '../../lib/outputs.mjs';
 import { runGitHub } from './exec.mjs';
 import { VERDICT_FILE } from './staging.mjs';
+
+const require = createRequire(import.meta.url);
+const { usingControlPlane } = require('../../lib/control-plane.cjs');
+const { writerFor } = require('../../lib/cp-effects.cjs');
 
 export const HEADING = '## Adversarial pull request test';
 
@@ -123,6 +128,7 @@ export async function render(env = process.env, { gh = runGitHub, spawn = spawnS
         '--base-ref', refs.base,
         '--base-sha', refs.baseSha,
         '--trigger-phrase', String(env.PHRASE ?? ''),
+        ...(usingControlPlane(env) ? ['--verify-only'] : []),
       ],
       { stdio: 'inherit' },
     );
@@ -133,8 +139,22 @@ export async function render(env = process.env, { gh = runGitHub, spawn = spawnS
   }
 }
 
-export async function post(env = process.env, { gh = runGitHub } = {}) {
+export async function post(env = process.env, { gh = runGitHub, fetch = globalThis.fetch } = {}) {
   const runDir = String(env.RUN_DIR ?? '');
+  if (usingControlPlane(env)) {
+    const testReview = {
+      verdict: readJson(join(runDir, VERDICT_FILE)),
+      criteria: readJson(join(runDir, 'criteria.json')),
+      environments: readJson(join(runDir, 'environments.json')),
+      verification: readJson(join(runDir, 'verification.json')),
+      spend: readJson(join(runDir, 'spend.json')),
+      rendered_outcome: String(env.RENDERED_OUTCOME ?? ''),
+      source_run: Number(env.SOURCE_RUN),
+      trigger_phrase: String(env.PHRASE ?? ''),
+    };
+    const published = await writerFor({ env, fetch }).publishTestReview({ number: env.PR, testReview });
+    return published.outcome;
+  }
   const path = join(runDir, 'review.md');
   const current = await pullRefs({ pr: env.PR, repo: env.REPO, gh });
   const decided = reviewToPost({

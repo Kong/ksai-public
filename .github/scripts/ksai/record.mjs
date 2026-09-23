@@ -5,11 +5,13 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const require = createRequire(import.meta.url);
+const { usingControlPlane } = require('../lib/control-plane.cjs');
+const { writerFor } = require('../lib/cp-effects.cjs');
 const { checkStep, oneLine, planDirOf, scrub, storedTitle } = require('./plan.cjs');
 const { readCount } = require('./continue.cjs');
 const { counted, plural } = require('../lib/text.cjs');
 const { safeEcho, verifyChunk, gitVia, noChangeLeftBehind } = require('./verify-chunk.cjs');
-const { expectationWarning, readExpectationEdits } = require('./expectation-edits.cjs');
+const { expectationWarning, readExpectationEdits, renderExpectationNote } = require('./expectation-edits.cjs');
 import { blockerFor, editPullBody, field, readManifest, readPullBody, reasonOf, runCommand, shown } from './run.mjs';
 import { publishCommit } from './signed-push.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
@@ -32,6 +34,7 @@ export function recordStep({
   commitFile = null,
   recordPushed = (_sha) => {},
   readEdits = readExpectationEdits,
+  throughControlPlane = false,
   run = runCommand,
 } = {}) {
   const block = blockerFor(manifestPath);
@@ -54,6 +57,7 @@ export function recordStep({
   let pushed;
   let pushedSha = '';
   let warning = '';
+  let expectationEdits = null;
 
   if (status === 'blocked') {
     return block(`Stopped on "${quoted}": ${scrub(reasonOf(manifest), { triggerPhrase }).trim()}`);
@@ -76,7 +80,24 @@ export function recordStep({
   } else if (status === 'done') {
     const verified = verifyChunk({ cwd, branch, remoteSha, manifestPath, deniedPaths, planDir });
     if (!verified.ok) return block(`I did not push "${quoted}": ${verified.reason}`);
-    warning = expectationWarning({ readEdits, git: gitVia(run, cwd), from: remoteSha, to: verified.sha, noun: 'This step' });
+    if (throughControlPlane) {
+      let found;
+      try {
+        found = readEdits({ git: gitVia(run, cwd), from: remoteSha, to: verified.sha });
+      } catch {
+        found = { ok: false, reason: 'the scan threw' };
+      }
+      if (!found?.ok) {
+        process.stderr.write(`Note: the existing test expectation scan did not run: ${found?.reason ?? 'no answer'}.\n`);
+      } else {
+        warning = renderExpectationNote(found, { noun: 'This step' });
+        if (Array.isArray(found.edited) && found.edited.length > 0) {
+          expectationEdits = { lines: found.lines, edited: found.edited };
+        }
+      }
+    } else {
+      warning = expectationWarning({ readEdits, git: gitVia(run, cwd), from: remoteSha, to: verified.sha, noun: 'This step' });
+    }
 
     const published = publishCommit({
       cwd,
@@ -118,7 +139,7 @@ export function recordStep({
       `Note: "${quoted}" was already ticked, so this step reported done twice. Carrying on to the next box.\n`,
     );
   }
-  if (!editPullBody({ repo, number: prNumber, bodyFile, body: flipped.body, run })) {
+  if (!throughControlPlane && !editPullBody({ repo, number: prNumber, bodyFile, body: flipped.body, run })) {
     return block(`I pushed "${quoted}" but could not update the plan. The commit is on the branch.`);
   }
 
@@ -135,6 +156,8 @@ export function recordStep({
     pushed,
     pushedSha,
     remaining: remainingAfter,
+    stepsLeft,
+    expectationEdits,
     boundary: stepsLeft === 0 && remainingAfter > 0,
     warned: warning !== '',
     message: `${finishedMessage({ quoted, remainingAfter, stepsLeft })}${warning === '' ? '' : `\n\n${warning}`}`,
@@ -152,7 +175,7 @@ function finishedMessage({ quoted, remainingAfter, stepsLeft }) {
   return `Finished "${quoted}". ${counted(stepsLeft, 'step')} ${plural(stepsLeft, 'remains', 'remain')}.`;
 }
 
-export function main(env = process.env, { run = runCommand } = {}) {
+export function main(env = process.env, { run = runCommand, tick = (facts) => writerFor({ env }).tickStep(facts) } = {}) {
   const tmp = env.RUNNER_TEMP || '/tmp';
   const messageFile = path.join(tmp, 'ksai-message.txt');
 
@@ -176,9 +199,26 @@ export function main(env = process.env, { run = runCommand } = {}) {
       pushed_sha: sha,
       pr_number: env.PR_NUMBER,
     }),
+    throughControlPlane: usingControlPlane(env),
     run,
   });
 
+  if (usingControlPlane(env) && result.status === 'stepped') {
+    return tick({ number: env.PR_NUMBER, title: env.STEP_TITLE, head: result.pushedSha || env.REMOTE_SHA }).then((said) => {
+      if (!Number.isSafeInteger(said.remaining) || said.remaining < 0) throw new Error('the control plane returned no plan count');
+      result.remaining = said.remaining;
+      return writeResult(env, messageFile, result);
+    }).catch((error) => {
+      result.status = 'blocked';
+      result.message = `I pushed "${env.STEP_TITLE}" but the control plane could not tick its box (${error.message}). The commit is on the branch.`;
+      return writeResult(env, messageFile, result);
+    });
+  }
+
+  return writeResult(env, messageFile, result);
+}
+
+function writeResult(env, messageFile, result) {
   process.stdout.write(`pushed=${result.pushed ? 'true' : 'false'}\n`);
 
   if (result.fatal) {
@@ -188,15 +228,24 @@ export function main(env = process.env, { run = runCommand } = {}) {
 
   const speaks = result.status !== 'stepped' || result.boundary === true || result.warned === true;
   if (speaks) writeFileSync(messageFile, `${result.message}\n`);
+  const factsFile = usingControlPlane(env) && result.status === 'stepped' && speaks
+    ? path.join(env.RUNNER_TEMP || '/tmp', 'ksai-step-result.json') : '';
+  if (factsFile) writeFileSync(factsFile, JSON.stringify({
+    step_title: env.STEP_TITLE,
+    remaining_after: result.remaining,
+    steps_left: result.stepsLeft,
+    ...(result.expectationEdits ? { expectation_edits: result.expectationEdits } : {}),
+  }));
   writeOutputs(env.GITHUB_OUTPUT, {
     status: result.status,
     remaining: result.remaining,
     message_file: speaks ? messageFile : '',
+    result_facts_file: factsFile,
   });
   process.stdout.write(`${result.message}\n`);
   return 0;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  process.exit(main());
+  process.exitCode = await main();
 }

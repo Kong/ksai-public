@@ -12,9 +12,9 @@ import { writeOutputs } from '../lib/outputs.mjs';
 
 export function openBranch({ cwd = null, issueNumber = null, issueFile = null, repo = null, run = runCommand } = {}) {
   const { named, branch } = nameBranch({ issueNumber, issueFile });
-  const block = (message) => ({ status: 'blocked', message });
+  const block = (message, reason, detail = '') => ({ status: 'blocked', message, reason, detail });
 
-  if (!branch) return block(`I could not name a branch for ${named}, so nothing was built.`);
+  if (!branch) return block(`I could not name a branch for ${named}, so nothing was built.`, 'branch-name', named);
 
   const standing = branchExists(run, repo, branch);
   if (standing === null) {
@@ -22,12 +22,14 @@ export function openBranch({ cwd = null, issueNumber = null, issueFile = null, r
       `I could not check whether a branch named \`${branch}\` already exists, so nothing was built rather than ` +
         'risk building over work that is already there. Ask again, and if it keeps failing the token this flow ' +
         'runs with is missing `contents: read`',
+      'branch-check', branch,
     );
   }
   if (standing) {
     return block(
       `A branch named \`${branch}\` already exists and no open pull request uses it, so nothing was built. ` +
         'Delete that branch, or reopen the pull request that used it',
+      'branch-exists', branch,
     );
   }
 
@@ -68,6 +70,8 @@ export function main(env = process.env, { run = runCommand } = {}) {
     writeOutputs(env.GITHUB_OUTPUT, {
       status: result.status,
       message_file: messageFile,
+      notice_reason: result.reason,
+      notice_detail: result.detail,
     });
     process.stdout.write(`${result.message}\n`);
     return 0;
