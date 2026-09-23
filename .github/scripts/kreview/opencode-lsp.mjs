@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { writeOutputs } from '../lib/outputs.mjs';
 
 export const LSP_ARM = Object.freeze({ off: 'off', native: 'native' });
-export const OPENCODE_VERSION = '1.18.31';
+export const OPENCODE_VERSION = '1.18.32';
 export const GOPLS_VERSION = 'v0.20.0';
 export const TYPESCRIPT_LANGUAGE_SERVER_VERSION = '5.3.0';
 export const TYPESCRIPT_VERSION = '5.9.3';

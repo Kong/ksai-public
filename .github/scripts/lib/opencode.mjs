@@ -258,7 +258,7 @@ export const RUNTIME_CONFIG = Object.freeze({
 
 export const PROVIDER_TIMEOUTS = Object.freeze({ headerTimeout: 120_000, chunkTimeout: 120_000 });
 
-export const PROVIDER_POLICY_VERSION = '1.18.31';
+export const PROVIDER_POLICY_VERSION = '1.18.32';
 
 export const PROVIDER_POLICY = Object.freeze([
   Object.freeze({ effect: 'deny', action: 'provider.use', resource: '*' }),

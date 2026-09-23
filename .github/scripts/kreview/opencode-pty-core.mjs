@@ -101,8 +101,8 @@ const CODE_SUBCOMMANDS = Object.freeze({
   bun: new Set(['build', 'run', 'test', 'x']),
   deno: new Set(['bench', 'compile', 'eval', 'jupyter', 'repl', 'run', 'serve', 'task', 'test']),
 });
-export const PTY_OPENCODE_VERSION = '1.18.31';
-const PTY_RUNTIME_LOCK_SHA256 = '31636115ee6238df77d3124c3b2d928d8d60916788824bb21b265c92afe7e519';
+export const PTY_OPENCODE_VERSION = '1.18.32';
+const PTY_RUNTIME_LOCK_SHA256 = 'e0c84b113ac7a2d4caad61bff75344126f8aee18fac7784049547bca7a0f9739';
 
 const executableName = (command) => command.replace(/\/+$/, '').split('/').at(-1).toLowerCase();
 const carriesEval = (args, short, long = []) => args.some((arg) =>
