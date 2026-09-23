@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { answer as streamAnswer, everything, parsed } from '../lib/opencode.mjs';
-import { extractReviewJson, readReviewOutput } from '../lib/review-output.cjs';
+import { extractReviewJson, readReviewOutput, REPAIRED } from '../lib/review-output.cjs';
 import { hypothesesOf } from '../lib/review-hypotheses.mjs';
 import { EXPORT_BYTES, exportChildren, exportedText } from './opencode-children.mjs';
 import { auditProblem, LIMITS, runPipeline } from './review-pipeline.cjs';
@@ -30,13 +30,14 @@ export async function completeStage({ name, prompt, timeoutMs, candidateIds = nu
       for (const [key, value] of Object.entries(call.usage)) sum[key] = (sum[key] || 0) + value;
       return sum;
     }, {}) : null,
-    invocations: calls.map(({ phase, code: exit_code, session_id, usage, completion, coverage, attempts, submission, correction }) => ({ phase, exit_code, session_id, usage, completion, coverage, attempts, submission_status: submission?.status ?? null, correction: correction === true, thinking: phase === 'research' ? 'selected' : 'enabled', effort: phase === 'research' ? 'selected' : 'low', thinking_budget: phase === 'research' ? undefined : LIMITS.finalizeThinkingTokens })),
+    invocations: calls.map(({ phase, code: exit_code, session_id, usage, completion, coverage, attempts, submission, correction, repaired }) => ({ phase, exit_code, session_id, usage, completion, coverage, attempts, submission_status: submission?.status ?? null, ...(submission?.as_text ? { submission_as_text: true } : {}), ...(repaired ? { parse_repaired: true } : {}), correction: correction === true, thinking: phase === 'research' ? 'selected' : 'enabled', effort: phase === 'research' ? 'selected' : 'low', thinking_budget: phase === 'research' ? undefined : LIMITS.finalizeThinkingTokens })),
   });
   if (timeoutMs < LIMITS.minStageMs) return answer(124);
   const finalizeMs = Math.min(LIMITS.finalizeMs, Math.floor(timeoutMs / 3));
   const research = await invoke({ prompt, timeoutMs: timeoutMs - finalizeMs, resumeSession, resultKind, candidateIds: candidateIds ?? [] });
-  const researched = typeof research.text === 'string' ? readReviewOutput(research.text).review : null;
-  calls.push({ phase: 'research', ...research, coverage: coverageOf(researched) });
+  const researchRead = typeof research.text === 'string' ? readReviewOutput(research.text) : null;
+  const researched = researchRead?.review ?? null;
+  calls.push({ phase: 'research', ...research, coverage: coverageOf(researched), repaired: researchRead?.reason === REPAIRED });
   if (research.code !== 0) return answer(research.code);
   if (typeof research.session_id !== 'string' || !/^ses_[a-zA-Z0-9]+$/.test(research.session_id)) return answer(1);
   if (coverageOf(researched) && (research.submission?.status === 'accepted' || resultTransport === 'text' && name.startsWith('discover-') && research.completion?.status === 'recorded' && research.completion.text_bytes > 0)) return answer(0, research.text);
@@ -58,9 +59,10 @@ export async function completeStage({ name, prompt, timeoutMs, candidateIds = nu
       prompt: `${correction}Finish the ${name} stage using only the evidence already collected. ${contract} Coverage is incomplete if the assigned investigation was interrupted or not performed; an empty findings array does not make it complete. For discovery: findings carry root_cause and full evidence from the original contract. For audit: summary "audit", findings [], and one decision per original candidate ID with id, verdict (keep, remove or insufficient_evidence), a nonempty reason explaining the evidence, and the corrected full finding for every keep. ${candidateIds ? `Original candidate IDs: ${JSON.stringify(candidateIds)}. ` : ''}No new research or other tool calls. An unsupported claim is insufficient evidence.`,
       timeoutMs: left, resumeSession: session, finalize: true, resultKind, candidateIds: candidateIds ?? [],
     });
-    const review = typeof final.text === 'string' ? readReviewOutput(final.text).review : null;
+    const finalRead = typeof final.text === 'string' ? readReviewOutput(final.text) : null;
+    const review = finalRead?.review ?? null;
     const isCorrection = attempt > 0 || resultTransport !== 'text' || name.startsWith('discover-');
-    calls.push({ phase: attempt ? 'finalize-retry' : 'finalize', ...final, correction: isCorrection, coverage: coverageOf(review) });
+    calls.push({ phase: attempt ? 'finalize-retry' : 'finalize', ...final, correction: isCorrection, coverage: coverageOf(review), repaired: finalRead?.reason === REPAIRED });
     problem = final.submission && final.submission.status !== 'accepted' ? `submission status is ${final.submission.status}` : !coverageOf(review) ? 'coverage and review JSON are required' : candidateIds ? auditProblem(review, candidateIds) : '';
     if (final.code !== 0) return answer(final.code);
     if (!problem) return answer(0, researched?.coverage === 'incomplete' ? JSON.stringify({ ...review, coverage: 'incomplete' }) : final.text);
@@ -177,7 +179,8 @@ export async function recoverReview({ flow, prompt, timeoutMs, invoke, budget = 
   attempts.push(attempt(second));
   const usage = first.usage && second.usage ? Object.fromEntries([...new Set([...Object.keys(first.usage), ...Object.keys(second.usage)])].map((key) => [key, (first.usage[key] ?? 0) + (second.usage[key] ?? 0)])) : null;
   const code = second.code === 0 && (typeof second.text !== 'string' || !second.text.trim()) ? 1 : second.code;
-  return { ...second, code, usage, attempts };
+  const asText = first.submission?.as_text === true || second.submission?.as_text === true;
+  return { ...second, code, usage, attempts, ...(asText ? { submission: { ...second.submission, as_text: true } } : {}) };
 }
 
 export async function reviewSession({ env, events, prompt, run, resumable = true }) {

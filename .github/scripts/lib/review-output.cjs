@@ -7,16 +7,37 @@ const FENCE_OPENER = /```(?:json)?[^\S\n]*\r?\n/gi;
 const MAX_FENCES = 64;
 const AFTER_STRING = new Set([',', '}', ']', ':']);
 
-function objectAt(text, start, end) {
+function escapeControls(text) {
+  let out = '';
+  let inString = false;
+  let escaped = false;
+
+  for (const char of text) {
+    if (inString && char < ' ') {
+      out += `${escaped ? '\\' : ''}${JSON.stringify(char).slice(1, -1)}`;
+      escaped = false;
+      continue;
+    }
+    if (escaped) escaped = false;
+    else if (char === '\\') escaped = inString;
+    else if (char === '"') inString = !inString;
+    out += char;
+  }
+  return out;
+}
+
+function parsedObject(text) {
   try {
-    const parsed = JSON.parse(text.slice(start, end));
+    const parsed = JSON.parse(text);
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
   } catch {
     return null;
   }
 }
 
-function topLevelObjects(text) {
+const objectOf = (text) => parsedObject(escapeControls(text));
+
+function topLevelObjects(text, read) {
   const found = [];
   let depth = 0;
   let start = -1;
@@ -42,7 +63,7 @@ function topLevelObjects(text) {
     else if (char === '}') {
       depth -= 1;
       if (depth === 0) {
-        const parsed = objectAt(text, start, index + 1);
+        const parsed = read(text.slice(start, index + 1));
         if (parsed) found.push(parsed);
       }
     }
@@ -54,7 +75,6 @@ function escapeStrayQuotes(text) {
   let out = '';
   let inString = false;
   let escaped = false;
-  let changed = false;
 
   for (let index = 0; index < text.length; index += 1) {
     const char = text[index];
@@ -85,10 +105,9 @@ function escapeStrayQuotes(text) {
       continue;
     }
     out += '\\"';
-    changed = true;
   }
 
-  return { text: out, changed };
+  return out;
 }
 
 function candidateRegions(text) {
@@ -96,10 +115,10 @@ function candidateRegions(text) {
   return [...starts.slice(-MAX_FENCES).map((start) => text.slice(start)), text];
 }
 
-function findReview(regions) {
+function findReview(regions, read) {
   let sawObject = false;
   for (const region of regions) {
-    const objects = topLevelObjects(region);
+    const objects = topLevelObjects(region, read);
     sawObject ||= objects.length > 0;
     const review = objects.find((candidate) => Array.isArray(candidate.findings));
     if (review) return { review, sawObject: true };
@@ -112,14 +131,15 @@ function readReviewOutput(raw) {
   if (!text.trim()) return { review: null, reason: NO_OUTPUT };
 
   const regions = candidateRegions(text);
-  const strict = findReview(regions);
+  const strict = findReview(regions, parsedObject);
   if (strict.review) return { review: strict.review, reason: null };
 
-  let sawRepaired = false;
+  const escaped = findReview(regions, objectOf);
+  if (escaped.review) return { review: escaped.review, reason: REPAIRED };
+
+  let sawRepaired = escaped.sawObject;
   for (const region of regions) {
-    const repair = escapeStrayQuotes(region);
-    if (!repair.changed) continue;
-    const salvaged = findReview([repair.text]);
+    const salvaged = findReview([escapeStrayQuotes(region)], objectOf);
     if (salvaged.review) return { review: salvaged.review, reason: REPAIRED };
     sawRepaired ||= salvaged.sawObject;
   }
@@ -131,4 +151,4 @@ function extractReviewJson(raw) {
   return readReviewOutput(raw).review;
 }
 
-module.exports = { extractReviewJson, readReviewOutput, NO_OUTPUT, NOT_JSON, NO_FINDINGS, REPAIRED };
+module.exports = { extractReviewJson, readReviewOutput, objectOf, NO_OUTPUT, NOT_JSON, NO_FINDINGS, REPAIRED };

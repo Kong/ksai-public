@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 
+const { objectOf } = require('../lib/review-output.cjs');
 const { LIMITS, auditProblem, findingProblem, wireProblem, fromWire, CELL_LIMIT, LINE_LIMIT, ASSESSMENT_LIMIT, ASSESSMENT_CHARS, BODY_CHARS } = require('./review-pipeline.cjs');
 
 const TOOL_NAME = 'submit_review_result';
@@ -16,6 +17,7 @@ const ENV_KEYS = Object.freeze([
 const text = (value, limit = 4000) => typeof value === 'string' && value.trim() !== '' && value.length <= limit;
 const pathOf = (value) => text(value, 512) && !/^(?:\/|[A-Za-z]:)/.test(value) && !value.split(/[\\/]/).some((part) => part === '..' || part === '.' || part === '') && !/[\p{C}]/u.test(value);
 const canonical = (value) => JSON.stringify(value) ?? '';
+const decoded = (value) => (typeof value === 'string' ? objectOf(value) ?? value : value);
 const exact = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).every((key) => keys.includes(key));
 
 const FLATTENED = /```|\|\s*:?-{3,}|^\s*\|.*\|/;
@@ -314,12 +316,13 @@ function plugin(env = process.env) {
             held = null;
             throw new Error('no attempts remain, so this review result is refused');
           }
-          const problem = !AGENTS.has(context?.agent) ? 'this agent cannot submit review results' : !/^ses_[a-zA-Z0-9]+$/.test(context?.sessionID ?? '') ? 'review result has no valid session' : wireProblem(kind, args?.submission) || submissionProblem(kind, normalized(kind, args?.submission), candidateIds);
-          const bytes = canonical(args?.submission);
+          const submission = decoded(args?.submission);
+          const problem = !AGENTS.has(context?.agent) ? 'this agent cannot submit review results' : !/^ses_[a-zA-Z0-9]+$/.test(context?.sessionID ?? '') ? 'review result has no valid session' : wireProblem(kind, submission) || submissionProblem(kind, normalized(kind, submission), candidateIds);
+          const bytes = canonical(submission);
           if (problem || !bytes || Buffer.byteLength(bytes) > LIMITS.outputBytes) {
             return reject(problem || 'review result exceeds its byte bound');
           }
-          const candidate = { version: 1, kind, session_id: context.sessionID, submission: normalized(kind, args.submission) };
+          const candidate = { version: 1, kind, session_id: context.sessionID, submission: normalized(kind, submission) };
           if (Buffer.byteLength(canonical(candidate)) > LIMITS.outputBytes) return reject('review result exceeds its byte bound');
           accepted = true;
           held = candidate;
@@ -358,6 +361,11 @@ function plugin(env = process.env) {
 
 function submitted({ file, events, kind, candidateIds = [] }) {
   const calls = events.filter((event) => event?.type === 'tool_use' && event.part?.tool === TOOL_NAME);
+  const answer = heldSubmission({ file, calls, kind, candidateIds });
+  return calls.some((call) => typeof call.part?.state?.input?.submission === 'string') ? { ...answer, as_text: true } : answer;
+}
+
+function heldSubmission({ file, calls, kind, candidateIds }) {
   if (calls.length === 0) return { status: 'missing', text: null };
   /*
    * A refused call is an attempt, not a submission. Counting every call read the corrected retry the
@@ -368,7 +376,7 @@ function submitted({ file, events, kind, candidateIds = [] }) {
   if (done.length === 0) return { status: 'invalid', text: null };
   if (done.length !== 1) return { status: 'duplicate', text: null };
   const [call] = done;
-  const input = call.part?.state?.input?.submission;
+  const input = decoded(call.part?.state?.input?.submission);
   if (!/^ses_[a-zA-Z0-9]+$/.test(call.sessionID ?? '')) return { status: 'invalid', text: null };
   const encoded = canonical(normalized(kind, input));
   if (!encoded) return { status: 'invalid', text: null };

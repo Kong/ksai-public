@@ -459,6 +459,11 @@ export function monitorProcess(rootPid, table = processTable, everyMs = PROCESS_
   };
 }
 
+export const submissionEnv = (submission) => ({
+  OPENCODE_REVIEW_SUBMISSION_STATUS: submission?.status ?? '',
+  OPENCODE_REVIEW_SUBMISSION_AS_TEXT: submission?.as_text ? 'true' : '',
+});
+
 export function runtimeSummary(invocations, mcpServers = null) {
   const complete = (field, rows = invocations) => rows.length > 0 && rows.every(
     (metric) => Number.isFinite(metric[field]) && metric[field] >= 0,
@@ -1210,7 +1215,7 @@ async function main(env = process.env, {
       const timeoutMs = env.FLOW === 'review' ? killAt > 0 ? Math.max(0, killAt - Date.now()) : LIMITS.totalMs : 0;
       const result = env.FLOW === 'review' && timeoutMs === 0 ? { code: 124, timed_out: true } : await run({ prompt, timeoutMs });
       code = result.code === 0 && resultTransport !== 'text' && result.submission?.status !== 'accepted' ? 1 : result.code;
-      env.OPENCODE_REVIEW_SUBMISSION_STATUS = result.submission?.status ?? '';
+      Object.assign(env, submissionEnv(result.submission));
       env.OPENCODE_REVIEW_CORRECTIONS = String(result.corrections ?? 0);
       deadlineExpired = result.timed_out === true;
       if ((resultTransport !== 'text' && result.submission?.status === 'accepted') || result.attempts?.length > 1) {

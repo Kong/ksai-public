@@ -106,6 +106,7 @@ if (process.env.FLOW === 'review') {
     ...metadata.identity,
     strategy: process.env.REVIEW_STRATEGY || 'baseline',
     submission_status: process.env.OPENCODE_REVIEW_SUBMISSION_STATUS || null,
+    ...(process.env.OPENCODE_REVIEW_SUBMISSION_AS_TEXT === 'true' ? { submission_as_text: true } : {}),
     correction_calls: Number(process.env.OPENCODE_REVIEW_CORRECTIONS || 0),
     ...protocol,
     ...coverage,

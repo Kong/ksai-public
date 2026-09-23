@@ -140,6 +140,7 @@ const withBody = (finding) => (finding && typeof finding === 'object' && !Array.
 
 /** wireProblem answers the shape the model submits, before `fromWire` renders it. */
 function wireProblem(kind, submission) {
+  if (typeof submission === 'string') return 'submission arrived as text that does not parse as a JSON object; pass the object itself';
   if (!submission || typeof submission !== 'object' || Array.isArray(submission)) return 'submission is not an object';
   const findings = Array.isArray(submission.findings) ? submission.findings : [];
   if (findings.some((finding) => finding && typeof finding === 'object' && !Array.isArray(finding) && !lineList(finding.body))) return 'every finding body is an array of lines, each a string with no line break in it';
