@@ -125,6 +125,29 @@ outputs:
       `true` where this repository asks the review team from the sidebar, so the
       withdrawal has something to withdraw, and empty otherwise
     value: ${{ steps.run_settings.outputs.clear_request }}
+  disabled_commands:
+    description: >-
+      the model-backed commands this repository turns off, or empty where the
+      control plane names none and the repository's own answer stands. This and
+      the five guards below reach only `ksai-cp.yml`, whose caller has no inputs
+      to state them. A standalone caller of `ksai.yml` sets them with its own
+      inputs and `.ksai/ksai.json`, so a served guard changes nothing there.
+    value: ${{ steps.run_settings.outputs.disabled_commands }}
+  write_access_commands:
+    description: the commands write access alone may run, or empty
+    value: ${{ steps.run_settings.outputs.write_access_commands }}
+  denied_paths:
+    description: the paths no implementation write may commit, or empty
+    value: ${{ steps.run_settings.outputs.denied_paths }}
+  bare_comments:
+    description: whether a comment naming no command is read, or empty
+    value: ${{ steps.run_settings.outputs.bare_comments }}
+  stop_mode:
+    description: how a stop ends a run, or empty
+    value: ${{ steps.run_settings.outputs.stop_mode }}
+  require_plan_approval:
+    description: whether planned implementation waits for an approval, or empty
+    value: ${{ steps.run_settings.outputs.require_plan_approval }}
   federation_rule_id:
     description: >-
       the Konnect federation this run exchanges its OIDC token under. This and

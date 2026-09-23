@@ -18,6 +18,9 @@ const KEYS = Object.freeze([
   'aliases',
   'bare_comments',
   'write_access_commands',
+  'disabled_commands',
+  'denied_paths',
+  'require_plan_approval',
   'plan_mode',
   'stop_mode',
   'stop_grace_seconds',
@@ -44,6 +47,10 @@ const MAX_ALIASES = 32;
 const MAX_ALIAS_CHARS = 32;
 const MAX_BYTES = 8 * 1024;
 
+const ESCAPED_KEY = /"(?:[^"\\]|\\.)*\\u[0-9a-fA-F]{4}(?:[^"\\]|\\.)*"\s*:/;
+
+const DENIED_PATH = /^(?!\.\.?(?:\/|$))[A-Za-z0-9._@+-]+(?:\/(?!\.\.?(?:\/|$))[A-Za-z0-9._@+-]+)*\/?$/;
+
 const NO_ALIASES = Object.freeze(Object.create(null));
 
 const NO_HALT = Object.freeze(Object.create(null));
@@ -65,6 +72,10 @@ function parseConfig(text) {
 
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
     return { error: `\`${CONFIG_PATH}\` must hold a JSON object, got ${describe(parsed)}` };
+  }
+
+  if (ESCAPED_KEY.test(raw)) {
+    return { error: `\`${CONFIG_PATH}\` writes a key with a \\u escape, which hides a repeated key; write every key plainly` };
   }
 
   const keys = Object.keys(parsed);
@@ -231,6 +242,49 @@ function parseConfig(text) {
     if (unknownName !== null) return { error: unknownName };
   }
 
+  let disabled = null;
+  if (keys.includes('disabled_commands')) {
+    const asked = parsed.disabled_commands;
+    if (!Array.isArray(asked) || asked.some((entry) => typeof entry !== 'string')) {
+      return {
+        error: `the \`disabled_commands\` value in \`${CONFIG_PATH}\` must be a JSON array of command names, got ${describe(asked)}`,
+      };
+    }
+    disabled = [...new Set(asked.map((entry) => canonicalCommand(entry.trim())))];
+    const standing = disabled.find((command) => command === HELP_COMMAND || deliveredCommand(command));
+    if (standing !== undefined) {
+      return {
+        error: `\`disabled_commands\` in \`${CONFIG_PATH}\` names \`${safeEcho(standing)}\`, which is always answered and cannot be turned off`,
+      };
+    }
+    const unknownName = unknownCommandIn(disabled, {
+      where: `\`disabled_commands\` in \`${CONFIG_PATH}\``,
+      commandAliases: aliases,
+    });
+    if (unknownName !== null) return { error: unknownName };
+  }
+
+  let denied = null;
+  if (keys.includes('denied_paths')) {
+    const asked = parsed.denied_paths;
+    if (!Array.isArray(asked) || asked.some((entry) => typeof entry !== 'string' || !DENIED_PATH.test(entry.trim()))) {
+      return {
+        error: `the \`denied_paths\` value in \`${CONFIG_PATH}\` must be a JSON array of repository paths using letters, digits and ._@+- with no glob, got ${describe(asked)}`,
+      };
+    }
+    denied = [...new Set(asked.map((entry) => entry.trim()))];
+  }
+
+  let approval = null;
+  if (keys.includes('require_plan_approval')) {
+    if (typeof parsed.require_plan_approval !== 'boolean') {
+      return {
+        error: `the \`require_plan_approval\` value in \`${CONFIG_PATH}\` must be true or false, got ${describe(parsed.require_plan_approval)}`,
+      };
+    }
+    approval = parsed.require_plan_approval;
+  }
+
   for (const name of new Set([...Object.keys(aliases), ...KEYS])) {
     const structural = KEYS.includes(name) ? 1 : 0;
     const declared = name in aliases ? 1 : 0;
@@ -247,6 +301,9 @@ function parseConfig(text) {
     aliases: Object.freeze(aliases),
     bareComments,
     writeAccess: writeAccess === null ? null : Object.freeze(writeAccess),
+    disabledCommands: disabled === null ? null : Object.freeze(disabled),
+    deniedPaths: denied === null ? null : Object.freeze(denied),
+    requirePlanApproval: approval,
     planning,
     halt: Object.freeze(halt),
   };
@@ -320,10 +377,19 @@ async function loadKsaiConfig({ github, core, owner, repo }) {
     path = LEGACY_CONFIG_PATH;
     found = await fetchConfig({ github, owner, repo, path });
   }
-  if (found.error) return { error: found.error };
+  if (found.error) return { error: found.error, unread: true };
   if (found.missing) {
     core.info(`No ${CONFIG_PATH} on ${owner}/${repo}'s default branch; only ${COMMANDS.join(', ')} are recognized.`);
-    return { aliases: NO_ALIASES, bareComments: '', writeAccess: null, planning: '', halt: NO_HALT };
+    return {
+      aliases: NO_ALIASES,
+      bareComments: '',
+      writeAccess: null,
+      disabledCommands: null,
+      deniedPaths: null,
+      requirePlanApproval: null,
+      planning: '',
+      halt: NO_HALT,
+    };
   }
   const { data } = found;
   if (path === LEGACY_CONFIG_PATH) {
@@ -355,6 +421,9 @@ async function loadKsaiConfig({ github, core, owner, repo }) {
     aliases: parsed.aliases,
     bareComments: parsed.bareComments,
     writeAccess: parsed.writeAccess,
+    disabledCommands: parsed.disabledCommands,
+    deniedPaths: parsed.deniedPaths,
+    requirePlanApproval: parsed.requirePlanApproval,
     planning: parsed.planning,
     halt: parsed.halt,
   };

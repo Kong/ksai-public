@@ -796,6 +796,11 @@ jobs:
       codeowner: ${{ steps.gate.outputs.codeowner }}
       write_access: ${{ steps.gate.outputs.write_access }}
       write_access_commands: ${{ steps.gate.outputs.write_access_commands }}
+      disabled_commands: ${{ steps.gate.outputs.disabled_commands || inputs.disabled_commands }}
+      denied_paths: ${{ steps.gate.outputs.denied_paths || inputs.denied_paths }}
+      bare_comments: ${{ steps.gate.outputs.bare_comments || inputs.bare_comments }}
+      stop_mode: ${{ steps.gate.outputs.stop_mode || inputs.stop_mode }}
+      require_plan_approval: ${{ steps.gate.outputs.require_plan_approval || inputs.require_plan_approval }}
       owners: ${{ steps.gate.outputs.owners }}
       review: ${{ steps.gate.outputs.review }}
       implement: ${{ steps.gate.outputs.implement }}
@@ -1045,6 +1050,9 @@ jobs:
           prompt_rendering: ${{ steps.run_settings.outputs.prompt_rendering }}
           prompt_endpoint: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
           bare_comments: ${{ inputs.bare_comments }}
+          denied_paths: ${{ inputs.denied_paths }}
+          stop_mode: ${{ inputs.stop_mode }}
+          require_plan_approval: ${{ inputs.require_plan_approval }}
           otel_endpoint: ${{ inputs.otel_endpoint }}
           datadog_key: ${{ secrets.datadog_key }}
 
@@ -1083,7 +1091,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-help
           repository: Kong/ksai-public
-          ref: v3.104.2
+          ref: v3.105.0
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1096,7 +1104,7 @@ jobs:
           ON_ISSUE: ${{ needs.gate.outputs.on_issue }}
           THREAD_ROOT_ID: ${{ needs.gate.outputs.thread_root_id }}
           TRIGGER: ${{ inputs.trigger_phrase }}
-          DISABLED_COMMANDS: ${{ inputs.disabled_commands }}
+          DISABLED_COMMANDS: ${{ needs.gate.outputs.disabled_commands || inputs.disabled_commands }}
           REPO: ${{ github.repository }}
           AUTHORIZED: ${{ needs.gate.outputs.codeowner }}
           OWNERS: ${{ needs.gate.outputs.owners }}
@@ -1220,7 +1228,7 @@ jobs:
           review_strategy: ${{ inputs.review_strategy }}
           review_experiment: ${{ inputs.review_experiment }}
           trigger_phrase: ${{ inputs.trigger_phrase }}
-          disabled_commands: ${{ inputs.disabled_commands }}
+          disabled_commands: ${{ needs.gate.outputs.disabled_commands || inputs.disabled_commands }}
           write_access_commands: ${{ inputs.write_access_commands }}
           allowed_commands: ${{ inputs.allowed_commands }}
           issue_number: ${{ inputs.pr }}
@@ -1406,7 +1414,7 @@ jobs:
           opencode_version: ${{ inputs.opencode_version }}
           opencode_pty: ${{ inputs.opencode_pty }}
           trigger_phrase: ${{ inputs.trigger_phrase }}
-          disabled_commands: ${{ inputs.disabled_commands }}
+          disabled_commands: ${{ needs.gate.outputs.disabled_commands || inputs.disabled_commands }}
           write_access_commands: ${{ inputs.write_access_commands }}
           allowed_commands: ${{ inputs.allowed_commands }}
           issue_number: ${{ inputs.pr || needs.gate.outputs.number }}
@@ -1539,7 +1547,7 @@ jobs:
         with:
           token: ${{ github.token }}
           repository: Kong/ksai-public
-          ref: v3.104.2
+          ref: v3.105.0
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1603,7 +1611,7 @@ jobs:
           publish: "false"
           engine: ${{ steps.sample.outputs.engine }}
           trigger_phrase: ${{ inputs.trigger_phrase }}
-          disabled_commands: ${{ inputs.disabled_commands }}
+          disabled_commands: ${{ needs.gate.outputs.disabled_commands || inputs.disabled_commands }}
           write_access_commands: ${{ inputs.write_access_commands }}
           issue_number: ${{ inputs.pr || needs.gate.outputs.number }}
           actor: ${{ inputs.actor }}
@@ -1905,10 +1913,10 @@ jobs:
           opencode_version: ${{ inputs.opencode_version }}
           opencode_pty: ${{ inputs.opencode_pty }}
           trigger_phrase: ${{ inputs.trigger_phrase }}
-          disabled_commands: ${{ inputs.disabled_commands }}
+          disabled_commands: ${{ needs.gate.outputs.disabled_commands || inputs.disabled_commands }}
           write_access_commands: ${{ inputs.write_access_commands }}
-          bare_comments: ${{ inputs.bare_comments }}
-          stop_mode: ${{ inputs.stop_mode }}
+          bare_comments: ${{ needs.gate.outputs.bare_comments || inputs.bare_comments }}
+          stop_mode: ${{ needs.gate.outputs.stop_mode || inputs.stop_mode }}
           stop_grace_seconds: ${{ inputs.stop_grace_seconds }}
           stop_warn_seconds: ${{ inputs.stop_warn_seconds }}
           stop_preserve: ${{ inputs.stop_preserve }}
@@ -1936,8 +1944,8 @@ jobs:
           classifier_turns: ${{ needs.gate.outputs.classifier_turns }}
           classifier_duration: ${{ needs.gate.outputs.classifier_duration }}
           otel_endpoint: ${{ inputs.otel_endpoint }}
-          require_plan_approval: ${{ inputs.require_plan_approval }}
-          denied_paths: ${{ inputs.denied_paths }}
+          require_plan_approval: ${{ needs.gate.outputs.require_plan_approval || inputs.require_plan_approval }}
+          denied_paths: ${{ needs.gate.outputs.denied_paths || inputs.denied_paths }}
           plan_file_path: ${{ inputs.plan_file_path }}
           keep_plan_file: ${{ inputs.keep_plan_file }}
           plan_mode: ${{ inputs.plan_mode }}
@@ -2073,7 +2081,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-recover
           repository: Kong/ksai-public
-          ref: v3.104.2
+          ref: v3.105.0
           sparse-checkout: |
             .github/scripts
           persist-credentials: false

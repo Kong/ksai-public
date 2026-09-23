@@ -27,6 +27,7 @@ const {
   verdictFromExecution,
 } = require('./classify.cjs');
 const { bareMode, ownPull, ownSurface, renderNudge, renderUnaddressed } = require('./bare.cjs');
+const { combinedGuards } = require('./guards.cjs');
 const { DEFAULT_TRIGGER_PHRASE, afterTrigger } = require('../lib/text.cjs');
 const { labelReaders, readLabelBasis, readReviewBasis, recordBasis } = require('./label-basis.cjs');
 const loadKsaiConfig = require('./config.cjs');
@@ -99,10 +100,19 @@ async function resolveBareGate({ github, core, owner, repo, env }) {
     stop_warn_seconds: '',
     stop_preserve: '',
     plan_mode: '',
+    denied_paths: '',
+    require_plan_approval: '',
   };
   const asked = bareMode({ input: env.BARE_COMMENTS });
   if (asked.error) return { outputs, notices: [], failure: asked.error };
   const config = await loadKsaiConfig({ github, core, owner, repo });
+  if (config.error && env.IS_CONTINUATION === 'true') {
+    return {
+      outputs,
+      notices: [],
+      failure: `${config.error}, so the guards this repository sets cannot be read and this chain stops here`,
+    };
+  }
   if (config.error) {
     outputs.plan_mode = 'always';
     return {
@@ -114,6 +124,12 @@ async function resolveBareGate({ github, core, owner, repo, env }) {
       failure: null,
     };
   }
+  const held = combinedGuards({
+    served: { denied_paths: env.DENIED_PATHS, require_plan_approval: env.REQUIRE_APPROVAL },
+    config,
+  });
+  outputs.denied_paths = held.denied_paths;
+  outputs.require_plan_approval = held.require_plan_approval;
   const halt = config.halt ?? {};
   outputs.stop_mode = String(halt.mode ?? '');
   outputs.stop_grace_seconds = halt.grace === undefined ? '' : String(halt.grace);

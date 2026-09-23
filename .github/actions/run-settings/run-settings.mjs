@@ -85,7 +85,24 @@ const NO_SETTINGS = {
   organization_id: '',
   service_account_id: '',
   workspace_id: '',
+  disabled_commands: '',
+  write_access_commands: '',
+  denied_paths: '',
+  bare_comments: '',
+  stop_mode: '',
+  require_plan_approval: '',
 };
+
+const DENIED_PATH = String.raw`(?!\.\.?(?:/|[\n,]|$))[A-Za-z0-9._@+-]+(?:/(?!\.\.?(?:/|[\n,]|$))[A-Za-z0-9._@+-]+)*/?`;
+
+const GUARDS = Object.freeze({
+  disabled_commands: /^[a-z][a-z-]{0,31}([ ,] ?[a-z][a-z-]{0,31})*$/,
+  write_access_commands: /^[a-z][a-z-]{0,31}([ ,] ?[a-z][a-z-]{0,31})*$/,
+  denied_paths: new RegExp(`^${DENIED_PATH}(?:[\n,] ?${DENIED_PATH})*\n?$`),
+  bare_comments: /^(auto|off)$/,
+  stop_mode: /^(soft|hard)$/,
+  require_plan_approval: /^(true|false)$/,
+});
 
 const RUNNER_LABEL = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
@@ -104,6 +121,11 @@ function settingsOf(served = Object.create(null)) {
   const settings = { ...NO_SETTINGS };
   const phrase = served.trigger_phrase;
   if (typeof phrase === 'string' && PHRASE.test(phrase)) settings.trigger_phrase = phrase;
+
+  for (const [name, shape] of Object.entries(GUARDS)) {
+    const value = served[name];
+    if (typeof value === 'string' && shape.test(value)) settings[name] = value;
+  }
 
   const workflow = served.continuation_workflow;
   if (typeof workflow === 'string' && WORKFLOW_FILE.test(workflow)) settings.continuation_workflow = workflow;
@@ -269,8 +291,13 @@ export async function readRunSettings({
     }
   }
 
+  const settings = settingsOf(served);
+  for (const name of Object.keys(GUARDS)) {
+    if (served[name] !== undefined && served[name] !== '' && settings[name] === '') refused.push(name);
+  }
+
   return {
-    model: servedModel, effort: servedEffort, arm, runSettings, settings: settingsOf(served),
+    model: servedModel, effort: servedEffort, arm, runSettings, settings,
     catalog, refused, served: true, why: '',
   };
 }

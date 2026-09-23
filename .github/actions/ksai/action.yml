@@ -1469,6 +1469,8 @@ runs:
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         BARE_COMMENTS: ${{ inputs.bare_comments }}
+        DENIED_PATHS: ${{ inputs.denied_paths }}
+        REQUIRE_APPROVAL: ${{ inputs.require_plan_approval }}
         TRIGGER: ${{ inputs.trigger_phrase }}
         COMMENT_BODY: ${{ steps.context.outputs.comment_body }}
         ON_ISSUE: ${{ steps.context.outputs.on_issue }}
@@ -2655,7 +2657,7 @@ runs:
         steps.phase.outputs.phase == 'step') }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
-        REQUIRE_APPROVAL: ${{ inputs.require_plan_approval }}
+        REQUIRE_APPROVAL: ${{ steps.bare_gate.outputs.require_plan_approval || inputs.require_plan_approval }}
         PHASE: ${{ steps.phase.outputs.phase }}
         ISSUE_NUM: ${{ steps.subject.outputs.number }}
         PR_NUMBER: ${{ steps.phase.outputs.pr_number }}
@@ -2955,7 +2957,7 @@ runs:
         BASE_REF: ${{ steps.fetch_base.outputs.ref }}
         BASE_BRANCH: ${{ steps.phase.outputs.base_ref }}
         REMOTE_SHA: ${{ steps.checkout_source.outputs.commit }}
-        DENIED_PATHS: ${{ inputs.denied_paths }}
+        DENIED_PATHS: ${{ steps.bare_gate.outputs.denied_paths || inputs.denied_paths }}
         PLAN_DIR: ${{ inputs.plan_file_path }}
         KSAI_GIT_FILEMODE: ${{ steps.configure_git.outputs.filemode }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
@@ -3384,7 +3386,7 @@ runs:
         COMMAND: ${{ steps.select.outputs.command }}
         PHASE: ${{ steps.phase.outputs.phase }}
         PLAN_MODE: ${{ steps.select.outputs.plan_mode }}
-        REQUIRE_APPROVAL: ${{ inputs.require_plan_approval }}
+        REQUIRE_APPROVAL: ${{ steps.bare_gate.outputs.require_plan_approval || inputs.require_plan_approval }}
         KSAI_ASK: ${{ inputs.ask }}
         JIRA_KEY: ${{ steps.subject.outputs.jira_key || steps.fetch_jira.outputs.key }}
         PR_NUMBER: ${{ steps.phase.outputs.pr_number }}
@@ -3434,7 +3436,7 @@ runs:
         COMMAND: ${{ steps.select.outputs.command }}
         PHASE: ${{ steps.phase.outputs.phase }}
         PLAN_MODE: ${{ steps.select.outputs.plan_mode }}
-        REQUIRE_APPROVAL: ${{ inputs.require_plan_approval }}
+        REQUIRE_APPROVAL: ${{ steps.bare_gate.outputs.require_plan_approval || inputs.require_plan_approval }}
         KSAI_ASK: ${{ inputs.ask }}
         JIRA_KEY: ${{ steps.subject.outputs.jira_key || steps.fetch_jira.outputs.key }}
         PR_NUMBER: ${{ steps.phase.outputs.pr_number }}
@@ -3594,7 +3596,7 @@ runs:
         PR_NUMBER: ${{ steps.phase.outputs.pr_number }}
         PLAN_MODE: ${{ steps.select.outputs.plan_mode }}
         VERDICT: ${{ steps.write_triage_verdict.outputs.verdict }}
-        REQUIRE_APPROVAL: ${{ inputs.require_plan_approval }}
+        REQUIRE_APPROVAL: ${{ steps.bare_gate.outputs.require_plan_approval || inputs.require_plan_approval }}
         KSAI_ASK: ${{ inputs.ask }}
         JIRA_KEY: ${{ steps.subject.outputs.jira_key || steps.fetch_jira.outputs.key }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
@@ -4241,7 +4243,7 @@ runs:
         SAW_ATTEMPT: ${{ steps.dispatch_record.outputs.trigger_attempt }}
         SAW_STATE: ${{ steps.dispatch_record.outputs.trigger_state }}
         SAW_NAME: ${{ steps.dispatch_record.outputs.trigger_name }}
-        DENIED_PATHS: ${{ inputs.denied_paths }}
+        DENIED_PATHS: ${{ steps.bare_gate.outputs.denied_paths || inputs.denied_paths }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:
         script: |
@@ -4349,7 +4351,7 @@ runs:
         JIRA_KEY: ${{ steps.fetch_jira.outputs.key }}
         GUIDANCE: ${{ steps.phase.outputs.request || inputs.work_guidance }}
         ADDITIONAL_PROMPT: ${{ inputs.additional_prompt }}
-        DENIED_PATHS: ${{ inputs.denied_paths }}
+        DENIED_PATHS: ${{ steps.bare_gate.outputs.denied_paths || inputs.denied_paths }}
         JOB_TIMEOUT_MINUTES: ${{ inputs.job_timeout_minutes }}
         CHANNEL_NONCE: ${{ steps.channel.outputs.nonce }}
         GO_FACTS_FILE: ${{ runner.temp }}/ksai-go-facts.json
@@ -5245,7 +5247,7 @@ runs:
         BASE_SHA: ${{ steps.checkout_source.outputs.commit }}
         PLAN_DIR: ${{ inputs.plan_file_path }}
         PLAN_FILE: ${{ steps.phase.outputs.plan_file }}
-        DENIED_PATHS: ${{ inputs.denied_paths }}
+        DENIED_PATHS: ${{ steps.bare_gate.outputs.denied_paths || inputs.denied_paths }}
         PROMPT_FILE: ${{ steps.governed_implement.outputs.prompt_file }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: node "${SCRIPTS}/ksai/implement-adversarial.mjs"
@@ -5371,7 +5373,7 @@ runs:
         BASE_SHA: ${{ steps.checkout_source.outputs.commit }}
         PLAN_DIR: ${{ inputs.plan_file_path }}
         PLAN_FILE: ${{ steps.phase.outputs.plan_file }}
-        DENIED_PATHS: ${{ inputs.denied_paths }}
+        DENIED_PATHS: ${{ steps.bare_gate.outputs.denied_paths || inputs.denied_paths }}
         PROMPT_FILE: ${{ steps.governed_implement.outputs.prompt_file }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: node "${SCRIPTS}/ksai/implement-repair.mjs"
@@ -5821,7 +5823,7 @@ runs:
         CHANGE_SCOPE_FILE: ${{ steps.build_implement.outputs.change_scope_file }}
         REPO: ${{ github.repository }}
         PUSH_URL: https://x-access-token:${{ inputs.source_org_github_token }}@github.com/${{ github.repository }}.git
-        DENIED_PATHS: ${{ inputs.denied_paths }}
+        DENIED_PATHS: ${{ steps.bare_gate.outputs.denied_paths || inputs.denied_paths }}
         PLAN_DIR: ${{ inputs.plan_file_path }}
         PLAN_FILE: ${{ steps.phase.outputs.plan_file }}
         PHASE: ${{ steps.size.outputs.phase }}
@@ -5934,7 +5936,7 @@ runs:
         TRIGGER: ${{ inputs.trigger_phrase }}
         MANIFEST: ${{ github.workspace }}/.ksai-manifest.json
         BRANCH: ${{ steps.open_draft.outputs.branch || steps.open_branch.outputs.branch || steps.phase.outputs.ref }}
-        DENIED_PATHS: ${{ inputs.denied_paths }}
+        DENIED_PATHS: ${{ steps.bare_gate.outputs.denied_paths || inputs.denied_paths }}
         PLAN_DIR: ${{ inputs.plan_file_path }}
         PLAN_GIVEN: ${{ steps.select.outputs.plan_given }}
         KSAI_GIT_AUTHOR_NAME: ${{ steps.identity.outputs.author_name }}
@@ -5964,7 +5966,7 @@ runs:
         BRANCH: ${{ steps.open_branch.outputs.branch }}
         BASE_SHA: ${{ steps.checkout_source.outputs.commit }}
         DEFAULT_BRANCH: ${{ steps.issue.outputs.default_branch || steps.context.outputs.default_branch }}
-        DENIED_PATHS: ${{ inputs.denied_paths }}
+        DENIED_PATHS: ${{ steps.bare_gate.outputs.denied_paths || inputs.denied_paths }}
         PLAN_DIR: ${{ inputs.plan_file_path }}
         KSAI_GIT_AUTHOR_NAME: ${{ steps.identity.outputs.author_name }}
         KSAI_GIT_AUTHOR_EMAIL: ${{ steps.identity.outputs.author_email }}
@@ -6029,7 +6031,7 @@ runs:
         REMAINING: ${{ steps.read_plan.outputs.remaining }}
         REMAINING_STEPS: ${{ steps.read_plan.outputs.remaining_steps }}
         TRIGGER: ${{ inputs.trigger_phrase }}
-        DENIED_PATHS: ${{ inputs.denied_paths }}
+        DENIED_PATHS: ${{ steps.bare_gate.outputs.denied_paths || inputs.denied_paths }}
         PLAN_DIR: ${{ inputs.plan_file_path }}
         MANIFEST: ${{ github.workspace }}/.ksai-manifest.json
         KSAI_GIT_AUTHOR_NAME: ${{ steps.identity.outputs.author_name }}
@@ -6062,7 +6064,7 @@ runs:
         PENDING_FILE: ${{ steps.phase.outputs.threads_file }}
         DEFERRED: ${{ steps.phase.outputs.deferred }}
         TRIGGER: ${{ inputs.trigger_phrase }}
-        DENIED_PATHS: ${{ inputs.denied_paths }}
+        DENIED_PATHS: ${{ steps.bare_gate.outputs.denied_paths || inputs.denied_paths }}
         PLAN_DIR: ${{ inputs.plan_file_path }}
         PLAN_FILE: ${{ steps.phase.outputs.plan_file }}
         RESUMED_SESSION: ${{ steps.plan_session.outputs.resumed }}
@@ -6097,7 +6099,7 @@ runs:
         COMMENT_ID: ${{ steps.context.outputs.comment_id }}
         SAW_TRIGGER: ${{ steps.dispatch_record.outputs.trigger }}
         TRIGGER: ${{ inputs.trigger_phrase }}
-        DENIED_PATHS: ${{ inputs.denied_paths }}
+        DENIED_PATHS: ${{ steps.bare_gate.outputs.denied_paths || inputs.denied_paths }}
         PLAN_DIR: ${{ inputs.plan_file_path }}
         MANIFEST: ${{ github.workspace }}/.ksai-manifest.json
         MERGED_SHA: ${{ steps.merge_base.outputs.merged_sha }}
@@ -6165,7 +6167,7 @@ runs:
         REMOTE_SHA: ${{ steps.checkout_source.outputs.commit }}
         OUT_DIR: ${{ runner.temp }}/ksai-refused
         MANIFEST: ${{ github.workspace }}/.ksai-manifest.json
-        DENIED_PATHS: ${{ inputs.denied_paths }}
+        DENIED_PATHS: ${{ steps.bare_gate.outputs.denied_paths || inputs.denied_paths }}
         PLAN_DIR: ${{ inputs.plan_file_path }}
         MERGED_SHA: ${{ steps.merge_base.outputs.merged_sha }}
         CHANGE_SCOPE_FILE: ${{ steps.build_implement.outputs.change_scope_file }}
@@ -6293,7 +6295,7 @@ runs:
         ISSUE_NUM: ${{ steps.subject.outputs.number }}
         KSAI_ASK: ${{ inputs.ask }}
         JIRA_KEY: ${{ steps.subject.outputs.jira_key || steps.fetch_jira.outputs.key }}
-        DENIED_PATHS: ${{ inputs.denied_paths }}
+        DENIED_PATHS: ${{ steps.bare_gate.outputs.denied_paths || inputs.denied_paths }}
         PLAN_DIR: ${{ inputs.plan_file_path }}
         MANIFEST: ${{ github.workspace }}/.ksai-manifest.json
         KSAI_GIT_AUTHOR_NAME: ${{ steps.identity.outputs.author_name }}

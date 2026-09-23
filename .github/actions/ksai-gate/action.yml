@@ -189,6 +189,18 @@ inputs:
     description: whether a comment naming no phrase on this flow's own pull request steers the run
     required: false
     default: auto
+  denied_paths:
+    description: paths no implementation may commit, which `.ksai/ksai.json` may add to
+    required: false
+    default: ""
+  stop_mode:
+    description: how a stop ends a run, which `.ksai/ksai.json` may make hard
+    required: false
+    default: ""
+  require_plan_approval:
+    description: whether planned work waits for an approval, which `.ksai/ksai.json` may turn on
+    required: false
+    default: ""
   otel_endpoint:
     description: OTLP endpoint the classifier reports to
     required: false
@@ -221,6 +233,21 @@ outputs:
   write_access_commands:
     description: the commands write access is enough for here, once `.ksai/ksai.json` has narrowed the list
     value: ${{ steps.trigger.outputs.write_access_commands }}
+  disabled_commands:
+    description: the commands turned off here, the input and `.ksai/ksai.json` together
+    value: ${{ steps.guards.outputs.disabled_commands }}
+  denied_paths:
+    description: the paths no implementation may commit, the input and `.ksai/ksai.json` together
+    value: ${{ steps.guards.outputs.denied_paths }}
+  require_plan_approval:
+    description: whether planned work waits for an approval, true when the input or `.ksai/ksai.json` says so
+    value: ${{ steps.guards.outputs.require_plan_approval }}
+  bare_comments:
+    description: whether a bare comment steers the run, off when the input or `.ksai/ksai.json` says so
+    value: ${{ steps.guards.outputs.bare_comments }}
+  stop_mode:
+    description: how a stop ends a run, hard when the input or `.ksai/ksai.json` says so
+    value: ${{ steps.guards.outputs.stop_mode }}
   owners:
     description: >-
       'absent' where this repository has no CODEOWNERS file at all, so a reader can say the repository has
@@ -364,6 +391,25 @@ runs:
         username: ${{ steps.requester.outputs.login }}
         write_access: ${{ inputs.write_access_commands != '' }}
 
+    - name: Combine the guards with the ones this repository sets
+      id: guards
+      if: ${{ inputs.authorization_github_token != '' }}
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        DISABLED_COMMANDS: ${{ inputs.disabled_commands }}
+        DENIED_PATHS: ${{ inputs.denied_paths }}
+        REQUIRE_PLAN_APPROVAL: ${{ inputs.require_plan_approval }}
+        BARE_COMMENTS: ${{ inputs.bare_comments }}
+        STOP_MODE: ${{ inputs.stop_mode }}
+        CONTINUATION: ${{ inputs.continuation }}
+        SCRIPTS: ${{ github.workspace }}/_ksai/.github/scripts
+      with:
+        github-token: ${{ inputs.authorization_github_token }}
+        retries: 3
+        script: |
+          const { guards } = require(`${process.env.SCRIPTS}/ksai/guards.cjs`);
+          await guards({ github, core, context, env: process.env });
+
     - name: Work out which flow this comment invokes
       id: trigger
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
@@ -373,7 +419,7 @@ runs:
         RECORD_PR: ${{ inputs.record_pr }}
         RECORD_HEAD_SHA: ${{ inputs.record_head_sha }}
         TRIGGER: ${{ inputs.trigger_phrase }}
-        DISABLED_COMMANDS: ${{ inputs.disabled_commands }}
+        DISABLED_COMMANDS: ${{ steps.guards.outputs.disabled_commands || inputs.disabled_commands }}
         WRITE_ACCESS_COMMANDS: ${{ inputs.write_access_commands }}
         CODEOWNER: ${{ steps.authz.outputs.authorized }}
         WRITE_ACCESS: ${{ steps.authz.outputs.write_access }}
@@ -382,7 +428,7 @@ runs:
         CLASSIFIER_MODEL: ${{ inputs.classifier_model }}
         BARE_COMMENTS: >-
           ${{ (steps.authz.outputs.authorized == 'true' || steps.authz.outputs.write_access == 'true') &&
-          inputs.bare_comments || 'off' }}
+          (steps.guards.outputs.bare_comments || inputs.bare_comments) || 'off' }}
         BOT_LOGIN: ${{ inputs.bot_login }}
         COMMENT_ID: ${{ inputs.authorization_github_token != '' && inputs.comment_id || '' }}
         COMMENT_KIND: ${{ inputs.authorization_github_token != '' && inputs.comment_kind || '' }}
@@ -506,7 +552,7 @@ runs:
       env:
         EXECUTION_FILE: ${{ steps.classify_run.outputs.execution_file }}
         CLASSIFY_MODEL: ${{ steps.trigger.outputs.classify_model }}
-        DISABLED_COMMANDS: ${{ inputs.disabled_commands }}
+        DISABLED_COMMANDS: ${{ steps.guards.outputs.disabled_commands || inputs.disabled_commands }}
         ON_ISSUE: ${{ steps.trigger.outputs.on_issue }}
         ON_OWN_PULL: ${{ steps.trigger.outputs.own_pull }}
         THREAD_ROOT_ID: ${{ steps.trigger.outputs.thread_root_id }}
