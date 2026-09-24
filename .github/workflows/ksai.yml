@@ -379,7 +379,7 @@ on:
           model IDs a comment or automatic selector may choose, comma- or space-separated
         required: false
         type: string
-        default: "zai-org/GLM-5.3-Flash,zai-org/GLM-5.3,claude-opus-5,claude-sonnet-5,claude-haiku-4-5"
+        default: "zai-org/GLM-5.3-Flash,zai-org/GLM-5.3,claude-opus-5,claude-opus-5-5,claude-sonnet-5,claude-haiku-4-5"
       max_effort:
         description: >-
           highest effort a comment or automatic selector may choose; empty uses the configured effort
@@ -1099,7 +1099,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-help
           repository: Kong/ksai-public
-          ref: v3.107.0
+          ref: v3.108.0
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1563,7 +1563,7 @@ jobs:
         with:
           token: ${{ github.token }}
           repository: Kong/ksai-public
-          ref: v3.107.0
+          ref: v3.108.0
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -2102,7 +2102,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-recover
           repository: Kong/ksai-public
-          ref: v3.107.0
+          ref: v3.108.0
           sparse-checkout: |
             .github/scripts
           persist-credentials: false

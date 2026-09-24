@@ -24,6 +24,7 @@
     "zai-org/GLM-5.3-Flash": "balanced",
     "claude-sonnet-5": "balanced",
     "claude-opus-5": "flagship",
+    "claude-opus-5-5": "flagship",
     "zai-org/GLM-5.3": "flagship"
   },
   "vendorAliases": {
@@ -42,6 +43,7 @@
   },
   "knownModels": [
     "claude-opus-5",
+    "claude-opus-5-5",
     "claude-sonnet-5",
     "claude-haiku-4-5",
     "zai-org/GLM-5.3-Flash",
@@ -55,16 +57,19 @@
     "zai-org/GLM-5.3-Flash",
     "zai-org/GLM-5.3",
     "claude-opus-5",
+    "claude-opus-5-5",
     "claude-sonnet-5",
     "claude-haiku-4-5"
   ],
   "claudeModels": [
     "claude-opus-5",
+    "claude-opus-5-5",
     "claude-sonnet-5",
     "claude-haiku-4-5"
   ],
   "context": {
     "claude-opus-5": "1M",
+    "claude-opus-5-5": "1M",
     "claude-sonnet-5": "1M",
     "claude-haiku-4-5": "200K",
     "zai-org/GLM-5.3-Flash": "1M",
@@ -78,6 +83,10 @@
     "claude-opus-5": {
       "input": 5,
       "output": 25
+    },
+    "claude-opus-5-5": {
+      "input": 4,
+      "output": 20
     },
     "claude-sonnet-5": {
       "input": 2,
