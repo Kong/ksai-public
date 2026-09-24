@@ -60,8 +60,11 @@ on:
         default: true
     secrets:
       ksai_private_key:
-        description: private key for the KSAI GitHub App, which is what can resolve an organization team
-        required: true
+        description: >-
+          private key for the KSAI GitHub App, which is what can resolve an organization team.
+          Required unless `push_as_app` is false, where a call passing none dispatches the review
+          without asking the team for it, because GITHUB_TOKEN cannot request a team.
+        required: false
 
 permissions: {}
 
@@ -84,6 +87,8 @@ jobs:
     permissions:
       actions: write
       contents: read
+    env:
+      KSAI_NO_APP: ${{ !inputs.push_as_app && secrets.ksai_private_key == '' }}
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
@@ -92,7 +97,7 @@ jobs:
       - name: Mint a token that can resolve the team
         id: token
         continue-on-error: true
-        if: ${{ github.event.action != 'review_requested' }}
+        if: ${{ github.event.action != 'review_requested' && env.KSAI_NO_APP != 'true' }}
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           owner: ${{ github.repository_owner }}
@@ -117,7 +122,7 @@ jobs:
         id: reviewed
         if: ${{ github.event.action != 'review_requested' }}
         env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
+          GH_TOKEN: ${{ env.KSAI_NO_APP == 'true' && github.token || steps.token.outputs.token }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
           BOT: >-
@@ -125,8 +130,15 @@ jobs:
             || 'github-actions[bot]' }}
         run: |
           set -euo pipefail
-          posted=$(gh api --paginate "repos/${REPO}/pulls/${PR}/reviews?per_page=100" \
-            --jq '.[] | select(.user.login == env.BOT) | .id' | wc -l)
+          if ! reviews=$(gh api --paginate "repos/${REPO}/pulls/${PR}/reviews?per_page=100" \
+            --jq '.[] | select(.user.login == env.BOT) | .id'); then
+            if [ "${KSAI_NO_APP}" != "true" ]; then
+              exit 1
+            fi
+            echo "::warning::GITHUB_TOKEN could not list the reviews on #${PR}, so this job cannot tell whether ${BOT} has reviewed it already and asks for the review anyway"
+            reviews=""
+          fi
+          posted=$(printf '%s' "${reviews}" | grep -c . || true)
           echo "posted=${posted}" >> "${GITHUB_OUTPUT}"
           if [ "${posted}" != "0" ]; then
             echo "::notice::${BOT} has already reviewed #${PR}, so this job is not asking for another"
@@ -134,7 +146,9 @@ jobs:
 
       - name: Request the review from the team
         id: request
-        if: ${{ github.event.action != 'review_requested' && steps.reviewed.outputs.posted == '0' }}
+        if: >-
+          ${{ github.event.action != 'review_requested' && env.KSAI_NO_APP != 'true' &&
+          steps.reviewed.outputs.posted == '0' }}
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           REPO: ${{ github.repository }}
