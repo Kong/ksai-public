@@ -5,6 +5,8 @@
 
 const MARKER = '<!-- kreview-finding -->';
 const { parseFoldedFindings } = require('../lib/folded-findings.cjs');
+const { usingControlPlane } = require('../lib/control-plane.cjs');
+const { readConversation } = require('../lib/cp-report.cjs');
 
 function foldedBullets(text) {
   return parseFoldedFindings(text).map(
@@ -18,7 +20,7 @@ function foldedBullets(text) {
 const FEEDBACK_FOOTER = /<!--\s*kreview-feedback\s*-->[\s\S]*?<!--\s*\/kreview-feedback\s*-->/g;
 const FEEDBACK_MARKER = '<!-- kreview-feedback -->';
 
-module.exports = async ({ github, core, owner, repo, prNumber, botLogin }) => {
+module.exports = async ({ github, core, owner, repo, prNumber, botLogin, env = process.env, readState = readConversation }) => {
   // A user/PAT token resolves to a login to match on; an App installation token cannot call
   // /user (403), so fall back to the caller-supplied bot login (e.g. `<app-slug>[bot]`) when
   // given. Only when neither is available do we widen to any Bot-type actor — the MARKER is
@@ -36,6 +38,22 @@ module.exports = async ({ github, core, owner, repo, prNumber, botLogin }) => {
   const mine = (user) => (knownLogin ? user?.login === knownLogin : user?.type === 'Bot');
 
   const out = [];
+
+  if (usingControlPlane(env)) {
+    const held = await readState({ number: prNumber, env });
+    if (held.why) {
+      core.setFailed(`Could not read prior findings from the control plane: ${held.why}`);
+      return;
+    }
+    if (!held.none) {
+      const prior = held.state.review_findings ?? [];
+      if (!Array.isArray(prior) || prior.some((finding) => typeof finding !== 'string')) {
+        core.setFailed('The control plane returned invalid prior findings');
+        return;
+      }
+      out.push(...prior);
+    }
+  }
 
   try {
     const comments = await github.paginate(github.rest.pulls.listReviewComments, {

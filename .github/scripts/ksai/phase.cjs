@@ -8,9 +8,25 @@ const { scrub, hasPlanRegion, heldBy, planFileIn } = require('./plan.cjs');
 const { asAlert, canonicalCommand, JIRA_KEY_SHAPE, plansWorkHere } = require('../lib/select-arm.cjs');
 const { EXPLICIT_SOURCE } = require('../lib/request-intent.cjs');
 const { headOrigin, sameRepo } = require('../lib/repo.cjs');
+const { usingControlPlane } = require('../lib/control-plane.cjs');
+const { readConversation } = require('./cp-report.cjs');
 
 const MAX_PAGES = 10;
 const PER_PAGE = 100;
+
+async function holdFor({ owner, repo, number, marker, resume, env, fetch }) {
+  const fallback = String(marker ?? '');
+  if (!usingControlPlane(env) || !(Number(number) > 0)) return { held: resume ? '' : fallback };
+  const found = await readConversation({ number, env, fetch });
+  if (found.why) return { error: found.why };
+  if (found.none) return { held: resume ? '' : fallback };
+  if (String(found.state.repository ?? '').toLowerCase() !== `${owner}/${repo}`.toLowerCase()) {
+    return { error: 'the control plane returned a conversation for another repository' };
+  }
+  const plan = found.state.plan;
+  const held = String(plan.held_by_run ?? '');
+  return { held: resume ? '' : held || (plan.release_tracking === true ? '' : fallback), plan };
+}
 
 /**
  * WORK_SCOPES is every kind of work a dispatch record may narrow a run to, and the names a record
@@ -453,13 +469,17 @@ async function resolvePhase({
   triggerPhrase = null,
   scope = null,
   sleep = null,
+  env = process.env,
+  fetch = globalThis.fetch,
   writeFile = (at, body) => require('node:fs').writeFileSync(at, body),
 } = {}) {
   const wanted = canonicalCommand(String(command ?? '').trim());
   const family = familyHere(wanted, onIssue);
   const said = String(guidance ?? '').trim();
   const onBranch = family === undefined || plansWorkHere(wanted, onIssue) ? '' : 'true';
-  const standingHold = (value) => (wanted === 'resume' ? '' : String(value ?? ''));
+  const standingHold = (prNumber, marker) => holdFor({
+    owner, repo, number: prNumber, marker, resume: wanted === 'resume', env, fetch,
+  });
   if (family === undefined) {
     return refuse(`\`${wanted}\` is not a command with a phase in this flow, so there is nothing to work on`);
   }
@@ -531,12 +551,16 @@ async function resolvePhase({
           prNumber,
           sha: known?.reportedHeadSha,
           botLogin,
+          env,
+          fetch,
           checksFile,
           writeFile,
         });
         if (recorded.error) return refuse(recorded.error);
         writeFile(threadsFile, JSON.stringify(pending));
         writeFile(threadStateFile, JSON.stringify(threads));
+        const hold = await standingHold(prNumber, held);
+        if (hold.error) return refuse(hold.error);
         return normalize({
           phase,
           request,
@@ -546,7 +570,7 @@ async function resolvePhase({
           disputed,
           deferred,
           baseRef,
-          held: standingHold(held),
+          held: hold.held,
           checksFile: recorded.checksFile,
           threadsFile,
           threadStateFile,
@@ -584,9 +608,13 @@ async function resolvePhase({
       threadsFile,
       admits,
       sleep,
+      env,
+      fetch,
       writeFile,
     });
     if (out.error) return refuse(out.error);
+    const hold = await standingHold(out.prNumber, out.held);
+    if (hold.error) return refuse(hold.error);
     return normalize({
       phase: out.phase,
       request,
@@ -594,7 +622,7 @@ async function resolvePhase({
       prNumber: out.prNumber,
       pending: out.pending,
       baseRef: out.baseRef,
-      held: standingHold(out.held),
+      held: hold.held,
       onBranch,
       checksFile: out.checksFile,
       retryFile: out.retryFile,
@@ -615,21 +643,26 @@ async function resolvePhase({
       defaultBranch,
     });
     if (out.error) return refuse(out.error);
+    const hold = await standingHold(out.prNumber, out.held);
+    if (hold.error) return refuse(hold.error);
+    const tracked = hold.plan?.release_tracking === true && hold.plan.path && out.prNumber;
+    const phase = tracked ? (hold.plan.release_ref ? 'step' : 'plan-review') : out.phase;
+    const planFile = tracked ? hold.plan.path : out.planFile;
     if (wanted !== 'revise') {
       return normalize({
-        phase: out.phase,
+        phase,
         request: said,
         ref: out.ref,
         isDraft: out.isDraft,
         prNumber: out.prNumber,
-        planFile: out.planFile,
-        held: standingHold(out.held),
+        planFile,
+        held: hold.held,
         handsOff: onBranch,
       });
     }
 
-    if (out.phase !== 'plan-review') {
-      return refuse(String(REVISE_STOP[out.phase] ?? REVISE_STOP.other));
+    if (phase !== 'plan-review') {
+      return refuse(String(REVISE_STOP[phase] ?? REVISE_STOP.other));
     }
     if (!threadsFile) return refuse('no path was given to write the review threads to');
     if (!threadStateFile) return refuse('no path was given to write the review thread state to');
@@ -641,7 +674,7 @@ async function resolvePhase({
       repo,
       prNumber: out.prNumber,
       botLogin,
-      planFile: out.planFile,
+      planFile,
       guidance,
       authorize,
       writeAccess,
@@ -664,7 +697,7 @@ async function resolvePhase({
       pending: asked.pending.length,
       deferred: asked.deferred,
       disputed: asked.disputed,
-      held: standingHold(out.held),
+      held: hold.held,
       threadsFile,
       threadStateFile,
       onBranch,

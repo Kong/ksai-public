@@ -25,6 +25,12 @@ const { counted, plural } = require('../lib/text.cjs');
 
 const MAX_CANDIDATES = 10;
 
+function acknowledgment(comments, receipts, botLogin, approvalRef) {
+  const recorded = receipts.find((one) => one.approvalRef === approvalRef);
+  if (recorded) return { acknowledged: true, url: recorded.url, id: recorded.id };
+  return findAcknowledgment(comments, { botLogin, approvalRef });
+}
+
 const APPROVABLE = Object.freeze(['plan-review', 'step']);
 
 const ALWAYS_APPROVED = 'plan-review';
@@ -64,6 +70,7 @@ async function readNativeApprovals({
   eventReview,
   already,
   acknowledgments,
+  receipts,
   readPull,
 }) {
   const pulls = github?.rest?.pulls;
@@ -84,10 +91,7 @@ async function readNativeApprovals({
     const approvals = latestNativeApprovals(reviews).filter((candidate) => {
       if (candidate.commitId === head) return true;
       if (candidate.login !== already?.login) return false;
-      return findAcknowledgment(acknowledgments, {
-        botLogin,
-        approvalRef: candidate.approvalRef,
-      }).acknowledged === true;
+      return acknowledgment(acknowledgments, receipts, botLogin, candidate.approvalRef).acknowledged === true;
     });
     return { approvals, unreadable: null, head };
   } catch (error) {
@@ -108,9 +112,10 @@ async function readControlPlaneApprovals({
   asked,
   already,
   acknowledgments,
+  receipts,
   readPull,
 }) {
-  const recorded = [];
+  const recorded = receipts.filter((one) => readControlPlaneApprovalRef(one.approvalRef) !== null);
   for (const comment of acknowledgments ?? []) {
     if (!vouchedOwn(comment, botLogin)) continue;
     for (const one of controlPlaneApprovalsIn(comment.body)) {
@@ -166,11 +171,11 @@ function adopt(found, approvals, thread) {
   for (const approval of approvals) {
     const held = found.find((seen) => seen.login === approval.login);
     if (!held) {
-      found.push({ ...approval, thread });
+      found.push({ ...approval, thread: approval.thread ?? thread });
       continue;
     }
     const forced = held.forced || approval.forced;
-    if (approval.at > held.at) Object.assign(held, approval, { thread });
+    if (approval.at > held.at) Object.assign(held, approval, { thread: approval.thread ?? thread });
     held.forced = forced;
   }
 }
@@ -277,6 +282,7 @@ async function resolveApproval({
   releasedRef = null,
   nativeReview = null,
   controlPlaneApproval = null,
+  approvalReceipts = [],
 } = {}) {
   const settled = await withoutScan({
     github,
@@ -369,6 +375,7 @@ async function resolveApproval({
     eventReview: nativeReview,
     already,
     acknowledgments,
+    receipts: approvalReceipts,
     readPull,
   });
   if (native.unreadable !== null) unreadable.push(native.unreadable);
@@ -381,6 +388,7 @@ async function resolveApproval({
     asked: controlPlaneApproval,
     already,
     acknowledgments,
+    receipts: approvalReceipts,
     readPull,
   });
   if (approvedInJira.unreadable !== null) unreadable.push(approvedInJira.unreadable);
@@ -468,7 +476,7 @@ async function resolveApproval({
     }
 
     const ack = candidate.approvalRef
-      ? findAcknowledgment(byThread.get(candidate.thread), { botLogin, approvalRef: candidate.approvalRef })
+      ? acknowledgment(byThread.get(candidate.thread), approvalReceipts, botLogin, candidate.approvalRef)
       : { acknowledged: true };
     if (ack.reason) core?.warning?.(`cannot tell whether this approval was already recorded: ${ack.reason}`);
 

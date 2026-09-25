@@ -7,6 +7,7 @@ const require = createRequire(import.meta.url);
 const { payloadFor, marked } = require('./marker.cjs');
 const { usingControlPlane } = require('../lib/control-plane.cjs');
 const { writerFor } = require('../lib/cp-effects.cjs');
+const { readConversation } = require('./cp-report.cjs');
 const {
   carryRecords,
   motivationOf,
@@ -86,6 +87,9 @@ export async function releasePlan({
   marker = null,
   throughControlPlane = false,
   releaseThroughControlPlane = null,
+  readPlanState = null,
+  env = process.env,
+  fetch = globalThis.fetch,
   run = runCommand,
 } = {}) {
   const number = String(prNumber ?? '');
@@ -110,7 +114,19 @@ export async function releasePlan({
   const body = readPullBody({ repo, number, run });
   if (body === null) return block('I could not read the pull request body, so no plan was released.', { code: 'body_unreadable' });
 
-  const planFile = planFileIn(body);
+  let plan = null;
+  if (throughControlPlane) {
+    const found = await (readPlanState ?? ((asked) => readConversation({ ...asked, env, fetch })))({ number: Number(number) });
+    if (found.why) return block(`I could not read this plan's control-plane state: ${found.why}.`, { code: 'cp_state_unreadable' });
+    if (!found.none) {
+      if (String(found.state?.repository ?? '').toLowerCase() !== String(repo ?? '').toLowerCase()) {
+        return block('The control plane returned a plan for another repository.', { code: 'cp_state_mismatch' });
+      }
+      plan = found.state.plan;
+    }
+  }
+  const tracked = plan?.release_tracking === true && Boolean(plan.offered_at);
+  const planFile = tracked ? String(plan.path ?? '') : planFileIn(body);
   if (!planFile) {
     return block('This pull request names no plan document, so there is nothing to release.', { code: 'no_document' });
   }
@@ -145,8 +161,14 @@ export async function releasePlan({
   if (parsed.error) return block(`\`${planFile}\` is not a plan this flow can run: ${parsed.error}.`,
     { code: 'document_invalid', path: planFile, error: parsed.error });
 
-  const recorded = await recordedBy({ repo, prNumber: number, botLogin, run });
   const offered = String(blob ?? '').trim().toLowerCase();
+  const recorded = tracked
+    ? { readable: true, docs: [String(plan.blob_sha ?? '').toLowerCase()], offeredAt: plan.offered_at,
+      requester: plan.requester }
+    : await recordedBy({ repo, prNumber: number, botLogin, run });
+  if (tracked && plan.release_ref) {
+    return block('This plan has already been released by the control plane.', { code: 'already_released' });
+  }
   if (!recorded.readable) {
     return block('I could not read this pull request\'s comments to find which plan document was approved, so no plan was released.',
       { code: 'comments_unreadable' });
@@ -195,7 +217,7 @@ export async function releasePlan({
     );
   }
 
-  const asked = requesterOf(body) ?? requestedBy;
+  const asked = tracked ? (plan.requester || requestedBy) : (requesterOf(body) ?? requestedBy);
   const trusted = recorded.requester;
   const rendered = renderBody({
     issueNumber: Number(issueNumber),
@@ -226,8 +248,8 @@ export async function releasePlan({
     try {
       const released = await releaseThroughControlPlane({ number: Number(number), facts });
       const { message } = filesLinked(
-        'Released the plan in [the plan document](LINK). The tasks in this body are the run state now, and ' +
-          'each one lands as its own commit here',
+        'Released [the plan document](LINK). The control plane tracks the tasks and updates the checklist ' +
+          'as each one lands in its own commit',
         rendered, { serverUrl, repo, number, triggerPhrase },
       );
       return { status: 'released', planFile, remaining: released.remaining, message };
@@ -302,6 +324,7 @@ export async function main(env = process.env, { run = runCommand,
     marker: payloadFor(env, {}),
     throughControlPlane: usingControlPlane(env),
     releaseThroughControlPlane,
+    env,
     run,
   });
 

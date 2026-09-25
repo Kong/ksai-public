@@ -41,7 +41,9 @@ const {
   stepDigest,
 } = require('./plan.cjs');
 const { counted, plural } = require('../lib/text.cjs');
+const { usingControlPlane } = require('../lib/control-plane.cjs');
 const { releasedTokens } = require('./checkpoint.cjs');
+const { readConversation } = require('./cp-report.cjs');
 
 function attributeCommand(flow, prompt, commandAliases, defaultCommand) {
   const command = parseOptions(prompt ?? '', { commandAliases, defaultCommand }).command;
@@ -260,7 +262,55 @@ async function resolveRequest({
   return { mine: false, foreign: command, routeSource };
 }
 
-async function nextStep({ github = null, owner = null, repo = null, prNumber = null, botLogin = null } = {}) {
+function nextFromConversation(state, owner, repo) {
+  const plan = state?.plan;
+  if (String(state?.repository ?? '').toLowerCase() !== `${owner}/${repo}`.toLowerCase() ||
+      !plan || typeof plan !== 'object') {
+    return { error: 'the control plane returned a conversation for another pull request', errorKind: 'unreadable' };
+  }
+  if (plan.held_by_run) {
+    return { held: String(plan.held_by_run), atCheckpoint: false, hasStep: false,
+      total: 0, remaining: 0, remainingSteps: 0, stepTitle: '' };
+  }
+  const steps = plan.steps;
+  if (!Array.isArray(steps) || steps.length === 0 || steps.some((step) =>
+    typeof step?.title !== 'string' || step.title === '' || typeof step.done !== 'boolean' ||
+    !Number.isInteger(step.phase) || step.phase < 1)) {
+    return { error: 'the control plane holds no readable released plan', errorKind: 'unreadable' };
+  }
+  if (typeof plan.release_ref !== 'string' || plan.release_ref === '') {
+    return { error: 'the control plane holds no approval for this plan', errorKind: 'no-release-record' };
+  }
+  if (steps.filter((step) => isCheckpoint(step.title)).length !== plan.boundaries) {
+    return { error: 'the control plane plan has an invalid phase count', errorKind: 'edited-plan' };
+  }
+  const next = firstUnchecked({ steps });
+  return {
+    total: steps.length,
+    remaining: steps.filter((step) => !step.done).length,
+    remainingSteps: steps.filter((step) => !step.done && !isCheckpoint(step.title)).length,
+    stepTitle: next ?? '',
+    hasStep: Boolean(next),
+    atCheckpoint: isCheckpoint(next),
+    criteria: state.jira_key
+      ? { kind: 'jira', site: state.jira_site, key: state.jira_key }
+      : Number.isInteger(state.issue) && state.issue > 0
+        ? { kind: 'github', owner, repo, number: state.issue }
+        : null,
+    releasedRef: plan.release_ref,
+    requestedBy: plan.requester ?? '',
+  };
+}
+
+async function nextStep({ github = null, owner = null, repo = null, prNumber = null, botLogin = null,
+  env = process.env, fetch = globalThis.fetch } = {}) {
+  if (usingControlPlane(env)) {
+    const held = await readConversation({ number: prNumber, env, fetch });
+    if (held.why) return { error: held.why, errorKind: 'unreadable' };
+    if (!held.none && (Array.isArray(held.state.plan.steps) || held.state.plan.release_ref)) {
+      return nextFromConversation(held.state, owner, repo);
+    }
+  }
   const [{ data: pr }, seen] = await Promise.all([
     github.rest.pulls.get({ owner, repo, pull_number: Number(prNumber) }),
     releasedTokens({ github, owner, repo, prNumber, botLogin }),

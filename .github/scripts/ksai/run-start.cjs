@@ -53,7 +53,7 @@ const RECOVER_VERSION = 2;
 
 const MAX_SAID_CHARS = 240;
 
-const REPLACERS = Object.freeze(['REVIEW_REPLACED', 'RESULT_REPLACED']);
+const REPLACERS = Object.freeze(['REVIEW_REPLACED', 'RESULT_REPLACED', 'NOTICE_REPLACED']);
 
 function armOf(env) {
   const model = String(env.MODEL ?? '').trim();
@@ -206,6 +206,19 @@ async function publishRunStart({ github, core, owner, repo, env, write = writeFi
 
 async function dropRunStart({ github, core, owner, repo, env, fetch = globalThis.fetch }) {
   const id = Number(env.COMMENT_ID);
+  if (usingControlPlane(env)) {
+    try {
+      const result = await writerFor({ github, owner, repo, env, fetch }).runStartCleanup({
+        number: Number(env.REPORT_NUM), run: String(env.RUN_ID ?? ''),
+      });
+      return { notices: [result.changed
+        ? 'the control plane removed the unreplaced opening comment'
+        : 'the control plane kept the opening comment'] };
+    } catch (error) {
+      core?.warning?.(`the control plane could not settle the opening comment (${error.message}).`);
+      return { notices: [] };
+    }
+  }
   if (!Number.isInteger(id) || id <= 0) return { notices: ['this run opened with no comment to remove'] };
   if (REPLACERS.some((name) => String(env[name] ?? '') === 'true')) {
     return { notices: ['the report replaced the comment this run opened with'] };

@@ -198,6 +198,22 @@ function parseState(body, identity) {
   return { state: { v: state.v, identity: state.identity, run_base: state.run_base, history, attempts } };
 }
 
+function parseControlPlaneState(held, identity) {
+  if (held.state === undefined) return parseState(held.body, identity);
+  const state = held.state;
+  if (state.v !== VERSION || !sameIdentity(state.identity, identity) ||
+      !/^https:\/\/[^\s]{1,240}$/.test(String(state.run_base ?? '')) ||
+      !Array.isArray(state.attempts) || state.attempts.length > MAX_ATTEMPTS ||
+      !state.attempts.every((attempt) => validAttempt(attempt))) {
+    return { error: 'the control plane returned a write report with the wrong version or identity' };
+  }
+  const ids = state.attempts.map((attempt) => attempt.id);
+  if (new Set(ids).size !== ids.length) {
+    return { error: 'the control plane returned a write report with repeated attempt ids' };
+  }
+  return { state: { ...state, history: historyOf(state) } };
+}
+
 function numberOrNull(value) {
   if (value === '' || value === null || value === undefined) return null;
   const number = Number(value);
@@ -1093,7 +1109,7 @@ function controlPlaneStore({ identity, number, where, env = process.env, fetch =
       const held = await cpReport.heldReport({ kind, request: asking, number, where, env, fetch });
       if (held.none) return { ref: null, state: null };
       if (held.why) return { error: held.why };
-      const parsed = parseState(held.body, identity);
+      const parsed = parseControlPlaneState(held, identity);
       return parsed.error ? parsed : { ref: { id: held.comment, body: held.body }, state: parsed.state };
     },
     /**
@@ -1181,7 +1197,7 @@ async function updateWriteProgressUnlocked({
     if (read.error) return { outputs: blank, failure: read.error };
     if (read.state === null) return { outputs: blank, failure: 'there is no durable write report to publish live progress into' };
     const before = read.state.attempts.map((entry) => entry.id);
-    const existingRequest = doRequestOf(read.ref.body);
+    const existingRequest = cp ? String(read.state.identity.request ?? '') : doRequestOf(read.ref.body);
     const doRequest = existingRequest === String(identity.request) ? existingRequest : null;
     const grown = cp || note === null
       ? historyOf(read.state)

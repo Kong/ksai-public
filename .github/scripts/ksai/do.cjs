@@ -72,6 +72,7 @@ const LEGACY_DO_MARKER_PREFIX = '<!-- muthur-do:';
  */
 const { writerFor } = require('../lib/cp-effects.cjs');
 const { usingControlPlane } = require('../lib/control-plane.cjs');
+const cpReport = require('./cp-report.cjs');
 const { markerValue, POSITIVE_ID_SHAPE } = require('./plan.cjs');
 const { counted } = require('../lib/text.cjs');
 const { neutralCut, neutralize } = require('../lib/prompt-text.cjs');
@@ -184,13 +185,17 @@ function publishedFooterLength(visible, sha) {
 }
 
 function publishedReport(body, sha, prNumber) {
-  const state = writeStateIn(body);
+  return publishedState(writeStateIn(body), sha, prNumber);
+}
+
+function publishedState(state, sha, prNumber) {
   const identity = state?.identity;
   if (!state || !['do', 'fix'].includes(identity?.kind) || String(identity?.pr ?? '') !== String(prNumber ?? '')) {
     return { found: false, summary: '' };
   }
-  for (let at = state.history.length - 1; at >= 0; at -= 1) {
-    const visible = String(state.history[at]?.said ?? '').replace(/\r$/, '');
+  const history = Array.isArray(state.history) ? state.history : [];
+  for (let at = history.length - 1; at >= 0; at -= 1) {
+    const visible = String(history[at]?.said ?? '').replace(/\r$/, '');
     const footerLength = publishedFooterLength(visible, sha);
     if (footerLength === 0) continue;
     return { found: true, summary: cut(visible.slice(footerLength).trim(), MAX_RETRY_REPORT_CHARS).text };
@@ -230,6 +235,8 @@ async function readFailedAttempt({
   sha = null,
   botLogin = null,
   trigger = null,
+  env = process.env,
+  fetch = globalThis.fetch,
 } = {}) {
   const head = String(sha ?? '').trim().toLowerCase();
   const bot = String(botLogin ?? '').trim();
@@ -247,6 +254,20 @@ async function readFailedAttempt({
   const committedBy = String(commit?.committer?.login ?? '').trim().toLowerCase();
   if (!isOwnLogin(commit?.author?.login, bot) ||
       (!isOwnLogin(committedBy, bot) && committedBy !== GITHUB_SIGNER)) return null;
+
+  if (usingControlPlane(env)) {
+    const held = await cpReport.headReport({ number: prNumber, sha: head, env, fetch });
+    if (held.why) {
+      core?.warning?.(`${held.why}, so this run starts without its previous attempt.`);
+      return null;
+    }
+    if (!held.none) {
+      const found = held.state === undefined
+        ? publishedReport(held.body, head, prNumber)
+        : publishedState(held.state, head, prNumber);
+      return found.found ? { commit: head, report: found.summary, ...boundedFiles(commit?.files) } : null;
+    }
+  }
 
   let report = null;
   const { unreadable } = await probeComments({
@@ -385,6 +406,8 @@ async function alreadyReported({
   prNumber = null,
   botLogin = null,
   commentId = null,
+  env = process.env,
+  fetch = globalThis.fetch,
 } = {}) {
   const wanted = String(commentId ?? '');
   if (!COMMENT_ID_SHAPE.test(wanted)) {
@@ -396,6 +419,25 @@ async function alreadyReported({
             'dispatched with a request in its body carries the id of the comment that asked, in `comment_id`.'
           : `\`${wanted}\` is not a comment id`,
     };
+  }
+  if (usingControlPlane(env)) {
+    for (const kind of ['fix', 'do']) {
+      const identity = { v: 1, kind, pr: Number(prNumber), request: Number(wanted) };
+      const held = await cpReport.heldReport({
+        kind: 'write_report', request: { state: { identity } },
+        number: Number(prNumber), where: 'comment', env, fetch,
+      });
+      if (held.why) return { answered: false, unreadable: held.why };
+      if (held.none) continue;
+      const verified = held.state === undefined
+        ? doRequestOf(held.body) === wanted
+        : JSON.stringify(held.state?.identity) === JSON.stringify(identity);
+      if (!verified) {
+        return { answered: false, unreadable: 'the control plane found a report without a verifiable request id' };
+      }
+      return { answered: true, unreadable: null };
+    }
+    return { answered: false, unreadable: null };
   }
   /*
    * Without a bot login nothing can be attributed, so this cannot answer at all.
@@ -438,7 +480,22 @@ async function alreadyReported({
   return { answered: false, unreadable };
 }
 
-async function reportedPushedHead({ github, core, owner, repo, prNumber, sha, botLogin }) {
+async function reportedPushedHead({ github, core, owner, repo, prNumber, sha, botLogin,
+  env = process.env, fetch = globalThis.fetch }) {
+  if (usingControlPlane(env)) {
+    const held = await cpReport.readConversation({ number: prNumber, env, fetch });
+    if (held.why) {
+      core?.warning?.(`${held.why}, so write triage cannot attribute the unsigned head.`);
+      return false;
+    }
+    if (!held.none) {
+      if (String(held.state?.repository ?? '').toLowerCase() !== `${owner}/${repo}`.toLowerCase()) {
+        core?.warning?.('The control plane returned a conversation for another repository.');
+        return false;
+      }
+      if (held.state.pushed_head) return held.state.pushed_head === String(sha).toLowerCase();
+    }
+  }
   let found = false;
   const { unreadable } = await probeComments({
     github,
@@ -516,7 +573,8 @@ async function createPushedReceipt({
   }
 }
 
-async function botAuthoredHead({ github, core, owner, repo, prNumber, sha, botLogin }) {
+async function botAuthoredHead({ github, core, owner, repo, prNumber, sha, botLogin,
+  env = process.env, fetch = globalThis.fetch }) {
   if (String(botLogin ?? '').trim() === '' || !/^[0-9a-f]{40}$/i.test(String(sha ?? ''))) return false;
   try {
     const commit = (await github.rest.repos.getCommit({ owner, repo, ref: sha })).data;
@@ -529,7 +587,7 @@ async function botAuthoredHead({ github, core, owner, repo, prNumber, sha, botLo
     if (verification?.verified === true && verification?.reason === 'valid' &&
       (webFlowCommitter || ownBotCommitter)) return true;
     if (verification?.verified !== false || verification?.reason !== 'unsigned' || !ownBotCommitter) return false;
-    return reportedPushedHead({ github, core, owner, repo, prNumber, sha, botLogin });
+    return reportedPushedHead({ github, core, owner, repo, prNumber, sha, botLogin, env, fetch });
   } catch (error) {
     core?.warning?.(
       `Could not attribute the red head ${String(sha)} (${error?.message ?? error}), so write triage will not ` +
@@ -549,6 +607,8 @@ async function recordCheckEvidence({
   sha = null,
   botLogin = null,
   checksFile = null,
+  env = process.env,
+  fetch = globalThis.fetch,
   writeFile = (at, body) => require('node:fs').writeFileSync(at, body),
 } = {}) {
   if (evidence === null) return { evidence: null, failing: 0, checksFile: '' };
@@ -562,6 +622,8 @@ async function recordCheckEvidence({
     prNumber,
     sha,
     botLogin,
+    env,
+    fetch,
   });
   const recorded = { ...evidence, previousAttemptRed };
   writeFile(checksFile, JSON.stringify(recorded));
@@ -613,6 +675,8 @@ async function resolveDoPhase({
   threadsFile = null,
   admits = null,
   sleep = null,
+  env = process.env,
+  fetch = globalThis.fetch,
   writeFile = (at, body) => require('node:fs').writeFileSync(at, body),
 } = {}) {
   const target = known?.mergeable != null
@@ -656,7 +720,7 @@ async function resolveDoPhase({
   }
   const seen = unasked
     ? { answered: false, unreadable: null }
-    : await alreadyReported({ github, owner, repo, prNumber: number, botLogin, commentId });
+    : await alreadyReported({ github, owner, repo, prNumber: number, botLogin, commentId, env, fetch });
   if (seen.unreadable) {
     return { error: `I could not tell whether I had already answered this request: ${seen.unreadable}` };
   }
@@ -744,6 +808,8 @@ async function resolveDoPhase({
     prNumber: number,
     sha: reportedHeadSha,
     botLogin,
+    env,
+    fetch,
     checksFile,
     writeFile,
   });
@@ -758,6 +824,8 @@ async function resolveDoPhase({
       sha: reportedHeadSha,
       botLogin,
       trigger,
+      env,
+      fetch,
     })
     : null;
   if (retry !== null && !retryFile) return { error: 'no path was given to write the failed attempt to' };

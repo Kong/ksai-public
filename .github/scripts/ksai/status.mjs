@@ -236,10 +236,10 @@ function writeGithubOver(token, apiUrl, fetchImpl) {
 export async function publishStatus({ held, reading, token, apiUrl = DEFAULT_API_URL, fetchImpl = fetch, sleep, rendering = {} }) {
   const cpEnv = { ...held, ...pick(rendering, RENDER_ENV_KEYS) };
   if (held.FLOW === 'review' && usingControlPlane(cpEnv)) {
-    if (!Number.isSafeInteger(Number(held.COMMENT_ID)) || Number(held.COMMENT_ID) <= 0) return false;
+    if (!Number.isSafeInteger(Number(held.PR_NUMBER)) || Number(held.PR_NUMBER) <= 0) return false;
     try {
       await writerFor({ env: cpEnv, fetch: fetchImpl, pause: sleep }).runProgress({
-        comment: Number(held.COMMENT_ID), start: startFacts(held, reading),
+        number: Number(held.PR_NUMBER), start: startFacts(held, reading),
       });
       return true;
     } catch {
@@ -292,7 +292,8 @@ export async function tick(
   if (!armed(env)) return kept;
   if (kept.at && now - kept.at < POLL_SECONDS * 1000) return kept;
   const held = kept.held ?? carried(env.CHANNEL_DIR);
-  if (!held?.COMMENT_ID && !storesInBody(identityOf(held ?? {}).identity)) return { ...kept, at: now };
+  if (!held?.COMMENT_ID && !storesInBody(identityOf(held ?? {}).identity) &&
+      !(held?.FLOW === 'review' && usingControlPlane(env) && held?.PR_NUMBER && held?.RUN_ID)) return { ...kept, at: now };
   const state = digest({ killAtMs: env.STATUS_KILL_AT_MS, trim: env.TRIM_PREFIX, now, streamsOf });
   if (!state) return { ...kept, at: now, held };
 

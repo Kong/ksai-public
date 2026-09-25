@@ -577,17 +577,8 @@ async function publishResult({ github, core, owner, repo, env, fetch = globalThi
       } else {
         notice = { kind: 'status_result', env: pick(env, NOTICE_KEYS) };
       }
-      const id = Number(env.START_COMMENT_ID);
-      out = { mode: 'created' };
-      if (Number.isInteger(id) && id > 0) {
-        try {
-          await writer.noticeEdit({ comment: id, notice });
-          out = { mode: 'updated' };
-        } catch (error) {
-          core?.warning?.(`the comment this run opened with could not be updated (${error.message}); posting a new one.`);
-        }
-      }
-      if (out.mode === 'created') await writer.noticeComment({ number: Number(env.REPORT_NUM), notice });
+      const result = await writer.runResult({ number: Number(env.REPORT_NUM), notice });
+      out = { mode: result.updated ? 'updated' : 'created' };
     } else {
       const message = fs.readFileSync(at, 'utf8');
       const body = await renderedNotice({

@@ -67,7 +67,8 @@ function controlPlaneWriter({ env, fetch, timeout, secret, pause = held }) {
   };
   const send = async (effect) => {
     const done = await sendRaw(effect);
-    return { id: Number(done.comment ?? 0) || null, review: Number(done.review ?? 0) || null };
+    return { id: Number(done.comment ?? 0) || null, review: Number(done.review ?? 0) || null,
+      ...(done.updated === true ? { updated: true } : {}) };
   };
   return {
     comment: rawCopy,
@@ -86,9 +87,15 @@ function controlPlaneWriter({ env, fetch, timeout, secret, pause = held }) {
     noticeReplyInThread: ({ number, comment, notice }) =>
       send({ kind: 'notice_reply_thread', number: Number(number), comment: Number(comment), notice }),
     runStart: ({ number, start }) => send({ kind: 'run_start_comment', number: Number(number), start }),
-    runProgress: ({ comment, start }) => send({ kind: 'run_progress_edit', comment: Number(comment), start }),
+    runProgress: ({ number, start }) => send({ kind: 'run_progress_edit', number: Number(number), start }),
     runReportEdit: ({ comment, report }) => send({ kind: 'run_report_edit', comment: Number(comment), report }),
     runReportComment: ({ number, report }) => send({ kind: 'run_report_comment', number: Number(number), report }),
+    runResult: ({ number, notice, report, mode }) => send({ kind: 'run_result', number: Number(number),
+      ...(notice ? { notice } : { report }), ...(mode ? { mode } : {}) }),
+    async runStartCleanup({ number, run }) {
+      const said = await sendRaw({ kind: 'run_start_cleanup', number: Number(number), run: String(run) });
+      return { changed: said.changed === true };
+    },
     reviewNoticeComment: ({ number, report }) => send({ kind: 'review_notice_comment', number: Number(number), report }),
     resolveThread: ({ thread }) => send({ kind: 'resolve_thread', thread: String(thread) }),
     setDescription: rawCopy,

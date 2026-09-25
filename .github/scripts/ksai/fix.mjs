@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const { marked } = require('./marker.cjs');
-const { cap, expectedPlanFile: planFileFor, planDirOf, planDocMarker, scrub, retargetPermalinks, POSITIVE_ID_SHAPE } =
+const { cap, expectedPlanFile: planFileFor, planDirOf, scrub, retargetPermalinks, POSITIVE_ID_SHAPE } =
   require('./plan.cjs');
 const { writerFor } = require('../lib/cp-effects.cjs');
 const { NOTICE_KEYS, pick } = require('../lib/cp-render.cjs');
@@ -228,8 +228,7 @@ export function recordFix({
       if (throughControlPlane) {
         const blob = gitVia(run, cwd)(['rev-parse', `${verified.sha}:${onlyPath}`]);
         planOfferSHA = blob.ok ? String(blob.stdout ?? '').trim().toLowerCase() : '';
-        offeredDoc = planDocMarker(planOfferSHA) ?? '';
-        if (offeredDoc === '') {
+        if (!/^[0-9a-f]{40}$/.test(planOfferSHA)) {
           return block(`I could not name the content of \`${onlyPath}\` that was pushed, so it was not offered for approval.`);
         }
       } else {
@@ -358,7 +357,10 @@ export async function publishReviewReplies(result, env, writer = writerFor({ env
   try {
     if (result.planOfferSHA) {
       await writer.noticeComment({ number, notice: {
-        kind: 'revised_plan_offer', review_reply: { phase: 'revise', plan_doc_sha: result.planOfferSHA }, env: noticeEnv,
+        kind: 'revised_plan_offer', review_reply: {
+          phase: 'revise', plan_doc_sha: result.planOfferSHA, commit: result.pushedSha,
+          path: expectedPlanFile(env),
+        }, env: noticeEnv,
       } });
     }
     for (const reply of result.replyFacts) {

@@ -31,7 +31,8 @@ const { combinedGuards } = require('./guards.cjs');
 const { DEFAULT_TRIGGER_PHRASE, afterTrigger } = require('../lib/text.cjs');
 const { labelReaders, readLabelBasis, readReviewBasis, recordBasis } = require('./label-basis.cjs');
 const loadKsaiConfig = require('./config.cjs');
-const { controlPlaneApprovalRef } = require('./control-plane-approval.cjs');
+const { controlPlaneApprovalRef, readControlPlaneApprovalRef } = require('./control-plane-approval.cjs');
+const { readNativeApprovalRef } = require('./native-approval-ref.cjs');
 const {
   AUTHZ_LOGIN_SHAPE,
   COMMENT_EVENT,
@@ -46,7 +47,8 @@ const {
   withLastEdit,
 } = require('./context.cjs');
 const { classifyTarget, nextStep, resolveRequest } = require('./dispatch.cjs');
-const { approvalApplies, describeApproval, resolveApproval } = require('./gate.cjs');
+const { APPROVABLE, approvalApplies, describeApproval, resolveApproval, threadsToScan } = require('./gate.cjs');
+const cpReport = require('./cp-report.cjs');
 const { writeRenderRequest } = require('../lib/render-request.cjs');
 const {
   alreadyReleased,
@@ -787,7 +789,38 @@ async function barFor({ github, core, owner, repo, env, approvalRef, authorize, 
   return { authorized: 'false', write: holds };
 }
 
-async function resolveCheckpoint({ github, core, owner, repo, env, authorize, writeAccess }) {
+async function checkpointFactsFromCP({ github, owner, repo, env, token, fetch }) {
+  const held = await cpReport.readConversation({ number: Number(env.PR_NUMBER), env, fetch });
+  if (held.why) return { seen: { released: false, head: '', unreadable: held.why }, dated: { at: null, unreadable: null } };
+  if (held.none || held.state.plan.release_tracking !== true) return null;
+  const plan = held.state.plan;
+  const releases = plan.releases ?? [];
+  if (String(held.state.repository ?? '').toLowerCase() !== `${owner}/${repo}`.toLowerCase() ||
+      !Array.isArray(releases) || !Number.isFinite(Date.parse(String(plan.progress_at)))) {
+    return {
+      seen: { released: false, head: '', unreadable: 'the control plane returned invalid checkpoint state' },
+      dated: { at: null, unreadable: null },
+    };
+  }
+  try {
+    const pull = await github.rest.pulls.get({ owner, repo, pull_number: Number(env.PR_NUMBER) });
+    return {
+      seen: {
+        released: releases.some((release) => release?.token === token && release.pending !== true),
+        head: String(pull?.data?.head?.sha ?? '').trim().toLowerCase(),
+        unreadable: null,
+      },
+      dated: { at: plan.progress_at, unreadable: null },
+    };
+  } catch (error) {
+    return {
+      seen: { released: false, head: '', unreadable: `could not read #${String(env.PR_NUMBER)}: ${error.message}` },
+      dated: { at: null, unreadable: null },
+    };
+  }
+}
+
+async function resolveCheckpoint({ github, core, owner, repo, env, authorize, writeAccess, fetch = globalThis.fetch }) {
   const approvalRef = approvedInJira(env);
   const token = releaseTokenFor({
     command: env.COMMAND,
@@ -809,19 +842,23 @@ async function resolveCheckpoint({ github, core, owner, repo, env, authorize, wr
     approvalRef,
     requestedAt: String(env.COMMENT_ID ?? '').trim() === '' ? env.REVIEW_SUBMITTED_AT : env.COMMENT_CREATED_AT,
   };
-  const [seen, dated] = needsReleaseRead(asked)
-    ? await Promise.all([
-        alreadyReleased({
-          github,
-          owner,
-          repo,
-          prNumber: env.PR_NUMBER,
-          botLogin: env.BOT_LOGIN,
-          commentId: token,
-        }),
+  let seen = { released: false, head: '', unreadable: null };
+  let dated = { at: null, unreadable: null };
+  if (needsReleaseRead(asked)) {
+    const facts = usingControlPlane(env)
+      ? await checkpointFactsFromCP({ github, owner, repo, env, token, fetch })
+      : null;
+    if (facts) {
+      ({ seen, dated } = facts);
+    } else {
+      const [release, progress] = await Promise.all([
+        alreadyReleased({ github, owner, repo, prNumber: env.PR_NUMBER, botLogin: env.BOT_LOGIN, commentId: token }),
         pendingSince({ github, owner, repo, prNumber: env.PR_NUMBER, botLogin: env.BOT_LOGIN }),
-      ])
-    : [{ released: false, head: '', unreadable: null }, { at: null, unreadable: null }];
+      ]);
+      seen = { released: release.released, head: release.head ?? '', unreadable: release.unreadable };
+      dated = progress;
+    }
+  }
 
   const out = decideCheckpoint({
     ...asked,
@@ -939,6 +976,7 @@ async function decidePhase({ github, core, owner, repo, env, authorize, writeAcc
     writeAccessCommands: env.WRITE_ACCESS_COMMANDS,
     triggerPhrase: env.TRIGGER,
     scope: env.RECORD_SCOPE,
+    env,
   });
 
   const outputs = {
@@ -1306,7 +1344,7 @@ async function readPlan({ github, owner, repo, env, fetch = globalThis.fetch }) 
     if (released.error) return { outputs: { ...outputs, error: released.error } };
     outputs.released_hold = released.released ? 'true' : 'false';
   }
-  const out = await nextStep({ github, owner, repo, prNumber: env.PR_NUMBER, botLogin: env.BOT_LOGIN });
+  const out = await nextStep({ github, owner, repo, prNumber: env.PR_NUMBER, botLogin: env.BOT_LOGIN, env, fetch });
   if (out.held) {
     outputs.held = 'true';
     outputs.has_step = 'false';
@@ -1797,7 +1835,36 @@ function implementRequest({ env }) {
   return implementRenderRequest(phase, values, { model: env.MODEL });
 }
 
-async function resolveApprovalGate({ github, core, owner, repo, env, authorize, writeAccess }) {
+async function readApprovalReceipts({ owner, repo, env, fetch = globalThis.fetch }) {
+  if (!usingControlPlane(env)) return { receipts: [] };
+  const receipts = [];
+  for (const thread of threadsToScan({ issueNumber: env.ISSUE_NUM, prNumber: env.PR_NUMBER })) {
+    const held = await cpReport.readConversation({ number: thread, env, fetch });
+    if (held.why) return { error: held.why };
+    if (held.none) continue;
+    if (String(held.state.repository ?? '').toLowerCase() !== `${owner}/${repo}`.toLowerCase() ||
+        !Array.isArray(held.state.approvals ?? [])) {
+      return { error: 'the control plane returned invalid approval state' };
+    }
+    for (const one of held.state.approvals ?? []) {
+      const reference = String(one?.reference ?? '');
+      const login = String(one?.approver ?? '');
+      const id = Number(one?.comment);
+      const at = Date.parse(String(one?.at ?? ''));
+      if ((!readNativeApprovalRef(reference) && !readControlPlaneApprovalRef(reference)) ||
+          (readControlPlaneApprovalRef(reference) && !AUTHZ_LOGIN_SHAPE.test(login)) ||
+          !Number.isSafeInteger(id) || id <= 0 || !Number.isFinite(at)) {
+        return { error: 'the control plane returned an invalid approval receipt' };
+      }
+      receipts.push({ approvalRef: reference, login, id, at, thread,
+        url: `https://github.com/${owner}/${repo}/issues/${thread}#issuecomment-${id}` });
+    }
+  }
+  return { receipts };
+}
+
+async function resolveApprovalGate({ github, core, owner, repo, env, authorize, writeAccess,
+  fetch = globalThis.fetch }) {
   const outputs = {
     blocked: 'true',
     reason: '',
@@ -1826,6 +1893,13 @@ async function resolveApprovalGate({ github, core, owner, repo, env, authorize, 
     : { commands: [] };
   if (opened.error) {
     outputs.reason = `could not read which commands write access releases here: ${opened.error}`;
+    return { outputs, notices: [] };
+  }
+
+  const recorded = applies && APPROVABLE.includes(String(env.PHASE ?? '').trim())
+    ? await readApprovalReceipts({ owner, repo, env, fetch }) : { receipts: [] };
+  if (recorded.error) {
+    outputs.reason = recorded.error;
     return { outputs, notices: [] };
   }
 
@@ -1860,6 +1934,7 @@ async function resolveApprovalGate({ github, core, owner, repo, env, authorize, 
       headSha: env.CONTROL_PLANE_HEAD_SHA,
       prNumber: env.CONTROL_PLANE_PR,
     },
+    approvalReceipts: recorded.receipts,
     authorize,
     writeAccess,
     writeAccessCommands: opened.commands,
@@ -1908,6 +1983,7 @@ module.exports = {
   fetchConversation,
   buildPrompt,
   resolveApprovalGate,
+  readApprovalReceipts,
   SECURED_AUTOFIX_CAPABILITY,
   EXTRA_ARGS_REFUSAL,
   PLAN_REFUSAL,

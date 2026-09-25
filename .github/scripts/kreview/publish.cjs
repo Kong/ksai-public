@@ -619,13 +619,20 @@ function localReviewNotice(env, { kind } = reviewNoticeDue(env)) {
 
 async function publishReviewNotice({ github, owner, repo, env, fetch = globalThis.fetch }) {
   const due = reviewNoticeDue(env);
-  const nothing = { notices: [due.why || 'nothing was due beside this review, so no notice was published'] };
+  const outputs = {
+    replaced: 'false',
+  };
+  const nothing = { outputs, notices: [due.why || 'nothing was due beside this review, so no notice was published'] };
   if (due.kind === '') return nothing;
   if (usingControlPlane(env)) {
-    await writerFor({ github, owner, repo, env, fetch }).reviewNoticeComment({
-      number: Number(env.PR_NUMBER), report: pick(env, RUN_REPORT_KEYS),
+    if (String(env.REPORT_PUBLISHED ?? '') === 'true') {
+      return { ...nothing, notices: [`the run report carried the \`${due.kind}\` notice`] };
+    }
+    const result = await writerFor({ github, owner, repo, env, fetch }).runResult({
+      number: Number(env.PR_NUMBER), report: pick(env, RUN_REPORT_KEYS), mode: 'review_notice',
     });
-    return { notices: [`published the \`${due.kind}\` notice`] };
+    outputs.replaced = result.updated ? 'true' : 'false';
+    return { outputs, notices: [`published the \`${due.kind}\` notice`] };
   }
   const { value } = await rendered({
     kind: 'review_notice',
@@ -654,17 +661,8 @@ async function publishRunReport({ github, core, owner, repo, env, fetch = global
   if (usingControlPlane(env)) {
     const writer = writerFor({ github, owner, repo, env, fetch });
     const report = pick(env, RUN_REPORT_KEYS);
-    const id = Number(env.START_COMMENT_ID);
-    let mode = 'created';
-    if (Number.isInteger(id) && id > 0) {
-      try {
-        await writer.runReportEdit({ comment: id, report });
-        mode = 'updated';
-      } catch (error) {
-        core?.warning?.(`the comment this run opened with could not be updated (${error.message}); posting a new one.`);
-      }
-    }
-    if (mode === 'created') await writer.runReportComment({ number: Number(env.PR_NUMBER), report });
+    const result = await writer.runResult({ number: Number(env.PR_NUMBER), report });
+    const mode = result.updated ? 'updated' : 'created';
     outputs.replaced = mode === 'updated' ? 'true' : 'false';
     outputs.published = 'true';
     const carried = carriedKind(env) === null ? '' : ', carrying the notice for what went wrong';

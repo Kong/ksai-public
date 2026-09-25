@@ -6907,6 +6907,7 @@ runs:
         TRIGGER: ${{ inputs.trigger_phrase }}
         CANCELLED: ${{ steps.cancellation.outputs.cancelled }}
         SELECT_ERROR: ${{ steps.select_arm.outputs.error }}
+        SELECT_ERROR_NOTICE: ${{ steps.select_arm.outputs.rejection }}
         BUILD_ERROR: ${{ steps.build_review.outputs.error }}
         STAND_DOWN: ${{ steps.select_arm.outputs.stand_down_notice }}
         DRY_RUN: ${{ inputs.dry_run }}
@@ -7027,12 +7028,13 @@ runs:
         github-token: ${{ inputs.source_org_github_token }}
         script: |
           const { publishReviewNotice } = require(`${process.env.SCRIPTS}/kreview/publish.cjs`);
-          const { notices } = await publishReviewNotice({
+          const { outputs, notices } = await publishReviewNotice({
             github,
             owner: context.repo.owner,
             repo: context.repo.repo,
             env: process.env,
           });
+          for (const [name, value] of Object.entries(outputs)) core.setOutput(name, value);
           for (const line of notices) core.info(line);
 
     - name: Remove the comment the run opened with
@@ -7042,8 +7044,13 @@ runs:
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         COMMENT_ID: ${{ steps.notice_started.outputs.comment_id }}
+        REPORT_NUM: >-
+          ${{ steps.phase.outputs.pr_number || steps.open_draft.outputs.pr_number ||
+          steps.context.outputs.issue_number }}
+        RUN_ID: ${{ github.run_id }}
         REVIEW_REPLACED: ${{ steps.comment_report.outputs.replaced }}
         RESULT_REPLACED: ${{ steps.result.outputs.replaced }}
+        NOTICE_REPLACED: ${{ steps.review_notice.outputs.replaced }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:
         github-token: ${{ inputs.source_org_github_token }}
