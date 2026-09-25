@@ -1037,7 +1037,9 @@ runs:
 
     - name: Say where this run's results and prompts are rendered
       id: rendering
-      if: ${{ inputs.report_rendering != '' || inputs.prompt_rendering != '' || inputs.github_calls != '' }}
+      if: >-
+        ${{ inputs.report_rendering != '' || inputs.prompt_rendering != '' ||
+        inputs.github_calls != '' || env.KSAI_PROVIDER_OBSERVATIONS == 'true' }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         REPORT: ${{ inputs.report_rendering }}
@@ -4561,7 +4563,7 @@ runs:
           ${{ steps.phase.outputs.pr_number || steps.open_draft.outputs.pr_number ||
           steps.context.outputs.issue_number }}
         ISSUE_NUM: ${{ steps.subject.outputs.number }}
-        PR_NUMBER: ${{ steps.phase.outputs.pr_number || steps.open_draft.outputs.pr_number }}
+        PR_NUMBER: ${{ steps.phase.outputs.pr_number || steps.open_draft.outputs.pr_number || steps.context.outputs.issue_number }}
         RUN_ID: ${{ github.run_id }}
         SERVER_URL: ${{ github.server_url }}
         REPOSITORY: ${{ github.repository }}
@@ -5782,6 +5784,16 @@ runs:
       env:
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: node "${SCRIPTS}/kreview/governed-check.mjs" report
+
+    - name: Report provider-boundary prompt observations
+      if: >-
+        ${{ always() && env.KSAI_PROVIDER_OBSERVATIONS == 'true' &&
+        steps.model_run.outcome != 'skipped' }}
+      shell: bash
+      env:
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+        MODEL_CONCLUSION: ${{ steps.model_run.outputs.conclusion }}
+      run: node "${SCRIPTS}/kreview/provider-observations.mjs"
 
     - name: Upload the opencode event stream
       if: >-

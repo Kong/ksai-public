@@ -616,6 +616,7 @@ export function sandboxArgs(
   const temp = String(env.RUNNER_TEMP ?? '');
   const opencodeHome = String(env.OPENCODE_HOME ?? '');
   const isolatedTools = isolatedToolPhase(env.OPENCODE_PHASE);
+  const brokered = isolatedTools || env.KSAI_PROVIDER_OBSERVATIONS === 'true';
   const providerPolicyDir = providerPolicyDirectory(opencodeHome);
   const args = [
     '--ro-bind',
@@ -703,7 +704,7 @@ export function sandboxArgs(
   }
 
   const tokenDir = String(env.KSAI_TOKEN_DIR ?? '');
-  if (!isolatedTools && tokenDir && exists(tokenDir)) {
+  if (!brokered && tokenDir && exists(tokenDir)) {
     args.push('--ro-bind', tokenDir, tokenDir, '--setenv', 'KSAI_TOKEN_FILE', String(env.KSAI_TOKEN_FILE ?? ''));
   }
 
@@ -735,9 +736,9 @@ export function sandboxArgs(
   const relay = String(env.KSAI_OTEL_RELAY ?? '').trim();
   if (relay) args.push('--setenv', EXPORTER_ENDPOINT, relay);
   const providerRelay = String(env.KSAI_PROVIDER_RELAY ?? '').trim();
-  if (isolatedTools) {
+  if (brokered) {
     if (!/^http:\/\/127\.0\.0\.1:[0-9]+$/.test(providerRelay)) {
-      throw new Error('write-phase provider relay is not a loopback origin');
+      throw new Error('provider relay is not a loopback origin');
     }
     args.push('--setenv', 'KSAI_PROVIDER_RELAY', providerRelay);
   }
@@ -747,7 +748,7 @@ export function sandboxArgs(
       '--setenv', 'OPENCODE_DISABLE_LSP_DOWNLOAD', 'true',
     );
   }
-  const scrubbed = isolatedTools ? [...SCRUBBED, ...BROKERED] : scrubbing(env) ? SCRUBBED : [];
+  const scrubbed = brokered ? [...SCRUBBED, ...BROKERED] : scrubbing(env) ? SCRUBBED : [];
   const denied = listed(env.SANDBOX_DENY_ENV);
   if (relay && denied.includes(EXPORTER_ENDPOINT)) {
     console.log(
@@ -909,7 +910,8 @@ async function main(env = process.env, {
   });
 
   const isolatedTools = isolatedToolPhase(env.OPENCODE_PHASE);
-  const tokenDir = !isolatedTools && String(env.RUNNER_TEMP ?? '') ? join(String(env.RUNNER_TEMP), 'ksai-token') : '';
+  const brokered = isolatedTools || env.KSAI_PROVIDER_OBSERVATIONS === 'true';
+  const tokenDir = !brokered && String(env.RUNNER_TEMP ?? '') ? join(String(env.RUNNER_TEMP), 'ksai-token') : '';
   const tokenFile = tokenDir ? join(tokenDir, 'token.json') : '';
   if (tokenDir) mkdirSync(tokenDir, { recursive: true });
 
@@ -967,7 +969,7 @@ async function main(env = process.env, {
   } catch (error) {
     console.log(`::warning::runtime telemetry could not start (${error?.message}), so span timings are unavailable`);
   }
-  if (isolatedTools) {
+  if (brokered) {
     try {
       providerRelay = await startProvider({ env });
     } catch (error) {

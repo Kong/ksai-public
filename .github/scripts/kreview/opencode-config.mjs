@@ -79,6 +79,7 @@ const allowed = String(process.env.ALLOWED_MODELS ?? '')
 
 const phase = String(process.env.OPENCODE_PHASE ?? '').trim();
 const isolatedTools = isolatedToolPhase(phase);
+const brokered = isolatedTools || process.env.KSAI_PROVIDER_OBSERVATIONS === 'true';
 const stated = String(process.env.OPENCODE_ALLOWED ?? '').trim();
 const policy = { allowed: stated, disallowed: process.env.OPENCODE_DISALLOWED };
 for (const { name, key, granted } of stated ? mergedDenials(policy) : phaseDenials(phase)) {
@@ -211,10 +212,10 @@ if (governed && resultTransport !== 'text') {
 }
 const runtime = { channel, permission, auth, attribution,
   smallModel: model,
-  plugin: isolatedTools ? '' : AUTH_PLUGIN,
-  brokered: isolatedTools,
+  plugin: brokered ? '' : AUTH_PLUGIN,
+  brokered,
   shell: isolatedTools ? TOOL_SHELL : '',
-  baseUrl: isolatedTools ? '{env:KSAI_PROVIDER_RELAY}/v1' : baseUrl,
+  baseUrl: brokered ? '{env:KSAI_PROVIDER_RELAY}/v1' : baseUrl,
 };
 const config = governed
   ? (await import('../governance/config.mjs')).governedConfig({ ...runtime, skills, governance: JSON.parse(readFileSync(governed, 'utf8')),

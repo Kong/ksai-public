@@ -208,7 +208,13 @@ export async function renderThroughControlPlane({
   const headers = { authorization: `Bearer ${reached.token}` };
   const answered = await asked(fetch, `${reached.base}/v1/prompts/render`, {
     method: 'POST',
-    headers: { ...headers, 'content-type': 'application/json' },
+    headers: {
+      ...headers,
+      'content-type': 'application/json',
+      ...(env.KSAI_PROVIDER_OBSERVATIONS === 'true' && promptRendering(env) === 'cp'
+        ? { 'x-ksai-provider-observations': 'v5' }
+        : {}),
+    },
     body: JSON.stringify(request),
     signal,
   }, 'the render', { retries: RETRIES, wait });
