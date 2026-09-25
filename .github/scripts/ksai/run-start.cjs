@@ -132,7 +132,11 @@ function startFacts(env, live = null) {
     route_label: String(env.ROUTE_LABEL ?? ''),
     route_review: String(env.ROUTE_REVIEW ?? '') === 'true',
     history_mode: String(env.STATUS_HISTORY ?? ''),
-    ...(live === null ? {} : { live }),
+    ...(live === null ? {} : { live: {
+      stage: live.stage,
+      history: live.history,
+      cells: live.cells,
+    } }),
   };
 }
 
