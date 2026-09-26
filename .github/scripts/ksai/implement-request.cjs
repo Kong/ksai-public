@@ -26,6 +26,23 @@ const MAX_RETRY_REPORT_CHARS = 1_000;
 const MAX_THREAD_COMMENTS = 8;
 const MAX_THREAD_COMMENT_CHARS = 1_500;
 const MAX_THREADS = 20;
+const CHECKS_NOT_READ = Object.freeze({
+  sha: '',
+  failing: [],
+  failingTotal: 0,
+  running: [],
+  runningTotal: 0,
+  cancelledTotal: 0,
+  statuses: [],
+  statusesTotal: 0,
+  logged: 0,
+  logsDeferred: 0,
+  logsUnavailable: null,
+  total: null,
+  listTruncated: false,
+  unreadable: 'this run is not admitted to the build, so the checks were not read',
+  statusesUnreadable: null,
+});
 const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const SAFE_REF = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,1023}$/;
 const SAFE_PATH = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,4095}$/;
@@ -386,7 +403,9 @@ function implementValues(env, phase, { denied = [], planDocument = '' } = {}) {
     }), { required: phase !== 'do', threadScoped: phase === 'fix' && threadScoped })
     : [];
   const checks = phase === 'do'
-    ? sanitizeChecks(readJSON(env.CHECKS_FILE, 'checks', MAX_INPUT.checks))
+    ? sanitizeChecks(text(env.CHECKS_FILE).trim() === ''
+      ? CHECKS_NOT_READ
+      : readJSON(env.CHECKS_FILE, 'checks', MAX_INPUT.checks))
     : {};
   const guidance = boundedText(env.GUIDANCE, 'guidance', MAX_INPUT.guidance);
   const stepTitle = phase === 'step'
