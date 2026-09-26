@@ -21,6 +21,7 @@ function helperScript(audience) {
 }
 
 function writeGatewayTokenHelper({ core, audience, env = process.env }) {
+  const selectedAudience = env.KSAI_MODEL_AUTH_MODE === 'cp_exchange' ? 'ksai-cp' : audience;
   const url = env.ACTIONS_ID_TOKEN_REQUEST_URL;
   const requestToken = env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
   if (!url || !requestToken) {
@@ -33,7 +34,7 @@ function writeGatewayTokenHelper({ core, audience, env = process.env }) {
   core.exportVariable(TOKEN_VAR, requestToken);
 
   const helper = path.join(String(env.RUNNER_TEMP), HELPER_NAME);
-  writeFileSync(helper, helperScript(audience), { mode: 0o700 });
+  writeFileSync(helper, helperScript(selectedAudience), { mode: 0o700 });
 
   const {
     ACTIONS_ID_TOKEN_REQUEST_URL: _requestUrl,
@@ -46,13 +47,13 @@ function writeGatewayTokenHelper({ core, audience, env = process.env }) {
   try {
     token = execFileSync(helper, { encoding: 'utf8', env: asTheCliWillSee }).trim();
   } catch (error) {
-    core.setFailed(`the credential helper could not mint against ${audience}: ${error.message}`);
+    core.setFailed(`the credential helper could not mint against ${selectedAudience}: ${error.message}`);
     return '';
   }
 
   core.setSecret(token);
   if (token.split('.').length !== 3) {
-    core.setFailed(`the credential helper did not print a JWT, so no run can reach ${audience}`);
+    core.setFailed(`the credential helper did not print a JWT, so no run can reach ${selectedAudience}`);
     return '';
   }
 

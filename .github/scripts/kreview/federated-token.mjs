@@ -35,6 +35,9 @@ export function authOf(env) {
   if (!AUTH_MODES.includes(said)) {
     throw new Error(`anthropic_auth must be one of ${AUTH_MODES.join(', ')}, got: ${said || '(empty)'}`);
   }
+  if (env.KSAI_MODEL_AUTH_MODE === 'cp_exchange' && said !== 'oidc-bearer') {
+    throw new Error('CP model token exchange requires anthropic_auth: oidc-bearer');
+  }
   return said;
 }
 
@@ -78,6 +81,10 @@ export function originOf(env) {
   return said;
 }
 
+export function identityAudience(env) {
+  return env.KSAI_MODEL_AUTH_MODE === 'cp_exchange' ? 'ksai-cp' : originOf(env);
+}
+
 /**
  * exchangeUrl answers where a federated exchange is made, which is the origin the run already calls.
  *
@@ -101,11 +108,7 @@ export function missingIdentifiers(env) {
 }
 
 /**
- * requestIdentity asks the runner for an identity token for the origin this run calls.
- *
- * The audience is that origin and is never named a second time: a token minted for a host that does
- * not receive it is refused by whichever host does, and the two drifting apart is undebuggable from
- * the outside.
+ * requestIdentity asks the runner for an identity token for the run's selected authorization route.
  *
  * @param {{env: Record<string, string | undefined>, fetchImpl?: typeof fetch, mask?: (value: string) => void}} options
  * @returns {Promise<string>}
@@ -116,7 +119,7 @@ export async function requestIdentity({ env, fetchImpl = fetch, mask = () => {} 
   if (!url || !requestToken) {
     throw new Error('no OIDC endpoint on this job, so it is missing permissions: id-token: write');
   }
-  const response = await fetchImpl(`${url}&audience=${encodeURIComponent(originOf(env))}`, {
+  const response = await fetchImpl(`${url}&audience=${encodeURIComponent(identityAudience(env))}`, {
     headers: { authorization: `Bearer ${requestToken}` },
     signal: AbortSignal.timeout(MINT_TIMEOUT_MS),
   });
@@ -260,7 +263,7 @@ export function assertionClaims(assertion) {
  * @returns {Promise<{accessToken: string, expiresIn: number, requestId: string}>}
  */
 export async function identity({ env, fetchImpl = fetch, mask = () => {} }) {
-  const audience = originOf(env);
+  const audience = identityAudience(env);
   const assertion = await requestIdentity({ env, fetchImpl, mask });
   const claims = assertionClaims(assertion);
   // An assertion whose claims cannot be read and one that has already expired are two states, and
