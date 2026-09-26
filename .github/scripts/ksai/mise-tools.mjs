@@ -1,7 +1,9 @@
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, existsSync, lstatSync, mkdirSync, realpathSync } from 'node:fs';
+import { appendFileSync, existsSync, lstatSync, mkdirSync, realpathSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
+
+import { writeOutputs } from '../lib/outputs.mjs';
 
 export const MISE_CONFIGS = Object.freeze([
   'mise.toml', '.mise.toml', 'mise/config.toml', '.mise/config.toml',
@@ -76,6 +78,28 @@ const fenced = (args, timeout) => execFileSync('bwrap', args, {
   encoding: 'utf8', timeout, stdio: ['ignore', 'pipe', 'inherit'],
 });
 
+export function pinnedConfigs(workspace, exists = treeFile(workspace)) {
+  return MISE_CONFIGS.filter((name) => exists(join(workspace, name)));
+}
+
+const regularFile = (at) => {
+  try {
+    return statSync(at).isFile();
+  } catch {
+    return false;
+  }
+};
+
+export function find(env = process.env, exists = null) {
+  const workspace = String(env.WORKSPACE ?? '').trim();
+  const [config] = isAbsolute(workspace) ? pinnedConfigs(workspace, exists ?? regularFile) : [];
+  console.log(config ? `the tree pins tools in ${config}` : 'the tree pins no tools, so its commands get what the runner carries');
+  writeOutputs(env.GITHUB_OUTPUT, {
+    present: config ? 'true' : 'false',
+  });
+  return 0;
+}
+
 export function main(env = process.env, { run = fenced, exists = null, makeDir = mkdirSync, findMise = miseOn } = {}) {
   const workspace = String(env.WORKSPACE ?? '').trim();
   const temp = String(env.RUNNER_TEMP ?? '').trim();
@@ -84,7 +108,7 @@ export function main(env = process.env, { run = fenced, exists = null, makeDir =
     return 0;
   }
   const inTree = exists ?? treeFile(workspace);
-  const configs = MISE_CONFIGS.filter((name) => inTree(join(workspace, name)));
+  const configs = pinnedConfigs(workspace, inTree);
   const [config] = configs;
   if (!config) {
     console.log('the tree under work pins no tools, so the model gets what the runner carries');
@@ -127,5 +151,5 @@ export function main(env = process.env, { run = fenced, exists = null, makeDir =
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  process.exitCode = main();
+  process.exitCode = process.argv[2] === '--find' ? find() : main();
 }

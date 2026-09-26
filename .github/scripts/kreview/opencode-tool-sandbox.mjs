@@ -228,6 +228,10 @@ export function toolSandboxArgs(
   return args;
 }
 
+export function toolShell(exists = existsSync) {
+  return exists('/bin/bash') ? '/bin/bash' : '/bin/sh';
+}
+
 export function isolatedToolCommand(command, args, workdir, linux = process.platform === 'linux', env = process.env) {
   if (!linux) return { command, args };
   return {

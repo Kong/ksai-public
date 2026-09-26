@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
 
-import { isolatedToolCommand, toolLauncherEnvironment } from './opencode-tool-sandbox.mjs';
+import { isolatedToolCommand, toolLauncherEnvironment, toolShell } from './opencode-tool-sandbox.mjs';
 
 let isolated;
 try {
-  isolated = isolatedToolCommand('/bin/sh', process.argv.slice(2), process.cwd(), true, process.env);
+  isolated = isolatedToolCommand(toolShell(), process.argv.slice(2), process.cwd(), true, process.env);
 } catch (error) {
   console.error(`tool sandbox refused to start: ${error.message}`);
   process.exit(125);

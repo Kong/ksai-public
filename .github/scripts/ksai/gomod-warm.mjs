@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
@@ -123,15 +123,21 @@ function downloadIn(cwd, child, timeout) {
   execFileSync('go', ['mod', 'download'], { cwd, env: child, stdio: ['ignore', 'inherit', 'inherit'], timeout });
 }
 
+function tidyIn(cwd, child, timeout) {
+  return !spawnSync('go', ['mod', 'tidy', '-diff'], { cwd, env: child, stdio: ['ignore', 'ignore', 'inherit'], timeout }).error;
+}
+
 export function main(
   env = process.env,
   {
     clock = () => Date.now(),
     toolchain = toolchainOf,
     download = downloadIn,
+    tidy = tidyIn,
     moduleCache = moduleCacheOf,
     goRoot = goRootOf,
     cacheExists = existsSync,
+    say = warn,
   } = {},
 ) {
   const workspace = env.WORKSPACE || process.cwd();
@@ -264,6 +270,7 @@ export function main(
 
   const failed = [];
   const deadline = clock() + WARM_BUDGET_MS;
+  const moduleDir = (dir) => (dir === '.' ? workspace : `${workspace}/${dir}`);
   for (const dir of dirs) {
     const left = deadline - clock();
     if (left <= 0) {
@@ -271,10 +278,20 @@ export function main(
       continue;
     }
     try {
-      download(dir === '.' ? workspace : `${workspace}/${dir}`, child, Math.min(DOWNLOAD_TIMEOUT_MS, left));
+      download(moduleDir(dir), child, Math.min(DOWNLOAD_TIMEOUT_MS, left));
     } catch {
       failed.push(dir);
     }
+  }
+  const untidied = [];
+  for (const dir of lockBuild ? dirs.filter((one) => !failed.includes(one)) : []) {
+    const left = deadline - clock();
+    if (left <= 0 || !tidy(moduleDir(dir), child, Math.min(DOWNLOAD_TIMEOUT_MS, left))) untidied.push(dir);
+  }
+  if (untidied.length > 0) {
+    say(
+      `go mod tidy did not finish for ${untidied.join(', ')}. Their builds have what they read, but a tidy inside the sandbox can fail on a module only tidy loads`,
+    );
   }
 
   if (failed.length > 0) {
