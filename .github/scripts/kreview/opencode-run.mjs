@@ -816,7 +816,7 @@ export function runArgs(env = process.env) {
   const variant = String(env.VARIANT ?? '').trim();
   if (variant && !(env.FLOW === 'review' && ['evidence', 'dual'].includes(env.REVIEW_STRATEGY) && env.OPENCODE_REVIEW_FINALIZE === 'true')) args.push('--variant', variant);
   const session = String(env.OPENCODE_RESUME_SESSION ?? '').trim();
-  if (session) args.push('--session', session, '--fork');
+  if (session && !String(env.KSAI_GOVERNED_DIR ?? '')) args.push('--session', session, '--fork');
   return args;
 }
 

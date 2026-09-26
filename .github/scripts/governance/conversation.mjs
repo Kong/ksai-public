@@ -246,22 +246,18 @@ function withoutCacheBoundary(messages) {
         return `${index}:${message.content.length - 1}`;
       }),
   );
-  let found = 0;
-  const normalized = messages.map((message, messageIndex) => {
+  return messages.map((message, messageIndex) => {
     if (!Array.isArray(message?.content)) return message;
     let bounded = false;
     const content = message.content.map((block, blockIndex) => {
       if (block === null || typeof block !== 'object' || !Object.hasOwn(block, 'cache_control')) return block;
       const { cache_control: boundary, ...rest } = block;
       if (!expected.has(`${messageIndex}:${blockIndex}`) || canonical(boundary) !== EPHEMERAL) throw new Error(CACHE_BOUNDARY);
-      found += 1;
       bounded = true;
       return rest;
     });
     return bounded ? { ...message, content } : message;
   });
-  if (found !== 0 && found !== expected.size) throw new Error(CACHE_BOUNDARY);
-  return normalized;
 }
 
 function toolContent(value) {

@@ -27,8 +27,10 @@ const OPENCODE_FILE = 'opencode-session.json';
 
 const opencodeAt = (dir) => join(dir, OPENCODE_FILE);
 
+const workspaceOf = (env) => String(env.GITHUB_WORKSPACE ?? '') || undefined;
+
 function newestSession(env, run) {
-  const listed = run('opencode', ['session', 'list', '--format', 'json', '-n', '1'], { encoding: 'utf8', env });
+  const listed = run('opencode', ['session', 'list', '--format', 'json', '-n', '1'], { encoding: 'utf8', env, cwd: workspaceOf(env) });
   try {
     const [newest] = JSON.parse(String(listed.stdout ?? '[]'));
     const id = String(newest?.id ?? '');
@@ -57,7 +59,7 @@ export function saveOpencode(env = process.env, run = spawnSync) {
       process.stdout.write('note: this run named no session to export, so the next rework starts cold.\n');
       return outputs;
     }
-    const exported = run('opencode', ['export', id], { encoding: 'utf8', env });
+    const exported = run('opencode', ['export', id], { encoding: 'utf8', env, cwd: workspaceOf(env) });
     if (exported.status !== 0 || !String(exported.stdout ?? '').trim()) {
       process.stdout.write('note: this run exported no session, so the next rework starts cold.\n');
       return outputs;
@@ -81,7 +83,7 @@ export function restoreOpencode(env = process.env, run = spawnSync) {
   const from = String(env.DOWNLOAD_DIR ?? '').trim();
   const at = from ? opencodeAt(from) : '';
   if (!at || !existsSync(at)) return outputs;
-  const imported = run('opencode', ['import', at], { encoding: 'utf8', env });
+  const imported = run('opencode', ['import', at], { encoding: 'utf8', env, cwd: workspaceOf(env) });
   if (imported.status !== 0) {
     process.stdout.write('note: the carried session could not be imported, so this run starts cold.\n');
     return outputs;

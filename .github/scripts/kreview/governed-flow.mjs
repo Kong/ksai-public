@@ -3,15 +3,18 @@ import { dirname, isAbsolute, join } from 'node:path';
 
 import { deliveriesAt, governanceOptions, governedRoot, rendererFor, trustedRootAt } from '../governance/anchors.mjs';
 import { parityOf, promptRendering, renderThroughControlPlane } from '../lib/cp-prompts.mjs';
-import { GOVERNED_TOOLS, opencodePermissions } from '../lib/opencode.mjs';
+import { GOVERNED_TOOLS, TOOL_PERMISSION, opencodePermissions } from '../lib/opencode.mjs';
 
 const NAME = /^[a-z][a-z0-9-]{0,31}$/;
 const PLUGIN = /^[a-z][a-z0-9-]{0,63}$/;
 
 export function governedTools(env) {
   const permission = opencodePermissions({ allowed: env.OPENCODE_ALLOWED, disallowed: env.OPENCODE_DISALLOWED });
-  return GOVERNED_TOOLS.filter((name) =>
-    name === 'bash' ? Object.values(permission.bash ?? {}).includes('allow') : permission[name] === 'allow');
+  return GOVERNED_TOOLS.filter((name) => {
+    const key = TOOL_PERMISSION[name];
+    if (key === undefined) throw new Error(`the governed ${name} tool names no opencode permission`);
+    return key === 'bash' ? Object.values(permission.bash ?? {}).includes('allow') : permission[key] === 'allow';
+  });
 }
 
 function laidDown(dir, files, plugin) {

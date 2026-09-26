@@ -387,6 +387,16 @@ export const ISOLATED_GUARDS = Object.freeze([
 
 export const GOVERNED_TOOLS = Object.freeze(['bash', 'edit', 'glob', 'grep', 'read', 'skill', 'write']);
 
+export const TOOL_PERMISSION = Object.freeze(Object.assign(Object.create(null), {
+  bash: 'bash',
+  edit: 'edit',
+  glob: 'glob',
+  grep: 'grep',
+  read: 'read',
+  skill: 'skill',
+  write: 'edit',
+}));
+
 export const ISOLATED_TOOL_PHASES = Object.freeze(new Set(Object.keys(claudeArgs.TOOL_POLICY)));
 
 export const isolatedToolPhase = (phase) => ISOLATED_TOOL_PHASES.has(String(phase ?? '').trim());
