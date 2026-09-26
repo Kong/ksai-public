@@ -141,6 +141,12 @@ export function recordDo({
         `\`${safeEcho(verification.target)}\`.`,
     );
   }
+  if (pushing && !merging && verification.reason === 'checks-unreadable' && verification.target) {
+    return blocked(
+      `I did not push the work: the CI checks on this head could not be read, so \`${safeEcho(verification.target)}\` ` +
+        'could not be reproduced here and the change would be a guess. Ask again once the checks can be read.',
+    );
+  }
   rmSync(manifestPath, { force: true });
 
   let sha = '';

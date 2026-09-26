@@ -56,11 +56,15 @@ export const TOOL_INJECTION_ENV = Object.freeze([
 export const TOOL_WRAPPER_ENV = Object.freeze([
   'FLOW',
   'GITHUB_WORKSPACE',
+  'KSAI_GOROOT',
+  'KSAI_GO_MODULE_CACHE',
   'KSAI_REVIEW_RESULT_DIR',
   'KSAI_STAGE_ARTIFACTS',
   'KSAI_STAGE_INPUTS',
   'KSAI_STAGE_REQUEST',
   'KSAI_STAGE_RESULT',
+  'KSAI_TOOL_PATH',
+  'KSAI_TOOL_ROOT',
   'KSAI_WORKFLOW_PACKAGE',
   'OPENCODE_CONFIG',
   'OPENCODE_HOME',
@@ -113,6 +117,11 @@ const safeWorkflowBinds = (env, exists, kind) => {
   return args;
 };
 
+export function pinnedToolRoot(env = process.env) {
+  const root = String(env.KSAI_TOOL_ROOT ?? '').trim().replace(/\/+$/, '');
+  return isAbsolute(root) ? root : '';
+}
+
 export function toolChildEnvironment(env = process.env) {
   const child = Object.create(null);
   for (const name of SAFE_CHILD_ENV) {
@@ -124,9 +133,17 @@ export function toolChildEnvironment(env = process.env) {
   const safePath = String(env.PATH ?? '').split(':').filter((at) =>
     at && (!workspace || !inside(at, workspace)) && (!runnerTemp || !inside(at, runnerTemp)),
   );
-  child.PATH = safePath.join(':') || PATH_FALLBACK;
+  const toolRoot = pinnedToolRoot(env);
+  const pinned = toolRoot ? String(env.KSAI_TOOL_PATH ?? '').split(':').filter((at) => inside(at, toolRoot)) : [];
+  child.PATH = [...safePath, ...pinned].join(':') || PATH_FALLBACK;
+  for (const [name, from] of [['GOROOT', 'KSAI_GOROOT'], ['GOMODCACHE', 'KSAI_GO_MODULE_CACHE']]) {
+    const at = String(env[from] ?? '').trim();
+    if (isAbsolute(at) && !at.includes(':')) child[name] = at;
+  }
   child.HOME = '/tmp/ksai-home';
   child.TMPDIR = '/tmp';
+  child.GOPROXY = 'off';
+  child.GOTOOLCHAIN = 'local';
   child.CI ||= 'true';
   child.LANG ||= 'C.UTF-8';
   child.LC_ALL ||= child.LANG;
@@ -174,6 +191,8 @@ export function toolSandboxArgs(
   if (runnerTemp && isAbsolute(runnerTemp) && exists(runnerTemp) && !inside(runnerTemp, '/tmp')) {
     args.push('--tmpfs', runnerTemp);
   }
+  const toolRoot = pinnedToolRoot(env);
+  if (toolRoot && exists(toolRoot)) args.push('--ro-bind', toolRoot, toolRoot);
   args.push(env.OPENCODE_LSP_TOOL === 'native' ? '--ro-bind' : '--bind', workspace, workspace);
   for (const at of scopes.allow) args.push('--bind', at, at);
   for (const at of scopes.deny) args.push('--ro-bind', at, at);

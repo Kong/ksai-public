@@ -88,13 +88,16 @@ function toolchainOf(workspace) {
   }
 }
 
-function moduleCacheOf(workspace) {
+const goEnvOf = (name) => (workspace) => {
   try {
-    return execFileSync('go', ['env', 'GOMODCACHE'], { cwd: workspace, encoding: 'utf8' }).trim();
+    return execFileSync('go', ['env', name], { cwd: workspace, encoding: 'utf8' }).trim();
   } catch {
     return '';
   }
-}
+};
+
+const moduleCacheOf = goEnvOf('GOMODCACHE');
+const goRootOf = goEnvOf('GOROOT');
 
 function modulesIn(workspace, dirs) {
   const read = [];
@@ -127,6 +130,7 @@ export function main(
     toolchain = toolchainOf,
     download = downloadIn,
     moduleCache = moduleCacheOf,
+    goRoot = goRootOf,
     cacheExists = existsSync,
   } = {},
 ) {
@@ -142,10 +146,11 @@ export function main(
   const done = ({ failed = [], version = '' }) => {
     if (lockBuild && env.GITHUB_ENV) appendFileSync(env.GITHUB_ENV, 'GOPROXY=off\nGOTOOLCHAIN=local\n');
     if (env.GITHUB_ENV && version !== '') {
-      const at = moduleCache(workspace);
-      if (at !== '' && !at.includes('\n') && cacheExists(at)) {
-        appendFileSync(env.GITHUB_ENV, `KSAI_GO_MODULE_CACHE=${at}\n`);
-      }
+      const publish = (name, at) => {
+        if (at !== '' && !at.includes('\n') && cacheExists(at)) appendFileSync(env.GITHUB_ENV, `${name}=${at}\n`);
+      };
+      publish('KSAI_GO_MODULE_CACHE', moduleCache(workspace));
+      publish('KSAI_GOROOT', goRoot(workspace));
     }
     if (version !== '' && env.PROMPT_FILE) tellThePrompt(env.PROMPT_FILE, renderGoNote({ version, failed }));
     if (env.GO_FACTS_FILE) {

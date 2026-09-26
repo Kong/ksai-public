@@ -94,6 +94,7 @@ function checksAt(path) {
   if (!path) return { required: false, names: [] };
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8'));
+    const unreadable = parsed?.unreadable != null || parsed?.statusesUnreadable != null;
     const failingTotal = Number(parsed?.failingTotal ?? 0) + Number(parsed?.statusesTotal ?? 0);
     const names = [
       ...(Array.isArray(parsed?.failing) ? parsed.failing.map((entry) => entry?.name) : []),
@@ -101,7 +102,7 @@ function checksAt(path) {
     ]
       .map((name) => exact(name, MAX_TARGET_CHARS))
       .filter((name) => name !== null && name !== '');
-    return { required: Number.isFinite(failingTotal) && failingTotal > 0, names };
+    return { required: unreadable || (Number.isFinite(failingTotal) && failingTotal > 0), names, unreadable };
   } catch {
     return { required: true, names: [], unreadable: true };
   }
@@ -176,8 +177,8 @@ export function verificationOf({
 
   const target = exact(manifest?.verification?.target, MAX_TARGET_CHARS);
   const command = exact(manifest?.verification?.command, MAX_COMMAND_CHARS);
-  if (checks.unreadable) {
-    return result({ status: 'unverified', target, command, reason: 'checks-unreadable' });
+  if (checks.unreadable && !checks.names.includes(target ?? '')) {
+    return result({ status: 'unverified', target: manifest?.verification?.target, command, reason: 'checks-unreadable' });
   }
   if (merging || noChange) {
     return result({ status: 'unverified', target, command, reason: 'target-not-reproduced' });

@@ -789,8 +789,16 @@ async function resolveDoPhase({
    * failure, it is the absence of an answer. With no request text either, the caller's notice says so.
    */
   const failing = evidence === null ? 0 : evidence.failingTotal + evidence.statusesTotal;
+  const unread = evidence?.unreadable ?? evidence?.statusesUnreadable ?? null;
+  const unreadSurfaces = [
+    evidence?.unreadable != null ? 'check runs' : '',
+    evidence?.statusesUnreadable != null ? 'statuses' : '',
+  ].filter(Boolean).join(' and ');
   if (!asked && failing === 0 && !thread && !conflicting) {
-    core?.info?.(`#${number}: the request named no work and nothing is failing on ${reportedHeadSha}, so nothing runs.`);
+    core?.info?.(unread === null
+      ? `#${number}: the request named no work and nothing is failing on ${reportedHeadSha}, so nothing runs.`
+      : `#${number}: the request named no work and the ${unreadSurfaces} on ${reportedHeadSha} could not be read ` +
+        `(${unread}), so nothing runs rather than a guess.`);
     return { phase: 'do', ref, baseRef, prNumber: target.prNumber, pending: 0, conflicting: false };
   }
 
@@ -832,8 +840,11 @@ async function resolveDoPhase({
   if (retry !== null) writeFile(retryFile, JSON.stringify(retry));
   if (thread) writeFile(threadsFile, JSON.stringify([thread]));
 
+  const found = unread === null
+    ? counted(failing, 'failing check or status', 'failing checks or statuses')
+    : `unread ${unreadSurfaces} and ${counted(failing, 'readable failing check or status', 'readable failing checks or statuses')}`;
   core?.info?.(
-    `#${number} on ${ref}: ${counted(failing, 'failing check or status', 'failing checks or statuses')} on ${reportedHeadSha}` +
+    `#${number} on ${ref}: ${found} on ${reportedHeadSha}` +
       `${thread ? `, asked inside the review thread opened by comment ${String(threadRootId)}` : ''}` +
       `${conflicting ? `, conflicting with \`${baseRef || '(unknown base)'}\`` : ''}` +
       `${asked ? `, scoped to: ${asked}` : ', with no request text'}.`,

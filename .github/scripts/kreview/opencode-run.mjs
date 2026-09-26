@@ -44,7 +44,7 @@ import { startRelay } from './otel-relay.mjs';
 import { startProviderRelay } from './opencode-provider-relay.mjs';
 import resultProtocol from './review-result.cjs';
 import { isolatedPtyCommand, ptyPilotEnabled } from './opencode-pty-core.mjs';
-import { TOOL_INJECTION_ENV, toolIsolationProbe } from './opencode-tool-sandbox.mjs';
+import { pinnedToolRoot, TOOL_INJECTION_ENV, toolIsolationProbe } from './opencode-tool-sandbox.mjs';
 
 const { structuredSubmission, submitted } = resultProtocol;
 
@@ -636,6 +636,8 @@ export function sandboxArgs(
     args.push('--tmpfs', temp);
     const tools = join(temp, 'ksai-opencode', 'bin');
     if (exists(tools)) args.push('--ro-bind', tools, tools);
+    const pinned = pinnedToolRoot(env);
+    if (pinned && exists(pinned)) args.push('--ro-bind', pinned, pinned);
     const lspRoot = String(env.OPENCODE_LSP_ROOT ?? '');
     if (env.OPENCODE_LSP_TOOL === 'native' && lspRoot && exists(lspRoot)) {
       args.push('--ro-bind', lspRoot, lspRoot);

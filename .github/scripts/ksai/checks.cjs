@@ -698,13 +698,18 @@ async function readFailingChecks({
   // Against `null` rather than truthiness, which is the same guard the fallback above closes from the other side.
   // Two independent ways to reach "unread but falsy" is one too many for the one distinction that must not
   // collapse, so the writer always writes something and the reader tests for absence rather than for emptiness.
+  const plane = usingControlPlane(env);
   if (evidence.unreadable !== null) {
     core?.warning?.(
       `Could not read the checks on ${commit}: ${evidence.unreadable}. This run has no CI evidence, so a red ` +
-        'branch reads to it as a branch with nothing failing. The token this was read on needs `checks: read`, ' +
-        '`statuses: read` and `actions: read`. An App installation that does not hold them answers 422 to a ' +
-        'token request naming them, and cannot be widened by any workflow - pass a token that does hold them ' +
-        'as `ci_evidence_github_token`, such as the job\'s own GITHUB_TOKEN with those three in `permissions:`.',
+        'branch reads to it as a branch with nothing failing. ' +
+        (plane
+          ? 'The control plane read them for this run and answered this, so the fix is on the control plane ' +
+            'side: its App token for the read, or the head it holds for this run\'s pull request.'
+          : 'The token this was read on needs `checks: read`, `statuses: read` and `actions: read`. An App ' +
+            'installation that does not hold them answers 422 to a token request naming them, and cannot be ' +
+            'widened by any workflow - pass a token that does hold them as `ci_evidence_github_token`, such as ' +
+            'the job\'s own GITHUB_TOKEN with those three in `permissions:`.'),
     );
   } else {
     core?.info?.(
@@ -717,7 +722,10 @@ async function readFailingChecks({
   if (evidence.logsUnavailable) {
     core?.warning?.(
       `The job logs on ${commit} could not be read (${evidence.logsUnavailable}), so the prompt carries check ` +
-        'names and conclusions without them. Grant the App `actions: read` to include the logs.',
+        'names and conclusions without them. ' +
+        (plane
+          ? 'The control plane read them for this run, so its read is where the logs went missing.'
+          : 'Grant the App `actions: read` to include the logs.'),
     );
   }
   if (evidence.statusesUnreadable !== null) {
