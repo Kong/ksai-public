@@ -118,9 +118,9 @@ function trustedLfsStorage() {
   return lfsStorage;
 }
 
-function trustedIdentity() {
-  const configuredName = String(process.env.KSAI_GIT_AUTHOR_NAME ?? '');
-  const configuredEmail = String(process.env.KSAI_GIT_AUTHOR_EMAIL ?? '');
+function trustedIdentity(env = process.env) {
+  const configuredName = String(env.KSAI_GIT_AUTHOR_NAME ?? '');
+  const configuredEmail = String(env.KSAI_GIT_AUTHOR_EMAIL ?? '');
   if (!configuredName && !configuredEmail) {
     return { ok: true, name: 'ksai[bot]', email: 'ksai[bot]@users.noreply.github.com' };
   }
@@ -1088,6 +1088,7 @@ module.exports = {
   lfsProcessingBudget,
   repositoryView,
   sealObjectStore,
+  trustedIdentity,
   uploadLfsObjects,
   validLfsObject,
 };

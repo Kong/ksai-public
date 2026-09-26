@@ -10,6 +10,8 @@ function renderingModeOf(value) {
 
 const DEFAULT_TIMEOUT = 30_000;
 
+const OUTCOME_HEADER = 'ksai-cp-outcome';
+
 const EARLY = 30_000;
 
 const tokens = new Map();
@@ -102,13 +104,24 @@ async function reachedFor({ env, fetch, timeout, secret, holds = timeout, audien
   return reached.failure ? { why: reached.failure } : { base: reached.base, token: reached.token, signal };
 }
 
+const SAID_MAX = 500;
+
+async function saidBy(response) {
+  try {
+    return String(await response.text()).replace(/\s+/g, ' ').trim().slice(0, SAID_MAX);
+  } catch {
+    return '';
+  }
+}
+
 async function answered(call, url, options) {
   try {
     const response = await postTo(call, url, options);
     if (!response.ok) {
       const { status, headers } = response;
-      await released(response);
-      return { status, headers, why: `the control plane answered ${status}` };
+      const said = options.said && headers?.get(OUTCOME_HEADER) ? await saidBy(response) : '';
+      if (!said) await released(response);
+      return { status, headers, why: said || `the control plane answered ${status}` };
     }
     return { answer: await response.json() };
   } catch (error) {

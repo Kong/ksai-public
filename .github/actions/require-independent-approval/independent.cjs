@@ -1,5 +1,6 @@
 const CO_AUTHOR_LINE = /^co-authored-by:\s*[^<]*<([^>]+)>\s*$/i;
 const RELEASED_BY_LINE = /^released-by:\s*\S/i;
+const RUN_LINE = /^ksai-run:\s*https:\/\/\S+$/i;
 const NOREPLY = /^(?:(\d+)\+)?([A-Za-z0-9-[\]]+)@users\.noreply\.github\.com$/i;
 const BOT_LOGIN = /\[bot\]$/i;
 const DECIDING = new Set(['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED']);
@@ -46,6 +47,15 @@ function appLogin(value) {
     .replace(BOT_LOGIN, '');
 }
 
+function madeAsPerson(entry, ours) {
+  const message = String(entry?.commit?.message ?? '');
+  return (
+    entry?.commit?.verification?.verified === true &&
+    message.split('\n').some((line) => RUN_LINE.test(line.trim())) &&
+    coAuthorsOf(message).some((co) => co.login && appLogin(co.login) === ours)
+  );
+}
+
 function contributorsOf({ pull, commits, botLogin }) {
   const logins = new Set();
   const ids = new Set();
@@ -66,7 +76,10 @@ function contributorsOf({ pull, commits, botLogin }) {
     if ((entry?.parents?.length ?? 1) > 1) continue;
     if (entry?.author?.login) add(entry.author.login, entry.author.id);
     else unresolved.add(String(entry?.commit?.author?.email ?? '(a commit author with no email)'));
-    if (!publishedByApp(entry)) continue;
+    if (!publishedByApp(entry)) {
+      if (ours && madeAsPerson(entry, ours)) involved = true;
+      continue;
+    }
     const trailers = coAuthorsOf(entry?.commit?.message);
     const credited = trailers.length > 0 || claimsRelease(entry?.commit?.message);
     const wrote = appLogin(entry.author?.login);

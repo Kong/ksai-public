@@ -2,6 +2,7 @@ import { writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 
 import { CREATE_COMMIT, PLAIN_FILE, splitMessage } from '../lib/signed-commit.mjs';
 
@@ -9,9 +10,12 @@ export { splitMessage };
 
 const require = createRequire(import.meta.url);
 const { COMMIT_TYPES, safeEcho } = require('./verify-chunk.cjs');
-const { uploadLfsObjects } = require('./trusted-git.cjs');
+const { trustedIdentity, uploadLfsObjects } = require('./trusted-git.cjs');
 const { SUBJECT_SHAPE } = require('./plan.cjs');
 const { JIRA_KEY_SHAPE } = require('../lib/select-arm.cjs');
+const { usingControlPlane } = require('../lib/control-plane.cjs');
+
+export const CP_COMMIT = fileURLToPath(new URL('./cp-commit.mjs', import.meta.url));
 
 const defaultBodyFile = () => path.join(process.env.RUNNER_TEMP || tmpdir(), 'ksai-commit.json');
 
@@ -146,7 +150,73 @@ function rewriteMessage({ git, log, coAuthor, jiraKey, messageFile = defaultMess
   return { sha: String(moved.stdout).trim() };
 }
 
-export function pushSigned({ cwd: _cwd, repo, branch, remoteSha, git, run, bodyFile = defaultBodyFile() }) {
+export function appAuthorOf(env = process.env) {
+  const identity = trustedIdentity(env);
+  return identity.ok && env.KSAI_GIT_AUTHOR_NAME ? `${identity.name} <${identity.email}>` : null;
+}
+
+function writeBody(file, input) {
+  try {
+    writeFileSync(file, `${JSON.stringify({ query: CREATE_COMMIT, variables: { input } })}\n`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const oneLine = (said) => String(said ?? '').replace(/\p{Cc}+/gu, ' ').trim().slice(0, 300);
+
+function asThePerson({ run, input, bodyFile, log }) {
+  const personFile = bodyFile.replace(/(\.json)?$/, '-person.json');
+  if (!writeBody(personFile, input)) {
+    log(`note: the commit could not be written to ${personFile}, so this App makes it.`);
+    return null;
+  }
+  const asked = run(process.execPath, [CP_COMMIT, personFile]);
+  let said = null;
+  try {
+    said = JSON.parse(String(asked.stdout ?? '').trim().split('\n').at(-1));
+  } catch {
+    said = null;
+  }
+  if (asked.ok && said?.commit) {
+    log(`note: the control plane made this commit as ${oneLine(said.author)}, who asked for it.`);
+    return said;
+  }
+  const why = oneLine(said?.why) || 'the control plane could not be asked';
+  log(`note: the control plane did not commit as whoever asked, so this App does: ${why}`);
+  return null;
+}
+
+function headOf({ run, repo, sha }) {
+  const read = run('gh', ['api', `repos/${repo}/git/commits/${sha}`]);
+  let held;
+  try {
+    held = read.ok ? JSON.parse(read.stdout) : null;
+  } catch {
+    held = null;
+  }
+  const parents = Array.isArray(held?.parents) ? held.parents : [];
+  return {
+    tree: String(held?.tree?.sha ?? ''),
+    parent: parents.length === 1 ? String(parents[0]?.sha ?? '') : '',
+    verified: held?.verification?.verified === true,
+  };
+}
+
+export function pushSigned({
+  cwd: _cwd,
+  repo,
+  branch,
+  remoteSha,
+  git,
+  run,
+  bodyFile = defaultBodyFile(),
+  env = process.env,
+  appAuthor = appAuthorOf(env),
+  jiraKey = env.JIRA_KEY,
+  log = (message) => process.stdout.write(`${message}\n`),
+}) {
   const second = git(['rev-parse', '--verify', '--quiet', 'HEAD^2']);
   if (second?.ok && String(second.stdout ?? '').trim() !== '') {
     return {
@@ -176,38 +246,47 @@ export function pushSigned({ cwd: _cwd, repo, branch, remoteSha, git, run, bodyF
   }
   if (changes.unreadable) return { signed: false, reason: `${changes.unreadable}, so it is pushed as it is` };
 
-  try {
-    writeFileSync(
-      bodyFile,
-      `${JSON.stringify({
-        query: CREATE_COMMIT,
-        variables: {
-          input: {
-            branch: { repositoryNameWithOwner: repo, branchName: branch },
-            expectedHeadOid: remoteSha,
-            message: splitMessage(message.stdout),
-            fileChanges: { additions: changes.additions, deletions: changes.deletions },
-          },
-        },
-      })}\n`,
-    );
-  } catch {
+  const input = {
+    branch: { repositoryNameWithOwner: repo, branchName: branch },
+    expectedHeadOid: remoteSha,
+    message: splitMessage(message.stdout),
+    fileChanges: { additions: changes.additions, deletions: changes.deletions },
+  };
+  if (!writeBody(bodyFile, input)) {
     return { signed: false, reason: `the mutation could not be written to ${bodyFile}, so it is pushed as it is` };
   }
 
-  const created = run('gh', ['api', 'graphql', '--input', bodyFile]);
-  if (!created.ok) {
-    const head = run('gh', ['api', `repos/${repo}/git/refs/heads/${branch}`, '--jq', '.object.sha']);
-    if (head.ok && String(head.stdout).trim() !== remoteSha) {
-      return { error: 'GitHub did not answer and the branch has moved - see the workflow run' };
+  const person = usingControlPlane(env) && coAuthorTrailer(appAuthor)
+    ? asThePerson({
+        run,
+        bodyFile,
+        log,
+        input: { ...input, message: splitMessage(withTrailers(normaliseMessage(message.stdout), { coAuthor: appAuthor, jiraKey })) },
+      })
+    : null;
+
+  let answer = person?.commit;
+  if (!answer) {
+    const created = run('gh', ['api', 'graphql', '--input', bodyFile]);
+    if (!created.ok) {
+      const head = run('gh', ['api', `repos/${repo}/git/refs/heads/${branch}`, '--jq', '.object.sha']);
+      const moved = head.ok ? String(head.stdout).trim() : '';
+      if (moved && moved !== remoteSha) {
+        const landed = headOf({ run, repo, sha: moved });
+        if (landed.tree !== localTree || landed.parent !== remoteSha) {
+          return { error: 'GitHub did not answer and the branch has moved - see the workflow run' };
+        }
+        return landed.verified
+          ? { signed: true, sha: moved }
+          : { signed: false, sha: moved, reason: 'the verified work landed while its answer was lost, and GitHub did not sign it' };
+      }
+      return { signed: false, reason: 'GitHub would not create the commit - see the workflow run' };
     }
-    return { signed: false, reason: 'GitHub would not create the commit - see the workflow run' };
-  }
-  let answer;
-  try {
-    answer = JSON.parse(created.stdout).data.createCommitOnBranch.commit;
-  } catch {
-    return { signed: false, reason: 'GitHub answered something this could not read, so nothing was created' };
+    try {
+      answer = JSON.parse(created.stdout).data.createCommitOnBranch.commit;
+    } catch {
+      return { signed: false, reason: 'GitHub answered something this could not read, so nothing was created' };
+    }
   }
 
   if (answer?.tree?.oid !== localTree) {
@@ -272,9 +351,10 @@ export function publishCommit({
   bodyFile = defaultBodyFile(),
   messageFile = defaultMessageFile(),
   createBranchAt = null,
-  coAuthor = process.env.CO_AUTHOR,
+  env = process.env,
+  coAuthor = env.CO_AUTHOR,
   remoteLfsRefs = [],
-  jiraKey = process.env.JIRA_KEY,
+  jiraKey = env.JIRA_KEY,
   log = (message) => process.stdout.write(`${message}\n`),
 }) {
   const normalised = rewriteMessage({ git, log, coAuthor, jiraKey, messageFile });
@@ -308,7 +388,18 @@ export function publishCommit({
     }
   }
 
-  const attempt = pushSigned({ cwd, repo, branch, remoteSha: createBranchAt ?? remoteSha, git, run, bodyFile });
+  const attempt = pushSigned({
+    cwd,
+    repo,
+    branch,
+    remoteSha: createBranchAt ?? remoteSha,
+    git,
+    run,
+    bodyFile,
+    env,
+    jiraKey,
+    log,
+  });
   if (attempt.error) return { ok: false, reason: attempt.error };
   if (attempt.signed) return { ok: true, sha: attempt.sha, signed: true };
 
