@@ -15,6 +15,16 @@ function delivered(env) {
   }
 }
 
+export function refusals(env) {
+  const root = governedRoot(env);
+  try {
+    const { deliveries } = deliveriesUnder({ files: [deliveriesAt(root)], root });
+    return [...new Set(deliveries.filter((one) => one.outcome === 'refused').map((one) => String(one.reason ?? '').trim()))];
+  } catch {
+    return [];
+  }
+}
+
 const CHECKS = {
   verify: async (env) => {
     verifyAudit(env);
@@ -30,6 +40,9 @@ const CHECKS = {
   report: async (env) => {
     const { reported } = await report(env);
     console.log(`reported ${reported} deliveries to the control plane`);
+    for (const reason of refusals(env)) {
+      console.log(`::error::prompt governance refused this run's prompt before a model saw it: ${reason || 'no reason was kept'}`);
+    }
   },
 };
 
