@@ -203,6 +203,9 @@ async function requestReviewTriage({ core, endpoint, request, mint, call = fetch
   }
   if (lastFailure) throw new Error(unreached(lastFailure));
   if (!answer.ok) throw new Error(`the control plane answered ${answer.status}`);
+  if (answer.status === 204) {
+    throw Object.assign(new Error('the control plane made no review decision for this evidence, so this run keeps its own arm'), { undecided: true });
+  }
   const raw = await answer.text();
   if (Buffer.byteLength(raw) > 65536) throw new Error('the control plane returned an oversized review decision');
   let decision;
@@ -290,7 +293,8 @@ async function runTriage({ github, core, owner, repo, prNumber, env = process.en
         source = mode === 'cp' ? 'cp' : 'shadow';
         if (mode === 'cp') result = resultOf(remote);
       } catch (error) {
-        core?.warning?.(`Control-plane review triage failed: ${error.message}`);
+        if (error.undecided) core?.notice?.(error.message);
+        else core?.warning?.(`Control-plane review triage failed: ${error.message}`);
         if (mode === 'cp') {
           result = NO_TRIAGE;
           source = 'fallback';
