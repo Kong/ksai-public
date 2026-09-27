@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
 import { CREATE_COMMIT, PLAIN_FILE, splitMessage } from '../lib/signed-commit.mjs';
+import { COMMIT_WAIT_LIMIT } from './cp-commit.mjs';
 
 export { splitMessage };
 
@@ -172,7 +173,7 @@ function asThePerson({ run, input, bodyFile, log }) {
     log(`note: the commit could not be written to ${personFile}, so this App makes it.`);
     return null;
   }
-  const asked = run(process.execPath, [CP_COMMIT, personFile]);
+  const asked = run(process.execPath, [CP_COMMIT, personFile], { timeout: COMMIT_WAIT_LIMIT });
   let said = null;
   try {
     said = JSON.parse(String(asked.stdout ?? '').trim().split('\n').at(-1));

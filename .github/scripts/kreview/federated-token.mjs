@@ -161,13 +161,13 @@ export function limitsOf(headers) {
  *
  * @param {Headers} headers
  */
-export function retryAfterMs(headers) {
+export function retryAfterMs(headers, now = Date.now) {
   const said = headers.get('retry-after');
   if (!said) return null;
   const seconds = Number(said);
   if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
   const at = Date.parse(said);
-  return Number.isFinite(at) ? Math.max(0, at - Date.now()) : null;
+  return Number.isFinite(at) ? Math.max(0, at - now()) : null;
 }
 
 /**

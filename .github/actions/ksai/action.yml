@@ -6097,6 +6097,8 @@ runs:
         steps.hand_plan.outputs.written == 'true') }}
       shell: bash
       env:
+        KSAI_JOB_STARTED_MS: ${{ steps.plugin_ref.outputs.started_at_ms }}
+        JOB_TIMEOUT_MINUTES: ${{ inputs.job_timeout_minutes }}
         GH_TOKEN: ${{ inputs.source_org_github_token }}
         KSAI_GITHUB_CALLS: ${{ inputs.github_calls }}
         KSAI_CP_ENDPOINT: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
@@ -6133,6 +6135,8 @@ runs:
         steps.model_run.outputs.conclusion == 'success' }}
       shell: bash
       env:
+        KSAI_JOB_STARTED_MS: ${{ steps.plugin_ref.outputs.started_at_ms }}
+        JOB_TIMEOUT_MINUTES: ${{ inputs.job_timeout_minutes }}
         GH_TOKEN: ${{ inputs.source_org_github_token }}
         KSAI_GITHUB_CALLS: ${{ inputs.github_calls }}
         KSAI_CP_ENDPOINT: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
@@ -6200,6 +6204,8 @@ runs:
         steps.model_run.outputs.conclusion == 'success' }}
       shell: bash
       env:
+        KSAI_JOB_STARTED_MS: ${{ steps.plugin_ref.outputs.started_at_ms }}
+        JOB_TIMEOUT_MINUTES: ${{ inputs.job_timeout_minutes }}
         GH_TOKEN: ${{ inputs.source_org_github_token }}
         REPO: ${{ github.repository }}
         PR_NUMBER: ${{ steps.phase.outputs.pr_number }}
@@ -6235,6 +6241,8 @@ runs:
         (steps.size.outputs.phase == 'fix' || steps.size.outputs.phase == 'revise') }}
       shell: bash
       env:
+        KSAI_JOB_STARTED_MS: ${{ steps.plugin_ref.outputs.started_at_ms }}
+        JOB_TIMEOUT_MINUTES: ${{ inputs.job_timeout_minutes }}
         GH_TOKEN: ${{ inputs.source_org_github_token }}
         REPO: ${{ github.repository }}
         PR_NUMBER: ${{ steps.phase.outputs.pr_number }}
@@ -6271,6 +6279,8 @@ runs:
         steps.model_run.outputs.conclusion == 'success' }}
       shell: bash
       env:
+        KSAI_JOB_STARTED_MS: ${{ steps.plugin_ref.outputs.started_at_ms }}
+        JOB_TIMEOUT_MINUTES: ${{ inputs.job_timeout_minutes }}
         GH_TOKEN: ${{ inputs.source_org_github_token }}
         REPO: ${{ github.repository }}
         PR_NUMBER: ${{ steps.phase.outputs.pr_number }}
@@ -6479,6 +6489,8 @@ runs:
         inputs.dry_run == 'false' }}
       shell: bash
       env:
+        KSAI_JOB_STARTED_MS: ${{ steps.plugin_ref.outputs.started_at_ms }}
+        JOB_TIMEOUT_MINUTES: ${{ inputs.job_timeout_minutes }}
         GH_TOKEN: ${{ inputs.source_org_github_token }}
         REPO: ${{ github.repository }}
         BRANCH: ${{ steps.phase.outputs.ref }}

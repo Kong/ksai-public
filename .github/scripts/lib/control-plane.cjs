@@ -155,6 +155,6 @@ function unanswered(error) {
 }
 
 module.exports = {
-  DEFAULT_TIMEOUT, renderingModeOf, usingControlPlane, minter, mask, mintedId, reachControlPlane, reachedFor, answered, postTo,
+  DEFAULT_TIMEOUT, OUTCOME_HEADER, renderingModeOf, usingControlPlane, minter, mask, mintedId, reachControlPlane, reachedFor, answered, postTo,
   unreached, unanswered,
 };

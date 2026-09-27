@@ -63,7 +63,10 @@ const COMMAND_MAX_BUFFER = 4 * 1024 * 1024;
 export function runCommand(
   file,
   args,
-  { cwd = null, env = null, stderr = 'inherit', input = null, base64 = false, maxBuffer = COMMAND_MAX_BUFFER } = {},
+  {
+    cwd = null, env = null, stderr = 'inherit', input = null, base64 = false, maxBuffer = COMMAND_MAX_BUFFER,
+    timeout = COMMAND_TIMEOUT_MS,
+  } = {},
 ) {
   try {
     const stdout = execFileSync(file, args, {
@@ -72,7 +75,7 @@ export function runCommand(
       input,
       stdio: [input === null ? 'ignore' : 'pipe', 'pipe', stderr === 'ignore' ? 'ignore' : 'inherit'],
       env,
-      timeout: COMMAND_TIMEOUT_MS,
+      timeout,
       maxBuffer,
     });
     return { ok: true, stdout: base64 ? Buffer.from(stdout ?? []).toString('base64') : String(stdout ?? ''), status: 0 };

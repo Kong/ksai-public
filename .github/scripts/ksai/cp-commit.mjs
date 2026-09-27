@@ -1,11 +1,24 @@
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { setTimeout as sleeping } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 
+import { retryAfterMs } from '../kreview/federated-token.mjs';
+
 const require = createRequire(import.meta.url);
-const { answered, reachedFor } = require('../lib/control-plane.cjs');
+const { answered, reachedFor, OUTCOME_HEADER } = require('../lib/control-plane.cjs');
+const { ceilingMinutes, wholeNumber } = require('../lib/watchdog.cjs');
 
 export const COMMIT_TIMEOUT = 90_000;
+export const SIGN_IN_WAIT = 15 * 60_000;
+export const COMMIT_WAIT_LIMIT = SIGN_IN_WAIT + 3 * COMMIT_TIMEOUT;
+const SIGN_IN_MARGIN = 5 * 60_000;
+const SIGN_IN_POLL = 20_000;
+const SHORTEST_SIGN_IN_WAIT = 60_000;
+const SHORTEST_BACKOFF = 1_000;
+
+const AWAITING_SIGN_IN = 'awaiting_sign_in';
+const SIGN_IN_REQUIRED = 'sign_in_required';
 
 const OID = /^[0-9a-f]{40}$/;
 
@@ -13,19 +26,67 @@ const text = (value) => (typeof value === 'string' ? value : '');
 
 const maskOnStderr = (token) => process.stderr.write(`::add-mask::${token}\n`);
 
-export async function askToCommit({
-  input, env = process.env, fetch = globalThis.fetch, timeout = COMMIT_TIMEOUT, secret = maskOnStderr,
-}) {
+const noteOnStderr = (line) => process.stderr.write(`${line}\n`);
+
+export function signInDeadline(env, now) {
+  const started = wholeNumber(env.KSAI_JOB_STARTED_MS);
+  const asked = String(env.JOB_TIMEOUT_MINUTES ?? '').trim();
+  const minutes = asked === '0' ? null : ceilingMinutes(asked);
+  if (!started || minutes === null) return now;
+  return Math.max(now, Math.min(now + SIGN_IN_WAIT, started + minutes * 60_000 - SIGN_IN_MARGIN));
+}
+
+async function askOnce({ input, env, fetch, timeout, secret, until, now, awaited }) {
   const reached = await reachedFor({ env, fetch, timeout, secret });
   if (reached.why) return { why: reached.why };
 
-  const said = await answered(fetch, `${reached.base}/run/commit`, {
+  const asked = { ...input, job: text(env.GITHUB_JOB) };
+  const wait = until === null ? 0 : until - now();
+  if (wait > 0) asked.awaitSignIn = Math.ceil(wait / 1000);
+  if (awaited) asked.awaitedSignIn = true;
+  return answered(fetch, `${reached.base}/run/commit`, {
     token: reached.token,
-    body: JSON.stringify({ ...input, job: text(env.GITHUB_JOB) }),
+    body: JSON.stringify(asked),
     timeout,
     signal: reached.signal,
     said: true,
   });
+}
+
+export async function askToCommit({
+  input, env = process.env, fetch = globalThis.fetch, timeout = COMMIT_TIMEOUT, secret = maskOnStderr,
+  now = Date.now, sleep = sleeping, note = noteOnStderr,
+}) {
+  const until = signInDeadline(env, now());
+  let offered = false;
+  let awaited = false;
+  let said;
+  for (;;) {
+    const wait = Math.max(0, until - now());
+    said = await askOnce({ input, env, fetch, timeout, secret, until: offered ? until : null, now, awaited });
+    const outcome = said.headers?.get(OUTCOME_HEADER);
+    if (!said.why || wait <= 0) break;
+    const left = Math.max(0, until - now());
+    const told = said.headers ? retryAfterMs(said.headers, now) : null;
+    const backoff = Math.min(Math.max(told ?? SIGN_IN_POLL, SHORTEST_BACKOFF), left);
+    const retryable = said.status === undefined || said.status === 408 || said.status === 429 || said.status >= 500;
+    if (left > 0 && retryable && !outcome && (offered || awaited)) {
+      await sleep(backoff);
+      continue;
+    }
+    if (outcome === SIGN_IN_REQUIRED && !offered && left >= SHORTEST_SIGN_IN_WAIT) {
+      offered = true;
+      continue;
+    }
+    if (outcome !== AWAITING_SIGN_IN) break;
+    if (!awaited) {
+      const minutes = Math.max(1, Math.ceil(left / 60_000));
+      note(`note: ${said.why}. The run waits up to ${minutes} minute${minutes === 1 ? '' : 's'}, then this App commits`);
+    }
+    offered = true;
+    awaited = true;
+    await sleep(backoff);
+  }
   if (said.why) return { why: said.why };
 
   const { oid, tree, signature, author } = said.answer ?? {};
