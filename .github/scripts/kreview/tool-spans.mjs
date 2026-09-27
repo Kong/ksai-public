@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 
 import { runMain } from '../lib/main.mjs';
 import { CLAUDE_NAME, parsed, refused } from '../lib/opencode.mjs';
+import { CLAUDE_NAME as NATIVE_NAME, isNativeStream, refused as refusedCall, toolCalls } from '../lib/opencode-v2.mjs';
 import { attributes, pairs, post, runAttributes } from '../lib/otlp.mjs';
 import { encoded } from './otlp-protobuf.mjs';
 
@@ -123,8 +124,47 @@ function callSpan({ event, context, env, parents }) {
  * A refused call reads differently from one that failed on its own, or an operator cannot tell a
  * profile scoped too tightly from a model that kept asking for what it was told not to do.
  */
-export function spansFrom({ events, children = [], context, env = process.env, say = console.log }) {
-  const run = { ...context, runSpanId: hex(8, 'run', runKey(env)) };
+function nativeCalls({ events, context, env }) {
+  const calls = toolCalls(events);
+  const spanOf = (call) => hex(8, 'span', runKey(env), `${call.session_id}:${call.id}`);
+  const childOf = (call) => {
+    const id = call.metadata?.sessionID;
+    return call.tool === 'subagent' && typeof id === 'string' && CHILD_SESSION.test(id) && id !== call.session_id ? id : '';
+  };
+  const parents = new Map();
+  for (const call of calls) {
+    const child = childOf(call);
+    if (child) parents.set(child, spanOf(call));
+  }
+  const spans = [];
+  for (const call of calls) {
+    const began = stamp(call.started);
+    const ended = stamp(call.ended);
+    if (!began || !ended) continue;
+    const outcome = refusedCall(call) ? OUTCOMES.refused : call.status === 'error' ? OUTCOMES.error : OUTCOMES.ok;
+    spans.push({
+      traceId: context.traceId,
+      spanId: spanOf(call),
+      parentSpanId: parents.get(call.session_id) ?? context.runSpanId,
+      name: NATIVE_NAME[call.tool] ?? call.tool,
+      kind: 1,
+      startTimeUnixNano: began,
+      endTimeUnixNano: ended,
+      attributes: attributes(
+        [
+          ['ksai.tool', call.tool],
+          ['ksai.tool.outcome', outcome],
+          ['ksai.session', call.session_id],
+          ['ksai.session.child', childOf(call)],
+        ].filter(([, value]) => value !== ''),
+      ),
+      status: outcome === OUTCOMES.ok ? undefined : { code: ERROR, message: outcome },
+    });
+  }
+  return spans;
+}
+
+function recordedCalls({ events, children, run, env }) {
   const calls = [];
   const parents = new Map();
   for (const event of events) {
@@ -140,20 +180,29 @@ export function spansFrom({ events, children = [], context, env = process.env, s
     const made = callSpan({ event, context: run, env, parents });
     if (made) calls.push(made.span);
   }
+  return calls;
+}
+
+export function spansFrom({ events, children = [], context, env = process.env, say = console.log }) {
+  const run = { ...context, runSpanId: hex(8, 'run', runKey(env)) };
+  const native = isNativeStream(events);
+  const calls = native ? nativeCalls({ events, context: run, env }) : recordedCalls({ events, children, run, env });
   if (calls.length > MAX_SPANS) {
     say(`::notice::${calls.length - MAX_SPANS} tool calls are not in this run's exported timeline, which holds ${MAX_SPANS}`);
   }
   /* The window is every event's, not every tool call's: a review spends time before its first call
      and, on the turn that writes the review, after its last - which is the time being hunted. */
   const marks = events
-    .map((one) => stamp(one?.timestamp))
+    .map((one) => stamp(native ? one?.created : one?.timestamp))
     .filter(Boolean)
     .map(BigInt);
   const bounds = [...calls.map((one) => BigInt(one.startTimeUnixNano)), ...calls.map((one) => BigInt(one.endTimeUnixNano)), ...marks];
   if (bounds.length === 0) return null;
   const began = bounds.reduce((low, at) => (at < low ? at : low));
   const ended = bounds.reduce((high, at) => (at > high ? at : high));
-  const failed = String(env.RUN_OUTCOME ?? '').trim() === 'failure' || events.some((one) => one?.type === 'error');
+  const failed =
+    String(env.RUN_OUTCOME ?? '').trim() === 'failure' ||
+    events.some((one) => one?.type === 'error' || one?.type === 'session.execution.failed' || one?.type === 'ksai.error');
   const root = {
     traceId: run.traceId,
     spanId: run.runSpanId,

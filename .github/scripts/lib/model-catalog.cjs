@@ -31,6 +31,7 @@ function modelsOf(served) {
     if (model.cache_read !== undefined && cacheRead === null) return null;
 
     if (model.opencode !== undefined && !object(model.opencode)) return null;
+    if (model.opencode2 !== undefined && !object(model.opencode2)) return null;
 
     for (const name of [id, ...aliases]) {
       const key = String(name).toLowerCase();
@@ -47,10 +48,11 @@ function modelsOf(served) {
       cacheRead,
       effort: typeof model.effort === 'string' ? model.effort : '',
       opencode: model.opencode === undefined ? null : model.opencode,
+      opencode2: model.opencode2 === undefined ? null : model.opencode2,
     });
   }
 
-    const runnable = new Set(
+  const runnable = new Set(
     held.filter((model) => model.opencode !== null).map((model) => model.id.toLowerCase()),
   );
   for (const id of Object.values(shipped.aliases ?? {})) {
@@ -65,6 +67,7 @@ function catalogOf(models, tiers) {
   const vendorAliases = Object.create(null);
   const rates = Object.create(null);
   const opencodeModels = Object.create(null);
+  const opencode2Models = Object.create(null);
   const defaultEfforts = Object.create(null);
   const knownModels = [];
   const allowedModels = [];
@@ -86,6 +89,7 @@ function catalogOf(models, tiers) {
       allowedModels.push(model.id);
       if (Object.keys(model.opencode).length > 0) opencodeModels[model.id] = model.opencode;
     }
+    if (model.opencode2 !== null) opencode2Models[model.id] = model.opencode2;
     if (model.id.startsWith('claude-')) claudeModels.push(model.id);
   }
 
@@ -105,6 +109,7 @@ function catalogOf(models, tiers) {
     legacyModelIds: vendorAliases,
     rates,
     opencodeModels,
+    opencode2Models,
     defaultEfforts,
     knownModels,
     allowedModels,
@@ -127,10 +132,8 @@ function read(env = process.env, load = require) {
   return models === null ? { ...shipped } : catalogOf(models, served.tiers);
 }
 
-const catalog = read();
-
-for (const [name, held] of Object.entries({ read, modelsOf, catalogOf, shipped })) {
-  Object.defineProperty(catalog, name, { value: held, enumerable: false });
-}
-
-module.exports = catalog;
+module.exports = read();
+Object.defineProperty(module.exports, 'read', { value: read, enumerable: false });
+Object.defineProperty(module.exports, 'modelsOf', { value: modelsOf, enumerable: false });
+Object.defineProperty(module.exports, 'catalogOf', { value: catalogOf, enumerable: false });
+Object.defineProperty(module.exports, 'shipped', { value: shipped, enumerable: false });

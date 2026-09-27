@@ -115,6 +115,8 @@ const JIRA_KEY_SHAPE = /^[A-Z][A-Z0-9]{1,9}-[1-9][0-9]{0,9}$/;
 
 const FLAGS = Object.freeze(['--force', '--plan', '--no-plan', '--plan-given', '--dry-run']);
 
+const CALLER_FLAG_SHAPE = /^--[a-z][a-z0-9-]{0,31}$/;
+
 const FLAG_ALIASES = Object.freeze(Object.assign(Object.create(null), { '-f': '--force' }));
 
 const PLAN_MODES = Object.freeze(['auto', 'always', 'never']);
@@ -801,7 +803,9 @@ function commandAuthorized(command, { codeowner = null, write = null, writeAcces
 
 const escapeHtml = (text) => String(text ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-function parseOptions(prompt, { commandAliases = null, defaultCommand = DEFAULT_COMMAND, bare = false } = {}) {
+function parseOptions(prompt, { commandAliases = null, defaultCommand = DEFAULT_COMMAND, bare = false, callerFlags = [] } = {}) {
+  const flags = new Set([...FLAGS, ...callerFlags]);
+  const options = new Set([...OPTIONS, ...callerFlags]);
   const text = String(prompt ?? '');
   const requested = Object.create(null);
   let command = null;
@@ -855,14 +859,14 @@ function parseOptions(prompt, { commandAliases = null, defaultCommand = DEFAULT_
 
     const eq = token.indexOf('=');
     const name = eq === -1 ? token : token.slice(0, eq);
-    if (!OPTIONS.includes(name)) {
+    if (!options.has(name)) {
       return reject(`unrecognized option \`${safeEcho(token)}\``);
     }
     if (name in requested) {
       return reject(`\`${name}\` given more than once`);
     }
 
-    if (FLAGS.includes(name)) {
+    if (flags.has(name)) {
       if (eq !== -1) {
         return reject(`\`${name}\` takes no value`);
       }
@@ -937,6 +941,7 @@ function selectArm({
   minEffort = null,
   triage = null,
   commandAliases = null,
+  callerFlags = [],
   onIssue = null,
   threadRootId = null,
   onReview = null,
@@ -945,6 +950,9 @@ function selectArm({
   modelPinned = false,
   effortPinned = false,
 } = {}) {
+  const offered = (Array.isArray(callerFlags) ? callerFlags : []).filter(
+    (one) => CALLER_FLAG_SHAPE.test(String(one?.flag ?? '')) && !OPTIONS.includes(one.flag),
+  );
   const pinnedModel = isPinned(modelPinned);
   const pinnedEffort = isPinned(effortPinned);
   const allowed = parseAllowedModels(allowedModels);
@@ -1012,7 +1020,7 @@ function selectArm({
   let { ceiling, floor } = bounds;
 
   const defaultCommand = defaultCommandFor(onIssue, threadRootId, onReview, reviewState);
-  const parsed = parseOptions(prompt, { commandAliases, defaultCommand, bare });
+  const parsed = parseOptions(prompt, { commandAliases, defaultCommand, bare, callerFlags: offered.map((one) => one.flag) });
   if (parsed.error) {
     return {
       error: parsed.error,
@@ -1021,13 +1029,14 @@ function selectArm({
       floor,
       command: parsed.command,
       commandNamed: parsed.commandNamed,
+      callerFlags: offered,
     };
   }
 
   const command = parsed.command ?? defaultCommand;
   const commandNamed = parsed.command !== null;
 
-  const reject = (error) => ({ error, allowed, ceiling, floor, command, commandNamed });
+  const reject = (error) => ({ error, allowed, ceiling, floor, command, commandNamed, callerFlags: offered });
 
   const { requested } = parsed;
   let model = fallbackModel;
@@ -1145,6 +1154,9 @@ function selectArm({
         `on \`${safeEcho(command)}\``,
     );
   }
+  const refused = offered.find((one) => one.flag in requested && one.honoured !== true);
+  if (refused) return reject(String(refused.refusal ?? `\`${refused.flag}\` cannot be honoured here`));
+
   const escaped = escapeHtml(parsed.prompt);
   return {
     command,
@@ -1152,6 +1164,7 @@ function selectArm({
     writeAccess: opened.commands,
     model,
     effort,
+    raised: offered.filter((one) => one.flag in requested).map((one) => one.flag),
     dryRun,
     planAsk,
     planGiven,
@@ -1222,7 +1235,7 @@ function asAlert(kind, body) {
   return [`> [!${kind}]`, ...quoted].join('\n');
 }
 
-function renderRejection({ error, allowed, ceiling, floor, command, trigger }) {
+function renderRejection({ error, allowed, ceiling, floor, command, callerFlags = [], trigger }) {
   const scrub = (body) => asAlert('WARNING', scrubTrigger(body, trigger));
 
   if (allowed === undefined || ceiling === undefined || floor === undefined) {
@@ -1255,6 +1268,9 @@ function renderRejection({ error, allowed, ceiling, floor, command, trigger }) {
     `| \`--model\` | ${allowed.map((m) => `\`${m}\``).join(', ') || '_none configured_'} |`,
     `| \`--effort\` | ${efforts.map((e) => `\`${e}\``).join(', ')} |`,
   ];
+  for (const one of Array.isArray(callerFlags) ? callerFlags : []) {
+    if (one?.honoured === true) lines.push(`| \`${one.flag}\` | ${String(one.accepted ?? 'no value')} |`);
+  }
   if (aliases.length) {
     lines.push(`| aliases | ${aliases.map((a) => `\`${a}\` → \`${ALIASES[a]}\``).join(', ')} |`);
   }

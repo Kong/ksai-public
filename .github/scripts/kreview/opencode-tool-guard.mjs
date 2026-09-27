@@ -7,8 +7,8 @@ import {
   patchPaths,
 } from './opencode-tool-sandbox.mjs';
 
-export const KsaiToolGuard = async ({ directory, worktree }) => {
-  const root = String(worktree || directory || process.env.GITHUB_WORKSPACE || '');
+export const KsaiToolGuard = async ({ directory }) => {
+  const root = String(directory || process.env.GITHUB_WORKSPACE || '');
   const pathFor = (args) => args?.filePath ?? args?.path ?? root;
   return {
     'shell.env': async (_input, output) => {

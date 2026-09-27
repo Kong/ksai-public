@@ -2,6 +2,21 @@ import { canonical, record } from './artifacts.mjs';
 
 export const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 
+export const MAX_STEPS = 256;
+
+export function boundedSteps(steps, name) {
+  if (!Number.isSafeInteger(steps) || steps < 1 || steps > MAX_STEPS) throw new Error(`${name} is not a step limit from 1 to ${MAX_STEPS}`);
+  return steps;
+}
+
+export function reminderText(body) {
+  const lines = JSON.parse(body.toString('utf8'))?.text_lines;
+  if (!Array.isArray(lines) || !lines.length || lines.some((line) => typeof line !== 'string')) {
+    throw new Error("opencode's step-limit reminder is malformed");
+  }
+  return lines.join('\n');
+}
+
 const MAX_BLOCKS = 1024;
 const MAX_EVENTS = 65_536;
 const MAX_TOOL_USES = 1024;
@@ -301,6 +316,7 @@ function resultIDs(messages, length, expected) {
 
 function reminded(normalized, limit, taken) {
   if (!limit || taken + 1 < limit.steps) return normalized;
+  if (taken + 1 > limit.steps) throw new Error('the request goes past the governed step limit');
   const reminder = canonical({ role: 'assistant', content: [{ type: 'text', text: limit.reminder }] });
   if (canonical(normalized.at(-1)) !== reminder) throw new Error("the request at the step limit does not end with opencode's governed reminder");
   return normalized.slice(0, -1);
@@ -328,8 +344,10 @@ export function conversation(prompt, model, tools, limit = null) {
       answered = history;
       history = normalized.map((message, index) => history[index] ?? canonical(message));
       awaiting = true;
+      return Boolean(limit) && taken + 1 === limit.steps;
     },
     failed() {
+      if (!awaiting) return;
       history = answered;
       awaiting = false;
     },
@@ -344,6 +362,11 @@ export function conversation(prompt, model, tools, limit = null) {
       awaiting = false;
       terminal = reply.terminal;
       pending = [...reply.toolUseIDs];
+      if (terminal) {
+        history = [];
+        answered = [];
+        used.clear();
+      }
       return reply;
     },
   };

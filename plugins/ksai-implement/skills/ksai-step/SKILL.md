@@ -163,7 +163,7 @@ anyway rather than stopping.
 
 Spawn an **adversarial** reviewer whose job is to break the step, not bless it. It starts from the
 assumption that the diff is wrong and hunts for the concrete failure. Use `general-purpose` framed
-adversarially - do not assume a repo-specific review plugin is installed.
+adversarially - do not assume a repo-specific review plugin is installed. Where the subagent tool names the field `agent` rather than `subagent_type`, pass `general-purpose` there.
 
 The reviewer gets the branch history on top of the shared context; the tester in Phase 6
 deliberately does not. Judging whether this step overreached or left work for a later step needs

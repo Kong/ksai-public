@@ -1,16 +1,14 @@
-import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { deliveriesAt, governanceOptions, governedRoot, rendererFor, trustedRootAt } from '../governance/anchors.mjs';
 import { bounded, evidence } from '../lib/evidence.cjs';
 import { conclusionOf } from '../lib/execution-log.mjs';
-import { SINKS, parityOf, promptRendering, renderRequest, renderThroughControlPlane, reportDeliveries, writeRenderRequest } from '../lib/cp-prompts.mjs';
+import { SINKS, digestOf, parityOf, promptRendering, renderRequest, renderThroughControlPlane, reportDeliveries, writeRenderRequest } from '../lib/cp-prompts.mjs';
+import { reviewTools } from './governed-flow.mjs';
 import prepare from './prepare.cjs';
 import reviewPipeline from './review-pipeline.cjs';
 import reviewRequest from './review-request.cjs';
-
-export const REVIEW_TOOLS = Object.freeze(['bash', 'glob', 'grep', 'read']);
 
 const PIPELINE = Object.freeze(['evidence', 'dual']);
 
@@ -23,7 +21,6 @@ const CHANGED_FILES_BYTES = 16 * 1024 * 1024;
 const DIFF_BYTES = 512 * 1024 * 1024;
 
 export const rootOf = governedRoot;
-const sha256 = (value) => createHash('sha256').update(value).digest('hex');
 
 export function resultOf(execution, phase) {
   const log = typeof execution === 'string' ? JSON.parse(execution) : execution;
@@ -37,7 +34,7 @@ function succeeded(result) {
 
 function pipelineBeside(prompt, from, text) {
   const held = JSON.parse(readFileSync(`${from}.pipeline.json`, 'utf8'));
-  held.identity = { ...held.identity, prompt_sha256: sha256(text) };
+  held.identity = { ...held.identity, prompt_sha256: digestOf(text).slice('sha256:'.length) };
   held.resultTransport = 'text';
   writeFileSync(`${prompt}.pipeline.json`, JSON.stringify(held), { mode: 0o600 });
 }
@@ -50,7 +47,7 @@ export function optionsOf(env, root, rendered, steps, pinned) {
       report: deliveriesAt(root),
       trustedRoot: trustedRootAt(root),
       expect: rendered.expect,
-      tools: REVIEW_TOOLS,
+      tools: reviewTools(env),
       arm: rendered.arm,
     }, pinned),
     ...(steps ? { steps } : {}),
@@ -76,7 +73,7 @@ export async function renderReview(env, deps = {}) {
   const request = reviewRequest.reviewRenderRequest({ ...options, ...(staged ? { priorFindings: '' } : {}), model: env.MODEL, baseSha: env.BASE_SHA, additionalPrompt: env.ADDITIONAL_PROMPT, pipeline: staged });
   const root = rootOf(env);
   mkdirSync(root, { recursive: true, mode: 0o700 });
-  const rendered = await renderThroughControlPlane({ request, dir: join(root, 'review'), tools: [...REVIEW_TOOLS], env, ...deps });
+  const rendered = await renderThroughControlPlane({ request, dir: join(root, 'review'), tools: reviewTools(env), env, ...deps });
   if (mode === 'shadow') {
     return { shadow: `${rendered.version}${rendered.arm ? ` (${rendered.arm})` : ''}`, parity: parityOf(readFileSync(rendered.prompt, 'utf8'), env.PROMPT_FILE) };
   }
@@ -117,7 +114,7 @@ export async function renderAudit(env, deps = {}) {
   const root = rootOf(env);
   const request = auditRequest(env);
   writeRenderRequest(join(root, 'audit.request.json'), request, { exclusive: true });
-  const rendered = await renderThroughControlPlane({ request, dir: join(root, 'audit'), tools: [...REVIEW_TOOLS], env, ...deps });
+  const rendered = await renderThroughControlPlane({ request, dir: join(root, 'audit'), tools: reviewTools(env), env, ...deps });
   const prompt = readFileSync(rendered.prompt, 'utf8');
   pipelineBeside(rendered.prompt, env.REVIEW_PROMPT_FILE, prompt);
   return { prompt_file: rendered.prompt, options_file: governing(env, root, rendered, 'audit', 0, deps.pinned), version: rendered.version };

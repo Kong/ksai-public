@@ -53,12 +53,13 @@ export const deliveriesAt = (root) => join(root, 'deliveries.jsonl');
 
 export const trustedRootAt = (root) => join(root, 'trusted-root.json');
 
-export function prepareGovernance(env, run = spawnSync, trustedRoot = null) {
+export function prepareGovernance(env, run = spawnSync, trustedRoot = null, install = true) {
   const root = governedRoot(env);
   mkdirSync(root, { recursive: true, mode: 0o700 });
   if (trustedRoot) writeFileSync(trustedRootAt(root), `${JSON.stringify(trustedRoot)}\n`, { mode: 0o600 });
   else writeTrustedRoot(trustedRootAt(root), run);
   writeFileSync(deliveriesAt(root), '', { mode: 0o600, flag: 'a' });
+  if (!install) return root;
   const vendored = join(String(env.SCRIPTS ?? ''), 'vendor', 'opencode-governance');
   const done = run('npm', ['ci', '--prefix', vendored, '--omit=dev', '--ignore-scripts'], { stdio: 'inherit', timeout: 300_000 });
   if (done.status !== 0) throw new Error(`the governance plugin's packages could not be installed under ${vendored}`);

@@ -79,9 +79,9 @@ function governedTools(tools, governed) {
   });
 }
 
-export function governRequest(body, governed, talk) {
+export function governRequest(body, governed, talk, parsed = null) {
   if (Buffer.byteLength(body) > MAX_RESPONSE_BYTES) throw new Error('the provider request is oversized');
-  const request = record(JSON.parse(body), 'the provider request');
+  const request = parsed ?? record(JSON.parse(body), 'the provider request');
   const unknown = Object.keys(request).filter((key) => !REQUEST_KEYS.has(key));
   if (unknown.length) throw new Error(`the provider request carries ${unknown.join(', ')}, which nothing governs`);
   if (request.model !== governed.model) throw new Errand(`the request asks ${String(request.model)}, and the render was for ${governed.model}`);
@@ -101,6 +101,7 @@ export function governRequest(body, governed, talk) {
     throw new Errand('the provider request lost the governed prompt');
   }
   const tools = governedTools(request.tools, governed.tools);
-  talk.request(request.messages);
-  return request.tools === undefined ? body : JSON.stringify({ ...request, tools });
+  const limited = talk.request(request.messages);
+  if (request.tools === undefined) return body;
+  return JSON.stringify({ ...request, tools, ...(limited ? { tool_choice: { type: 'none' } } : {}) });
 }

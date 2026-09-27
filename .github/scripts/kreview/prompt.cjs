@@ -436,7 +436,8 @@ ${budget === '' || !told || !measurable(budgetMinutes) ? '' : `
    skip you reasoned your way to rather than read off one of those two throws that gate away and buys
    back nothing: one run dropped it with 26 minutes left.
 `}
-   Try \`subagent_type: "kreview:findings-auditor"\`. If that type is unknown, retry with
+   Try \`subagent_type: "kreview:findings-auditor"\`, which is the \`agent\` field where the subagent
+   tool names it that way. If that type is unknown, retry with
    \`subagent_type: "general-purpose"\` and prepend the mandate at
    ${auditor} to the prompt.
 

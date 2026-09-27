@@ -360,9 +360,15 @@ function plugin(env = process.env) {
 }
 
 function submitted({ file, events, kind, candidateIds = [] }) {
-  const calls = events.filter((event) => event?.type === 'tool_use' && event.part?.tool === TOOL_NAME);
+  const calls = events
+    .filter((event) => event?.type === 'tool_use' && event.part?.tool === TOOL_NAME)
+    .map((event) => ({ status: event.part?.state?.status, submission: event.part?.state?.input?.submission, sessionID: event.sessionID }));
+  return submittedCalls({ file, calls, kind, candidateIds });
+}
+
+function submittedCalls({ file, calls, kind, candidateIds = [] }) {
   const answer = heldSubmission({ file, calls, kind, candidateIds });
-  return calls.some((call) => typeof call.part?.state?.input?.submission === 'string') ? { ...answer, as_text: true } : answer;
+  return calls.some((call) => typeof call.submission === 'string') ? { ...answer, as_text: true } : answer;
 }
 
 function heldSubmission({ file, calls, kind, candidateIds }) {
@@ -372,11 +378,11 @@ function heldSubmission({ file, calls, kind, candidateIds }) {
    * plugin now invites as a duplicate, which would have refused the very result it accepted. The
    * plugin holds one acceptance at most, so more than one completed call is still the old duplicate.
    */
-  const done = calls.filter((call) => call.part?.state?.status === 'completed');
+  const done = calls.filter((call) => call.status === 'completed');
   if (done.length === 0) return { status: 'invalid', text: null };
   if (done.length !== 1) return { status: 'duplicate', text: null };
   const [call] = done;
-  const input = decoded(call.part?.state?.input?.submission);
+  const input = decoded(call.submission);
   if (!/^ses_[a-zA-Z0-9]+$/.test(call.sessionID ?? '')) return { status: 'invalid', text: null };
   const encoded = canonical(normalized(kind, input));
   if (!encoded) return { status: 'invalid', text: null };
@@ -409,4 +415,4 @@ function structuredSubmission({ events, kind, candidateIds = [] }) {
   return { status: 'accepted', text: encoded };
 }
 
-module.exports = { TOOL_NAME, STRUCTURED_EVENT, KINDS, ENV_KEYS, schemaFor, submissionProblem, wireProblem, normalized, finalFindingProblem, plugin, submitted, structuredSubmission };
+module.exports = { TOOL_NAME, STRUCTURED_EVENT, KINDS, ENV_KEYS, schemaFor, submissionProblem, wireProblem, normalized, finalFindingProblem, plugin, submitted, submittedCalls, structuredSubmission };

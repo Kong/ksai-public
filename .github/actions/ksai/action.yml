@@ -338,8 +338,9 @@ inputs:
     default: "true"
   opencode_version:
     description: >-
-      npm version of `opencode-ai` the `opencode` engine installs, with no `v` prefix. Pinned rather than
-      latest, because that CLI cuts releases daily and an unpinned reviewer is a different reviewer every run.
+      npm version of the `opencode` engine this run installs, with no `v` prefix: a 1.x pin installs `opencode-ai`
+      and a 2.x pin `@opencode/cli`. Pinned rather than latest, because that CLI cuts releases daily and an
+      unpinned reviewer is a different reviewer every run.
     required: false
     # renovate: datasource=npm depName=opencode-ai
     default: "1.18.32"
@@ -1200,15 +1201,27 @@ runs:
               exit 1
             fi
             audited="$(node -p 'require(process.env.PTY_LOCK).packages["node_modules/@opencode-ai/plugin"].version')"
-            if [[ "${OPENCODE_VERSION}" != "${audited}" ]]; then
+            if [[ "${OPENCODE_VERSION}" != 2.* && "${OPENCODE_VERSION}" != "${audited}" ]]; then
               echo "::error::opencode_pty: true requires the audited opencode_version ${audited}"
               exit 1
             fi
             ;;
           *) echo "::error::opencode_pty must be true or false"; exit 1 ;;
         esac
+        case "${OPENCODE_VERSION}" in
+          1.*) major=1 ;;
+          2.*)
+            major=2
+            pattern='opencode-v2-drive[r].mjs'
+            ;;
+          *)
+            echo "::error::opencode_version: ${OPENCODE_VERSION} names no OpenCode line this action runs - pin a 1.x or a 2.x release"
+            exit 1
+            ;;
+        esac
         echo "name=${ENGINE}" >> "$GITHUB_OUTPUT"
         echo "cli_pattern=${pattern}" >> "$GITHUB_OUTPUT"
+        echo "opencode_major=${major}" >> "$GITHUB_OUTPUT"
 
     - name: Resolve plugin ref
       id: plugin_ref
@@ -2383,6 +2396,7 @@ runs:
         OPENCODE_ALLOWED: ${{ steps.test_tools.outputs.allowed_tools }}
         OPENCODE_DISALLOWED: ${{ steps.test_tools.outputs.disallowed_tools }}
         PROMPT_FILE: ${{ steps.build_test.outputs.file }}
+        OPENCODE_VERSION: ${{ inputs.opencode_version }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: node "${SCRIPTS}/kreview/governed-render.mjs" flow
 
@@ -4177,6 +4191,7 @@ runs:
         OPENCODE_ALLOWED: ${{ steps.build_run.outputs.allowed_tools }}
         OPENCODE_DISALLOWED: ${{ steps.build_run.outputs.disallowed_tools }}
         PROMPT_FILE: ${{ steps.build_run.outputs.file }}
+        OPENCODE_VERSION: ${{ inputs.opencode_version }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: node "${SCRIPTS}/kreview/governed-render.mjs" flow
 
@@ -4206,6 +4221,7 @@ runs:
       working-directory: ${{ runner.temp }}
       env:
         VERSION: ${{ inputs.opencode_version }}
+        OPENCODE_MAJOR: ${{ steps.engine.outputs.opencode_major }}
         DIST_DIR: ${{ runner.temp }}/ksai-opencode-dist
         TOOL_DIR: ${{ runner.temp }}/ksai-opencode/bin
         OPENCODE_PTY: ${{ inputs.opencode_pty }}
@@ -4225,8 +4241,11 @@ runs:
           fi
           if selected="$(node "${SCRIPTS}/kreview/opencode-install.mjs")" && [[ -n "${selected}" ]]; then
             echo "Installed OpenCode ${VERSION} from its verified registry package"
+          elif [[ "${OPENCODE_MAJOR:-}" == 2 ]]; then
+            npm install --global --allow-scripts=@opencode/cli "@opencode/cli@${VERSION}"
+            selected="$(npm prefix --global)/bin/opencode"
           else
-            npm install --global "opencode-ai@${VERSION}"
+            npm install --global --allow-scripts=opencode-ai "opencode-ai@${VERSION}"
             selected="$(npm prefix --global)/bin/opencode"
           fi
         fi
@@ -4235,6 +4254,10 @@ runs:
         export PATH="${tool_bin}:${PATH}"
         echo '${{ runner.temp }}/ksai-opencode/bin' >> "$GITHUB_PATH"
         actual="$(opencode --version)"
+        if [[ "${OPENCODE_MAJOR:-}" == 2 ]]; then
+          actual="$(printf '%s' "${actual}" | sed -E 's/\x1B\[[0-9;]*m//g; s/^opencode v//')"
+          npm ci --prefix "${SCRIPTS}/vendor/opencode-client" --omit=dev --ignore-scripts
+        fi
         echo "opencode ${actual}"
         if [[ "${actual}" != "${VERSION}" ]]; then
           echo "::error::opencode reports ${actual}, and this run pinned ${VERSION} - two builds of one reviewer are not one reviewer"
@@ -4253,6 +4276,7 @@ runs:
       env:
         DOWNLOAD_DIR: ${{ runner.temp }}/ksai-plan-session
         ENGINE: ${{ steps.engine.outputs.name }}
+        OPENCODE_VERSION: ${{ steps.opencode_install.outputs.version }}
         OPENCODE_HOME: ${{ runner.temp }}/opencode-home
         XDG_DATA_HOME: ${{ runner.temp }}/opencode-home
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
@@ -4449,6 +4473,7 @@ runs:
         OPENCODE_ALLOWED: ${{ steps.build_implement.outputs.allowed_tools }}
         OPENCODE_DISALLOWED: ${{ steps.build_implement.outputs.disallowed_tools }}
         PROMPT_FILE: ${{ steps.build_implement.outputs.file }}
+        OPENCODE_VERSION: ${{ inputs.opencode_version }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: node "${SCRIPTS}/kreview/governed-render.mjs" flow
 
@@ -4520,6 +4545,7 @@ runs:
         JOB_TIMEOUT_MINUTES: ${{ inputs.job_timeout_minutes }}
         MODEL: ${{ steps.select_arm.outputs.model }}
         AUDITOR_MANDATE: ${{ github.workspace }}/_ksai/plugins/kreview/agents/findings-auditor.md
+        OPENCODE_VERSION: ${{ inputs.opencode_version }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: node "${SCRIPTS}/kreview/governed-render.mjs" review
 
@@ -4536,7 +4562,7 @@ runs:
     - name: Install the opencode SDK
       id: opencode_sdk_install
       if: >-
-        ${{ steps.opencode_install.outcome == 'success' &&
+        ${{ steps.opencode_install.outcome == 'success' && steps.engine.outputs.opencode_major == '1' &&
         steps.build_review.outputs.result_transport == 'structured' }}
       shell: bash
       working-directory: ${{ runner.temp }}
@@ -4613,6 +4639,8 @@ runs:
         (steps.build_implement.outcome == 'success' || steps.build_review.outcome == 'success' ||
         steps.build_test.outcome == 'success' || steps.build_run.outputs.agent == 'true') }}
       shell: bash
+      env:
+        OPENCODE_MAJOR: ${{ steps.engine.outputs.opencode_major }}
       run: |
         set -euo pipefail
         if [[ ! -x /usr/bin/bwrap || ! -x /usr/bin/socat || ! -x /usr/bin/rg ]]; then
@@ -4678,7 +4706,11 @@ runs:
         # The probe stays either way. A fleet's kernel is not ours to promise, and this is what makes
         # a change in one loud rather than silent.
         probe_userns() {
-          bwrap --ro-bind / / --proc /proc --unshare-user --unshare-pid true
+          local private_net=()
+          if [[ "${OPENCODE_MAJOR:-}" == 2 ]]; then
+            private_net=(--unshare-net)
+          fi
+          bwrap --ro-bind / / --proc /proc --unshare-user --unshare-pid "${private_net[@]}" true
         }
         if ! probe_userns 2>/dev/null; then
           # Two further knobs gate unprivileged userns on some kernels and neither exists
@@ -4687,7 +4719,7 @@ runs:
           sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
         fi
         if ! probe_err="$(probe_userns 2>&1)"; then
-          echo "::error::bwrap cannot create a user namespace on runner ${RUNNER_NAME:-unknown}: ${probe_err}"
+          echo "::error::bwrap cannot create the namespaces the sandbox runs in on runner ${RUNNER_NAME:-unknown}: ${probe_err}"
           exit 1
         fi
 
@@ -4809,7 +4841,11 @@ runs:
       working-directory: ${{ runner.temp }}
       run: |
         set -euo pipefail
-        node "${SCRIPTS}/kreview/opencode-config.mjs"
+        if [[ "${OPENCODE_VERSION}" == 2.* ]]; then
+          node "${SCRIPTS}/kreview/opencode-v2-config.mjs"
+        else
+          node "${SCRIPTS}/kreview/opencode-config.mjs"
+        fi
         echo "file=${OPENCODE_CONFIG}" >> "$GITHUB_OUTPUT"
 
     - name: Mint the bearer this review starts on
@@ -4909,7 +4945,12 @@ runs:
           steps.select_test.outputs.route_surface }},intent_source=${{ steps.select_test.outputs.route_source }}${{ inputs.otel_extra_attributes != '' &&
           format(',{0}', inputs.otel_extra_attributes) || '' }}
       working-directory: ${{ runner.temp }}
-      run: node "${SCRIPTS}/kreview/opencode-run.mjs"
+      run: |
+        if [[ "${OPENCODE_VERSION}" == 2.* ]]; then
+          node "${SCRIPTS}/kreview/opencode-v2-run.mjs"
+        else
+          node "${SCRIPTS}/kreview/opencode-run.mjs"
+        fi
 
     - name: Accept the manifest-backed test result
       id: accept_test_stage
@@ -5317,7 +5358,12 @@ runs:
         OPENCODE_LSP_MEASURE: ${{ steps.build_review.outputs.lsp_measure }}
         OPENCODE_LSP_ROOT: ${{ steps.opencode_lsp.outputs.root }}
       working-directory: ${{ runner.temp }}
-      run: node "${SCRIPTS}/kreview/opencode-run.mjs"
+      run: |
+        if [[ "${OPENCODE_VERSION}" == 2.* ]]; then
+          node "${SCRIPTS}/kreview/opencode-v2-run.mjs"
+        else
+          node "${SCRIPTS}/kreview/opencode-run.mjs"
+        fi
 
     - name: Record what this pass committed for an independent reader
       id: implement_adversarial_request
@@ -5350,6 +5396,7 @@ runs:
         GOVERNED_NAME: adversarial
         OPENCODE_ALLOWED: ${{ steps.implement_adversarial_request.outputs.allowed_tools }}
         OPENCODE_DISALLOWED: ${{ steps.implement_adversarial_request.outputs.disallowed_tools }}
+        OPENCODE_VERSION: ${{ inputs.opencode_version }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: node "${SCRIPTS}/kreview/governed-render.mjs" flow
 
@@ -5384,7 +5431,11 @@ runs:
       working-directory: ${{ runner.temp }}
       run: |
         set -euo pipefail
-        node "${SCRIPTS}/kreview/opencode-config.mjs"
+        if [[ "${OPENCODE_VERSION}" == 2.* ]]; then
+          node "${SCRIPTS}/kreview/opencode-v2-config.mjs"
+        else
+          node "${SCRIPTS}/kreview/opencode-config.mjs"
+        fi
         echo "file=${OPENCODE_CONFIG}" >> "$GITHUB_OUTPUT"
 
 
@@ -5441,7 +5492,12 @@ runs:
         OPENCODE_LSP_MEASURE: ${{ steps.build_review.outputs.lsp_measure }}
         OPENCODE_LSP_ROOT: ${{ steps.opencode_lsp.outputs.root }}
       working-directory: ${{ runner.temp }}
-      run: node "${SCRIPTS}/kreview/opencode-run.mjs"
+      run: |
+        if [[ "${OPENCODE_VERSION}" == 2.* ]]; then
+          node "${SCRIPTS}/kreview/opencode-v2-run.mjs"
+        else
+          node "${SCRIPTS}/kreview/opencode-run.mjs"
+        fi
 
 
     - name: Ask what the independent run found
@@ -5477,6 +5533,7 @@ runs:
         GOVERNED_PLUGIN: ksai-implement
         OPENCODE_ALLOWED: ${{ steps.build_implement.outputs.allowed_tools }}
         OPENCODE_DISALLOWED: ${{ steps.build_implement.outputs.disallowed_tools }}
+        OPENCODE_VERSION: ${{ inputs.opencode_version }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: node "${SCRIPTS}/kreview/governed-render.mjs" flow
 
@@ -5514,7 +5571,11 @@ runs:
       working-directory: ${{ runner.temp }}
       run: |
         set -euo pipefail
-        node "${SCRIPTS}/kreview/opencode-config.mjs"
+        if [[ "${OPENCODE_VERSION}" == 2.* ]]; then
+          node "${SCRIPTS}/kreview/opencode-v2-config.mjs"
+        else
+          node "${SCRIPTS}/kreview/opencode-config.mjs"
+        fi
         echo "file=${OPENCODE_CONFIG}" >> "$GITHUB_OUTPUT"
 
 
@@ -5574,7 +5635,12 @@ runs:
         OPENCODE_LSP_MEASURE: ${{ steps.build_review.outputs.lsp_measure }}
         OPENCODE_LSP_ROOT: ${{ steps.opencode_lsp.outputs.root }}
       working-directory: ${{ runner.temp }}
-      run: node "${SCRIPTS}/kreview/opencode-run.mjs"
+      run: |
+        if [[ "${OPENCODE_VERSION}" == 2.* ]]; then
+          node "${SCRIPTS}/kreview/opencode-v2-run.mjs"
+        else
+          node "${SCRIPTS}/kreview/opencode-run.mjs"
+        fi
 
 
     - name: Render the independent audit of the governed review
@@ -5591,6 +5657,7 @@ runs:
         DIFF_FILES: ${{ steps.diff.outputs.files_file }}
         REVIEW_PROMPT_FILE: ${{ steps.governed_review.outputs.prompt_file }}
         AUDITOR_MANDATE: ${{ github.workspace }}/_ksai/plugins/kreview/agents/findings-auditor.md
+        OPENCODE_VERSION: ${{ inputs.opencode_version }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: node "${SCRIPTS}/kreview/governed-render.mjs" audit
 
@@ -5632,7 +5699,11 @@ runs:
       working-directory: ${{ runner.temp }}
       run: |
         set -euo pipefail
-        node "${SCRIPTS}/kreview/opencode-config.mjs"
+        if [[ "${OPENCODE_VERSION}" == 2.* ]]; then
+          node "${SCRIPTS}/kreview/opencode-v2-config.mjs"
+        else
+          node "${SCRIPTS}/kreview/opencode-config.mjs"
+        fi
         echo "file=${OPENCODE_CONFIG}" >> "$GITHUB_OUTPUT"
 
     - name: Check the audit reads the files it was rendered for
@@ -5700,7 +5771,12 @@ runs:
         OPENCODE_LSP_MEASURE: ${{ steps.build_review.outputs.lsp_measure }}
         OPENCODE_LSP_ROOT: ${{ steps.opencode_lsp.outputs.root }}
       working-directory: ${{ runner.temp }}
-      run: node "${SCRIPTS}/kreview/opencode-run.mjs"
+      run: |
+        if [[ "${OPENCODE_VERSION}" == 2.* ]]; then
+          node "${SCRIPTS}/kreview/opencode-v2-run.mjs"
+        else
+          node "${SCRIPTS}/kreview/opencode-run.mjs"
+        fi
 
     - name: Publish only what the audit answered
       id: governed_combine
@@ -5967,6 +6043,8 @@ runs:
       env:
         PR_NUMBER: ${{ steps.phase.outputs.pr_number || steps.open_draft.outputs.pr_number }}
         ENGINE: ${{ steps.engine.outputs.name }}
+        OPENCODE_VERSION: ${{ steps.opencode_install.outputs.version }}
+        EVENTS_FILE: ${{ steps.opencode.outputs.events_file }}
         OPENCODE_HOME: ${{ runner.temp }}/opencode-home
         XDG_DATA_HOME: ${{ runner.temp }}/opencode-home
         TRANSCRIPT_SINCE: ${{ steps.watchdog.outputs.armed_at_ms || steps.plugin_ref.outputs.started_at_ms }}
@@ -6857,6 +6935,7 @@ runs:
         ROUTE_SURFACE: ${{ steps.select_arm.outputs.route_surface }}
         ROUTE_SOURCE: ${{ steps.select_arm.outputs.route_source }}
         JOB_INDEX: ${{ strategy.job-index || 0 }}
+        ENGINE_VERSION: ${{ steps.opencode_install.outputs.version }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: |
         set -euo pipefail

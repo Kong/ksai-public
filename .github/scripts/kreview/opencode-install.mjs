@@ -24,7 +24,9 @@ const readCpu = () => {
   }
 };
 
-const glibcRuntime = () => existsSync('/lib64/ld-linux-x86-64.so.2');
+const GLIBC_LOADERS = Object.freeze({ x64: '/lib64/ld-linux-x86-64.so.2', arm64: '/lib/ld-linux-aarch64.so.1' });
+
+const glibcRuntime = () => Object.hasOwn(GLIBC_LOADERS, process.arch) && existsSync(GLIBC_LOADERS[process.arch]);
 
 const sha512 = (bytes) => createHash('sha512').update(bytes).digest();
 
@@ -34,10 +36,13 @@ const untar = (tarball, into) => spawnSync('tar', ['-xzf', tarball, '-C', into, 
 }).status === 0;
 
 /** packageFor answers the platform package npm's opencode launcher would run here, or '' where this installer does not apply. */
-export function packageFor({ platform, arch, glibc, cpuinfo }) {
-  if (platform !== 'linux' || arch !== 'x64' || !glibc) return '';
-  return /(^|\s)avx2(\s|$)/i.test(String(cpuinfo)) ? 'opencode-linux-x64' : 'opencode-linux-x64-baseline';
+export function packageFor({ platform, arch, glibc, cpuinfo, major = 1 }) {
+  if (platform !== 'linux' || !Object.hasOwn(GLIBC_LOADERS, arch) || !glibc) return '';
+  const family = `${major === 2 ? '@opencode/cli' : 'opencode'}-linux-${arch}`;
+  return arch === 'arm64' || /(^|\s)avx2(\s|$)/i.test(String(cpuinfo)) ? family : `${family}-baseline`;
 }
+
+const unscoped = (name) => name.split('/').at(-1);
 
 /**
  * installOpencode places one verified OpenCode binary in the job-local tool directory.
@@ -58,13 +63,13 @@ export async function installOpencode({
   log = console.error,
 } = {}) {
   if (!VERSION_SHAPE.test(version) || !distDir || !toolDir) throw new Error('the OpenCode install names no version or directory');
-  const name = packageFor({ platform, arch, glibc, cpuinfo });
+  const name = packageFor({ platform, arch, glibc, cpuinfo, major: Number(version.split('.')[0]) });
   if (!name) return null;
 
   const metadata = await fetchImpl(`${REGISTRY}/${name}/${version}`, { signal: AbortSignal.timeout(METADATA_TIMEOUT_MS) });
   if (!metadata.ok) throw new Error(`the registry answered ${metadata.status} for ${name}@${version}`);
   const described = JSON.parse(await metadata.text());
-  const tarballUrl = `${REGISTRY}/${name}/-/${name}-${version}.tgz`;
+  const tarballUrl = `${REGISTRY}/${name}/-/${unscoped(name)}-${version}.tgz`;
   const integrity = String(described?.dist?.integrity ?? '');
   if (described?.name !== name || described?.version !== version || described?.dist?.tarball !== tarballUrl || !INTEGRITY_SHAPE.test(integrity)) {
     throw new Error(`the registry described ${name}@${version} in a shape this installer does not accept`);
@@ -72,7 +77,7 @@ export async function installOpencode({
   const expected = Buffer.from(integrity.slice('sha512-'.length), 'base64');
 
   mkdirSync(distDir, { recursive: true });
-  const tarball = join(distDir, `${name}-${version}.tgz`);
+  const tarball = join(distDir, `${unscoped(name)}-${version}.tgz`);
   let fetched = false;
   if (!existsSync(tarball) || !sha512(readFileSync(tarball)).equals(expected)) {
     if (existsSync(tarball)) log(`::warning::the cached ${name}@${version} tarball does not match the registry integrity, so it was downloaded again`);
@@ -93,7 +98,7 @@ export async function installOpencode({
   const staging = mkdtempSync(join(distDir, 'extract-'));
   try {
     if (!extract(tarball, staging)) throw new Error(`the ${name}@${version} tarball could not be unpacked`);
-    const binary = join(toolDir, `opencode-${version}-${name}`);
+    const binary = join(toolDir, `opencode-${version}-${unscoped(name)}`);
     rmSync(binary, { force: true });
     renameSync(join(staging, 'package', 'bin', 'opencode'), binary);
     chmodSync(binary, 0o755);
@@ -111,7 +116,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       toolDir: String(process.env.TOOL_DIR ?? ''),
     });
     if (!installed) {
-      console.error('this runner is not Linux x64 with glibc, so OpenCode is installed from npm');
+      console.error('this runner is not Linux x64 or arm64 with glibc, so OpenCode is installed from npm');
       process.exitCode = 1;
     } else {
       console.error(`${installed.fetched ? 'Downloaded' : 'Restored'} ${installed.name}@${process.env.VERSION}, verified against the registry integrity`);

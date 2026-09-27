@@ -6,9 +6,10 @@ import { writeOutputs } from '../lib/outputs.mjs';
 import { sessionEvents } from './opencode-children.mjs';
 import { lspToolMetrics } from './opencode-lsp.mjs';
 import { gatewayDiagnostics, streamFailure } from './opencode-review.mjs';
+import { reviewProtocol } from './review-protocol.mjs';
 
 const require = createRequire(import.meta.url);
-const { extractReviewJson } = require('../lib/review-output.cjs');
+const { carriesWhole } = require('../lib/review-output.cjs');
 
 const eventsFile = process.env.OPENCODE_EVENTS_FILE;
 const executionFile = process.env.OPENCODE_EXECUTION_FILE;
@@ -51,7 +52,7 @@ const completeEventStream = eventLines.length > 0 && eventLines.length === event
 const said = answer(events);
 const recovered = process.env.FLOW === 'review' && events.filter((event) => event.type === 'ksai_review_attempt').length > 1;
 const whole = process.env.FLOW === 'review' && !process.env.OPENCODE_REVIEW_FILE && !recovered ? everything(events) : null;
-const carries = whole !== null && said !== null && !extractReviewJson(said) && extractReviewJson(whole);
+const carries = carriesWhole(said, whole);
 if (carries) {
   console.log('::warning::the reviewer wrote its findings before its last turn, so the whole run is published');
 }
@@ -85,48 +86,25 @@ if (process.env.KSAI_PTY_METRICS_FILE) {
   }
 }
 if (process.env.FLOW === 'review') {
-  const held = process.env.REVIEW_PIPELINE_FILE ? JSON.parse(readFileSync(process.env.REVIEW_PIPELINE_FILE, 'utf8')) : null;
-  const completedCalls = held?.stages?.length > 0 && held.stages.every((stage) => stage.invocations?.length > 0 && stage.invocations.every((call) => call.exit_code === 0 && call.usage));
-  const measuredExit = Number(process.env.OPENCODE_EXIT) === 0 || (staged && Number(process.env.OPENCODE_EXIT) === 1 && completedCalls);
-  const { candidates = [], decisions = [], scope_plan: scopePlan, ...protocol } = held ?? {};
-  const coverage = scopePlan ? { scope_plan: {
-    version: scopePlan.version,
-    digest: scopePlan.digest,
-    total_files: scopePlan.total_files,
-    total_units: scopePlan.total_units,
-    omitted_units: scopePlan.omitted.length,
-    scopes: scopePlan.scopes.map((scope) => ({
-      id: scope.id, files: scope.files.length, units: scope.units.length,
-      bytes: scope.bytes, lines: scope.lines, coverage: scope.coverage,
-      completed_focuses: scope.completed_focuses,
-    })),
-  } } : {};
-  const metadata = process.env.PROMPT_FILE ? JSON.parse(readFileSync(`${process.env.PROMPT_FILE}.pipeline.json`, 'utf8')) : {};
-  Object.assign(log[0], { review_protocol: {
-    ...metadata.identity,
-    strategy: process.env.REVIEW_STRATEGY || 'baseline',
-    submission_status: process.env.OPENCODE_REVIEW_SUBMISSION_STATUS || null,
-    ...(process.env.OPENCODE_REVIEW_SUBMISSION_AS_TEXT === 'true' ? { submission_as_text: true } : {}),
-    correction_calls: Number(process.env.OPENCODE_REVIEW_CORRECTIONS || 0),
-    ...protocol,
-    ...coverage,
-    candidates_count: held ? candidates.length : null,
-    rejected_count: held ? decisions.filter((d) => d.verdict !== 'keep').length : null,
-    measured_children: children?.sessions.length ?? null,
-    unmeasured_children: children?.missing ?? null,
-    cost_complete: completeEventStream && measuredExit && spending(events).length > 0 && !events.some((event) => event.type === 'error' || (event.type === 'ksai_review_attempt' && event.exit_code !== 0)) && children !== null && children.missing === 0 && (held?.missing_usage ?? 0) === 0,
-    stream_attempts: events.filter((event) => event.type === 'ksai_review_attempt').map(({ exit_code, session_id, failure }) => ({ exit_code, session_id, failure })),
-    gateway_failures: gatewayDiagnostics(events),
-    configured_effort: process.env.VARIANT || null,
-    thinking_wire_verified: false,
+  Object.assign(log[0], { review_protocol: reviewProtocol({
+    env: process.env,
+    read: readFileSync,
+    events,
+    staged,
     runtime,
+    measured: children?.sessions.length ?? null,
+    unmeasured: children?.missing ?? null,
+    clean: !events.some((event) => event.type === 'error'),
+    complete: completeEventStream,
+    spent: spending(events).length > 0,
+    gatewayFailures: gatewayDiagnostics(events),
     lsp: completeToolTelemetry ? {
       ...lspToolMetrics([...allEvents, ...childToolEvents]),
       peak_rss_kb: runtime?.peak_rss_kb ?? null,
       lingering_processes: runtime?.lingering_processes ?? null,
       invocations: runtime?.invocations ?? [],
     } : null,
-  } });
+  }) });
 }
 
 writeFileSync(executionFile, JSON.stringify(log, null, 2) + '\n');

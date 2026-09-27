@@ -4,7 +4,9 @@ import { pathToFileURL } from 'node:url';
 import { TRIPPED, breaker, plain, rendered, summary, timeline } from '../ksai/progress.mjs';
 import { main as stagesMain } from '../ksai/stages.mjs';
 import { CLAUDE_NAME, detailed, parsed } from '../lib/opencode.mjs';
+import { CLAUDE_NAME as NATIVE_NAME, INPUT_KEY as NATIVE_INPUT_KEY, isNativeStream, rootSessions, sessionOf } from '../lib/opencode-v2.mjs';
 import { sessionEvents } from './opencode-children.mjs';
+import { childrenMeasured } from './opencode-v2-review.mjs';
 
 export { detailed };
 
@@ -89,6 +91,63 @@ export function transcript(events) {
   return lines.join('\n');
 }
 
+const iso = (value) => {
+  const at = Number(value);
+  return Number.isFinite(at) ? new Date(at).toISOString() : undefined;
+};
+
+function nativeTranscript(events) {
+  const lines = [];
+  const calls = new Map();
+  for (const event of events) {
+    const data = event.data ?? {};
+    const key = `${sessionOf(event)}\u0000${data.id ?? ''}`;
+    if (event.type === 'session.step.started') {
+      lines.push(JSON.stringify({ timestamp: iso(event.created), type: 'assistant', message: { content: [] } }));
+    } else if (event.type === 'session.step.ended' || event.type === 'session.step.failed') {
+      const usage = usageOf(data);
+      if (usage) lines.push(JSON.stringify({ timestamp: iso(event.created), type: 'assistant', message: { content: [], usage } }));
+    } else if (event.type === 'session.tool.input.started') {
+      calls.set(key, { name: data.name, began: event.created, input: {} });
+    } else if (event.type === 'session.tool.called') {
+      calls.set(key, { ...(calls.get(key) ?? { name: '', began: event.created }), input: data.input && typeof data.input === 'object' ? data.input : {} });
+    } else if (event.type === 'session.tool.success' || event.type === 'session.tool.failed') {
+      const call = calls.get(key) ?? { name: '', began: event.created, input: {} };
+      const name = NATIVE_NAME[call.name] ?? plain(call.name, 40) ?? 'unknown';
+      const id = typeof data.id === 'string' ? data.id : `call_${lines.length}`;
+      lines.push(
+        JSON.stringify({ timestamp: iso(call.began), type: 'assistant', message: { content: [{ type: 'tool_use', name, id, input: detailed(name, call.input, NATIVE_INPUT_KEY) }] } }),
+        JSON.stringify({
+          timestamp: iso(event.created),
+          type: 'user',
+          message: { content: [{ type: 'tool_result', tool_use_id: id, ...(event.type === 'session.tool.failed' ? { is_error: true } : {}) }] },
+        }),
+      );
+    }
+  }
+  return lines.join('\n');
+}
+
+function nativeSource(events) {
+  const { roots, children } = rootSessions(events);
+  const rooted = [];
+  const bySession = new Map([...children].map((session) => [session, []]));
+  for (const event of events) {
+    const session = sessionOf(event);
+    if (roots.has(session)) rooted.push(event);
+    else bySession.get(session)?.push(event);
+  }
+  const runtime = events.findLast((event) => event?.type === 'ksai_runtime')?.runtime;
+  return {
+    text: nativeTranscript(rooted),
+    why: '',
+    delegations: childrenMeasured(events).missing,
+    children: [...bySession].map(([session, own]) => ({ name: session, source: nativeTranscript(own) })),
+    runtime: runtime && typeof runtime === 'object' && !Array.isArray(runtime) ? runtime : null,
+    inline: true,
+  };
+}
+
 export function delegationsIn(events) {
   if (!Array.isArray(events)) return 0;
   return events.filter((event) => event?.type === 'tool_use' && CLAUDE_NAME[event?.part?.tool] === 'Task').length;
@@ -99,6 +158,7 @@ function source(env = process.env) {
   if (!path) return { text: '', why: 'No opencode event stream was named', delegations: 0, children: [], runtime: null };
   try {
     const events = parsed(readFileSync(path, 'utf8'));
+    if (isNativeStream(events)) return nativeSource(events);
     const runtime = events.findLast((event) => event?.type === 'ksai_runtime')?.runtime;
     let children = [];
     let missing = delegationsIn(events);
@@ -138,11 +198,12 @@ const movedAt = (path) => {
  * one is absent rather than a run of zeroes, which a reader takes for a run that is stuck.
  */
 export function streams(env = process.env) {
-  const { text, why, delegations, children } = source(env);
+  const { text, why, delegations, children, inline } = source(env);
   if (why) return { streams: [], why, dropped: 0 };
   if (text === '') return { streams: [], why: 'The opencode event stream carries no work yet', dropped: 0 };
+  const childAt = movedAt(inline ? env.OPENCODE_EVENTS_FILE : `${env.OPENCODE_EVENTS_FILE}.children.json`);
   return {
-    streams: [{ name: '', source: text, at: movedAt(env.OPENCODE_EVENTS_FILE) }, ...children.map((child) => ({ ...child, at: movedAt(`${env.OPENCODE_EVENTS_FILE}.children.json`) }))],
+    streams: [{ name: '', source: text, at: movedAt(env.OPENCODE_EVENTS_FILE) }, ...children.map((child) => ({ ...child, at: childAt }))],
     why: '',
     dropped: delegations,
   };

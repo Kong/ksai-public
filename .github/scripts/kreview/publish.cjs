@@ -217,6 +217,7 @@ function evalRunRecord(env, { now = new Date() } = {}) {
       plugin_ref: env.PLUGIN_REF,
       harness: env.FLOW === 'run' ? `ksai-run:${env.PROFILE}` : 'kreview-full',
       engine: env.ENGINE || 'claude',
+      engine_version: env.ENGINE_VERSION || null,
       shadow: env.SHADOW === 'true',
       source: 'observed',
       trial_index: stagesOf(env.REVIEW_PROTOCOL)?.trial_index ?? 0,

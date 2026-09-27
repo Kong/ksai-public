@@ -1,7 +1,9 @@
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { parsed } from '../lib/opencode.mjs';
+import { isV2, storeEnv } from '../lib/opencode-v2.mjs';
 import { encodeProject, findTranscript, transcriptRoot } from './progress.mjs';
 
 const SESSION_SHAPE = /^[0-9a-zA-Z][0-9a-zA-Z._-]{0,120}$/;
@@ -25,8 +27,6 @@ export function retentionDays(allowed) {
 
 const OPENCODE_FILE = 'opencode-session.json';
 
-const opencodeAt = (dir) => join(dir, OPENCODE_FILE);
-
 const workspaceOf = (env) => String(env.GITHUB_WORKSPACE ?? '') || undefined;
 
 function newestSession(env, run) {
@@ -44,22 +44,26 @@ function newestSession(env, run) {
  * saveOpencode carries the planning session by exporting it, which is the only handle this engine
  * offers: its sessions live in a store rather than in a transcript file a path can name.
  */
-export function saveOpencode(env = process.env, run = spawnSync) {
+export function saveOpencode(
+  env = process.env,
+  run = spawnSync,
+  { file = OPENCODE_FILE, newest = () => newestSession(env, run), exporting = (id) => run('opencode', ['export', id], { encoding: 'utf8', env, cwd: workspaceOf(env) }) } = {},
+) {
   const outputs = { file: '', saved: 'false' };
   const dir = String(env.STAGING_DIR ?? '').trim();
   if (!dir) {
     process.stdout.write('note: no staging directory was given, so the session is not carried.\n');
     return outputs;
   }
-  const at = opencodeAt(dir);
+  const at = join(dir, file);
   try {
     mkdirSync(dir, { recursive: true });
-    const id = newestSession(env, run);
+    const id = newest();
     if (id === '') {
       process.stdout.write('note: this run named no session to export, so the next rework starts cold.\n');
       return outputs;
     }
-    const exported = run('opencode', ['export', id], { encoding: 'utf8', env, cwd: workspaceOf(env) });
+    const exported = exporting(id);
     if (exported.status !== 0 || !String(exported.stdout ?? '').trim()) {
       process.stdout.write('note: this run exported no session, so the next rework starts cold.\n');
       return outputs;
@@ -78,17 +82,21 @@ export function saveOpencode(env = process.env, run = spawnSync) {
  * The id is read back from the store rather than from the file, because an import is what decides
  * it: a session already present is not imported twice and the id in the file may name another run's.
  */
-export function restoreOpencode(env = process.env, run = spawnSync) {
+export function restoreOpencode(
+  env = process.env,
+  run = spawnSync,
+  { file = OPENCODE_FILE, importing = (at) => run('opencode', ['import', at], { encoding: 'utf8', env, cwd: workspaceOf(env) }), idOf = (_imported = {}) => newestSession(env, run) } = {},
+) {
   const outputs = { session_id: '', resumed: 'false' };
   const from = String(env.DOWNLOAD_DIR ?? '').trim();
-  const at = from ? opencodeAt(from) : '';
+  const at = from ? join(from, file) : '';
   if (!at || !existsSync(at)) return outputs;
-  const imported = run('opencode', ['import', at], { encoding: 'utf8', env, cwd: workspaceOf(env) });
+  const imported = importing(at);
   if (imported.status !== 0) {
     process.stdout.write('note: the carried session could not be imported, so this run starts cold.\n');
     return outputs;
   }
-  const id = newestSession(env, run);
+  const id = idOf(imported);
   if (id === '') {
     process.stdout.write('note: the imported session is not named as a session id, so this run starts cold.\n');
     return outputs;
@@ -97,8 +105,42 @@ export function restoreOpencode(env = process.env, run = spawnSync) {
   return { session_id: id, resumed: 'true' };
 }
 
+const OPENCODE2_FILE = 'opencode2-session.json';
+
+const EXPORT_BYTES = 64 * 1024 * 1024;
+
+const SESSION2_SHAPE = /^ses_[a-zA-Z0-9]{1,120}$/;
+
+const transfer = (env, run, command, argument) =>
+  run(process.execPath, [join(String(env.SCRIPTS ?? ''), 'kreview/opencode-v2-driver.mjs'), command, argument], {
+    encoding: 'utf8',
+    env: storeEnv(env),
+    cwd: workspaceOf(env),
+    maxBuffer: EXPORT_BYTES,
+  });
+
+export function newestRoot(raw) {
+  const roots = parsed(raw).filter((event) => event.type === 'ksai.session' && event.data?.parentID === null && SESSION2_SHAPE.test(String(event.data?.sessionID ?? '')));
+  return roots.at(-1)?.data.sessionID ?? '';
+}
+
+export function saveOpencode2(env = process.env, run = spawnSync, read = readFileSync) {
+  return saveOpencode(env, run, { file: OPENCODE2_FILE, newest: () => newestRoot(read(String(env.EVENTS_FILE ?? ''), 'utf8')), exporting: (id) => transfer(env, run, 'export', id) });
+}
+
+export function restoreOpencode2(env = process.env, run = spawnSync) {
+  return restoreOpencode(env, run, {
+    file: OPENCODE2_FILE,
+    importing: (at) => transfer(env, run, 'import', at),
+    idOf: (imported) => {
+      const id = String(imported.stdout ?? '').trim();
+      return SESSION2_SHAPE.test(id) ? id : '';
+    },
+  });
+}
+
 export function save(env = process.env) {
-  if (String(env.ENGINE ?? '') === 'opencode') return saveOpencode(env);
+  if (String(env.ENGINE ?? '') === 'opencode') return isV2(env.OPENCODE_VERSION) ? saveOpencode2(env) : saveOpencode(env);
   const outputs = { file: '', saved: 'false' };
   const named = String(env.SESSION_ID ?? '').trim();
   if (!SESSION_SHAPE.test(named)) {
@@ -129,7 +171,7 @@ export function save(env = process.env) {
 }
 
 export function restore(env = process.env) {
-  if (String(env.ENGINE ?? '') === 'opencode') return restoreOpencode(env);
+  if (String(env.ENGINE ?? '') === 'opencode') return isV2(env.OPENCODE_VERSION) ? restoreOpencode2(env) : restoreOpencode(env);
   const outputs = { session_id: '', resumed: 'false' };
   const from = String(env.DOWNLOAD_DIR ?? '').trim();
   if (!from || !existsSync(from)) return outputs;

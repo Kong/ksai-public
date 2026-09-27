@@ -267,9 +267,9 @@ if (spawnSync('rg', ['--version']).status !== 0) throw new Error('isolated searc
 const scratch = fs.mkdtempSync(workspace + '/.ksai-tool-probe-');
 fs.writeFileSync(scratch + '/write', 'ok');
 fs.rmSync(scratch, { recursive: true });
-const port = Number(new URL(relayUrl).port);
+const relay = relayUrl.startsWith('/') ? { path: relayUrl } : { host: '127.0.0.1', port: Number(new URL(relayUrl).port) };
 await new Promise((resolve, reject) => {
-  const socket = net.connect({ host: '127.0.0.1', port });
+  const socket = net.connect(relay);
   socket.once('connect', () => reject(new Error('tool namespace reached the provider relay')));
   socket.once('error', () => resolve());
 });
@@ -293,7 +293,7 @@ export function toolIsolationProbe(env) {
   ]);
   return isolatedToolCommand(
     'node',
-    ['-e', PROBE_SOURCE, String(env.KSAI_PROVIDER_RELAY ?? ''), String(env.GITHUB_WORKSPACE ?? ''), JSON.stringify(TOOL_DENIED_ENV), ...hidden],
+    ['-e', PROBE_SOURCE, String(env.KSAI_PROVIDER_RELAY || env.KSAI_PROVIDER_SOCKET || ''), String(env.GITHUB_WORKSPACE ?? ''), JSON.stringify(TOOL_DENIED_ENV), ...hidden],
     String(env.GITHUB_WORKSPACE ?? ''),
     true,
     env,

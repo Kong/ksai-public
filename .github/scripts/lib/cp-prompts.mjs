@@ -3,10 +3,13 @@ import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import controlPlane from './control-plane.cjs';
+import { isV2 } from './opencode-v2.mjs';
 
 const { mask, reachedFor, renderingModeOf, unanswered } = controlPlane;
 
 export const TOOL_PREFIX = 'static.runtime.opencode-tool-';
+export const TOOL_PREFIX_V2 = 'static.runtime.opencode2-tool-';
+export const toolPrefixOf = (version) => (isV2(version) ? TOOL_PREFIX_V2 : TOOL_PREFIX);
 export const REMINDER_ID = 'static.runtime.opencode-max-steps';
 const CLASSIFICATION = Object.freeze({ internal: 'internal', public: 'public' });
 export { SINKS, renderRequest, writeRenderRequest } from './render-request.cjs';
@@ -190,7 +193,7 @@ export async function renderThroughControlPlane({
   request,
   dir,
   tools = [],
-  limited = false,
+  steps = 0,
   statics = true,
   env = process.env,
   fetch = globalThis.fetch,
@@ -236,18 +239,20 @@ export async function renderThroughControlPlane({
     const answer = await asked(fetch, `${catalog}/static`, { headers, signal }, 'the static prompts', { retries: RETRIES, wait });
     return covering(staticOf(await answer.json(), version, lockDigest, locked), locked, version);
   });
+  const toolPrefix = toolPrefixOf(env.OPENCODE_VERSION);
   const governed = tools.map((name) => {
-    const tool = files.find((file) => file.id === TOOL_PREFIX + name);
+    const tool = files.find((file) => file.id === toolPrefix + name);
     if (!tool) throw new Error(`prompt release ${version} governs no ${name} tool`);
     return [name, tool.body];
   });
-  const reminder = limited ? files.find((file) => file.id === REMINDER_ID)?.body : undefined;
-  if (limited && reminder === undefined) throw new Error(`prompt release ${version} governs no step-limit reminder`);
+  const reminder = steps ? files.find((file) => file.id === REMINDER_ID)?.body : undefined;
+  if (steps && reminder === undefined) throw new Error(`prompt release ${version} governs no step-limit reminder`);
   const expect = {
     promptId: request.prompt_id,
     sink: request.sink,
     model: request.model,
     finalDigest: digestOf(rendered.prompt),
+    ...(steps ? { steps } : {}),
   };
   writeArtifacts(dir, { rendered, lock, attestation, tools: governed, reminder, expect });
   return {

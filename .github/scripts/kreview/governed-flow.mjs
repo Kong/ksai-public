@@ -3,12 +3,15 @@ import { dirname, isAbsolute, join } from 'node:path';
 
 import { deliveriesAt, governanceOptions, governedRoot, rendererFor, trustedRootAt } from '../governance/anchors.mjs';
 import { parityOf, promptRendering, renderThroughControlPlane } from '../lib/cp-prompts.mjs';
+import claudeArgs from '../lib/claude-args.cjs';
 import { GOVERNED_TOOLS, TOOL_PERMISSION, opencodePermissions } from '../lib/opencode.mjs';
+import { governedToolsV2, isV2 } from '../lib/opencode-v2.mjs';
 
 const NAME = /^[a-z][a-z0-9-]{0,31}$/;
 const PLUGIN = /^[a-z][a-z0-9-]{0,63}$/;
 
 export function governedTools(env) {
+  if (isV2(env.OPENCODE_VERSION)) return governedToolsV2({ allowed: env.OPENCODE_ALLOWED, disallowed: env.OPENCODE_DISALLOWED });
   const permission = opencodePermissions({ allowed: env.OPENCODE_ALLOWED, disallowed: env.OPENCODE_DISALLOWED });
   return GOVERNED_TOOLS.filter((name) => {
     const key = TOOL_PERMISSION[name];
@@ -16,6 +19,8 @@ export function governedTools(env) {
     return key === 'bash' ? Object.values(permission.bash ?? {}).includes('allow') : permission[key] === 'allow';
   });
 }
+
+export const reviewTools = (env) => governedTools({ OPENCODE_VERSION: env.OPENCODE_VERSION, OPENCODE_ALLOWED: claudeArgs.TOOL_POLICY.review.allowed, OPENCODE_DISALLOWED: claudeArgs.TOOL_POLICY.review.disallowed });
 
 function laidDown(dir, files, plugin) {
   if (!PLUGIN.test(plugin)) throw new Error(`${plugin} is not a plugin name`);
@@ -45,7 +50,7 @@ export async function renderFlow(env, deps = {}) {
   const tools = governedTools(env);
   const root = governedRoot(env);
   mkdirSync(root, { recursive: true, mode: 0o700 });
-  const rendered = await renderThroughControlPlane({ request, dir: join(root, name), tools, limited: false, env, ...deps });
+  const rendered = await renderThroughControlPlane({ request, dir: join(root, name), tools, env, ...deps });
   if (mode === 'shadow') {
     return { shadow: `${rendered.version}${rendered.arm ? ` (${rendered.arm})` : ''}`, parity: parityOf(readFileSync(rendered.prompt, 'utf8'), env.PROMPT_FILE) };
   }

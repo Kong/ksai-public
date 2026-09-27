@@ -47,16 +47,16 @@ function spans(payload) {
   );
 }
 
-export function traceObserver({ arm = '' } = {}) {
+export function traceObserver({ arm = '', model: modelSpan = MODEL_SPAN, mcp: mcpSpan = MCP_SPAN } = {}) {
   const named = String(arm ?? '').trim();
   let active = null;
   const observe = (signal, payload) => {
     if (signal !== 'traces' || !active) return;
     for (const span of spans(payload)) {
-      if (span?.name !== MCP_SPAN && span?.name !== MODEL_SPAN) continue;
+      if (span?.name !== mcpSpan && span?.name !== modelSpan) continue;
       const measured = timing(span);
       if (!measured) continue;
-      if (span.name !== MODEL_SPAN) {
+      if (span.name !== modelSpan) {
         active.mcp.push(measured);
         continue;
       }

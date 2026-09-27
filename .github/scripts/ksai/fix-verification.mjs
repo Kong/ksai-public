@@ -1,6 +1,8 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
+import { isNativeStream, toolCalls } from '../lib/opencode-v2.mjs';
+
 const require = createRequire(import.meta.url);
 const { MAX_VERIFICATION_COMMANDS } = require('../lib/write-record.cjs');
 
@@ -128,19 +130,34 @@ function eventsAt(path) {
   return { events, commands_state: 'complete' };
 }
 
-function commandsIn(events, secrets) {
+export function shellCalls(events) {
+  if (isNativeStream(events)) {
+    return toolCalls(events)
+      .filter((call) => call.tool === 'shell')
+      .map((call) => ({ command: String(call.input?.command ?? ''), status: call.status, exit: call.metadata?.exit }));
+  }
+  return events
+    .filter((event) => event?.type === 'tool_use' && event?.part?.tool === 'bash')
+    .map((event) => ({
+      command: String(event?.part?.state?.input?.command ?? ''),
+      status: event?.part?.state?.status,
+      exit: event?.part?.state?.metadata?.exit,
+    }));
+}
+
+const finished = (call) => ['completed', 'error'].includes(call.status);
+
+function commandsIn(calls, secrets) {
   const commands = [];
   let capped = false;
-  for (const event of events) {
-    if (event?.type !== 'tool_use' || event?.part?.tool !== 'bash') continue;
-    if (!['completed', 'error'].includes(event?.part?.state?.status)) continue;
+  for (const call of calls) {
+    if (!finished(call)) continue;
     if (commands.length >= MAX_VERIFICATION_COMMANDS) {
       capped = true;
       continue;
     }
-    const exit = event?.part?.state?.metadata?.exit;
-    const shown = reportedCommand(event?.part?.state?.input?.command, secrets);
-    commands.push([shown.command, Number.isSafeInteger(exit) && exit >= 0 ? exit : null]);
+    const shown = reportedCommand(call.command, secrets);
+    commands.push([shown.command, Number.isSafeInteger(call.exit) && call.exit >= 0 ? call.exit : null]);
   }
   return { commands, commands_capped: capped };
 }
@@ -151,11 +168,7 @@ const withCommands = (fields, collected, secrets) => record({
   ...collected,
 });
 
-const isCommit = (event) => {
-  if (event?.type !== 'tool_use' || event?.part?.tool !== 'bash') return false;
-  const command = String(event?.part?.state?.input?.command ?? '');
-  return /(?:^|[\s;&|()])git(?:\s+-[^\s]+)*\s+commit(?:\s|$)/.test(command);
-};
+const isCommit = (call) => /(?:^|[\s;&|()])git(?:\s+-[^\s]+)*\s+commit(?:\s|$)/.test(call.command);
 
 export function verificationOf({
   manifest = null,
@@ -166,7 +179,8 @@ export function verificationOf({
   secrets = [],
 } = {}) {
   const read = eventsAt(eventsPath);
-  const collected = { ...commandsIn(read.events, secrets), commands_state: read.commands_state };
+  const shells = shellCalls(read.events);
+  const collected = { ...commandsIn(shells, secrets), commands_state: read.commands_state };
   const result = (fields) => withCommands(fields, collected, secrets);
   const checks = checksAt(checksPath);
   if (!checks.required) {
@@ -199,25 +213,19 @@ export function verificationOf({
 
   if (read.error) return result({ status: 'unverified', target, command, reason: read.error });
 
-  const calls = read.events.filter(
-    (event) =>
-      event?.type === 'tool_use' &&
-      event?.part?.tool === 'bash' &&
-      ['completed', 'error'].includes(event?.part?.state?.status) &&
-      String(event?.part?.state?.input?.command ?? '') === command,
-  );
+  const calls = shells.filter((one) => finished(one) && one.command === command);
   if (calls.length === 0) {
     return result({ status: 'unverified', target, command, reason: 'command-not-seen' });
   }
 
   const call = calls.at(-1);
-  const exit = call?.part?.state?.metadata?.exit;
+  const { exit } = call;
   if (!Number.isSafeInteger(exit) || exit < 0) {
     return result({ status: 'unverified', target, command, reason: 'exit-unavailable' });
   }
 
-  const callAt = read.events.lastIndexOf(call);
-  const commitAt = read.events.findIndex(isCommit);
+  const callAt = shells.lastIndexOf(call);
+  const commitAt = shells.findIndex((one) => isCommit(one));
   if (exit !== 0) {
     return result({ status: 'failed', target, command, exit_status: exit, reason: 'target-failed' });
   }

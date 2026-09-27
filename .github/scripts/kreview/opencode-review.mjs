@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { answer as streamAnswer, everything, parsed } from '../lib/opencode.mjs';
-import { extractReviewJson, readReviewOutput, REPAIRED } from '../lib/review-output.cjs';
+import { extractReviewJson, readReviewOutput, REPAIRED, reviewAnswerOf } from '../lib/review-output.cjs';
 import { hypothesesOf } from '../lib/review-hypotheses.mjs';
 import { EXPORT_BYTES, exportChildren, exportedText } from './opencode-children.mjs';
 import { auditProblem, LIMITS, runPipeline } from './review-pipeline.cjs';
@@ -12,11 +12,7 @@ import { collectSecrets, scrub } from './secrets.cjs';
 
 export { LIMITS };
 
-export function reviewAnswer(events) {
-  const last = streamAnswer(events);
-  const whole = everything(events);
-  return last !== null && !extractReviewJson(last) && extractReviewJson(whole) ? whole : last;
-}
+export const reviewAnswer = (events) => reviewAnswerOf(streamAnswer(events), everything(events));
 
 const coverageOf = (review) => ['complete', 'incomplete'].includes(review?.coverage) ? review.coverage : undefined;
 
@@ -163,7 +159,7 @@ export function gatewayDiagnostics(events) {
   });
 }
 
-export async function recoverReview({ flow, prompt, timeoutMs, invoke, budget = { remaining: 1 }, now = Date.now, ...options }) {
+export async function recoverReview({ flow, prompt, timeoutMs, invoke, budget = { remaining: 1 }, now = Date.now, restart = null, ...options }) {
   const deadline = now() + timeoutMs;
   const first = await invoke({ ...options, prompt, timeoutMs });
   const attempt = (result) => ({ exit_code: result.code, session_id: result.session_id, failure: result.failure?.kind ?? null, usage: result.usage ?? null });
@@ -174,8 +170,11 @@ export async function recoverReview({ flow, prompt, timeoutMs, invoke, budget = 
   if (empty && !first.submission && typeof first.text === 'string' && extractReviewJson(first.text)) return { ...first, attempts };
   if (flow !== 'review' || first.code !== (empty ? 0 : 1) || !RECOVERABLE.includes(first.failure?.kind) || first.session_id !== first.failure.session_id || !/^ses_[a-zA-Z0-9]+$/.test(first.session_id ?? '') || budget.remaining < 1 || !Number.isFinite(remaining) || remaining < 5000) return { ...first, attempts };
   budget.remaining -= 1;
+  restart?.();
   const lost = empty ? 'The previous turn ended without any text or tool call reaching this session.' : 'The previous response ended with a transport stream error.';
-  const second = await invoke({ ...options, prompt: `${lost} Continue the original assigned review from completed evidence in this history. Discard the unfinished response fragment. Preserve the original scope, permissions, evidence requirements and output contract. Unfinished investigation remains incomplete; do not infer a clean result from the interruption.`, timeoutMs: remaining, resumeSession: first.session_id });
+  const second = await invoke(restart
+    ? { ...options, prompt, timeoutMs: remaining, resumeSession: '' }
+    : { ...options, prompt: `${lost} Continue the original assigned review from completed evidence in this history. Discard the unfinished response fragment. Preserve the original scope, permissions, evidence requirements and output contract. Unfinished investigation remains incomplete; do not infer a clean result from the interruption.`, timeoutMs: remaining, resumeSession: first.session_id });
   attempts.push(attempt(second));
   const usage = first.usage && second.usage ? Object.fromEntries([...new Set([...Object.keys(first.usage), ...Object.keys(second.usage)])].map((key) => [key, (first.usage[key] ?? 0) + (second.usage[key] ?? 0)])) : null;
   const code = second.code === 0 && (typeof second.text !== 'string' || !second.text.trim()) ? 1 : second.code;

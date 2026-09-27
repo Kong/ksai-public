@@ -2,9 +2,9 @@ import { appendFileSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 
 import { DIGEST, readArtifacts, regularFile } from './artifacts.mjs';
-import { IncompleteAnswer, MAX_RESPONSE_BYTES, UpstreamFailure, conversation } from './conversation.mjs';
+import { IncompleteAnswer, MAX_RESPONSE_BYTES, UpstreamFailure, boundedSteps, conversation } from './conversation.mjs';
 import { Errand, governRequest } from './provider.mjs';
-import { governedReminder, governedTool, rendered, verifyRelease, versionParts } from './release.mjs';
+import { TOOL_PREFIX, governedReminder, governedTool, rendered, verifyRelease, versionParts } from './release.mjs';
 import { certificateTrust, keyTrust, verifyRender } from './render.mjs';
 
 export const GOVERNED_HOOKS = Object.freeze([
@@ -15,13 +15,15 @@ export const GOVERNED_HOOKS = Object.freeze([
   'experimental.session.compacting',
 ]);
 
+export const GOVERNED_HOOKS_V2 = Object.freeze(['prompt', 'context', 'tool', 'compaction', 'title']);
+
 const KEEPALIVE_MS = 15_000;
 const KEEPALIVE = new TextEncoder().encode(': validating\n\n');
 const STALL_MS = 300_000;
 const TRUSTED_ROOT_BYTES = 1024 * 1024;
 const MAX_REASON = 512;
 const MAX_REFUSALS = 16;
-const MAX_STEPS = 256;
+const DELEGATION = new Set(['task', 'subagent']);
 
 function options(raw) {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('governance options are not an object');
@@ -39,6 +41,7 @@ function options(raw) {
   ) {
     throw new Error('governance.expect names the prompt id, sink, model and final digest the runner rendered');
   }
+  if (expected.steps !== undefined) boundedSteps(expected.steps, 'governance.expect.steps');
   if (typeof given.releaseSigner !== 'string' || !given.releaseSigner) throw new Error('governance.releaseSigner names no workflow');
   if (typeof given.releaseIssuer !== 'string' || !given.releaseIssuer) throw new Error('governance.releaseIssuer names no token issuer');
   if (typeof given.renderPredicate !== 'string' || !given.renderPredicate) throw new Error('governance.renderPredicate names no receipt type');
@@ -54,9 +57,7 @@ function options(raw) {
   if (given.tools !== undefined && (!Array.isArray(given.tools) || new Set(given.tools).size !== given.tools.length)) {
     throw new Error('governance.tools is not a list of distinct tool names');
   }
-  if (given.steps !== undefined && (!Number.isSafeInteger(given.steps) || given.steps < 1 || given.steps > MAX_STEPS)) {
-    throw new Error(`governance.steps is not a step limit from 1 to ${MAX_STEPS}`);
-  }
+  if (given.steps !== undefined) boundedSteps(given.steps, 'governance.steps');
   return given;
 }
 
@@ -76,7 +77,7 @@ function sameRun(receipt, env) {
   }
 }
 
-function verified(given, env) {
+function verified(given, env, toolPrefix) {
   const artifacts = readArtifacts(given.artifacts);
   const receipt = verifyRender(artifacts.render, artifacts.prompt, renderTrust(given), given.renderPredicate);
   sameRun(receipt, env);
@@ -98,8 +99,8 @@ function verified(given, env) {
   });
   rendered(release, receipt);
   const tools = new Map();
-  for (const name of given.tools ?? []) tools.set(name, governedTool(release, name, artifacts.tool(name)));
-  const limit = given.steps === undefined ? null : { steps: given.steps, reminder: governedReminder(release, artifacts.reminder()) };
+  for (const name of given.tools ?? []) tools.set(name, governedTool(release, name, artifacts.tool(name), toolPrefix));
+  const limit = expected.steps === undefined ? null : { steps: expected.steps, reminder: governedReminder(release, artifacts.reminder()) };
   return {
     governed: { prompt: artifacts.prompt.toString('utf8'), model: receipt.model, tools, limit },
     receipt,
@@ -131,6 +132,7 @@ function refusing(said, report) {
   };
   return {
     hooks: Object.fromEntries(GOVERNED_HOOKS.map((name) => [name, refuse])),
+    v2: Object.fromEntries(GOVERNED_HOOKS_V2.map((name) => [name, refuse])),
     guard() {
       throw new Error(`prompt governance refused this run: ${said}`);
     },
@@ -147,6 +149,12 @@ function onePart(parts) {
     throw new Error('the prompt is not one owned text part');
   }
   return part.text;
+}
+
+function onlyText(content) {
+  if (!Array.isArray(content) || content.length !== 1) return null;
+  const part = content[0];
+  return part?.type === 'text' && typeof part.text === 'string' ? part.text : null;
 }
 
 async function buffered(reader) {
@@ -224,6 +232,22 @@ function governing(state, given, report, provider) {
       return refuse(error, breaks);
     }
   };
+  const clearedSystem = (sent, system) =>
+    guarded(() => {
+      onProvider(sent);
+      if (!Array.isArray(system)) throw new Error('the system context is unavailable');
+      system.splice(0);
+    }, false);
+  const governedCall = async (event) =>
+    guarded(() => {
+      const tool = String(event?.tool ?? '');
+      if (DELEGATION.has(tool.toLowerCase())) throw new Error(`${tool.toLowerCase()} delegation was attempted`);
+      if (!governed.tools.has(tool)) throw new Error(`the ${tool} tool is not governed`);
+    });
+  const compacting = async () =>
+    guarded(() => {
+      throw new Error('context compaction was attempted');
+    });
   return {
     hooks: {
       'chat.message': async (input, output) =>
@@ -244,23 +268,36 @@ function governing(state, given, report, provider) {
             throw new Error('the conversation holds a turn after the prompt that the model did not take');
           }
         }),
-      'experimental.chat.system.transform': async (input, output) => {
+      'experimental.chat.system.transform': async (input, output) => clearedSystem(input, output?.system),
+      'tool.execute.before': governedCall,
+      'experimental.session.compacting': compacting,
+    },
+    v2: {
+      prompt: async (event) =>
+        guarded(() => {
+          if (!armed) throw new Error("the provider's request hook was never installed, so nothing would check what leaves");
+          if (messaged) throw new Error('a second top-level prompt was submitted');
+          const prompt = event?.prompt;
+          if (typeof prompt?.text !== 'string' || (Array.isArray(prompt.files) && prompt.files.length > 0) || prompt.text !== governed.prompt) {
+            throw new Error('the top-level prompt is not the governed one');
+          }
+          messaged = true;
+        }),
+      context: async (event) => {
+        clearedSystem({ model: { providerID: event?.model?.providerID, modelID: event?.model?.id } }, event?.system);
         return guarded(() => {
-          onProvider(input);
-          if (!Array.isArray(output?.system)) throw new Error('the system context is unavailable');
-          output.system.splice(0);
-        }, false);
+          const [first, ...rest] = Array.isArray(event?.messages) ? event.messages : [];
+          if (first?.role !== 'user' || onlyText(first.content) !== governed.prompt) throw new Error('the conversation lost the governed prompt');
+          if (rest.some((entry) => entry?.role !== 'assistant' && entry?.role !== 'tool')) {
+            throw new Error('the conversation holds a turn after the prompt that the model did not take');
+          }
+        });
       },
-      'tool.execute.before': async (input) =>
-        guarded(() => {
-          const tool = String(input?.tool ?? '');
-          if (tool.toLowerCase() === 'task') throw new Error('task delegation was attempted');
-          if (!governed.tools.has(tool)) throw new Error(`the ${tool} tool is not governed`);
-        }),
-      'experimental.session.compacting': async () =>
-        guarded(() => {
-          throw new Error('context compaction was attempted');
-        }),
+      tool: governedCall,
+      compaction: compacting,
+      title: async (event) => {
+        event.result = 'ksai';
+      },
     },
     guard(body) {
       sealed();
@@ -326,7 +363,7 @@ function governing(state, given, report, provider) {
   };
 }
 
-export function governance(raw, env, log, provider, report = reporter(raw, log)) {
+export function governance(raw, env, log, provider, toolPrefix = TOOL_PREFIX, report = reporter(raw, log)) {
   let given;
   try {
     given = options(raw);
@@ -334,7 +371,7 @@ export function governance(raw, env, log, provider, report = reporter(raw, log))
     return refusing(reason(error), report);
   }
   try {
-    return governing(verified(given, env), given, report, provider);
+    return governing(verified(given, env, toolPrefix), given, report, provider);
   } catch (error) {
     log('error', 'prompt governance refused this run', { reason: reason(error) });
     return refusing(reason(error), report);

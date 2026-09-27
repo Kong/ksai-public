@@ -99,9 +99,9 @@ function pointsAt(at, real) {
 export const MASKED_HOMES = Object.freeze(['.config', '.claude', '.opencode']);
 
 /** maskedHomes answers the absolute credential stores this run masks, for the home it runs under. */
-export function maskedHomes(env) {
+export function maskedHomes(env, homes = MASKED_HOMES) {
   const home = String(env.HOME ?? '').trim();
-  return home ? MASKED_HOMES.map((name) => join(home, name)) : [];
+  return home ? homes.map((name) => join(home, name)) : [];
 }
 
 /**
@@ -124,7 +124,7 @@ export function maskedHomes(env) {
  * @param {(at: string) => string} real
  * @returns {{allow: string[], deny: string[], missing: string[], masked: string[]}}
  */
-export function sandboxScopes(env, exists, real) {
+export function sandboxScopes(env, exists, real, homes = MASKED_HOMES) {
   const workspace = String(env.GITHUB_WORKSPACE ?? '').trim() || '/';
   const staged = [
     String(env.RUNNER_TEMP ?? ''),
@@ -149,7 +149,7 @@ export function sandboxScopes(env, exists, real) {
    * sit behind one just as easily. `pointsAt` answers the lexical path where nothing resolves, so
    * this covers a store that is not on the runner without naming that case twice.
    */
-  const hidden = maskedHomes(env).map((one) => pointsAt(one, real));
+  const hidden = maskedHomes(env, homes).map((one) => pointsAt(one, real));
   const scoped = (value) =>
     listed(value)
       .map((one) => resolve(workspace, expandHome(one, env)))
@@ -194,7 +194,7 @@ function bashPatterns(token) {
   return inner.endsWith(':*') ? [inner.slice(0, -2), `${inner.slice(0, -2)} *`] : [inner];
 }
 
-function classify(list) {
+export function classify(list, table = OPENCODE_TOOL) {
   const tools = [];
   const bash = [];
   for (const token of String(list ?? '')
@@ -203,7 +203,7 @@ function classify(list) {
     .filter(Boolean)) {
     if (token === 'Bash') bash.push('*');
     else if (token.startsWith('Bash(') && token.endsWith(')')) bash.push(...bashPatterns(token));
-    else if (OPENCODE_TOOL[token]) tools.push([token, OPENCODE_TOOL[token]]);
+    else if (table[token]) tools.push([token, table[token]]);
   }
   return { tools, bash };
 }
@@ -293,8 +293,8 @@ export function validateProviderPolicyVersion(version) {
   return actual;
 }
 
-export function validateProviderPolicyConfig(value, at = 'trusted provider policy') {
-  if (JSON.stringify(value) !== JSON.stringify(PROVIDER_POLICY_CONFIG)) {
+export function validateProviderPolicyConfig(value, at = 'trusted provider policy', expected = null) {
+  if (JSON.stringify(value) !== JSON.stringify(expected ?? PROVIDER_POLICY_CONFIG)) {
     throw new Error(`trusted provider policy ${at} does not restrict every provider except anthropic`);
   }
   return value;
@@ -403,6 +403,8 @@ export const isolatedToolPhase = (phase) => ISOLATED_TOOL_PHASES.has(String(phas
 
 const asFileUrl = (path) => (path.startsWith('file://') ? path : `file://${path}`);
 
+export const pluginEntry = (one) => (Array.isArray(one) ? [asFileUrl(one[0]), one[1]] : asFileUrl(one));
+
 /**
  * runtimeConfig answers that configuration with the origin, the headers and the renewing auth plugin.
  *
@@ -434,7 +436,7 @@ export function runtimeConfig({
 } = {}) {
   const loadedPlugins = [plugin, channel, ...plugins]
     .filter(Boolean)
-    .map((one) => (Array.isArray(one) ? [asFileUrl(one[0]), one[1]] : asFileUrl(one)));
+    .map((one) => pluginEntry(one));
   return {
     ...RUNTIME_CONFIG,
     ...(shell ? { shell } : {}),
@@ -459,7 +461,7 @@ export function runtimeConfig({
 
 const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 
-function frontmatterOf(source) {
+export function frontmatterOf(source) {
   const match = FRONTMATTER.exec(String(source ?? ''));
   if (!match) return { fields: Object.create(null), body: String(source ?? '') };
   const fields = Object.create(null);
@@ -621,9 +623,9 @@ const INPUT_KEY = Object.assign(Object.create(null), {
  * twenty-second step. The digest distinguishes them and no renderer reads the key, so the command text
  * still reaches nothing that prints.
  */
-export function detailed(name, input) {
+export function detailed(name, input, keys = INPUT_KEY) {
   const out = { ...input };
-  for (const [from, to] of INPUT_KEY[name] ?? []) {
+  for (const [from, to] of keys[name] ?? []) {
     if (typeof input?.[from] === 'string' && out[to] === undefined) out[to] = input[from];
   }
   if (typeof out.command === 'string') {
@@ -792,13 +794,21 @@ export function endedOn(events) {
 
 const MAX_FAILURE_CHARS = 300;
 
-function elapsed(events) {
-  const stamps = events.map((one) => Number(one?.timestamp)).filter((one) => Number.isFinite(one));
-  if (stamps.length < 2) return 0;
-  return Math.max(0, Math.max(...stamps) - Math.min(...stamps));
+export function elapsed(events, stampOf = (one) => Number(one?.timestamp)) {
+  let first = Infinity;
+  let last = -Infinity;
+  let counted = 0;
+  for (const one of events) {
+    const stamp = stampOf(one);
+    if (!Number.isFinite(stamp)) continue;
+    counted += 1;
+    first = Math.min(first, stamp);
+    last = Math.max(last, stamp);
+  }
+  return counted < 2 ? 0 : Math.max(0, last - first);
 }
 
-function totals(steps) {
+export function totals(steps) {
   const usage = { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
   let cost = 0;
   for (const { tokens, cost: spent } of steps) {

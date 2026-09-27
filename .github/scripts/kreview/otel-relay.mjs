@@ -153,12 +153,21 @@ const severityOf = (record) => {
  * but a handful were its SQLite, which answers nothing anybody asks after a slow review and is
  * volume Datadog bills for.
  */
-export function bounded(payload) {
+const WIRE_ATTRIBUTE = /^(?:http\.(?:request|response)\.header\.|url\.(?:full|query)$|user_agent\.)/;
+
+const allowedSpan = (span, allowed) => !allowed || allowed.has(span?.name);
+
+const withoutWire = (span, allowed) =>
+  allowed ? { ...span, attributes: asArray(span?.attributes).filter((one) => !WIRE_ATTRIBUTE.test(String(one?.key ?? ''))) } : span;
+
+export function bounded(payload, allowed = null) {
   if (elements(payload) > MAX_ELEMENTS) return null;
   let kept = 0;
   for (const group of asArray(payload.resourceSpans)) {
     for (const scope of asArray(group?.scopeSpans)) {
-      scope.spans = asArray(scope?.spans).filter((span) => !storeSpan(span));
+      scope.spans = asArray(scope?.spans)
+        .filter((span) => !storeSpan(span) && allowedSpan(span, allowed))
+        .map((span) => withoutWire(span, allowed));
       kept += scope.spans.length;
     }
   }
@@ -202,11 +211,11 @@ export function read(chunks, encoding, ceiling = MAX_BODY_BYTES) {
   return '';
 }
 
-export function preparedPayload({ body, named, secrets }) {
+export function preparedPayload({ body, named, secrets, allowed = null }) {
   try {
     const stampedPayload = stamped(body, named);
     if (!stampedPayload) return null;
-    const payload = bounded(stampedPayload);
+    const payload = bounded(stampedPayload, allowed);
     if (!payload) return null;
     return JSON.parse(scrub(JSON.stringify(payload), secrets));
   } catch {
@@ -229,7 +238,8 @@ export function prepared({ signal, body, named, secrets }) {
  * `flow: test` the reviewed pull request's own code reaches this port, Datadog bills what arrives,
  * and a small body can name a large export. What arrived is counted too, but only as a rate.
  */
-export async function startRelay({ env = process.env, fetchImpl = fetch, observe = null, say = console.log, serverFactory = createServer } = {}) {
+export async function startRelay({ env = process.env, fetchImpl = fetch, observe = null, say = console.log, serverFactory = createServer, socket = '', spans = null } = {}) {
+  const allowed = spans ? new Set(spans) : null;
   const where = target(env);
   if (!where && typeof observe !== 'function') return null;
   const secrets = collectSecrets(env);
@@ -312,7 +322,7 @@ export async function startRelay({ env = process.env, fetchImpl = fetch, observe
           counts.dropped += 1;
           return;
         }
-        const payload = preparedPayload({ body: text, named, secrets });
+        const payload = preparedPayload({ body: text, named, secrets, allowed });
         if (!payload) {
           counts.dropped += 1;
           return;
@@ -347,10 +357,12 @@ export async function startRelay({ env = process.env, fetchImpl = fetch, observe
   await new Promise((ready, reject) => {
     const failed = (error) => reject(error);
     server.once('error', failed);
-    server.listen(0, '127.0.0.1', () => {
+    const listening = () => {
       server.off('error', failed);
       ready(null);
-    });
+    };
+    if (socket) server.listen(socket, listening);
+    else server.listen(0, '127.0.0.1', listening);
   });
   server.on('error', (error) => {
     say(`::warning::the telemetry relay stopped (${error?.message}), so later records are unavailable`);
@@ -360,13 +372,13 @@ export async function startRelay({ env = process.env, fetchImpl = fetch, observe
   server.unref();
   const bound = server.address();
   const port = bound && typeof bound === 'object' ? bound.port : 0;
-  if (!port) {
+  if (!socket && !port) {
     server.close();
     say('::warning::the telemetry relay took no port, so this run exports no trace and no log line');
     return null;
   }
-  const url = `http://127.0.0.1:${port}`;
-  say(where ? `telemetry relayed from ${url} to ${where.endpoint}` : `runtime telemetry observed at ${url}`);
+  const url = socket ? '' : `http://127.0.0.1:${port}`;
+  say(where ? `telemetry relayed from ${socket || url} to ${where.endpoint}` : `runtime telemetry observed at ${socket || url}`);
 
   const beginObservation = () => {
     observation.bytes = 0;
@@ -401,5 +413,5 @@ export async function startRelay({ env = process.env, fetchImpl = fetch, observe
     return { ...counts, in_flight: flight.size };
   };
 
-  return { url, close, counts, beginObservation };
+  return { url, socket, close, counts, beginObservation };
 }

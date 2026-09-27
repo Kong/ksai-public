@@ -3,10 +3,12 @@ import {
   chmodSync,
   closeSync,
   existsSync,
+  fstatSync,
   mkdtempSync,
   mkdirSync,
   openSync,
   readFileSync,
+  readSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -17,6 +19,7 @@ import {
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+import { forgetDeliveries } from '../lib/channel-hook.mjs';
 import { promptRendering } from '../lib/cp-prompts.mjs';
 import { conclusionOf, exitedOn, killedBySignal, stopReason } from '../lib/execution-log.mjs';
 import {
@@ -514,8 +517,8 @@ export function runtimeSummary(invocations, mcpServers = null) {
   };
 }
 
-export function scopeBinds(env = process.env, exists = existsSync, real = realpathSync) {
-  const scopes = sandboxScopes(env, exists, real);
+export function scopeBinds(env = process.env, exists = existsSync, real = realpathSync, homes = MASKED_HOMES) {
+  const scopes = sandboxScopes(env, exists, real, homes);
   for (const at of scopes.missing) {
     console.log(
       `::warning::the sandbox scope ${at} is not on this runner, so nothing is bound there and no tool may reach it`,
@@ -558,6 +561,55 @@ export function markKilled(at, reason, write = writeFileSync) {
       `::warning::the kill could not be recorded (${error?.message ?? error}), so no later step can tell this run was killed from one that failed`,
     );
     return false;
+  }
+}
+
+export function since(file, offset) {
+  const fd = openSync(file, 'r');
+  try {
+    const held = Buffer.alloc(Math.max(0, fstatSync(fd).size - offset));
+    readSync(fd, held, 0, held.length, offset);
+    return held.toString('utf8');
+  } finally {
+    closeSync(fd);
+  }
+}
+
+export async function singleRun({ env, prompt, run, resultTransport }) {
+  const killAt = Number(env.KSAI_CHANNEL_KILL_AT);
+  const timeoutMs = env.FLOW === 'review' ? killAt > 0 ? Math.max(0, killAt - Date.now()) : LIMITS.totalMs : 0;
+  const result = env.FLOW === 'review' && timeoutMs === 0 ? { code: 124, timed_out: true } : await run({ prompt, timeoutMs });
+  const code = result.code === 0 && resultTransport !== 'text' && result.submission?.status !== 'accepted' ? 1 : result.code;
+  Object.assign(env, submissionEnv(result.submission));
+  env.OPENCODE_REVIEW_CORRECTIONS = String(result.corrections ?? 0);
+  const keeps = (resultTransport !== 'text' && result.submission?.status === 'accepted') || result.attempts?.length > 1;
+  return { code, deadlineExpired: result.timed_out === true, kept: keeps ? result.text ?? '' : null };
+}
+
+export function keepReview(env, events, text) {
+  if (text === null) return;
+  const reviewFile = `${events}.review.json`;
+  writeFileSync(reviewFile, scrub(text, collectSecrets(env)));
+  env.OPENCODE_REVIEW_FILE = reviewFile;
+}
+
+export function reportExit(env, code, deadlineExpired) {
+  const reason = stopReason(code);
+  console.log(`opencode exit=${code}`);
+  if (killedBySignal(code)) markKilled(env.KSAI_KILLED_FILE, reason);
+  if (deadlineExpired) console.log(`::error::${reason}; the review deadline expired, so this attempt has no finished answer`);
+  else if (killedBySignal(code)) console.log(`::error::${reason}; an external signal stopped this attempt before it returned a finished answer`);
+}
+
+export function finalizePtyMetrics(at) {
+  try {
+    const metrics = JSON.parse(readFileSync(at, 'utf8'));
+    metrics.active_at_runner_exit = Number(metrics.active_sessions) || 0;
+    metrics.namespace_cleanup_count = metrics.active_at_runner_exit;
+    metrics.active_sessions = 0;
+    writeFileSync(at, `${JSON.stringify(metrics)}\n`);
+  } catch {
+    console.log('::warning::the PTY pilot metrics could not be finalized');
   }
 }
 
@@ -610,13 +662,15 @@ export function sandboxArgs(
   exists = existsSync,
   kind = (at) => statSync(at),
   real = realpathSync,
+  homes = MASKED_HOMES,
+  sockets = '',
 ) {
   const home = String(env.HOME ?? '');
   const workspace = String(env.GITHUB_WORKSPACE ?? '');
   const temp = String(env.RUNNER_TEMP ?? '');
   const opencodeHome = String(env.OPENCODE_HOME ?? '');
   const isolatedTools = isolatedToolPhase(env.OPENCODE_PHASE);
-  const brokered = isolatedTools || env.KSAI_PROVIDER_OBSERVATIONS === 'true';
+  const brokered = sockets !== '' || isolatedTools || env.KSAI_PROVIDER_OBSERVATIONS === 'true';
   const providerPolicyDir = providerPolicyDirectory(opencodeHome);
   const args = [
     '--ro-bind',
@@ -666,7 +720,7 @@ export function sandboxArgs(
     args.push('--dir', dirname(compactionFile), '--bind', compactionFile, compactionFile);
   }
 
-  for (const name of MASKED_HOMES) {
+  for (const name of homes) {
     const at = join(home, name);
     if (!exists(at)) continue;
     if (kind(at).isDirectory()) args.push('--tmpfs', at);
@@ -711,7 +765,7 @@ export function sandboxArgs(
   }
 
   args.push(
-    ...scopeBinds(env, exists),
+    ...scopeBinds(env, exists, undefined, homes),
     '--setenv',
     'TMPDIR',
     '/tmp',
@@ -738,7 +792,12 @@ export function sandboxArgs(
   const relay = String(env.KSAI_OTEL_RELAY ?? '').trim();
   if (relay) args.push('--setenv', EXPORTER_ENDPOINT, relay);
   const providerRelay = String(env.KSAI_PROVIDER_RELAY ?? '').trim();
-  if (brokered) {
+  if (sockets) {
+    args.push('--ro-bind', sockets, sockets);
+    for (const [name, file] of [['KSAI_PROVIDER_SOCKET', 'provider.sock'], ['KSAI_OTEL_SOCKET', 'otel.sock']]) {
+      if (exists(join(sockets, file))) args.push('--setenv', name, join(sockets, file));
+    }
+  } else if (brokered) {
     if (!/^http:\/\/127\.0\.0\.1:[0-9]+$/.test(providerRelay)) {
       throw new Error('provider relay is not a loopback origin');
     }
@@ -761,19 +820,21 @@ export function sandboxArgs(
   for (const name of new Set([...UNSET, ...exporter, ...scrubbed, ...denied])) {
     args.push('--unsetenv', name);
   }
+  args.push('--setenv', 'OPENCODE_DISABLE_PROJECT_CONFIG', '1');
+  if (!sockets) {
+    args.push(
+      '--setenv',
+      'OPENCODE_DISABLE_EXTERNAL_SKILLS',
+      '1',
+      '--setenv',
+      'OPENCODE_DISABLE_CLAUDE_CODE',
+      '1',
+      '--setenv',
+      'OPENCODE_DISABLE_DEFAULT_PLUGINS',
+      '1',
+    );
+  }
   args.push(
-    '--setenv',
-    'OPENCODE_DISABLE_PROJECT_CONFIG',
-    '1',
-    '--setenv',
-    'OPENCODE_DISABLE_EXTERNAL_SKILLS',
-    '1',
-    '--setenv',
-    'OPENCODE_DISABLE_CLAUDE_CODE',
-    '1',
-    '--setenv',
-    'OPENCODE_DISABLE_DEFAULT_PLUGINS',
-    '1',
     '--setenv',
     'OPENCODE_DISABLE_MODELS_FETCH',
     '1',
@@ -782,6 +843,7 @@ export function sandboxArgs(
     providerPolicyDirectory(opencodeHome),
     '--unshare-user',
     '--unshare-pid',
+    ...(sockets ? ['--unshare-net'] : []),
     '--new-session',
     '--die-with-parent',
     '--chdir',
@@ -811,17 +873,18 @@ export function runArgs(env = process.env) {
   const args = ['run', '--model', `anthropic/${named}`, '--format', 'json'];
   const staged = env.FLOW === 'review' && ['evidence', 'dual'].includes(env.REVIEW_STRATEGY);
   const structuredFinal = env.FLOW === 'review' && env.REVIEW_RESULT_TRANSPORT === 'structured' && env.OPENCODE_REVIEW_FINALIZE === 'true';
-  if (staged) args.push('--agent', env.OPENCODE_REVIEW_FINALIZE === 'true' ? 'ksai-review-finish' : 'ksai-review-stage');
+  const governed = String(env.KSAI_GOVERNED_DIR ?? '') !== '';
+  if (staged && !governed) args.push('--agent', env.OPENCODE_REVIEW_FINALIZE === 'true' ? 'ksai-review-finish' : 'ksai-review-stage');
   else if (structuredFinal) args.push('--agent', 'ksai-review-structured-finish');
   const variant = String(env.VARIANT ?? '').trim();
   if (variant && !(env.FLOW === 'review' && ['evidence', 'dual'].includes(env.REVIEW_STRATEGY) && env.OPENCODE_REVIEW_FINALIZE === 'true')) args.push('--variant', variant);
   const session = String(env.OPENCODE_RESUME_SESSION ?? '').trim();
-  if (session && !String(env.KSAI_GOVERNED_DIR ?? '')) args.push('--session', session, '--fork');
+  if (session && !governed) args.push('--session', session, '--fork');
   return args;
 }
 
-export function validateProviderPolicy(home, version, read = readFileSync) {
-  validateProviderPolicyVersion(version);
+export function validateProviderPolicy(home, version, { read = readFileSync, validVersion = validateProviderPolicyVersion, validConfig = validateProviderPolicyConfig } = {}) {
+  validVersion(version);
   const at = providerPolicyFile(home);
   let policy;
   try {
@@ -829,7 +892,7 @@ export function validateProviderPolicy(home, version, read = readFileSync) {
   } catch (error) {
     throw new Error(`trusted provider policy ${at} cannot be read: ${error.message}`, { cause: error });
   }
-  validateProviderPolicyConfig(policy, at);
+  validConfig(policy, at);
   return at;
 }
 
@@ -871,17 +934,14 @@ export async function broker(at, env, write = writeToken) {
   }
 }
 
-/**
- * main runs the review. `probe` is injectable for one reason: the abort below has to be executable.
- *
- * It was asserted by reading this file for the error string, which survives disabling the branch -
- * `if (false && probe.status !== 0)` left the whole suite green while a run proceeded past a
- * sandbox that never started, every tool call died at exec, and the empty event stream was
- * published as a reviewer that wrote nothing.
- */
-async function governedStageRun(env, invoke, context) {
+export const restartGoverned = (env, relay) => () => {
+  relay?.restart();
+  forgetDeliveries(String(env.KSAI_CHANNEL_DIR ?? ''));
+};
+
+export async function governedStageRun(env, invoke, context, deps = {}, govern = (_dir) => {}) {
   const { governedStages } = await import('./governed-stages.mjs');
-  const render = governedStages(env, context);
+  const render = governedStages(env, context, deps);
   return async (options) => {
     let staged;
     try {
@@ -893,10 +953,19 @@ async function governedStageRun(env, invoke, context) {
       console.log(`::warning::the control plane rendered no governed prompt for ${options.name}: ${error?.message}`);
       return { code: 1, text: null, usage: null };
     }
+    govern(staged.dir);
     return { ...(await invoke({ ...options, prompt: staged.prompt, resumeSession: '' })), prompt_sha256: staged.sha256 };
   };
 }
 
+/**
+ * main runs the review. `probe` is injectable for one reason: the abort below has to be executable.
+ *
+ * It was asserted by reading this file for the error string, which survives disabling the branch -
+ * `if (false && probe.status !== 0)` left the whole suite green while a run proceeded past a
+ * sandbox that never started, every tool call died at exec, and the empty event stream was
+ * published as a reviewer that wrote nothing.
+ */
 async function main(env = process.env, {
   probe: probeWith = spawnSync,
   startProvider = startProviderRelay,
@@ -1181,7 +1250,7 @@ async function main(env = process.env, {
       runtimeMetrics.push(runtimeMetric);
       if (timeout) clearTimeout(timeout);
       if (hardStop) clearTimeout(hardStop);
-      const segment = parsed(readFileSync(events).subarray(offset).toString('utf8'));
+      const segment = parsed(since(events, offset));
       Object.assign(runtimeMetric, toolTiming(segment, began, ended));
       const submission = resultTransport === 'tool'
         ? submitted({ file: resultFile, events: segment, kind: resultKind, candidateIds })
@@ -1196,14 +1265,15 @@ async function main(env = process.env, {
         usage: spending(segment).length ? { ...result.usage, cost_usd: result.total_cost_usd, num_turns: result.num_turns } : null };
     };
     const governed = String(env.KSAI_GOVERNED_DIR ?? '') !== '';
-    const budget = { remaining: governed ? 0 : 1 };
+    const budget = { remaining: 1 };
+    const restart = governed ? restartGoverned(env, providerRelay) : null;
     const prompt = readFileSync(String(env.PROMPT_FILE ?? ''), 'utf8');
-    const governedStage = pipeline && governed ? await governedStageRun(env, invoke, prompt) : null;
     const recovering = async (options) => {
-      const result = await recoverReview({ ...options, flow: env.FLOW, invoke, budget });
+      const result = await recoverReview({ ...options, flow: env.FLOW, invoke, budget, restart });
       for (const attempt of result.attempts) writeSync(out, `${JSON.stringify({ type: 'ksai_review_attempt', ...attempt })}\n`);
       return result;
     };
+    const governedStage = pipeline && governed ? await governedStageRun(env, recovering, prompt, {}, (dir) => providerRelay?.govern(dir)) : null;
     const run = (options) => governedStage
       ? governedStage(options)
       : pipeline
@@ -1215,18 +1285,9 @@ async function main(env = process.env, {
       Object.assign(env, await reviewSession({ env, events, prompt, run, resumable: !governedStage }));
       code = Number(env.OPENCODE_REVIEW_EXIT);
     } else {
-      const killAt = Number(env.KSAI_CHANNEL_KILL_AT);
-      const timeoutMs = env.FLOW === 'review' ? killAt > 0 ? Math.max(0, killAt - Date.now()) : LIMITS.totalMs : 0;
-      const result = env.FLOW === 'review' && timeoutMs === 0 ? { code: 124, timed_out: true } : await run({ prompt, timeoutMs });
-      code = result.code === 0 && resultTransport !== 'text' && result.submission?.status !== 'accepted' ? 1 : result.code;
-      Object.assign(env, submissionEnv(result.submission));
-      env.OPENCODE_REVIEW_CORRECTIONS = String(result.corrections ?? 0);
-      deadlineExpired = result.timed_out === true;
-      if ((resultTransport !== 'text' && result.submission?.status === 'accepted') || result.attempts?.length > 1) {
-        const reviewFile = `${events}.review.json`;
-        writeFileSync(reviewFile, scrub(result.text ?? '', collectSecrets(env)));
-        env.OPENCODE_REVIEW_FILE = reviewFile;
-      }
+      const ran = await singleRun({ env, prompt, run, resultTransport });
+      ({ code, deadlineExpired } = ran);
+      keepReview(env, events, ran.kept);
     }
   } catch {
     code = 1;
@@ -1249,16 +1310,7 @@ async function main(env = process.env, {
       if (!removed) console.log(`::error::the native LSP resource guardian could not remove ${nativeCgroup}`);
     }
   }
-  const reason = stopReason(code);
-  console.log(`opencode exit=${code}`);
-  if (killedBySignal(code)) markKilled(env.KSAI_KILLED_FILE, reason);
-  if (deadlineExpired) {
-    console.log(`::error::${reason}; the review deadline expired, so this attempt has no finished answer`);
-  } else if (killedBySignal(code)) {
-    console.log(
-      `::error::${reason}; an external signal stopped this attempt before it returned a finished answer`,
-    );
-  }
+  reportExit(env, code, deadlineExpired);
 
   if (env.FLOW === 'review') {
     try {
@@ -1267,17 +1319,7 @@ async function main(env = process.env, {
       console.log('::warning::child sessions could not be recorded; their usage remains unmeasured');
     }
   }
-  if (ptyMetrics) {
-    try {
-      const metrics = JSON.parse(readFileSync(ptyMetrics, 'utf8'));
-      metrics.active_at_runner_exit = Number(metrics.active_sessions) || 0;
-      metrics.namespace_cleanup_count = metrics.active_at_runner_exit;
-      metrics.active_sessions = 0;
-      writeFileSync(ptyMetrics, `${JSON.stringify(metrics)}\n`);
-    } catch {
-      console.log('::warning::the PTY pilot metrics could not be finalized');
-    }
-  }
+  if (ptyMetrics) finalizePtyMetrics(ptyMetrics);
   await relay?.close();
   await providerRelay?.close();
   const reduced = spawnSync(process.execPath, [join(String(env.SCRIPTS ?? ''), 'kreview/opencode-log.mjs')], {

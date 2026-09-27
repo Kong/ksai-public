@@ -159,7 +159,7 @@ git diff --cached --stat
 the one mistake that costs the whole run: there is no later turn, so the manifest never gets written.
 
 Spawn an **adversarial** reviewer whose job is to break the pass. Use `general-purpose` framed
-adversarially - do not assume a repo-specific review plugin is installed.
+adversarially - do not assume a repo-specific review plugin is installed. Where the subagent tool names the field `agent` rather than `subagent_type`, pass `general-purpose` there.
 
 ```js
 Agent({

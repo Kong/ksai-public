@@ -11,6 +11,7 @@ const {
   canonicalCommand,
 } = require('./select-arm.cjs');
 const { markerJson } = require('./run-record.cjs');
+const { runSettingsArmOf } = require('./run-settings-migration.cjs');
 const { escapeForRegExp } = require('./text.cjs');
 
 const VERSION = 1;
@@ -215,6 +216,7 @@ function packAttempts(attempts) {
     kinds,
     rows: attempts.map((attempt) => trimmed(ATTEMPT_FIELDS.map((name) => {
       if (name === 'arms') return packArms(attempt.arms, at);
+      if (name === 'run_settings_arm') return runSettingsArmOf(attempt);
       if (name !== 'verification' || attempt.verification === null || attempt.verification === undefined ||
           attempt.verification.commands_state !== undefined) return attempt[name];
       return { ...attempt.verification, command: '', commands: [] };

@@ -219,8 +219,7 @@ const runtime = { channel, permission, auth, attribution,
 };
 const config = governed
   ? (await import('../governance/config.mjs')).governedConfig({ ...runtime, skills, governance: JSON.parse(readFileSync(governed, 'utf8')),
-    guards: isolatedTools ? [...ISOLATED_GUARDS] : [],
-    ...(staged ? { agent: 'ksai-review-stage' } : {}) })
+    guards: isolatedTools ? [...ISOLATED_GUARDS] : [] })
   : runtimeConfig({ ...runtime, agents, skills,
     plugins: [
       ...(isolatedTools ? ISOLATED_GUARDS : []),

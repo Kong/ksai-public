@@ -15,7 +15,7 @@ function governedPermission(permission, tools) {
   return governed;
 }
 
-export function governedConfig({ governance, permission = { '*': 'deny' }, agent = 'build', skills = [], guards = [], ...runtime }) {
+export function governedConfig({ governance, permission = { '*': 'deny' }, skills = [], guards = [], ...runtime }) {
   const tools = new Set(governance.tools ?? []);
   const config = runtimeConfig({
     ...runtime,
@@ -25,6 +25,6 @@ export function governedConfig({ governance, permission = { '*': 'deny' }, agent
     plugins: [...guards, [GOVERNANCE_PLUGIN, governance]],
   });
   config.compaction = { auto: false, prune: false };
-  if (governance.steps !== undefined) config.agent = { [agent]: { mode: 'primary', steps: governance.steps } };
+  if (governance.steps !== undefined) config.agent = { build: { mode: 'primary', steps: governance.steps } };
   return config;
 }

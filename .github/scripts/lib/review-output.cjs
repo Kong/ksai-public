@@ -151,4 +151,8 @@ function extractReviewJson(raw) {
   return readReviewOutput(raw).review;
 }
 
-module.exports = { extractReviewJson, readReviewOutput, objectOf, NO_OUTPUT, NOT_JSON, NO_FINDINGS, REPAIRED };
+const carriesWhole = (last, whole) => whole !== null && last !== null && !extractReviewJson(last) && Boolean(extractReviewJson(whole));
+
+const reviewAnswerOf = (last, whole) => (carriesWhole(last, whole) ? whole : last);
+
+module.exports = { carriesWhole, extractReviewJson, readReviewOutput, reviewAnswerOf, objectOf, NO_OUTPUT, NOT_JSON, NO_FINDINGS, REPAIRED };

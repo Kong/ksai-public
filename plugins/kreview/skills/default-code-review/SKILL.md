@@ -93,7 +93,7 @@ breaks false positives, right-sizes severity, kills duplicates, and corrects hal
 
 **Spawn protocol:**
 
-1. Try `subagent_type: "kreview:findings-auditor"`.
+1. Try `subagent_type: "kreview:findings-auditor"`, which is the `agent` field where the subagent tool names it that way.
 2. On unknown subagent type, retry with `subagent_type: "general-purpose"` and prepend the
    auditor's mandate by reading
    [../../agents/findings-auditor.md](../../agents/findings-auditor.md)

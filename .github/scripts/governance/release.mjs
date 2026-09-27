@@ -1,4 +1,5 @@
 import { DIGEST, canonical, digest, sameDigest } from './artifacts.mjs';
+import { reminderText } from './conversation.mjs';
 import { signedWithDigest, statementOf } from './render.mjs';
 import { TrustedRoot, Verifier, bundleFromJSON, toTrustMaterial } from './sigstore.mjs';
 import { compareVersions, versionParts } from './versions.mjs';
@@ -7,7 +8,9 @@ export { compareVersions, versionParts };
 
 const LOCK_SUBJECT = /^ksai-cp-prompts-(v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))\.lock\.json$/;
 const TOOL_NAME = /^[a-z][a-z0-9_-]{0,63}$/;
-const TOOL_PREFIX = 'static.runtime.opencode-tool-';
+export const TOOL_PREFIX = 'static.runtime.opencode-tool-';
+
+export const TOOL_PREFIX_V2 = 'static.runtime.opencode2-tool-';
 const REMINDER_ID = 'static.runtime.opencode-max-steps';
 
 function entriesOf(lock) {
@@ -63,9 +66,9 @@ export function rendered(release, receipt) {
   return entry;
 }
 
-export function governedTool(release, name, body) {
+export function governedTool(release, name, body, prefix) {
   if (!TOOL_NAME.test(name)) throw new Error(`${name} is not a tool name`);
-  const entry = release.entries.find((one) => one.id === TOOL_PREFIX + name);
+  const entry = release.entries.find((one) => one.id === prefix + name);
   if (!entry || entry.dynamic || !sameDigest(entry.body_digest, digest(body))) {
     throw new Error(`the ${name} tool is not the one the attested release governs`);
   }
@@ -82,9 +85,5 @@ export function governedReminder(release, body) {
   if (!entry || entry.dynamic || !sameDigest(entry.body_digest, digest(body))) {
     throw new Error("opencode's step-limit reminder is not the one the attested release governs");
   }
-  const lines = JSON.parse(body.toString('utf8'))?.text_lines;
-  if (!Array.isArray(lines) || !lines.length || lines.some((line) => typeof line !== 'string')) {
-    throw new Error("opencode's step-limit reminder is malformed");
-  }
-  return lines.join('\n');
+  return reminderText(body);
 }

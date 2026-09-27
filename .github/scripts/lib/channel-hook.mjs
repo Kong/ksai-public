@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -163,6 +163,12 @@ export function collect(options) {
   ];
 }
 
+export function forgetDeliveries(stateDir) {
+  if (!stateDir || !isAbsolute(stateDir)) return;
+  for (const name of ['ticks', 'consumed']) rmSync(join(runDir(stateDir), name), { recursive: true, force: true });
+  openRunDir(stateDir);
+}
+
 function openRunDir(stateDir) {
   for (const name of ['ticks', 'consumed']) {
     try {
@@ -242,6 +248,38 @@ export function main(argv = process.argv.slice(2), read = () => readFileSync(0, 
   if (body === '') return '';
   record(stateDir, currentAt, event, notes.map((entry) => entry.kind));
   return JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: body } });
+}
+
+export function channelQueue(env) {
+  const argv = [
+    env.KSAI_CHANNEL_DIR ?? '',
+    env.KSAI_CHANNEL_KILL_AT ?? '0',
+    env.KSAI_CHANNEL_ARMED_AT ?? '0',
+    env.KSAI_CHANNEL_FLOW ?? 'unknown',
+    env.KSAI_CHANNEL_NONCE ?? 'none',
+    env.KSAI_CHANNEL_WARN ?? '0',
+  ];
+  const held = new Map();
+  return {
+    holds: (stream) => held.has(stream),
+    drain(stream) {
+      const said = (held.get(stream) ?? []).join('\n\n');
+      held.delete(stream);
+      return said;
+    },
+    answer(event, stream, tool) {
+      let answer = {};
+      try {
+        const payload = JSON.stringify({ hook_event_name: event, agent_id: stream, tool_name: tool ?? '' });
+        answer = JSON.parse(main(argv, () => payload) || '{}')?.hookSpecificOutput ?? {};
+      } catch {
+        return {};
+      }
+      const body = String(answer.additionalContext ?? '');
+      if (body !== '') held.set(stream, [...(held.get(stream) ?? []), body]);
+      return answer;
+    },
+  };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

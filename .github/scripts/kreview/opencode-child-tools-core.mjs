@@ -17,10 +17,9 @@ const string = (description) => ({ type: 'string', description });
 const optionalString = (description) => ({ type: ['string', 'null'], description });
 
 const requestedPath = (value, context) => {
-  const directory = String(context.directory || context.worktree || process.env.GITHUB_WORKSPACE || '');
-  const worktree = String(context.worktree || process.env.GITHUB_WORKSPACE || directory);
+  const directory = String(context.directory || process.env.GITHUB_WORKSPACE || '');
   const requested = value ? (isAbsolute(value) ? value : resolve(directory, value)) : directory;
-  return assertToolPath(requested, worktree);
+  return assertToolPath(requested, directory);
 };
 
 export function runIsolatedTool(
