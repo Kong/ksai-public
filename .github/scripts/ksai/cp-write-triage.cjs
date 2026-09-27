@@ -12,7 +12,7 @@ const {
   parseAllowedModels,
   defaultEffortFor,
 } = require('../lib/select-arm.cjs');
-const { mintedId, postTo, reachControlPlane } = require('../lib/control-plane.cjs');
+const { gatewayHandover, mintedId, postTo, reachControlPlane } = require('../lib/control-plane.cjs');
 const { withinBytes } = require('../lib/prompt-text.cjs');
 
 const API_VERSION = 'triage/v1';
@@ -237,12 +237,15 @@ async function decideWrite({
   if (error) return kept(error);
 
   const audience = String(env.AUDIENCE ?? '').trim() || undefined;
-  const { base, token, failure } = await reachControlPlane({ endpoint, audience, env, mint, secret });
+  const [{ base, token, failure }, headers] = await Promise.all([
+    reachControlPlane({ endpoint, audience, env, mint, secret }),
+    gatewayHandover({ env, mint, secret }),
+  ]);
   if (failure) return kept(failure);
 
   let answer;
   try {
-    const response = await postTo(fetch, `${base}/v1/triage/write`, { token, body: JSON.stringify(body), timeout });
+    const response = await postTo(fetch, `${base}/v1/triage/write`, { token, body: JSON.stringify(body), timeout, headers });
     if (response.status === 409) return kept('the evidence this run sent is no longer current');
     if (!response.ok) return kept('the control plane did not decide this run');
     answer = await response.json();

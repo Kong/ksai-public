@@ -3464,6 +3464,8 @@ runs:
         TRIAGE: ${{ inputs.triage }}
         TRIAGE_WRITE: ${{ inputs.triage_write }}
         ENDPOINT: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
+        ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
+        ANTHROPIC_AUTH: ${{ inputs.anthropic_auth }}
         RECORD_ID: ${{ inputs.record_id }}
         RUN_HEAD_SHA: ${{ github.sha }}
         HEAD_SHA: ${{ steps.phase.outputs.pr_number != '' && steps.dispatch_record.outputs.head_sha || github.sha }}
@@ -7011,6 +7013,8 @@ runs:
         steps.report.outcome == 'success' }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
+        ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
+        ANTHROPIC_AUTH: ${{ inputs.anthropic_auth }}
         PR_NUMBER: ${{ steps.context.outputs.issue_number }}
         RUN_ID: ${{ github.run_id }}
         COMMAND: ${{ steps.select_arm.outputs.command }}

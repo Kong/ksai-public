@@ -12,6 +12,8 @@ const DEFAULT_TIMEOUT = 30_000;
 
 const OUTCOME_HEADER = 'ksai-cp-outcome';
 
+const HANDOVER_HEADER = 'X-Ksai-Gateway-Token';
+
 const EARLY = 30_000;
 
 const tokens = new Map();
@@ -94,6 +96,15 @@ async function reachControlPlane({ endpoint, audience = 'ksai-cp', env, mint, se
   return minted.failure ? minted : { base, token: minted.token };
 }
 
+async function gatewayHandover({ env, mint, secret }) {
+  if (String(env.ANTHROPIC_AUTH ?? '').trim() !== 'oidc-bearer') return {};
+  if (String(env.KSAI_MODEL_AUTH_MODE ?? '').trim() === 'cp_exchange') return {};
+  const gateway = String(env.ANTHROPIC_BASE_URL ?? '').trim().replace(/\/+$/, '');
+  if (!gateway.startsWith('https://') || /\/v1$/i.test(gateway)) return {};
+  const minted = await controlPlaneToken({ audience: gateway, env, mint, secret });
+  return minted.token ? { [HANDOVER_HEADER]: minted.token } : {};
+}
+
 async function reachedFor({ env, fetch, timeout, secret, holds = timeout, audience = 'ksai-cp', endpoint = env.KSAI_CP_ENDPOINT }) {
   const named = String(endpoint ?? '').trim();
   if (named === '') return { why: 'no control plane serves this repository' };
@@ -133,10 +144,10 @@ function usingControlPlane(env) {
   return String(env?.KSAI_GITHUB_CALLS ?? '').trim() === 'cp';
 }
 
-function postTo(call, url, { token, body, timeout, signal = AbortSignal.timeout(timeout) }) {
+function postTo(call, url, { token, body, timeout, signal = AbortSignal.timeout(timeout), headers = {} }) {
   return call(url, {
     method: 'POST',
-    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    headers: { ...headers, authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     body,
     signal,
   });
@@ -155,6 +166,6 @@ function unanswered(error) {
 }
 
 module.exports = {
-  DEFAULT_TIMEOUT, OUTCOME_HEADER, renderingModeOf, usingControlPlane, minter, mask, mintedId, reachControlPlane, reachedFor, answered, postTo,
-  unreached, unanswered,
+  DEFAULT_TIMEOUT, OUTCOME_HEADER, renderingModeOf, usingControlPlane, minter, mask, mintedId, reachControlPlane, reachedFor,
+  gatewayHandover, answered, postTo, unreached, unanswered,
 };

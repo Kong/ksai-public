@@ -3,7 +3,7 @@
 
 const { createHash } = require('node:crypto');
 
-const { DEFAULT_TIMEOUT, answered, mask, reachedFor, usingControlPlane } = require('./control-plane.cjs');
+const { DEFAULT_TIMEOUT, answered, gatewayHandover, mask, minter, reachedFor, usingControlPlane } = require('./control-plane.cjs');
 
 const API_VERSION = 'effects/v1';
 const EFFECTS = '/v1/run/effects';
@@ -18,14 +18,17 @@ const held = (ms) => new Promise((done) => { setTimeout(done, ms); });
 
 const text = (value) => String(value ?? '').trim();
 
-async function askControlPlane(effects, { env, fetch, timeout, secret, pause = held }) {
+async function askControlPlane(effects, { env, fetch, timeout, secret, pause = held, handover = false }) {
   const reached = await reachedFor({ env, fetch, timeout, secret, holds: holdsFor(timeout) });
   if (reached.why) return reached;
+  const headers = handover
+    ? await gatewayHandover({ env, secret, mint: minter({ env, fetch, signal: reached.signal, holds: holdsFor(timeout) }) })
+    : {};
   const body = JSON.stringify({ api_version: API_VERSION, effects });
   let last = { why: 'the control plane was asked nothing' };
   for (let tries = 0; tries < EFFECT_ATTEMPTS; tries += 1) {
     if (tries > 0) await pause(backoffFor(tries));
-    const said = await answered(fetch, `${reached.base}${EFFECTS}`, { token: reached.token, body, timeout });
+    const said = await answered(fetch, `${reached.base}${EFFECTS}`, { token: reached.token, body, timeout, headers });
     if (said.why) {
       last = { why: said.why, unavailable: said.status === undefined || said.status >= 500 || said.status === 429 };
       if (said.status !== undefined && said.status < 500 && said.status !== 429) return last;
@@ -55,9 +58,9 @@ function controlPlaneWriter({ env, fetch, timeout, secret, pause = held }) {
   const rawCopy = async () => {
     throw new Error('the control plane needs structured facts to publish user-facing copy');
   };
-  const sendRaw = async (effect) => {
+  const sendRaw = async (effect, { handover = false } = {}) => {
     const asked = { ...effect, id: name(effect) };
-    const said = await askControlPlane([asked], { env, fetch, timeout, secret, pause });
+    const said = await askControlPlane([asked], { env, fetch, timeout, secret, pause, handover });
     if (said.why) {
       throw Object.assign(new Error(said.why), { cpUnavailable: said.unavailable !== false });
     }
@@ -65,8 +68,8 @@ function controlPlaneWriter({ env, fetch, timeout, secret, pause = held }) {
     if (text(done?.refused) !== '') throw new Error(done.refused);
     return done ?? {};
   };
-  const send = async (effect) => {
-    const done = await sendRaw(effect);
+  const send = async (effect, options) => {
+    const done = await sendRaw(effect, options);
     return { id: Number(done.comment ?? 0) || null, review: Number(done.review ?? 0) || null,
       ...(done.updated === true ? { updated: true } : {}) };
   };
@@ -91,7 +94,7 @@ function controlPlaneWriter({ env, fetch, timeout, secret, pause = held }) {
     runReportEdit: ({ comment, report }) => send({ kind: 'run_report_edit', comment: Number(comment), report }),
     runReportComment: ({ number, report }) => send({ kind: 'run_report_comment', number: Number(number), report }),
     runResult: ({ number, notice, report, mode }) => send({ kind: 'run_result', number: Number(number),
-      ...(notice ? { notice } : { report }), ...(mode ? { mode } : {}) }),
+      ...(notice ? { notice } : { report }), ...(mode ? { mode } : {}) }, { handover: true }),
     async runStartCleanup({ number, run }) {
       const said = await sendRaw({ kind: 'run_start_cleanup', number: Number(number), run: String(run) });
       return { changed: said.changed === true };
