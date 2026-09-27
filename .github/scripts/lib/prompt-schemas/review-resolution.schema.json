@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ksai.invalid/prompts/schemas/review-resolution.schema.json",
+  "title": "Review finding resolution input",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "excerpt",
+    "finding",
+    "patch",
+    "resolution"
+  ],
+  "properties": {
+    "excerpt": {
+      "type": "string",
+      "maxLength": 16384
+    },
+    "finding": {
+      "type": "string",
+      "maxLength": 4096
+    },
+    "patch": {
+      "type": "string",
+      "maxLength": 16384
+    },
+    "resolution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "line",
+        "path"
+      ],
+      "properties": {
+        "line": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      }
+    }
+  }
+}
