@@ -39,6 +39,7 @@ export const PINNED = {
   report_rendering: WHERE,
   run_tokens: WHERE,
   prompt_rendering: WHERE,
+  engine: (/** @type {string} */ value) => ['opencode', 'opencode2'].includes(value),
 };
 
 /**

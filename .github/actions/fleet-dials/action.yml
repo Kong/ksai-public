@@ -201,6 +201,12 @@ outputs:
       only what the control plane rendered and signed, verified by the gateway plugin. Nothing is
       pinned here, because a repository moves by being served this dial.
     value: ${{ steps.dials.outputs.prompt_rendering }}
+  engine:
+    description: >-
+      the OpenCode line a v5 run starts: `opencode` is OpenCode 1 and `opencode2` is OpenCode 2, and empty
+      where the control plane served neither, which a v5 run reads as OpenCode 1. Nothing is pinned here,
+      because a repository moves by being served this dial.
+    value: ${{ steps.dials.outputs.engine }}
   catalog_path:
     description: >-
       the file the served model catalog was written to, or empty where the
