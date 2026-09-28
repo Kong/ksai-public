@@ -5,6 +5,7 @@ import { offerChildTools } from './child-tools.mjs';
 import { guard } from './guard.mjs';
 import { capped, serve } from './models.mjs';
 import { policy } from './policy.mjs';
+import { replyLimit } from './replies.mjs';
 import { bounded } from './shell.mjs';
 
 const SESSION_HOOKS = Object.freeze(['context', 'compaction', 'generate', 'title']);
@@ -37,6 +38,7 @@ export default {
       await ctx.shell.hook('create.before', guarded.shell);
       await ctx.tool.hook('execute.before', guarded.before);
     }
+    if (options.replies) await ctx.tool.hook('execute.before', replyLimit(directory));
     if (options.children) await offerChildTools(ctx, options.children, directory);
     await governed(ctx, governance);
   },

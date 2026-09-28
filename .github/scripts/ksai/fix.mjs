@@ -13,7 +13,8 @@ const { NOTICE_KEYS, pick } = require('../lib/cp-render.cjs');
 const { usingControlPlane } = require('../lib/control-plane.cjs');
 const { safeEcho, soleWritable, verifyChunk, gitVia, noChangeLeftBehind } = require('./verify-chunk.cjs');
 const { readScope, writeScopeResult } = require('./change-scope.cjs');
-const { MAX_ANSWERABLE: MAX_REPLIES, MAX_REPLY_CHARS } = require('./threads.cjs');
+const { MAX_ANSWERABLE: MAX_REPLIES } = require('./threads.cjs');
+const { MAX_REPLY_CHARS, replyBody } = require('./reply-limit.cjs');
 const { counted } = require('../lib/text.cjs');
 import { blockerFor, field, offerPlanDoc, readManifest, reasonOf, runCommand, shown } from './run.mjs';
 import { publishCommit } from './signed-push.mjs';
@@ -75,7 +76,7 @@ export function parseReplies(manifest, { pending = null, triggerPhrase = null } 
       return { message: `A review thread on \`${safeEcho(thread.path)}\` has no comment to reply to.` };
     }
 
-    const body = scrub(field(row?.reply), { triggerPhrase }).trim();
+    const body = replyBody(row?.reply, { triggerPhrase });
     if (!body) return { message: `The pass reported no reply for the thread on \`${safeEcho(thread.path)}\`.` };
     if (body.length > MAX_REPLY_CHARS) {
       return { message: `A reply for \`${safeEcho(thread.path)}\` is ${body.length} characters, over the limit of ${MAX_REPLY_CHARS}.` };

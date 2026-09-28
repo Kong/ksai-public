@@ -27,6 +27,7 @@ import {
   validateV2Version,
 } from '../lib/opencode-v2.mjs';
 import { LINK_TOOLS } from '../governance/release.mjs';
+import { REPLYING_PHASES } from '../ksai/reply-limit.cjs';
 import { AUTH_MODES, originProblem } from './federated-token.mjs';
 
 const TOOL_SHELL = fileURLToPath(new URL('./opencode-tool-shell.mjs', import.meta.url));
@@ -104,6 +105,7 @@ export function v2Config(env, { exists = existsSync, real = realpathSync, read =
     shell: linked ? join(linked, 'shell.json') : { timeout_ms: SHELL_TIMEOUT_MS },
     policy: { models: [model], workspace, strip_instructions: true },
     ...(isolated ? { guard: true, children: { permissions } } : {}),
+    ...(REPLYING_PHASES.includes(phase) ? { replies: true } : {}),
   }]];
   const skills = governedTools.includes('skill')
     ? String(env.OPENCODE_SKILLS ?? '')

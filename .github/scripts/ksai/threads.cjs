@@ -9,8 +9,6 @@ const REPLY_SEARCH_DEPTH = 30;
 
 const MAX_ANSWERABLE = 30;
 
-const MAX_REPLY_CHARS = 1000;
-
 const THREAD_QUERY = `
   query ($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
     repository(owner: $owner, name: $repo) {
@@ -661,7 +659,6 @@ async function resolveFixPhase({
 module.exports = {
   PER_PAGE,
   MAX_ANSWERABLE,
-  MAX_REPLY_CHARS,
   THREAD_QUERY,
   THREAD_COMMENTS_QUERY,
   AGREED_KIND,

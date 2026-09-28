@@ -272,7 +272,8 @@ const {
   MAX_SUMMARY_CHARS,
   MAX_TITLE_CHARS,
 } = require('./plan.cjs');
-const { isOwnLogin, MAX_REPLY_CHARS } = require('./threads.cjs');
+const { isOwnLogin } = require('./threads.cjs');
+const { MAX_REPLY_CHARS } = require('./reply-limit.cjs');
 const { MAX_REPORT_CHARS, renderFailedAttempt } = require('./do.cjs');
 const { isBranchForWork } = require('./phase.cjs');
 
