@@ -85,8 +85,7 @@ function normalizeRule(record, { scope }) {
 }
 
 /*
- * Parses the committed list. One JSON object per line, as written in
- * `suppressions/<owner>/<repo>/learnings.jsonl`. Blank lines are skipped; anything else that does
+ * Parses a rule list. One JSON object per line. Blank lines are skipped; anything else that does
  * not validate is dropped with a warning naming the line, so a bad entry is visible in the run
  * log rather than silently inert.
  */

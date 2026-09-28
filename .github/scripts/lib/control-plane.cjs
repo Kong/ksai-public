@@ -167,5 +167,5 @@ function unanswered(error) {
 
 module.exports = {
   DEFAULT_TIMEOUT, OUTCOME_HEADER, renderingModeOf, usingControlPlane, minter, mask, mintedId, reachControlPlane, reachedFor,
-  gatewayHandover, answered, postTo, unreached, unanswered,
+  gatewayHandover, answered, postTo, released, unreached, unanswered,
 };

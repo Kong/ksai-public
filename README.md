@@ -19,4 +19,4 @@ The value is an origin - it starts with `https://` and ends at the host, because
 
 `ksai-request.yml` and `ksai-hold.yml` make no model call and take no such secret.
 
-`suppressions_store` empties the same way. An empty one loads no suppressions and changes nothing else.
+Suppressions load from the control plane `control_plane_endpoint` names. With none set the load is skipped and every finding posts.

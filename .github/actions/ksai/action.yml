@@ -630,21 +630,19 @@ inputs:
     required: false
     default: "kreview-full"
   suppressions_store:
-    description: "owner/repo holding the committed suppression lists (suppressions/<owner>/<repo>/learnings.jsonl)"
+    description: "deprecated and ignored: a review reads its suppression rules from the control plane"
     required: false
     default: ""
   suppressions_ref:
-    description: "ref in the store to read the list from; a branch means a merged rule takes effect on the next review"
+    description: "deprecated and ignored: a review reads its suppression rules from the control plane"
     required: false
     default: "main"
   suppressions_app_id:
-    description: >-
-      app id of the GitHub App used to read the suppression store. Empty (the default) skips the load entirely,
-      so every finding posts.
+    description: "deprecated and ignored: a review reads its suppression rules from the control plane"
     required: false
     default: ""
   suppressions_private_key:
-    description: "private key of that same App. Empty skips the load, so every finding posts."
+    description: "deprecated and ignored: a review reads its suppression rules from the control plane"
     required: false
     default: ""
   artifact_retention_days:
@@ -6780,14 +6778,11 @@ runs:
       id: suppressions
       if: >-
         ${{ always() && inputs.flow == 'review' && steps.report.outputs.has_output == 'true' &&
-        inputs.suppressions_app_id != '' && inputs.suppressions_private_key != '' }}
+        (inputs.control_plane_endpoint || inputs.fleet_dials_endpoint) != '' }}
       continue-on-error: true
       shell: bash
       env:
-        KREVIEW_SUPPRESSIONS_APP_ID: ${{ inputs.suppressions_app_id }}
-        KREVIEW_SUPPRESSIONS_PRIVATE_KEY: ${{ inputs.suppressions_private_key }}
-        KREVIEW_SUPPRESSIONS_STORE: ${{ inputs.suppressions_store }}
-        KREVIEW_SUPPRESSIONS_REF: ${{ inputs.suppressions_ref }}
+        KSAI_CP_ENDPOINT: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
         KREVIEW_REVIEWED_REPO: ${{ github.repository }}
         KREVIEW_SUPPRESSIONS_BUNDLE: ${{ runner.temp }}/kreview-suppressions.json
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
