@@ -5,7 +5,7 @@ import { boundedBytes } from '../lib/evidence.cjs';
 
 export const DIGEST = /^sha256:[0-9a-f]{64}$/;
 
-const PROMPT_BYTES = 1024 * 1024;
+const PROMPT_BYTES = 2 * 1024 * 1024;
 const CONTROL_BYTES = 2 * 1024 * 1024;
 
 export function record(value, name) {

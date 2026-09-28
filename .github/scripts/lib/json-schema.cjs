@@ -6,7 +6,7 @@ const TYPE = new Set(['null', 'boolean', 'object', 'array', 'number', 'integer',
 const SCHEMA_KEYWORDS = Object.freeze([
   '$schema', '$id', '$defs', '$ref', 'type', 'enum', 'const', 'required', 'properties',
   'additionalProperties', 'items', 'minItems', 'maxItems', 'maxProperties', 'uniqueItems', 'minLength', 'maxLength', 'pattern',
-  'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'allOf', 'anyOf', 'oneOf',
+  'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'allOf', 'anyOf', 'oneOf', 'not',
   'description', 'title', 'default', 'examples', 'format',
 ]);
 const KEYWORDS = new Set(SCHEMA_KEYWORDS);
@@ -114,7 +114,7 @@ function inspect(schema, root, path, resolveReference, seen, resourceRoot, idBas
     if (!object(schema[keyword])) throw new Error(`${path} schema ${keyword} is invalid`);
     for (const branch of Object.values(schema[keyword])) inspect(branch, root, path, resolveReference, seen, false, ownsIdBase);
   }
-  for (const keyword of ['items', 'additionalProperties']) {
+  for (const keyword of ['items', 'additionalProperties', 'not']) {
     if (schema[keyword] !== undefined) inspect(schema[keyword], root, path, resolveReference, seen, false, ownsIdBase);
   }
 }
@@ -205,6 +205,12 @@ function check(schema, value, root, path, where, problems, seen, resolveReferenc
     if (keyword === 'anyOf' && matches === 0) problems.push(`${where} matches no allowed schema`);
     if (keyword === 'oneOf' && matches !== 1) problems.push(`${where} does not match exactly one schema`);
     if (outcomes.some((outcome) => outcome.blocked)) blocked = true;
+  }
+  if (schema.not !== undefined) {
+    const held = [];
+    const notBlocked = check(schema.not, value, root, path, where, held, seen, resolveReference);
+    if (notBlocked || held.length === 0) problems.push(`${where} matches a schema it must not`);
+    if (notBlocked) blocked = true;
   }
 
   if (typeof value === 'string') {

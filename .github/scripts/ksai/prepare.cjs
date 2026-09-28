@@ -222,6 +222,8 @@ async function selectImplementArm({ github, core, owner, repo, env }) {
     codeowner: env.CODEOWNER,
     write: env.WRITE_ACCESS,
     classifiedCommand: env.CLASSIFIED_COMMAND,
+    bound: env.BOUND_COMMAND,
+    operator: { codeowner: env.OPERATOR_CODEOWNER, write: env.OPERATOR_WRITE_ACCESS },
   });
 
   const named = `${owner}/${repo}`;
@@ -419,6 +421,8 @@ async function selectTesterArm({ github, core, owner, repo, env }) {
     },
     codeowner: env.CODEOWNER,
     write: env.WRITE_ACCESS,
+    bound: env.BOUND_COMMAND,
+    operator: { login: env.OPERATOR, codeowner: env.OPERATOR_CODEOWNER, write: env.OPERATOR_WRITE_ACCESS },
   });
 
   const named = `${owner}/${repo}`;
@@ -520,7 +524,7 @@ async function selectTesterArm({ github, core, owner, repo, env }) {
 
 function dispatchedActor(env) {
   const named = String(env.IN_ACTOR ?? '');
-  return env.FLOW === 'review' && named !== '' ? named : String(env.IN_TRIGGERING_ACTOR ?? '');
+  return (env.FLOW === 'review' || env.FLOW === 'test') && named !== '' ? named : String(env.IN_TRIGGERING_ACTOR ?? '');
 }
 
 function labelledContext(labelled) {

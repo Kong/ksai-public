@@ -7,6 +7,8 @@ const { EXTRA_ARGS_REFUSAL, toolPolicy, validateExtraArgs } = require('../lib/cl
 const { mintedId, postTo, reachControlPlane, unreached } = require('../lib/control-plane.cjs');
 const {
   HELP_COMMAND,
+  boundRefusal,
+  operatorRefusal,
   commandAuthorized,
   commandEnabled,
   ownsCommand,
@@ -391,9 +393,19 @@ async function selectReviewArm({ github, core, owner, repo, env }) {
     });
     return { ...outputs, rejected: `Rejected model/effort selection: ${result.error}`, note: '' };
   }
+  const bound = String(env.BOUND_COMMAND ?? '').trim();
+  const unbound = boundRefusal(result, bound) || (bound === '' ? '' : operatorRefusal(
+    result.command,
+    { login: env.OPERATOR, codeowner: env.OPERATOR_CODEOWNER, write: env.OPERATOR_WRITE_ACCESS },
+    [...result.writeAccess],
+  ));
+  if (unbound) {
+    outputs.error = unbound;
+    return { ...outputs, rejected: unbound, note: '' };
+  }
 
   const helps = result.command === HELP_COMMAND;
-  const read = result.commandNamed ? '' : String(env.CLASSIFIED_COMMAND ?? '').trim();
+  const read = result.commandNamed || bound !== '' ? '' : String(env.CLASSIFIED_COMMAND ?? '').trim();
   const verdict = read === CLARIFY_VERDICT ? CLARIFY_VERDICT : read === '' ? '' : verdictOf(read, env.DISABLED_COMMANDS);
   const routed = verdict !== '' && verdict !== NO_VERDICT;
   const clarified = verdict === CLARIFY_VERDICT;

@@ -1,7 +1,7 @@
 {
   "source": "kong-konnect/ksai-cp/prompts/public/runtime",
   "source_release": "v0.2.167",
-  "source_change": "kong-konnect/ksai-cp#573",
+  "source_change": "kong-konnect/ksai-cp#602",
   "inputs": {
     "runtime.claude-generic": [
       "request",
@@ -126,6 +126,11 @@
       "finding",
       "patch",
       "resolution"
+    ],
+    "runtime.work-session-continue": [
+      "base_prompt",
+      "handoff",
+      "knowledge"
     ],
     "runtime.write-triage-risk": [
       "ask",

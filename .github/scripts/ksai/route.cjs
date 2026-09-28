@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const { afterTrigger } = require('../lib/text.cjs');
 const {
   COMMANDS,
+  operatorRefusal,
   commandEnabled,
   defaultCommandFor,
   HELP_COMMAND,
@@ -78,6 +79,23 @@ function decide({ command, spelled, onIssue, onReview = null, disabledCommands }
       !enabled ||
       (onIssue && spelled === null),
   };
+}
+
+const FLOW_OUTPUTS = Object.freeze({ reviewer: 'review', implement: 'implement', tester: 'test' });
+
+function boundUnrunnable({ bound, asked = null, surface = null, disabledCommands, decision }) {
+  const refused = (why) => `${why}, so the successor bound to \`${bound}\` did not run`;
+  if (parseDisabledCommands(disabledCommands).some((command) => !COMMANDS.includes(command))) {
+    return refused("this repository's disabled commands name something that is not a command");
+  }
+  if (!commandEnabled(bound, { flow: ownerOf(bound), disabledCommands })) return refused('this repository turned that command off');
+  if (asked !== null && asked !== bound) return refused('the retained request no longer asks for that command');
+  if (surface !== null && !commandFitsSurface(bound, surface)) return refused('that command does not run where it was asked');
+  const owner = ownerOf(bound);
+  if (Object.entries(FLOW_OUTPUTS).some(([flow, output]) => Boolean(decision[output]) !== (flow === owner))) {
+    return refused('that command would reach a flow other than its own');
+  }
+  return '';
 }
 
 function routeVerdict({ verdict, onIssue, disabledCommands }) {
@@ -204,7 +222,19 @@ async function resolveRequester({ github, context, env }) {
 }
 
 async function routeLabelled({ github, core, context, env, basis, asker = 'A label' }) {
+  const bound = String(env.RECORD_BOUND_COMMAND ?? '').trim();
   const decision = decide({ command: basis.command, spelled: basis.command, onIssue: false, disabledCommands: env.DISABLED_COMMANDS });
+  const unrunnable = bound === '' ? '' : boundUnrunnable({
+    bound,
+    asked: basis.command,
+    surface: { onIssue: false },
+    disabledCommands: env.DISABLED_COMMANDS,
+    decision,
+  });
+  if (unrunnable !== '') {
+    core.setFailed(unrunnable);
+    return null;
+  }
   let pending;
   const readConfig = () => {
     pending ??= loadKsaiConfig({ github, core, owner: context.repo.owner, repo: context.repo.repo });
@@ -310,7 +340,8 @@ async function route({ github, core, context, env }) {
   }
   if (reviewed) return routeLabelled({ github, core, context, env, basis: reviewed, asker: 'A review' });
 
-  const decision = await routeCommand({
+  const bound = String(env.RECORD_BOUND_COMMAND ?? '').trim();
+  const routed = await routeCommand({
     eventName,
     onIssue,
     threadRootId,
@@ -321,6 +352,18 @@ async function route({ github, core, context, env }) {
     disabledCommands,
     loadConfig: readConfig,
   });
+  const decision = bound === '' ? routed : decide({ command: bound, spelled: bound, onIssue, onReview, disabledCommands });
+  const unrunnable = bound === '' ? '' : boundUnrunnable({
+    bound,
+    asked: dispatched.held ? routed.command ?? '' : null,
+    surface: dispatched.held ? { onIssue, threadRootId, onReview } : null,
+    disabledCommands,
+    decision,
+  });
+  if (unrunnable !== '') {
+    core.setFailed(unrunnable);
+    return null;
+  }
 
   core.setOutput('review', decision.review ? 'true' : 'false');
   core.setOutput('implement', decision.implement ? 'true' : 'false');
@@ -341,6 +384,11 @@ async function route({ github, core, context, env }) {
   const asked = continued ? null : afterTrigger(unquoted(body), env.TRIGGER);
   const requested = ownReview || continued || asked !== null;
   core.setOutput('requested', requested ? 'true' : 'false');
+  if (bound !== '') {
+    core.setOutput('write_access_commands', requested ? await opened() : '');
+    core.info(`This run continues a work session bound to \`${bound}\`, so its comment is not classified.`);
+    return decision;
+  }
   const bare =
     request === null &&
     (await bareTarget({ github, core, context, payload, eventName, env, onIssue, threadRootId, body, readConfig, opened }));
@@ -516,11 +564,22 @@ function settleAuthorization({ core, env }) {
   });
 
   const refusal = answer.undecided ? undecidedWriteAccess(command) : '';
+  const unoperated = String(env.BOUND_COMMAND ?? '').trim() === ''
+    ? ''
+    : operatorRefusal(
+        command,
+        { login: env.OPERATOR, codeowner: env.OPERATOR_CODEOWNER, write: env.OPERATOR_WRITE_ACCESS },
+        writeAccessNames(env.WRITE_ACCESS_COMMANDS),
+      );
   core.setOutput('command', command);
   core.setOutput('bar', answer.bar);
   core.setOutput('undecided', answer.undecided ? 'true' : 'false');
   core.setOutput('unreadable_write', refusal);
-  core.setOutput('authorized', answer.read ? (answer.authorized ? 'true' : 'false') : '');
+  core.setOutput('authorized', answer.read ? (answer.authorized && unoperated === '' ? 'true' : 'false') : '');
+  if (unoperated !== '') {
+    core.setFailed(unoperated);
+    return answer;
+  }
 
   if (refusal !== '') {
     core.warning(refusal);

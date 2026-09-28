@@ -217,7 +217,7 @@ inputs:
   actor:
     description: >-
       GitHub username to run the CODEOWNERS authorization check against on a dispatch. **Honoured by the review
-      flow only.** The implement flow authorizes `github.triggering_actor`, never an input: an input is free
+      and test flows only.** The implement flow authorizes `github.triggering_actor`, never an input: an input is free
       text the caller sets, and a caller holding only `actions: write` could name a real code owner's login to
       borrow their authority.
     required: false
@@ -1399,7 +1399,7 @@ runs:
       id: dispatch_record
       if: >-
         ${{ steps.checkout_authz.outcome == 'success' && inputs.record_id != '' &&
-        inputs.flow != 'test' && inputs.flow != 'test-publish' && inputs.flow != 'run' }}
+        inputs.flow != 'test-publish' && inputs.flow != 'run' }}
       uses: ./_ksai/.github/actions/dispatch-record
       with:
         endpoint: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
@@ -1469,6 +1469,15 @@ runs:
       with:
         github-token: ${{ inputs.authorization_github_token || inputs.source_org_github_token }}
         username: ${{ steps.context.outputs.commenter || steps.context.outputs.work_actor }}
+        write_access: ${{ inputs.write_access_commands != '' }}
+
+    - name: Authorize the operator who continued a work session
+      id: check_operator
+      if: ${{ inputs.flow != 'test-publish' && steps.dispatch_record.outputs.bound_command != '' }}
+      uses: ./_ksai/.github/actions/codeowners-authz
+      with:
+        github-token: ${{ inputs.authorization_github_token || inputs.source_org_github_token }}
+        username: ${{ steps.dispatch_record.outputs.requester }}
         write_access: ${{ inputs.write_access_commands != '' }}
 
     - name: Resolve authorization
@@ -1601,7 +1610,9 @@ runs:
 
     - name: Decide whether to classify the comment
       id: classify_gate
-      if: ${{ steps.prompt.outputs.has_trigger == 'true' && inputs.classifier_model_used == '' }}
+      if: >-
+        ${{ steps.prompt.outputs.has_trigger == 'true' && inputs.classifier_model_used == '' &&
+        steps.dispatch_record.outputs.bound_command == '' }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         FLOW: ${{ inputs.flow }}
@@ -1686,7 +1697,7 @@ runs:
       id: verdict
       if: >-
         ${{ always() && (steps.classify_gate.outputs.classify == 'true' || inputs.classifier_model_used !=
-        '') }}
+        '') && steps.dispatch_record.outputs.bound_command == '' }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         EXECUTION_FILE: ${{ steps.classify_run.outputs.execution_file }}
@@ -1734,6 +1745,10 @@ runs:
         ON_OWN_PULL: ${{ steps.bare_gate.outputs.mine }}
         THREAD_ROOT_ID: ${{ steps.context.outputs.thread_root_id }}
         CLASSIFIED_COMMAND: ${{ steps.verdict.outputs.verdict }}
+        BOUND_COMMAND: ${{ steps.dispatch_record.outputs.bound_command }}
+        OPERATOR: ${{ steps.dispatch_record.outputs.requester }}
+        OPERATOR_CODEOWNER: ${{ steps.check_operator.outputs.authorized }}
+        OPERATOR_WRITE_ACCESS: ${{ steps.check_operator.outputs.write_access }}
         COMMENT_ID: ${{ steps.context.outputs.comment_id }}
         REQUEST_LABEL: ${{ steps.context.outputs.label }}
         REQUEST_REVIEW: ${{ steps.context.outputs.label_review }}
@@ -1788,6 +1803,10 @@ runs:
         TRIGGER: ${{ inputs.trigger_phrase }}
         THREAD_ROOT_ID: ${{ steps.context.outputs.thread_root_id }}
         CLASSIFIED_COMMAND: ${{ steps.verdict.outputs.verdict }}
+        BOUND_COMMAND: ${{ steps.dispatch_record.outputs.bound_command }}
+        OPERATOR: ${{ steps.dispatch_record.outputs.requester }}
+        OPERATOR_CODEOWNER: ${{ steps.check_operator.outputs.authorized }}
+        OPERATOR_WRITE_ACCESS: ${{ steps.check_operator.outputs.write_access }}
         COMMENT_ID: ${{ steps.context.outputs.comment_id }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:
@@ -1865,6 +1884,10 @@ runs:
         EFFORT_PINNED: ${{ inputs.effort_pinned }}
         THREAD_ROOT_ID: ${{ steps.context.outputs.thread_root_id }}
         CLASSIFIED_COMMAND: ${{ steps.verdict.outputs.verdict }}
+        BOUND_COMMAND: ${{ steps.dispatch_record.outputs.bound_command }}
+        OPERATOR: ${{ steps.dispatch_record.outputs.requester }}
+        OPERATOR_CODEOWNER: ${{ steps.check_operator.outputs.authorized }}
+        OPERATOR_WRITE_ACCESS: ${{ steps.check_operator.outputs.write_access }}
         COMMENT_ID: ${{ steps.context.outputs.comment_id }}
       with:
         github-token: ${{ inputs.authorization_github_token || github.token }}
@@ -1902,6 +1925,10 @@ runs:
         ON_ISSUE: ${{ steps.context.outputs.on_issue }}
         THREAD_ROOT_ID: ${{ steps.context.outputs.thread_root_id }}
         CLASSIFIED_COMMAND: ${{ steps.verdict.outputs.verdict }}
+        BOUND_COMMAND: ${{ steps.dispatch_record.outputs.bound_command }}
+        OPERATOR: ${{ steps.dispatch_record.outputs.requester }}
+        OPERATOR_CODEOWNER: ${{ steps.check_operator.outputs.authorized }}
+        OPERATOR_WRITE_ACCESS: ${{ steps.check_operator.outputs.write_access }}
         COMMENT_ID: ${{ steps.context.outputs.comment_id }}
         TEST_MODE: ${{ inputs.test_mode }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts

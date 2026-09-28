@@ -1221,6 +1221,20 @@ function selectArm({
   };
 }
 
+function boundRefusal(result, bound) {
+  if (bound === '') return '';
+  if (result.command === bound && (result.commandNamed || String(result.prompt ?? '').trim() === '')) return '';
+  return `the retained comment no longer asks for \`${bound}\`, the command this successor is bound to, so nothing ran`;
+}
+
+function operatorRefusal(command, { login = '', codeowner = null, write = null } = {}, writeAccessCommands = []) {
+  const answer = commandAuthorized(command, { codeowner, write, writeAccessCommands });
+  const who = String(login ?? '').trim() === '' ? 'the operator who continued this work session' : `${login}, who continued this work session,`;
+  if (answer.undecided || !answer.read) return `whether ${who} clears the ${answer.bar} bar \`${command}\` holds here could not be read, so it did not run`;
+  if (!answer.authorized) return `${who} does not clear the ${answer.bar} bar \`${command}\` holds here, so it did not run`;
+  return '';
+}
+
 function planMode({ input = '', fromFile = '', asked = '' } = {}) {
   const named = String(input ?? '').trim().toLowerCase() || 'auto';
   if (!PLAN_MODES.includes(named)) {
@@ -1317,6 +1331,8 @@ function renderConfigRejection(error, trigger) {
 }
 
 module.exports = {
+  boundRefusal,
+  operatorRefusal,
   FLAGS,
   PLAN_MODES,
   planMode,

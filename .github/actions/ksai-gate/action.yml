@@ -92,6 +92,19 @@ inputs:
       token. `fix` with a label below starts a run nobody typed; anything else leaves today's routing alone
     required: false
     default: ""
+  record_bound_command:
+    description: >-
+      the command a work-session successor's record binds it to, or empty. The gate routes on it, and the
+      retained comment must name exactly it. Nothing classifies a bound comment
+    required: false
+    default: ""
+  record_requester:
+    description: >-
+      the operator a work-session successor's record names as the one who continued or restarted it, or
+      empty. It is never a grant: the retained request's own author is still the one authorized, and the
+      operator must clear the same bar or the successor does not run
+    required: false
+    default: ""
   record_label:
     description: >-
       the label the record says the run rests on. The gate reads back that the pull request still carries
@@ -397,6 +410,15 @@ runs:
         username: ${{ steps.requester.outputs.login }}
         write_access: ${{ inputs.write_access_commands != '' }}
 
+    - name: Authorize the operator who continued a work session
+      id: authz_operator
+      if: ${{ inputs.authorization_github_token != '' && inputs.record_bound_command != '' }}
+      uses: ./_ksai/.github/actions/codeowners-authz
+      with:
+        github-token: ${{ inputs.authorization_github_token }}
+        username: ${{ inputs.record_requester }}
+        write_access: ${{ inputs.write_access_commands != '' }}
+
     - name: Combine the guards with the ones this repository sets
       id: guards
       if: ${{ inputs.authorization_github_token != '' }}
@@ -421,6 +443,7 @@ runs:
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         RECORD_COMMAND: ${{ inputs.record_command }}
+        RECORD_BOUND_COMMAND: ${{ inputs.record_bound_command }}
         RECORD_LABEL: ${{ inputs.record_label }}
         RECORD_PR: ${{ inputs.record_pr }}
         RECORD_HEAD_SHA: ${{ inputs.record_head_sha }}
@@ -613,6 +636,10 @@ runs:
         WRITE_ACCESS_COMMANDS: ${{ steps.trigger.outputs.write_access_commands }}
         COMMAND: ${{ steps.trigger.outputs.command }}
         VERDICT: ${{ steps.verdict.outputs.bar_verdict }}
+        BOUND_COMMAND: ${{ inputs.record_bound_command }}
+        OPERATOR: ${{ inputs.record_requester }}
+        OPERATOR_CODEOWNER: ${{ steps.authz_operator.outputs.authorized }}
+        OPERATOR_WRITE_ACCESS: ${{ steps.authz_operator.outputs.write_access }}
         SCRIPTS: ${{ github.workspace }}/_ksai/.github/scripts
       with:
         script: |

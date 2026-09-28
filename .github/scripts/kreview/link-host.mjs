@@ -33,7 +33,8 @@ import { startProviderRelay } from './opencode-provider-relay.mjs';
 import { observationsIn } from './provider-observations.mjs';
 import { monitorProcess, runtimeSummary, sandboxArgs, since } from './opencode-run.mjs';
 import { mcpServerCount, traceObserver } from './opencode-runtime.mjs';
-import { RESTORED_EXPORT, checkpointSaved, checkpointUpload, restoredFrom } from './link-checkpoint.mjs';
+import { RESTORED_EXPORT, Unapplied, checkpointSaved, checkpointUpload, restoredFrom } from './link-checkpoint.mjs';
+import { transcriptOf, transcriptSent } from './link-transcript.mjs';
 import { published } from './link-publish.mjs';
 import { toolIsolationProbe } from './opencode-tool-sandbox.mjs';
 import { compactions, streamFailure, toolTiming } from './opencode-v2-review.mjs';
@@ -282,6 +283,8 @@ export function renderFact(env) {
   if (!at) throw new Error('a linked run was started with no render request');
   return rendering(readFileSync(at, 'utf8'));
 }
+
+export const askedRender = (named, flow) => (named ? { promptId: named.prompt_id, sink: named.sink } : { promptId: flow.promptId, sink: flow.sink });
 
 export function stagesFact(env) {
   const held = JSON.parse(readFileSync(`${String(env.PROMPT_FILE ?? '')}.pipeline.json`, 'utf8'));
@@ -616,11 +619,24 @@ export async function main(env = process.env, {
     for (const report of progressOf(session, readOn(events, held), held.reported, secrets)) client.send('progress', undefined, report);
   };
 
+  const uploads = [];
+  const keepTranscript = async (session, model, segment) => {
+    const lines = transcriptOf(segment, secrets);
+    if (!lines.length) return;
+    try {
+      const { left, unserved } = await transcriptSent({ endpoint, fetch, token: await mint('ksai-cp'), link: client.link, job, flow: run.flow, session: model, lines });
+      if (unserved) console.log(`::notice::the control plane keeps no transcript of session ${session}`);
+      if (left) console.log(`::notice::session ${session} said ${left} more lines than a transcript keeps, so only its last ones were kept`);
+    } catch (error) {
+      console.log(`::warning::the transcript of session ${session} was not kept: ${error?.message ?? error}`);
+    }
+  };
+
   const startSession = async ({ session, phase, render: named, restarts, env: given = [] }) => {
     if (restarts) forgetDeliveries(String(env.KSAI_CHANNEL_DIR ?? ''));
     const allowed = Object.fromEntries(given.filter((one) => SESSION_ENV.includes(one.name)).map((one) => [one.name, one.value]));
     if (audits.has(session)) verifyAudit(env, audits.get(session));
-    const asked = named ? { promptId: named.prompt_id, sink: named.sink } : render;
+    const asked = askedRender(named, render);
     const held = { plugin: null, waiting: [], offset: statSync(events).size, read: 0, seen: [], child: null, killed: false, promptId: asked.promptId, reported: new Set() };
     sessions.set(session, held);
     const policy = policies.get(session) ?? policies.get(restarts ?? '') ?? {};
@@ -697,9 +713,11 @@ export async function main(env = process.env, {
       });
       reportProgress(session, held);
       reportRecords(session, held);
+      const kept = keptSession(dir, governedDir, session);
       client.send('session.ended', `session/${session}/ended`, {
-        session, exit: Math.min(255, Math.max(0, exit)), conclusion: conclusionOf(exit, held.killed), ...keptSession(dir, governedDir, session),
+        session, exit: Math.min(255, Math.max(0, exit)), conclusion: conclusionOf(exit, held.killed), ...kept,
       });
+      if (kept.opencode_session) uploads.push(keepTranscript(session, kept.opencode_session, segment));
     });
   };
 
@@ -818,6 +836,7 @@ export async function main(env = process.env, {
           const patchFile = join(scratch, 'restore.patch');
           writeFileSync(patchFile, patch, { mode: 0o600 });
           const { exit, said } = await childSaid(checkpointScript(env), { CHECKPOINT_MODE: 'apply', CHECKPOINT_PATCH: patchFile, CHECKPOINT_HEAD: head }, 'restore.json');
+          if (exit === 0 && said?.unapplied) throw new Unapplied(said.error);
           if (exit !== 0 || !said || said.error) throw new Error(`the checkpoint could not be restored: ${said?.error ?? `the restore task exited ${exit}`}`);
         },
         keep: (exported) => {
@@ -857,6 +876,7 @@ export async function main(env = process.env, {
 
   const linking = client.start();
   const done = await finished;
+  await Promise.allSettled(uploads);
   cancelled.removeEventListener('abort', cancel);
   for (const held of sessions.values()) {
     if (held.child && held.child.exitCode === null) {

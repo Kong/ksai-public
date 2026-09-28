@@ -8,12 +8,13 @@ import stage from '../ksai/stage.cjs';
 import trustedGit from '../ksai/trusted-git.cjs';
 import controlPlane from '../lib/control-plane.cjs';
 import { OPENCODE_V2_VERSION } from '../lib/opencode-v2.mjs';
-import { scrub } from './secrets.cjs';
+import { scrub, withEscaped } from './secrets.cjs';
 
 export const PART_MOST = 8 * 1024 * 1024;
 export const RESTORED_EXPORT = 'restored.export.json';
 const CALL_MS = 120_000;
 const REASON_MOST = 200;
+export const UNSAID = 'the checkpoint was not restored, and nothing said why';
 const COMMIT = /^[0-9a-f]{40}$/;
 const CHECKPOINT = /^[0-9a-f]{64}$/;
 const SESSION = /^ses_[A-Za-z0-9]{1,64}$/;
@@ -44,18 +45,15 @@ export function snapshot(git, scratch) {
   return { head, patch: Buffer.from(diff.stdout, 'base64') };
 }
 
+export class Unapplied extends Error {}
+
 export function applied(git, patchFile, saved) {
   const head = headOf(git);
-  if (head !== saved) throw new Error(`the checkout is at ${head}, and the checkpoint was saved against ${saved}`);
+  if (head !== saved) throw new Unapplied(`the checkout is at ${head}, and the checkpoint was saved against ${saved}`);
   if (statSync(patchFile).size === 0) return;
-  if (!git(['apply', '--check', '--binary', patchFile]).ok) throw new Error('the checkpoint does not apply to the checkout');
+  if (!git(['apply', '--check', '--binary', patchFile]).ok) throw new Unapplied('the checkpoint does not apply to the checkout');
   if (!git(['apply', '--binary', patchFile]).ok) throw new Error('the checkpoint could not be applied');
 }
-
-const withEscaped = (secrets) => secrets.flatMap(([name, value]) => {
-  const escaped = JSON.stringify(value).slice(1, -1);
-  return escaped === value ? [[name, value]] : [[name, value], [name, escaped]];
-});
 
 export function checkpointUpload({ exported, patch, head, base, parent, promptVersion, link, job, flow, secrets = [] }) {
   if (!VERSION.test(promptVersion)) throw new Error('the engine named no prompt version to save the checkpoint under');
@@ -92,6 +90,25 @@ export async function checkpointSaved({ endpoint, fetch, token, upload }) {
   return id;
 }
 
+function bounded(said) {
+  let bytes = 0;
+  let kept = '';
+  for (const one of said) {
+    bytes += Buffer.byteLength(one);
+    if (bytes > REASON_MOST) break;
+    kept += one;
+  }
+  return kept || UNSAID;
+}
+
+function fellBack(reason, parent) {
+  return [
+    { name: 'status', value: 'fallback' },
+    { name: 'reason', value: bounded(reason) },
+    ...(parent === undefined ? [] : [{ name: 'parent', value: parent }]),
+  ];
+}
+
 export async function restoredFrom({ endpoint, fetch, token, link, job, flow, promptVersion, apply, keep }) {
   if (!VERSION.test(promptVersion)) throw new Error('the engine named no prompt version to restore under');
   const said = await controlPlane.answered(fetch, `${endpoint}/v1/run/work-sessions/checkpoints/restore`, {
@@ -100,7 +117,10 @@ export async function restoredFrom({ endpoint, fetch, token, link, job, flow, pr
   if (said.why) throw new Error(`the control plane did not answer the restore: ${said.why}`);
   const answer = said.answer ?? {};
   if (answer.status === 'fallback') {
-    return [{ name: 'status', value: 'fallback' }, { name: 'reason', value: [...String(answer.reason ?? '')].slice(0, REASON_MOST).join('') }];
+    if (answer.parent_id !== undefined && (typeof answer.parent_id !== 'string' || !CHECKPOINT.test(answer.parent_id))) {
+      throw new Error('the control plane fell back under a parent that is not a checkpoint');
+    }
+    return fellBack(String(answer.reason ?? ''), answer.parent_id);
   }
   if (answer.status !== 'ready') throw new Error(`the control plane answered a restore with status ${JSON.stringify(answer.status)}`);
   const saved = answer.checkpoint ?? {};
@@ -118,7 +138,12 @@ export async function restoredFrom({ endpoint, fetch, token, link, job, flow, pr
     session = '';
   }
   if (session !== saved.model_session_id) throw new Error('the offered export is of another OpenCode session');
-  await apply(patch, saved.head_sha);
+  try {
+    await apply(patch, saved.head_sha);
+  } catch (error) {
+    if (!(error instanceof Unapplied)) throw error;
+    return fellBack(error.message, saved.id);
+  }
   keep(exported);
   return [{ name: 'status', value: 'restored' }, { name: 'checkpoint', value: saved.id }, { name: 'model_session', value: saved.model_session_id }];
 }
@@ -136,7 +161,7 @@ export function main(env = process.env, { git = trustedGit.directGit(String(env.
       throw new Error(`there is no checkpoint mode ${JSON.stringify(env.CHECKPOINT_MODE)}`);
     }
   } catch (error) {
-    write(JSON.stringify({ error: String(error?.message ?? error) }));
+    write(JSON.stringify({ error: String(error?.message ?? error), ...(error instanceof Unapplied ? { unapplied: true } : {}) }));
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }

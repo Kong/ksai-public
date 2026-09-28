@@ -1,5 +1,7 @@
 
 const {
+  boundRefusal,
+  operatorRefusal,
   selectArm,
   parseOptions,
   defaultCommandFor,
@@ -122,12 +124,18 @@ async function resolveRequest({
   label = '',
   labelReview = false,
   classifiedCommand = '',
+  bound = '',
+  operator = null,
   codeowner = null,
   write = null,
 } = {}) {
   const own = String(flow ?? '').trim().toLowerCase();
+  const boundTo = String(bound ?? '').trim();
   if (!FLOWS.includes(own)) {
     return { error: `the \`flow\` input must be one of ${FLOWS.join(', ')}, got: ${own}` };
+  }
+  if (boundTo !== '' && !ownsCommand(own, boundTo)) {
+    return { error: `the successor is bound to \`${boundTo}\`, which the ${own} flow does not run, so nothing ran`, mine: true };
   }
 
   const here = defaultCommandFor(onIssue, threadRootId, onReview, reviewState);
@@ -140,6 +148,8 @@ async function resolveRequest({
     if (!commandEnabled(primary, { flow: own, disabledCommands: arm?.disabledCommands })) {
       return { mine: false, disabled: primary };
     }
+    const unoperated = boundTo === '' ? '' : operatorRefusal(primary, operator ?? {});
+    if (unoperated !== '') return { error: unoperated, mine: true };
     const source = sourceOf({ continuation: true });
     return {
       mine: true,
@@ -189,8 +199,10 @@ async function resolveRequest({
     const { error, allowed, ceiling, floor, command } = result;
     return { error, rejection: renderRejection({ error, allowed, ceiling, floor, command, trigger }), mine };
   }
+  const unbound = boundRefusal(result, boundTo);
+  if (unbound) return { error: unbound, mine: true };
 
-  const verdict = result.commandNamed
+  const verdict = result.commandNamed || boundTo !== ''
     ? ''
     : String(classifiedCommand ?? '').trim() === CLARIFY_VERDICT
       ? CLARIFY_VERDICT
@@ -239,6 +251,8 @@ async function resolveRequest({
         routeSource,
       };
     }
+    const unoperated = boundTo === '' ? '' : operatorRefusal(command, operator ?? {}, [...result.writeAccess]);
+    if (unoperated !== '') return { error: unoperated, mine: true };
     const source = routeSource;
     return {
       mine: true,

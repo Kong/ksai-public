@@ -96,6 +96,7 @@ const NO_RECORD = Object.freeze({
   guidance: '',
   workItem: '',
   ask: '',
+  boundCommand: '',
 });
 
 const PR_SHAPE = /^[1-9][0-9]{0,9}$/;
@@ -145,6 +146,31 @@ const CHAIN_SHAPE = /^[0-9]{1,6}$/;
 const WORK_REF_SHAPE = /^jira\/[A-Za-z][A-Za-z0-9_]*-[0-9]{1,10}$/;
 
 const COMMENT_KINDS = Object.freeze(['issue', 'review', 'submitted_review']);
+
+const SESSION_ACTIONS = Object.freeze(['continue', 'restart']);
+
+const BOUND_COMMANDS = new Map([['review', ['review']], ['implement', ['implement', SECURED_FIX_COMMAND]]]);
+
+const STAGE_BOUND_COMMANDS = new Map([['test', 'test']]);
+
+const STAGE_PART = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+
+const STAGE_INSTANCE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\[(?:0|[1-9][0-9]*)\])?$/;
+
+const shaped = (value, shape) => typeof value === 'string' && shape.test(value);
+
+function boundCommandOf(flow, command, { job, stage, instance }) {
+  const named = typeof flow === 'string' ? flow : '';
+  const staged = STAGE_BOUND_COMMANDS.get(named);
+  if (staged === undefined ? !BOUND_COMMANDS.get(named)?.includes(command) : command !== undefined) {
+    throw policyStopped('the record binds a work session to a flow its command does not run');
+  }
+  if (staged === undefined) return command === SECURED_FIX_COMMAND ? 'fix' : command;
+  if (!shaped(job, STAGE_PART) || !shaped(stage, STAGE_PART) || !shaped(instance, STAGE_INSTANCE)) {
+    throw policyStopped('the record binds a workflow successor to no stage attempt the control plane could have admitted');
+  }
+  return staged;
+}
 
 /** oneOf answers a value from a set the control plane chooses from, or empty for anything else. */
 const oneOf = (value, of) => (typeof value === 'string' && of.includes(value) ? value : '');
@@ -331,6 +357,9 @@ function recordFrom(served) {
     autofix_capability: autofixCapability, comment_id: commentId, comment_kind: commentKind,
     trigger, trigger_run: triggerRun, trigger_attempt: triggerAttempt,
     trigger_state: triggerState, trigger_name: triggerName,
+    work_session_id: sessionId, work_session_action: sessionAction,
+    work_session_parent_id: sessionParent, work_session_flow: sessionFlow, classification,
+    workflow_job: workflowJob, workflow_stage: workflowStage, workflow_instance: workflowInstance,
   } = /** @type {Record<string, unknown>} */ (served);
   if (recordId !== undefined && (typeof recordId !== 'string' || !RECORD_ID.test(recordId))) {
     throw policyStopped('the record names itself as something the control plane could not have minted');
@@ -420,9 +449,32 @@ function recordFrom(served) {
       throw policyStopped('the secured autofix record names a review identity for a trigger that is not a submitted review');
     }
   }
+  const bound = [sessionId, sessionAction, sessionParent, sessionFlow].some((one) => one !== undefined);
+  let boundCommand = '';
+  if (bound) {
+    if (typeof sessionId !== 'string' || !RECORD_ID.test(sessionId)) {
+      throw policyStopped('the record binds a work session the control plane could not have minted');
+    }
+    if (typeof sessionAction !== 'string' || !SESSION_ACTIONS.includes(sessionAction)) {
+      throw policyStopped('the record binds a work session to an action a successor does not take');
+    }
+    if (sessionAction === 'restart'
+      ? typeof sessionParent !== 'string' || !RECORD_ID.test(sessionParent) || sessionParent === sessionId
+      : sessionParent !== undefined) {
+      throw policyStopped('the record binds a work session to a parent its action does not name');
+    }
+    boundCommand = boundCommandOf(sessionFlow, command, { job: workflowJob, stage: workflowStage, instance: workflowInstance });
+    if (classification !== undefined) {
+      throw policyStopped('the record binds a work session to a classified comment, which a successor never replays');
+    }
+    if (requester === undefined) {
+      throw policyStopped('the record binds a work session but names no operator who continued it');
+    }
+  }
   return {
     read: true,
-    command: securedFix ? 'fix' : text(command),
+    command: boundCommand || (securedFix ? 'fix' : text(command)),
+    boundCommand,
     autofixCapability: securedFix ? AUTOFIX_CAPABILITY : '',
     label: text(label),
     pr: text(pr),

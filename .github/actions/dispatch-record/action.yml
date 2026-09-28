@@ -102,6 +102,12 @@ outputs:
     description: >-
       the secured autofix context/output policy this runner validated, or empty for other records
     value: ${{ steps.record.outputs.autofix_capability }}
+  bound_command:
+    description: >-
+      the command a work-session successor is bound to, or empty for every other record. It is the
+      `command` too, including a test successor's, whose record names none and binds a workflow stage
+      attempt instead. The retained comment must name exactly this command, and nothing classifies it
+    value: ${{ steps.record.outputs.bound_command }}
   comment_id:
     description: the comment or submitted review id read from the trusted record, or empty
     value: ${{ steps.record.outputs.comment_id }}
@@ -240,7 +246,8 @@ runs:
             ['trigger_run', 'triggerRun'], ['trigger_attempt', 'triggerAttempt'],
             ['trigger_state', 'triggerState'], ['trigger_name', 'triggerName'],
             ['requester', 'requester'], ['approver', 'approver'], ['approval_id', 'approvalId'], ['model', 'model'],
-            ['effort', 'effort'], ['guidance', 'guidance'], ['work_item', 'workItem'], ['ask', 'ask']]) {
+            ['effort', 'effort'], ['guidance', 'guidance'], ['work_item', 'workItem'], ['ask', 'ask'],
+            ['bound_command', 'boundCommand']]) {
             core.setOutput(name, answer[held]);
           }
           core.setOutput('guidance_html', escapeHtml(answer.guidance));

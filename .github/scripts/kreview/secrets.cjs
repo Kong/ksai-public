@@ -17,4 +17,11 @@ function scrub(text, secrets) {
   return longestFirst.reduce((out, [name, value]) => out.replaceAll(value, `***redacted ${name}***`), String(text ?? ''));
 }
 
-module.exports = { DEFAULT_SECRET_VARS, collectSecrets, scrub };
+function withEscaped(secrets) {
+  return secrets.flatMap(([name, value]) => {
+    const escaped = JSON.stringify(value).slice(1, -1);
+    return escaped === value ? [[name, value]] : [[name, value], [name, escaped]];
+  });
+}
+
+module.exports = { DEFAULT_SECRET_VARS, collectSecrets, scrub, withEscaped };
