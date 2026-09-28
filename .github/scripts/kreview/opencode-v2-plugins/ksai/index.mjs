@@ -5,8 +5,11 @@ import { offerChildTools } from './child-tools.mjs';
 import { guard } from './guard.mjs';
 import { capped, serve } from './models.mjs';
 import { policy } from './policy.mjs';
+import { bounded } from './shell.mjs';
 
 const SESSION_HOOKS = Object.freeze(['context', 'compaction', 'generate', 'title']);
+
+const given = (value) => (typeof value === 'string' ? JSON.parse(readFileSync(value, 'utf8')) : value);
 
 export default {
   id: 'ksai',
@@ -17,11 +20,13 @@ export default {
       await refuseAll(ctx);
       return;
     }
-    const model = await serve(ctx, typeof options.model === 'string' ? JSON.parse(readFileSync(options.model, 'utf8')) : options.model);
+    const clamp = bounded(given(options.shell));
+    const model = await serve(ctx, given(options.model));
     const cap = capped(model);
     const ruled = policy(options.policy);
     await ctx.model.transform(ruled.models);
     await ctx.tool.hook('execute.before', ruled.before);
+    await ctx.shell.hook('create.before', clamp);
     for (const name of SESSION_HOOKS) {
       await ctx.session.hook(name, cap);
       await ctx.session.hook(name, ruled.context);

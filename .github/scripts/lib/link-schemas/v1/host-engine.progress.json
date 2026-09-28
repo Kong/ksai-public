@@ -7,7 +7,7 @@
   "properties": {
     "session": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$" },
     "calls": {
-      "description": "Each tool call that ended since the last report, in the order the calls began",
+      "description": "Each tool call that started or ended since the last report, in the order the calls began. A call that started and ended between two reports is reported once, as ended",
       "type": "array",
       "maxItems": 256,
       "items": {
@@ -17,8 +17,16 @@
         "properties": {
           "tool": { "type": "string", "pattern": "^[A-Za-z0-9_.:-]{1,64}$" },
           "fingerprint": { "description": "The tool and its input, hashed, so two identical calls match", "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
-          "failed": { "type": "boolean" }
-        }
+          "failed": { "type": "boolean" },
+          "id": { "description": "The call, as a digest of its session and OpenCode's own id for it, the same in every report that names it", "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+          "state": { "description": "Whether the call started and still runs, or ended. A call that names no state ended", "enum": ["started", "ended"] },
+          "began_ms": { "description": "When the call began, in milliseconds since the epoch on the runner's clock", "type": "integer", "minimum": 0 },
+          "timeout_ms": { "description": "The timeout a shell call runs under, never past the plan's shell timeout", "type": "integer", "minimum": 1 }
+        },
+        "anyOf": [
+          { "properties": { "state": { "enum": ["ended"] } } },
+          { "required": ["id", "began_ms"] }
+        ]
       }
     },
     "tokens": {

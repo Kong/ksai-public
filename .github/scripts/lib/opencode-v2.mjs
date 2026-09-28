@@ -212,6 +212,8 @@ export const PROVIDER_BASE_URL = '{env:KSAI_PROVIDER_RELAY}/v1';
 
 export const KSAI_PLUGIN = fileURLToPath(new URL('../kreview/opencode-v2-plugins/ksai/index.mjs', import.meta.url));
 
+export const SHELL_TIMEOUT_MS = 120_000;
+
 const pluginDirectory = (file) => String(file).replace(/\/index\.mjs$/, '');
 
 export const pluginEntry = (one) => {

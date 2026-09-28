@@ -15,6 +15,7 @@ import {
 } from '../lib/opencode.mjs';
 import {
   KSAI_PLUGIN,
+  SHELL_TIMEOUT_MS,
   V2_PROVIDER_POLICY_CONFIG,
   governedRules,
   opencodeDataDir,
@@ -100,6 +101,7 @@ export function v2Config(env, { exists = existsSync, real = realpathSync, read =
   const plugins = [[KSAI_PLUGIN, {
     governance: linked ? { from: governance.from } : governance,
     model: served,
+    shell: linked ? join(linked, 'shell.json') : { timeout_ms: SHELL_TIMEOUT_MS },
     policy: { models: [model], workspace, strip_instructions: true },
     ...(isolated ? { guard: true, children: { permissions } } : {}),
   }]];

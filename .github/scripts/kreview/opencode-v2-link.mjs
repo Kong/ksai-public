@@ -120,6 +120,7 @@ export function questions(path, name, ask, reply) {
 }
 
 export function governed(env, dir, plan, artifacts, { retry = '', context = '', directory = process.cwd() } = {}) {
+  if (!Number.isSafeInteger(plan.shell_timeout_ms) || plan.shell_timeout_ms <= 0) throw new Error('the plan bounds no shell call, so one could hold the run until the job is cancelled');
   const notes = join(dir, 'notes');
   mkdirSync(notes, { recursive: true, mode: 0o700 });
   const options = governanceOptions({
@@ -139,6 +140,7 @@ export function governed(env, dir, plan, artifacts, { retry = '', context = '', 
   }, pinsOf(env));
   writeFileSync(join(dir, 'governance.json'), JSON.stringify({ ...options, notes, nonce: plan.nonce, flow: String(env.FLOW ?? ''), directory, ...(retry ? { retry } : {}), ...(context ? { context } : {}) }), { mode: 0o600 });
   writeFileSync(join(dir, 'model.json'), JSON.stringify(plan.model), { mode: 0o600 });
+  writeFileSync(join(dir, 'shell.json'), JSON.stringify({ timeout_ms: plan.shell_timeout_ms }), { mode: 0o600 });
   return notes;
 }
 

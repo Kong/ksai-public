@@ -20,7 +20,7 @@ import { exitedOn } from '../lib/execution-log.mjs';
 import { linkClient, pollTransport, websocketTransport } from './link-client.mjs';
 import { ordered } from '../ksai/progress.mjs';
 import { isolatedToolPhase, parsed, PROVIDER_TIMEOUTS, totals, UNCONTINUED } from '../lib/opencode.mjs';
-import { answer, executionLog, reportedVersion, rootSessions, spending, toolCalls, V2_MASKED_HOMES, validateV2Version } from '../lib/opencode-v2.mjs';
+import { answer, executionLog, reportedVersion, rootSessions, SHELL_TIMEOUT_MS, spending, toolCalls, V2_MASKED_HOMES, validateV2Version } from '../lib/opencode-v2.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
 import writeRecord from '../lib/write-record.cjs';
 import watchdogLimits from '../lib/watchdog.cjs';
@@ -43,7 +43,6 @@ import { main as reduceLog } from './opencode-v2-log.mjs';
 import { startRelay } from './otel-relay.mjs';
 
 const REMINDER_ID = 'static.runtime.opencode-max-steps';
-const SHELL_TIMEOUT_MS = 120_000;
 const KILL_GRACE_MS = 10_000;
 const KILLED_EXIT = 137;
 const CANCELLING = Object.freeze(['SIGINT', 'SIGTERM']);
