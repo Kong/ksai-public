@@ -6839,7 +6839,8 @@ runs:
         steps.works.outputs.released_nothing != 'true' &&
         steps.lock_threads.outputs.held != 'true' &&
         steps.checkpoint.outputs.waiting != 'true' &&
-        steps.open_draft.outputs.status != 'blocked' &&
+        ((steps.open_draft.outputs.status != 'blocked' && steps.open_branch.outputs.status != 'blocked') ||
+        (steps.notice_opened.outcome != 'success' && steps.notice_opened_cp.outcome != 'success')) &&
         steps.notice_waiting.outcome != 'success' &&
         steps.finish.outcome != 'success' &&
         steps.release_plan.outcome != 'success' &&
