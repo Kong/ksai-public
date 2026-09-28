@@ -20,7 +20,7 @@ const {
   surfaceOfEvent,
   MODEL_SHAPE,
 } = require('../lib/select-arm.cjs');
-const { ASSIGNED_SOURCE, receiptOf, sourceOf } = require('../lib/request-intent.cjs');
+const { ASSIGNED_SOURCE, PRESSED_SOURCE, receiptOf, sourceOf } = require('../lib/request-intent.cjs');
 const { ceilingMinutes } = require('../lib/watchdog.cjs');
 const { SKILLS: REVIEWER_SKILLS, skipsAuthor, stackManifests, triage } = require('../triage/policy.cjs');
 const { renderReviewPrompt, renderPipelineContext } = require('./prompt.cjs');
@@ -35,6 +35,7 @@ const NO_TRIAGE = Object.freeze(NO_TRIAGE_DEFAULTS);
 const TRIAGE_API_VERSION = 'triage/v1';
 const TRIAGE_MODES = Object.freeze(['local', 'shadow', 'cp']);
 const SHA = /^[0-9a-f]{40}$/;
+const PRESS_TRIGGER = 'check_action';
 
 function telemetryTag(value) {
   return String(value ?? '').replace(/[, =]/g, '_');
@@ -428,7 +429,7 @@ async function selectReviewArm({ github, core, owner, repo, env }) {
     classified: routed,
     named: result.commandNamed,
     commented: String(env.COMMENT_ID ?? '').trim() !== '',
-    uncommented: ASSIGNED_SOURCE,
+    uncommented: String(env.SAW_TRIGGER ?? '').trim() === PRESS_TRIGGER ? PRESSED_SOURCE : ASSIGNED_SOURCE,
   });
 
   Object.assign(outputs, {

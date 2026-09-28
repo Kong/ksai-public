@@ -122,6 +122,11 @@ const LABEL_MAX = 50;
  */
 export const TRIGGERS = Object.freeze([
   'build_failed', 'status_failed', 'labeled', 'review_submitted', 'comment', 'opened', 'review_requested', 'pushed',
+  'check_action',
+]);
+
+const BOUND_TRIGGERS = Object.freeze([
+  'build_failed', 'status_failed', 'labeled', 'review_submitted', 'comment', 'opened', 'review_requested', 'pushed',
 ]);
 
 export const TRIGGER_STATES = Object.freeze([
@@ -439,7 +444,7 @@ function recordFrom(served) {
     if (commentKind !== undefined && commentKind !== 'submitted_review') {
       throw policyStopped('the secured autofix record names a comment surface automatic writes do not use');
     }
-    if (!TRIGGERS.includes(/** @type {string} */ (trigger))) {
+    if (!BOUND_TRIGGERS.includes(/** @type {string} */ (trigger))) {
       throw policyStopped('the secured autofix record names no trigger this runner can bind to its context');
     }
     if (trigger === 'review_submitted' && (commentId === undefined || commentKind !== 'submitted_review')) {

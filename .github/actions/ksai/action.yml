@@ -1889,6 +1889,7 @@ runs:
         OPERATOR_CODEOWNER: ${{ steps.check_operator.outputs.authorized }}
         OPERATOR_WRITE_ACCESS: ${{ steps.check_operator.outputs.write_access }}
         COMMENT_ID: ${{ steps.context.outputs.comment_id }}
+        SAW_TRIGGER: ${{ steps.dispatch_record.outputs.trigger }}
       with:
         github-token: ${{ inputs.authorization_github_token || github.token }}
         script: |
@@ -7317,7 +7318,7 @@ runs:
     - name: Remove the comment the run opened with
       if: >-
         ${{ inputs.flow == 'review' && inputs.publish == 'true' && always() &&
-        steps.notice_started.outputs.comment_id != '' }}
+        (steps.notice_started.outputs.comment_id != '' || inputs.github_calls == 'cp') }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         COMMENT_ID: ${{ steps.notice_started.outputs.comment_id }}

@@ -211,9 +211,13 @@ async function publishRunStart({ github, core, owner, repo, env, write = writeFi
 async function dropRunStart({ github, core, owner, repo, env, fetch = globalThis.fetch }) {
   const id = Number(env.COMMENT_ID);
   if (usingControlPlane(env)) {
+    const number = Number(env.REPORT_NUM);
+    if (!Number.isInteger(number) || number <= 0) {
+      return { notices: [`no pull request number to settle an opening comment on, got: ${env.REPORT_NUM ?? ''}`] };
+    }
     try {
       const result = await writerFor({ github, owner, repo, env, fetch }).runStartCleanup({
-        number: Number(env.REPORT_NUM), run: String(env.RUN_ID ?? ''),
+        number, run: String(env.RUN_ID ?? ''),
       });
       return { notices: [result.changed
         ? 'the control plane removed the unreplaced opening comment'

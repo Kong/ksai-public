@@ -1112,6 +1112,7 @@ const SAW_TRIGGER = Object.freeze(
     pushed: 'a commit was pushed while a review of this pull request was still owed',
     opened: 'this pull request was opened',
     comment: 'somebody left a comment',
+    check_action: "somebody pressed the review check's button",
   }),
 );
 

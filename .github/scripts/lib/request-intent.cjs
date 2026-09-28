@@ -38,6 +38,8 @@ const ASSIGNED_SOURCE = 'assigned';
 
 const LABEL_SOURCE = 'label';
 
+const PRESSED_SOURCE = 'pressed';
+
 const labelNamed = (label) => {
   const shown = String(label ?? '').replaceAll('`', "'").trim();
   return shown === '' ? 'a label' : `the \`${shown}\` label`;
@@ -49,6 +51,7 @@ const READ = bare({
   context: (where) => `Read ${where} as a request to`,
   assigned: (where) => `Assigned as a reviewer on ${where}, to`,
   continuation: (where) => `Carried on from the run before this one on ${where}, to`,
+  [PRESSED_SOURCE]: (where) => `Read ${where} as a request to`,
   [LABEL_SOURCE]: (where, { label = '', review = false } = {}) =>
     review ? `Asked for by a review on ${where}, which carries ${labelNamed(label)}, to` : `Asked for by ${labelNamed(label)} on ${where}, to`,
 });
@@ -78,4 +81,4 @@ function sourceOf({
   return named === true ? EXPLICIT_SOURCE : 'context';
 }
 
-module.exports = { receiptOf, sourceOf, EXPLICIT_SOURCE, ASSIGNED_SOURCE, LABEL_SOURCE, SOURCES };
+module.exports = { receiptOf, sourceOf, EXPLICIT_SOURCE, ASSIGNED_SOURCE, LABEL_SOURCE, PRESSED_SOURCE, SOURCES };

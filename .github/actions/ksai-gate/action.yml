@@ -776,6 +776,35 @@ runs:
             body: process.env.BODY,
           });
 
+    - name: Take back the opening comment a refused review was given at dispatch
+      continue-on-error: true
+      if: >-
+        ${{ always() && inputs.github_calls == 'cp' && steps.trigger.outputs.requested == 'true' &&
+        steps.trigger.outputs.on_issue != 'true' &&
+        (steps.bar.outputs.authorized != 'true' || steps.trigger.outputs.help == 'true' ||
+        (steps.verdict.outputs.review || steps.trigger.outputs.review) != 'true') }}
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        REPORT_NUM: >-
+          ${{ inputs.record_pr || steps.trigger.outputs.issue_number || inputs.pr_number ||
+          github.event.issue.number || github.event.pull_request.number }}
+        RUN_ID: ${{ github.run_id }}
+        SCRIPTS: ${{ github.workspace }}/_ksai/.github/scripts
+        KSAI_CP_ENDPOINT: ${{ inputs.prompt_endpoint }}
+        KSAI_GITHUB_CALLS: ${{ inputs.github_calls }}
+      with:
+        github-token: ${{ inputs.post_github_token }}
+        script: |
+          const { dropRunStart } = require(`${process.env.SCRIPTS}/ksai/run-start.cjs`);
+          const { notices } = await dropRunStart({
+            github,
+            core,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            env: process.env,
+          });
+          for (const line of notices) core.info(line);
+
     - name: Stop when the write bar could not be read
       if: ${{ steps.bar.outputs.undecided == 'true' }}
       shell: bash
