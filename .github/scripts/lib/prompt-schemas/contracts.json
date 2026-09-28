@@ -1,7 +1,7 @@
 {
   "source": "kong-konnect/ksai-cp/prompts/public/runtime",
   "source_release": "v0.2.167",
-  "source_change": "kong-konnect/ksai-cp#602",
+  "source_change": "kong-konnect/ksai-cp#633",
   "inputs": {
     "runtime.claude-generic": [
       "request",
@@ -31,6 +31,7 @@
     ],
     "runtime.implement.do": [
       "additional_prompt",
+      "allowed_paths",
       "checks",
       "context",
       "denied_paths",
@@ -42,6 +43,7 @@
     ],
     "runtime.implement.fix": [
       "additional_prompt",
+      "allowed_paths",
       "context",
       "denied_paths",
       "go_failures",
@@ -57,6 +59,7 @@
       "jira"
     ],
     "runtime.implement.repair": [
+      "allowed_paths",
       "context",
       "denied_paths",
       "findings",
@@ -130,6 +133,10 @@
     "runtime.work-session-continue": [
       "base_prompt",
       "handoff",
+      "knowledge"
+    ],
+    "runtime.work-session-start": [
+      "base_prompt",
       "knowledge"
     ],
     "runtime.write-triage-risk": [

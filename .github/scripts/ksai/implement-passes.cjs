@@ -4,8 +4,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { finalResult } = require('./classify.cjs');
-const { deniedPaths } = require('./prepare.cjs');
-const { bounded, evidence } = require('../lib/evidence.cjs');
+const { allowedPaths, deniedPaths } = require('./prepare.cjs');
+const { bounded, evidence, stagedEvidence } = require('../lib/evidence.cjs');
 const { extractReviewJson } = require('../lib/review-output.cjs');
 const { SINKS, renderRequest } = require('../lib/render-request.cjs');
 
@@ -30,7 +30,7 @@ function workOf(env) {
   return {
     changed_files: evidence(env.CHANGED_FILES_FILE, 'the changed-file list', MAX.changedFiles),
     diff: evidence(env.DIFF_FILE, "the pass's diff", MAX.diff),
-    prompt: evidence(env.PROMPT_FILE, 'the prompt the pass ran on', MAX.prompt),
+    prompt: stagedEvidence(env.PROMPT_FILE, path.join(path.dirname(env.DIFF_FILE), 'prompt.md'), 'the prompt the pass ran on', MAX.prompt),
   };
 }
 
@@ -94,6 +94,7 @@ function repairRequest(env = process.env, said = findingsOf(env)) {
         { name: 'findings', value: findings },
         { name: 'manifest', value: manifestOf(env) },
         { name: 'denied_paths', value: deniedPaths(env) },
+        { name: 'allowed_paths', value: allowedPaths(env) },
       ],
     }),
     needed: defects(findings),

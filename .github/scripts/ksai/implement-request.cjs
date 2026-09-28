@@ -347,8 +347,9 @@ function phaseInputs(phase, values) {
       failures,
     ];
   }
+  const allowed = component('allowed_paths', values.allowed);
   if (phase === 'fix') {
-    return [context, additionalPrompt, guidance, component('threads', values.threads), issue, denied, failures];
+    return [context, additionalPrompt, guidance, component('threads', values.threads), issue, denied, allowed, failures];
   }
   if (phase === 'revise') {
     return [
@@ -370,6 +371,7 @@ function phaseInputs(phase, values) {
     component('checks', values.checks),
     issue,
     denied,
+    allowed,
     failures,
     component('retry', values.retry ?? null),
   ];
@@ -389,7 +391,7 @@ function implementRenderRequest(phase, values, { model = '' } = {}) {
   });
 }
 
-function implementValues(env, phase, { denied = [], planDocument = '' } = {}) {
+function implementValues(env, phase, { denied = [], allowed = null, planDocument = '' } = {}) {
   const goFacts = readGoFacts(env.GO_FACTS_FILE);
   const packageFacts = readPackageFacts(env.PACKAGE_FACTS_FILE);
   const retry = phase === 'do' ? readRetry(env.RETRY_FILE) : null;
@@ -447,6 +449,7 @@ function implementValues(env, phase, { denied = [], planDocument = '' } = {}) {
     planDocument: boundedText(planDocument, 'plan document', MAX_INPUT.planDocument),
     stepTitle,
     denied,
+    allowed,
     goFailures: goFacts.failed,
     retry,
   };

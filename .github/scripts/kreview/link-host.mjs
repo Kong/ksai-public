@@ -20,11 +20,12 @@ import { exitedOn } from '../lib/execution-log.mjs';
 import { linkClient, pollTransport, websocketTransport } from './link-client.mjs';
 import { ordered } from '../ksai/progress.mjs';
 import { isolatedToolPhase, parsed, PROVIDER_TIMEOUTS, totals, UNCONTINUED } from '../lib/opencode.mjs';
-import { answer, executionLog, reportedVersion, rootSessions, SHELL_TIMEOUT_MS, spending, toolCalls, V2_MASKED_HOMES, validateV2Version } from '../lib/opencode-v2.mjs';
+import { answer, everything, executionLog, reportedVersion, rootSessions, SHELL_TIMEOUT_MS, spending, toolCalls, V2_MASKED_HOMES, validateV2Version } from '../lib/opencode-v2.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
 import writeRecord from '../lib/write-record.cjs';
 import watchdogLimits from '../lib/watchdog.cjs';
 import { hypothesesOf } from '../lib/review-hypotheses.mjs';
+import { reviewAnswerOf } from '../lib/review-output.cjs';
 import { governedTools } from './governed-flow.mjs';
 import { auditContext, verifyAudit } from './governed-review.mjs';
 import reviewPipeline from './review-pipeline.cjs';
@@ -45,6 +46,7 @@ import { startRelay } from './otel-relay.mjs';
 
 const REMINDER_ID = 'static.runtime.opencode-max-steps';
 const KILL_GRACE_MS = 10_000;
+const ENGINE_STOP_MS = 45_000;
 const KILLED_EXIT = 137;
 const CANCELLING = Object.freeze(['SIGINT', 'SIGTERM']);
 const CANCELLED = 'the job was cancelled, so the run stopped itself and the engine was told it was not lost';
@@ -155,7 +157,7 @@ function deadlineOf(env, now) {
   const ceiling = asked === '0' ? MAX_CEILING_MINUTES : ceilingMinutes(asked);
   if (ceiling === null) throw new Error(`job_timeout_minutes ${asked} names no ceiling this job can run under`);
   const started = Number(env.KSAI_JOB_STARTED_AT_MS) || now;
-  return (ceiling - SALVAGE_MARGIN_MINUTES) * 60_000 - Math.max(0, now - started);
+  return (ceiling - SALVAGE_MARGIN_MINUTES) * 60_000 - ENGINE_STOP_MS - Math.max(0, now - started);
 }
 
 function breakersOf(env) {
@@ -324,6 +326,18 @@ export function keptReview(env, events, outputs) {
   const hypothesesFile = hypotheses ? `${events}.hypotheses.json` : '';
   if (hypotheses) writeFileSync(hypothesesFile, scrub(JSON.stringify(hypotheses), secrets));
   return { OPENCODE_REVIEW_EXIT: ledger.coverage === 'complete' ? '0' : '1', OPENCODE_REVIEW_FILE: reviewFile, REVIEW_PIPELINE_FILE: ledgerFile, REVIEW_HYPOTHESES_FILE: hypothesesFile };
+}
+
+export function keptAnswer(env, events, conclusion, outputs, worked) {
+  const kept = keptReview(env, events, outputs);
+  if (kept.OPENCODE_REVIEW_FILE) return kept;
+  const review = String(env.FLOW ?? '').trim() === 'review';
+  if (review && ['evidence', 'dual'].includes(env.REVIEW_STRATEGY)) return {};
+  const answerFile = `${events}.answer`;
+  if (!worked && existsSync(answerFile)) return { OPENCODE_REVIEW_FILE: answerFile };
+  const said = !worked || (review && conclusion !== 'success') ? '' : review ? reviewAnswerOf(worked.answer ?? null, worked.whole ?? null) : worked.answer;
+  writeFileSync(answerFile, scrub(String(said ?? ''), collectSecrets(env)));
+  return { OPENCODE_REVIEW_FILE: answerFile };
 }
 
 const linkDirOf = (root, session) => join(root, 'link', session.replace(/[^A-Za-z0-9._-]/g, '_'));
@@ -534,7 +548,7 @@ export async function main(env = process.env, {
     }
     settled.error = error;
     if (error) appendFileSync(events, `${JSON.stringify({ type: 'ksai.error', created: Date.now(), data: { error: { type: 'ksai.engine', message: error.slice(0, 500) } } })}\n`);
-    Object.assign(env, keptReview(env, events, outputs));
+    Object.assign(env, keptAnswer(env, events, conclusion, outputs, sessions.get(String(outputs.worked ?? ''))));
     const code = conclusion === 'success' || conclusion === 'stopped' ? 0 : 1;
     try {
       reduced = reduceLog({ ...env, OPENCODE_EXIT: String(code), OPENCODE_EVENTS_FILE: events, OPENCODE_EXECUTION_FILE: execution, OPENCODE_RUNTIME_METRICS: JSON.stringify(settled.runtime) });
@@ -773,7 +787,7 @@ export async function main(env = process.env, {
       const held = sessions.get(arg('session'));
       const segment = held ? parsed(since(events, held.offset)) : [];
       const said = String(answer(segment) ?? '').slice(0, 1_000_000);
-      if (held) held.answer = said;
+      if (held) Object.assign(held, { answer: said, whole: everything(segment) });
       const read = stageRead(segment, said);
       const outputs = [
         ...(said ? [{ name: 'answer', value: said }] : []),

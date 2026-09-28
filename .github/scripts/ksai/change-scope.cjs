@@ -625,6 +625,8 @@ function renderAllowed(scope) {
     ...scope.allowed.exact.map((file) => `  ${JSON.stringify(file)} (exact)`),
     ...scope.allowed.patterns.include.map((glob) => `  ${JSON.stringify(glob)} (base policy)`),
     ...scope.allowed.protectedPatterns.include.map((glob) => `  ${JSON.stringify(glob)} (base policy; protected)`),
+    ...[...new Set([...scope.allowed.patterns.exclude, ...scope.allowed.protectedPatterns.exclude])]
+      .map((glob) => `  ${JSON.stringify(glob)} (base policy; excluded, never committable)`),
   ];
   return lines.length === 0 ? ['  (none)'] : lines;
 }

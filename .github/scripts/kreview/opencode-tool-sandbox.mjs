@@ -309,17 +309,19 @@ export function toolLauncherEnvironment(env = process.env) {
   return launcher;
 }
 
-export function toolPathRoots(env = process.env, directory = String(env.GITHUB_WORKSPACE ?? '')) {
-  const workspace = String(directory ?? '').trim();
-  const scopes = sandboxScopes(env, existsSync, realpathSync).allow;
-  const workflow = [
-    env.KSAI_WORKFLOW_PACKAGE,
+function stageRoots(env) {
+  return present([
     env.KSAI_STAGE_REQUEST,
     env.KSAI_STAGE_INPUTS,
     env.KSAI_STAGE_ARTIFACTS,
     env.KSAI_STAGE_RESULT ? dirname(String(env.KSAI_STAGE_RESULT)) : '',
-  ];
-  return present([workspace, '/tmp', ...scopes, ...workflow]).map((one) => resolve(one));
+  ]);
+}
+
+export function toolPathRoots(env = process.env, directory = String(env.GITHUB_WORKSPACE ?? '')) {
+  const workspace = String(directory ?? '').trim();
+  const scopes = sandboxScopes(env, existsSync, realpathSync).allow;
+  return present([workspace, '/tmp', ...scopes, env.KSAI_WORKFLOW_PACKAGE, ...stageRoots(env)]).map((one) => resolve(one));
 }
 
 export function normalizedToolPath(value, directory, exists = existsSync, real = realpathSync) {
@@ -340,6 +342,10 @@ export function assertToolPath(value, directory, env = process.env, exists = exi
   const target = normalizedToolPath(value, directory, exists, real);
   const roots = toolPathRoots(env, directory).map((one) => normalizedToolPath(one, directory, exists, real));
   const protectedRoots = toolProtectedPaths(env).map((one) => normalizedToolPath(one, directory, exists, real));
+  const within = (at, root) => inside(at.lexical, root.lexical) && inside(at.canonical, root.canonical);
+  const staged = stageRoots(env).map((one) => normalizedToolPath(one, directory, exists, real))
+    .filter((root) => !protectedRoots.some((held) => inside(held.lexical, root.lexical) || inside(held.canonical, root.canonical)));
+  if (staged.some((root) => within(target, root))) return target.canonical;
   if (protectedRoots.some((root) => inside(target.lexical, root.lexical) || inside(target.canonical, root.canonical))) {
     throw new Error('tool path reaches trusted runtime state');
   }

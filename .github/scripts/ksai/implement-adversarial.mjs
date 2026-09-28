@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { openSync, closeSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 
@@ -31,10 +31,13 @@ export function adversarial(env = process.env, run = spawnSync) {
   if (manifestIfAny(env) === null) {
     return { request_file: '', diff_file: '', changed_files_file: '', allowed_tools: reading.allowed, disallowed_tools: reading.disallowed };
   }
+  const readable = join(String(env.GITHUB_WORKSPACE ?? ''), '_ksai', 'implement-pass');
+  rmSync(readable, { recursive: true, force: true });
+  mkdirSync(readable, { recursive: true });
   const asked = {
     ...env,
-    DIFF_FILE: recorded(env, ['diff', '--patch', range], join(temp, 'ksai-implement-pass.diff'), run),
-    CHANGED_FILES_FILE: recorded(env, ['diff', '--name-status', range], join(temp, 'ksai-implement-pass-files.txt'), run),
+    DIFF_FILE: recorded(env, ['diff', '--patch', range], join(readable, 'diff.patch'), run),
+    CHANGED_FILES_FILE: recorded(env, ['diff', '--name-status', range], join(readable, 'changed-files.txt'), run),
   };
   const at = join(temp, 'ksai-implement-adversarial.request.json');
   writeRenderRequest(at, adversarialRequest(asked));

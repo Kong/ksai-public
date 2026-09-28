@@ -83,7 +83,7 @@ const {
 } = require('./prompt.cjs');
 const { MAX_DIRECT_COMMITS, PLAN_ONLY_PHASES, deniedFor, soleWritable } = require('./verify-chunk.cjs');
 const { implementRenderRequest, implementValues } = require('./implement-request.cjs');
-const { createScope, renderAllowed } = require('./change-scope.cjs');
+const { createScope, readScope, renderAllowed } = require('./change-scope.cjs');
 const { plansWork } = require('./write-triage.cjs');
 
 function refusedByBar({ command, bar, undecided }, { outputs, notices }) {
@@ -1828,6 +1828,15 @@ function deniedPaths(env) {
   return rule.stated;
 }
 
+function allowedPaths(env) {
+  if (String(env.CHANGE_SCOPE_FILE ?? '') === '') return null;
+  const scoped = readScope(env.CHANGE_SCOPE_FILE);
+  if (!scoped.ok) throw new Error(scoped.reason);
+  const { exact, patterns, protectedPatterns } = scoped.scope.allowed;
+  const excluded = [...new Set([...patterns.exclude, ...protectedPatterns.exclude])];
+  return { exact, patterns: patterns.include, protected: protectedPatterns.include, excluded };
+}
+
 function implementRequest({ env }) {
   const phase = String(env.PHASE ?? '');
   const record = PHASES[phase];
@@ -1835,7 +1844,7 @@ function implementRequest({ env }) {
   const named = String(env.PLAN_FILE ?? '').trim();
   const denied = deniedPaths(env);
   const planDocument = phase === 'revise' ? fs.readFileSync(path.join(String(env.GITHUB_WORKSPACE ?? ''), named), 'utf8') : '';
-  const values = implementValues(env, phase, { denied, planDocument });
+  const values = implementValues(env, phase, { denied, allowed: allowedPaths(env), planDocument });
   return implementRenderRequest(phase, values, { model: env.MODEL });
 }
 
@@ -1964,6 +1973,7 @@ async function resolveApprovalGate({ github, core, owner, repo, env, authorize, 
 
 module.exports = {
   releaseHold,
+  allowedPaths,
   deniedPaths,
   implementRequest,
   validateExtraArgs,

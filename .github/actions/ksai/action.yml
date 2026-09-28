@@ -4508,6 +4508,7 @@ runs:
         GUIDANCE: ${{ steps.phase.outputs.request || inputs.work_guidance }}
         ADDITIONAL_PROMPT: ${{ inputs.additional_prompt }}
         DENIED_PATHS: ${{ steps.bare_gate.outputs.denied_paths || inputs.denied_paths }}
+        CHANGE_SCOPE_FILE: ${{ steps.build_implement.outputs.change_scope_file }}
         JOB_TIMEOUT_MINUTES: ${{ inputs.job_timeout_minutes }}
         CHANNEL_NONCE: ${{ steps.channel.outputs.nonce }}
         GO_FACTS_FILE: ${{ runner.temp }}/ksai-go-facts.json
@@ -5692,6 +5693,7 @@ runs:
         PLAN_DIR: ${{ inputs.plan_file_path }}
         PLAN_FILE: ${{ steps.phase.outputs.plan_file }}
         DENIED_PATHS: ${{ steps.bare_gate.outputs.denied_paths || inputs.denied_paths }}
+        CHANGE_SCOPE_FILE: ${{ steps.build_implement.outputs.change_scope_file }}
         PROMPT_FILE: ${{ steps.governed_implement.outputs.prompt_file }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: node "${SCRIPTS}/ksai/implement-repair.mjs"

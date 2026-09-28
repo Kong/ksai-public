@@ -70,6 +70,13 @@ function evidence(at, name, maximum) {
   }
 }
 
+function stagedEvidence(from, at, name, maximum) {
+  const bytes = boundedBytes(from, name, maximum);
+  fs.rmSync(at, { force: true });
+  fs.writeFileSync(at, bytes, { mode: 0o444, flag: 'wx' });
+  return evidence(at, name, maximum);
+}
+
 function bounded(at, name, maximum) {
   const refuse = () => `${name} is empty or larger than ${maximum} bytes`;
   const text = boundedBytes(at, name, maximum, { refuse }).toString('utf8');
@@ -77,4 +84,4 @@ function bounded(at, name, maximum) {
   return text;
 }
 
-module.exports = { bounded, boundedBytes, evidence };
+module.exports = { bounded, boundedBytes, evidence, stagedEvidence };

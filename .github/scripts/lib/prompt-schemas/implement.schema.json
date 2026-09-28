@@ -50,6 +50,58 @@
         "maxLength": 4096
       }
     },
+    "allowedPaths": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "exact",
+            "patterns",
+            "protected",
+            "excluded"
+          ],
+          "properties": {
+            "exact": {
+              "type": "array",
+              "maxItems": 2000,
+              "items": {
+                "$ref": "#/$defs/path"
+              }
+            },
+            "patterns": {
+              "type": "array",
+              "maxItems": 200,
+              "items": {
+                "$ref": "#/$defs/path"
+              }
+            },
+            "protected": {
+              "type": "array",
+              "maxItems": 200,
+              "items": {
+                "$ref": "#/$defs/path"
+              }
+            },
+            "excluded": {
+              "type": "array",
+              "maxItems": 200,
+              "items": {
+                "$ref": "#/$defs/path"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
     "goFailures": {
       "type": "array",
       "maxItems": 128,
@@ -780,6 +832,9 @@
             }
           }
         },
+        "allowed_paths": {
+          "$ref": "#/$defs/allowedPaths"
+        },
         "denied_paths": {
           "$ref": "#/$defs/deniedPaths"
         },
@@ -871,6 +926,9 @@
               "const": "do"
             }
           }
+        },
+        "allowed_paths": {
+          "$ref": "#/$defs/allowedPaths"
         },
         "denied_paths": {
           "$ref": "#/$defs/deniedPaths"

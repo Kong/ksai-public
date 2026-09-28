@@ -1,8 +1,8 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { deliveriesAt, governanceOptions, governedRoot, rendererFor, trustedRootAt } from '../governance/anchors.mjs';
-import { bounded, evidence } from '../lib/evidence.cjs';
+import { bounded, evidence, stagedEvidence } from '../lib/evidence.cjs';
 import { conclusionOf } from '../lib/execution-log.mjs';
 import { SINKS, digestOf, parityOf, promptRendering, renderRequest, renderThroughControlPlane, reportDeliveries, writeRenderRequest } from '../lib/cp-prompts.mjs';
 import { reviewTools } from './governed-flow.mjs';
@@ -108,7 +108,7 @@ function candidateOf(env) {
 export const auditContext = (env) => ({
   changed_files: evidence(env.DIFF_FILES, 'the changed-file list', CHANGED_FILES_BYTES),
   diff: evidence(env.DIFF_PATCH, 'the diff', DIFF_BYTES),
-  review_prompt: evidence(env.REVIEW_PROMPT_FILE, 'the review prompt', PROMPT_BYTES),
+  review_prompt: stagedEvidence(env.REVIEW_PROMPT_FILE, join(dirname(env.DIFF_PATCH), 'review-prompt.md'), 'the review prompt', PROMPT_BYTES),
 });
 
 export function auditRequest(env, candidate = candidateOf(env)) {
