@@ -76,9 +76,14 @@ export function writeDirective(dir, message) {
   renameSync(`${at}.part`, at);
 }
 
+export const contextAsked = (asked) => (Number.isSafeInteger(asked?.job_log_id) && asked.job_log_id > 0 ? { job_log_id: asked.job_log_id } : {});
+
 const pinsOf = (env) => (env.KSAI_TRUST_PINS ? JSON.parse(env.KSAI_TRUST_PINS) : undefined);
 
-export function retries(path, ask) {
+export const retryReply = (body) => ({ retry: body.retry, delay_ms: body.delay_ms });
+export const contextReply = (body) => (body.error === undefined ? { manifest: body.manifest } : { error: body.error });
+
+export function questions(path, name, ask, reply) {
   const waiting = new Map();
   let asks = 0;
   const server = createServer((socket) => {
@@ -91,7 +96,7 @@ export function retries(path, ask) {
         return;
       }
       asks += 1;
-      const id = `retry/${asks}`;
+      const id = `${name}/${asks}`;
       waiting.set(id, socket);
       socket.once('close', () => waiting.delete(id));
       ask(id, asked);
@@ -105,7 +110,7 @@ export function retries(path, ask) {
     answer(id, body) {
       const socket = waiting.get(id);
       waiting.delete(id);
-      socket?.end(line({ retry: body.retry, delay_ms: body.delay_ms }));
+      socket?.end(line(reply(body)));
     },
     close: () => new Promise((resolve) => {
       for (const socket of waiting.values()) socket.destroy();
@@ -114,7 +119,7 @@ export function retries(path, ask) {
   };
 }
 
-export function governed(env, dir, plan, artifacts, retry = '', directory = process.cwd()) {
+export function governed(env, dir, plan, artifacts, { retry = '', context = '', directory = process.cwd() } = {}) {
   const notes = join(dir, 'notes');
   mkdirSync(notes, { recursive: true, mode: 0o700 });
   const options = governanceOptions({
@@ -132,7 +137,7 @@ export function governed(env, dir, plan, artifacts, retry = '', directory = proc
     tools: plan.tools,
     arm: '',
   }, pinsOf(env));
-  writeFileSync(join(dir, 'governance.json'), JSON.stringify({ ...options, notes, nonce: plan.nonce, flow: String(env.FLOW ?? ''), directory, ...(retry ? { retry } : {}) }), { mode: 0o600 });
+  writeFileSync(join(dir, 'governance.json'), JSON.stringify({ ...options, notes, nonce: plan.nonce, flow: String(env.FLOW ?? ''), directory, ...(retry ? { retry } : {}), ...(context ? { context } : {}) }), { mode: 0o600 });
   writeFileSync(join(dir, 'model.json'), JSON.stringify(plan.model), { mode: 0o600 });
   return notes;
 }
@@ -183,9 +188,11 @@ export async function linked(env = process.env, { connect = createConnection, ou
   const plan = first.body;
   const dir = String(env.KSAI_LINK_DIR ?? '');
   const retrySocket = join(dir, 'retry.sock');
-  const retry = retries(retrySocket, (id, asked) => say('retry.ask', id, { ...asked, session }));
-  await retry.listening;
-  const notes = governed(env, dir, plan, laidDown(dir, plan), retrySocket);
+  const retry = questions(retrySocket, 'retry', (id, asked) => say('retry.ask', id, { ...asked, session }), retryReply);
+  const contextSocket = join(dir, 'context.sock');
+  const context = questions(contextSocket, 'context', (id, asked) => say('context.ask', id, { session, ...contextAsked(asked) }), contextReply);
+  await Promise.all([retry.listening, context.listening]);
+  const notes = governed(env, dir, plan, laidDown(dir, plan), { retry: retrySocket, context: contextSocket });
 
   const opened = await relays(env);
   const { client, server } = await connected({ ...env, ...opened.extra });
@@ -236,6 +243,7 @@ export async function linked(env = process.env, { connect = createConnection, ou
         }
         if (DIRECTIVES.has(message.kind)) writeDirective(notes, message);
         if (message.kind === 'retry.answer') retry.answer(message.id, message.body);
+        if (message.kind === 'context.answer') context.answer(message.id, message.body);
       }
     })();
     await client.session.prompt({ sessionID: opencodeSession.id, text: plan.prompt.text, files: [], delivery: 'steer' });
@@ -251,7 +259,7 @@ export async function linked(env = process.env, { connect = createConnection, ou
     return 1;
   } finally {
     controller.abort();
-    await retry.close();
+    await Promise.all([retry.close(), context.close()]);
     if (opencodeSession) await exported(client, opencodeSession.id, dir);
     await server.stop();
     await opened.close();

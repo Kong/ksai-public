@@ -1046,11 +1046,11 @@ function uploadLfsObjects({ git, from, to, pushUrl, remoteRefs = [] }) {
 
 function gitVia(run, cwd) {
   const policy = repositoryView(cwd);
-  const invoke = (args, options = {}) => {
+  const invoke = (args, { index = '', ...options } = {}) => {
     if (!policy.ok) return { ok: false, stdout: '', status: null, reason: policy.reason };
     const result = run('git', gitArgs(cwd, args, policy.overrides), {
       ...options,
-      env: gitEnv(policy),
+      env: index ? { ...gitEnv(policy), GIT_INDEX_FILE: index } : gitEnv(policy),
       maxBuffer: GIT_MAX_BUFFER,
     });
     return syncRepositoryState(policy)

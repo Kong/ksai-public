@@ -20,7 +20,9 @@ export function retryAsked(event) {
   };
 }
 
-export function asker(path, { connect = createConnection, within = ASK_MS } = {}) {
+const retryAnswer = (answer) => typeof answer?.retry === 'boolean';
+
+export function asker(path, { connect = createConnection, within = ASK_MS, accept = retryAnswer } = {}) {
   if (!path) return null;
   return (asked) => new Promise((resolve) => {
     const socket = connect(path);
@@ -41,7 +43,7 @@ export function asker(path, { connect = createConnection, within = ASK_MS } = {}
       if (end < 0) return;
       try {
         const answer = JSON.parse(said.slice(0, end));
-        done(typeof answer?.retry === 'boolean' ? answer : null);
+        done(accept(answer) ? answer : null);
       } catch {
         done(null);
       }

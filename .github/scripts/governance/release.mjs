@@ -15,6 +15,8 @@ export const TOOL_PREFIX_V2 = 'static.runtime.opencode2-tool-';
 const REMINDER_ID = 'static.runtime.opencode-max-steps';
 export const NOTES_ID = 'static.runtime.ksai-link-notes';
 export const STATUS_TOOL = 'status';
+export const CONTEXT_TOOL = 'context';
+export const LINK_TOOLS = Object.freeze([STATUS_TOOL, CONTEXT_TOOL]);
 
 function entriesOf(lock) {
   const parsed = JSON.parse(lock.toString('utf8'));

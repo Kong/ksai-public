@@ -1,7 +1,7 @@
 import { readFileSync, realpathSync } from 'node:fs';
 
 import { governance } from '../governor.mjs';
-import { STATUS_TOOL, TOOL_PREFIX_V2 } from '../release.mjs';
+import { CONTEXT_TOOL, STATUS_TOOL, TOOL_PREFIX_V2 } from '../release.mjs';
 import { asker, decided, retryAsked } from '../retry-ask.mjs';
 
 export const optionsOf = (given, read = readFileSync) => (typeof given?.from === 'string' && given.from ? JSON.parse(read(given.from, 'utf8')) : given);
@@ -12,6 +12,27 @@ export const statusTool = (defined) => ({
   input: defined.input_schema,
   options: { codemode: false },
   execute: async (input) => ({ content: String(input?.update ?? '') }),
+});
+
+const CONTEXT_ASK_MS = 60_000;
+export const CONTEXT_UNANSWERED = 'the control plane gave no work context in time';
+
+export const contextAnswer = (answer) =>
+  answer !== null && typeof answer === 'object' &&
+  (typeof answer.error === 'string' || (answer.manifest !== null && typeof answer.manifest === 'object' && !Array.isArray(answer.manifest)));
+
+export const contextTool = (defined, ask) => ({
+  name: CONTEXT_TOOL,
+  description: defined.description,
+  input: defined.input_schema,
+  options: { codemode: false },
+  execute: async (input) => {
+    const log = input?.job_log_id;
+    const answer = ask ? await ask(Number.isSafeInteger(log) && log > 0 ? { job_log_id: log } : {}) : null;
+    if (!answer) throw new Error(CONTEXT_UNANSWERED);
+    if (typeof answer.error === 'string') throw new Error(answer.error);
+    return { content: JSON.stringify(answer.manifest) };
+  },
 });
 
 const logged = (level, message, extra) => {
@@ -74,6 +95,11 @@ export async function governed(ctx, options) {
   await ctx.session.hook('retry', retrying(governor, asker(options?.retry)));
   await ctx.permission.hook('evaluate', refusedAsk);
   const status = governor.offered(STATUS_TOOL);
-  if (status) await ctx.tool.transform((editor) => editor.add(statusTool(status)));
+  const context = governor.offered(CONTEXT_TOOL);
+  const added = [
+    ...(status ? [statusTool(status)] : []),
+    ...(context ? [contextTool(context, asker(options?.context, { accept: contextAnswer, within: CONTEXT_ASK_MS }))] : []),
+  ];
+  if (added.length) await ctx.tool.transform((editor) => { for (const tool of added) editor.add(tool); });
   governor.arm();
 }

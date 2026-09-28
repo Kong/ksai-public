@@ -36,12 +36,14 @@ const NAMED = new Set([
   'engine>plugin:stop.enforce',
   'engine>plugin:interrupt',
   'engine>plugin:retry.answer',
+  'engine>plugin:context.answer',
   'host>engine:facts',
   'host>engine:credential',
   'host>engine:task.result',
   'host>engine:session.started',
   'host>engine:session.ended',
   'plugin>engine:retry.ask',
+  'plugin>engine:context.ask',
   'plugin>engine:note.delivered',
 ]);
 

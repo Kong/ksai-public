@@ -25,7 +25,7 @@ import {
   v2SandboxScopes,
   validateV2Version,
 } from '../lib/opencode-v2.mjs';
-import { STATUS_TOOL } from '../governance/release.mjs';
+import { LINK_TOOLS } from '../governance/release.mjs';
 import { AUTH_MODES, originProblem } from './federated-token.mjs';
 
 const TOOL_SHELL = fileURLToPath(new URL('./opencode-tool-shell.mjs', import.meta.url));
@@ -93,7 +93,7 @@ export function v2Config(env, { exists = existsSync, real = realpathSync, read =
   if (!base) {
     return refuse(`opencode_phase ${phase || '(empty)'} names no entry in the shared tool table, so this run has no tool policy - a phase resolving to a default would run a write flow read-only, or hand a reviewer the tools to change the tree it is reviewing`);
   }
-  const permissions = [...governedRules(base, governedTools), ...(linked ? [rule(STATUS_TOOL, '*', 'allow')] : [])];
+  const permissions = [...governedRules(base, governedTools), ...(linked ? LINK_TOOLS.map((name) => rule(name, '*', 'allow')) : [])];
 
   const workspace = String(env.GITHUB_WORKSPACE ?? '').trim();
   const isolated = isolatedToolPhase(phase);

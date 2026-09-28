@@ -33,6 +33,7 @@ import { startProviderRelay } from './opencode-provider-relay.mjs';
 import { observationsIn } from './provider-observations.mjs';
 import { monitorProcess, runtimeSummary, sandboxArgs, since } from './opencode-run.mjs';
 import { mcpServerCount, traceObserver } from './opencode-runtime.mjs';
+import { RESTORED_EXPORT, checkpointSaved, checkpointUpload, restoredFrom } from './link-checkpoint.mjs';
 import { published } from './link-publish.mjs';
 import { toolIsolationProbe } from './opencode-tool-sandbox.mjs';
 import { compactions, streamFailure, toolTiming } from './opencode-v2-review.mjs';
@@ -68,6 +69,7 @@ const PROBE_TIMEOUT_MS = 60_000;
 const linkScript = (env) => join(String(env.SCRIPTS ?? ''), 'kreview/opencode-v2-link.mjs');
 const driverScript = (env) => join(String(env.SCRIPTS ?? ''), 'kreview/opencode-v2-driver.mjs');
 const preserveScript = (env) => join(String(env.SCRIPTS ?? ''), 'kreview/link-preserve.mjs');
+const checkpointScript = (env) => join(String(env.SCRIPTS ?? ''), 'kreview/link-checkpoint.mjs');
 
 export function spawned(command, args, { env = process.env, timeoutMs = PROBE_TIMEOUT_MS, launch = spawn } = {}) {
   return new Promise((done) => {
@@ -433,6 +435,23 @@ function listening(path) {
   });
 }
 
+export function childRunner(launch, env, scratch) {
+  return async (script, extra, name, outName = 'CHECKPOINT_OUT') => {
+    const file = join(scratch, name);
+    rmSync(file, { force: true });
+    const exit = await new Promise((resolve) => {
+      const child = launch(process.execPath, [script], { env: { ...env, ...extra, [outName]: file }, stdio: ['ignore', 'inherit', 'inherit'] });
+      child.once('error', () => resolve(-1));
+      child.once('close', (code) => resolve(code));
+    });
+    try {
+      return { exit, said: JSON.parse(readFileSync(file, 'utf8')) };
+    } catch {
+      return { exit, said: null };
+    }
+  };
+}
+
 export async function main(env = process.env, {
   launch = spawn, mintFor = controlPlane.minter, startProvider = startProviderRelay, startTelemetry = startRelay,
   pinned = shipped, dial = '', fetch = globalThis.fetch, monitor = monitorProcess, probe = sandboxProblem, cancelled = new AbortController().signal,
@@ -685,6 +704,8 @@ export async function main(env = process.env, {
     });
   };
 
+  const childSaid = childRunner(launch, env, scratch);
+
   const handle = async (message) => {
     const { kind, id, body } = message;
     if (kind === 'need' && body.credential) {
@@ -778,21 +799,38 @@ export async function main(env = process.env, {
       });
       return;
     }
-    if (kind === 'task' && body.name === 'preserve') {
-      const keptAt = join(scratch, 'preserve.json');
-      const exit = await new Promise((resolve) => {
-        const child = launch(process.execPath, [preserveScript(env)], {
-          env: { ...env, PRESERVE_STOPPED: arg('stopped'), PRESERVE_HARD: arg('hard'), PRESERVE_KILLED: arg('killed'), PRESERVE_OUT: keptAt },
-          stdio: ['ignore', 'inherit', 'inherit'],
-        });
-        child.once('close', (code) => resolve(code));
+    if (kind === 'task' && body.name === 'checkpoint') {
+      const session = arg('session');
+      const exported = readFileSync(join(linkDirOf(governedDir, session), EXPORT_FILE));
+      const { exit, said } = await childSaid(checkpointScript(env), { CHECKPOINT_MODE: 'snapshot' }, 'checkpoint.json');
+      if (exit !== 0 || !said || said.error) throw new Error(`the work could not be read: ${said?.error ?? `the checkpoint task exited ${exit}`}`);
+      const upload = checkpointUpload({
+        exported, patch: Buffer.from(said.patch, 'base64'), head: said.head, base: String(env.BASE_SHA ?? '').trim() || said.head, parent: arg('parent'),
+        promptVersion: arg('prompt_version'), link: client.link, job, flow: run.flow, secrets: collectSecrets(env),
       });
-      let kept = null;
-      try {
-        kept = JSON.parse(readFileSync(keptAt, 'utf8'));
-      } catch {
-        kept = null;
-      }
+      const saved = await checkpointSaved({ endpoint, fetch, token: await mint('ksai-cp'), upload });
+      client.send('task.result', id, { ok: true, outputs: [{ name: 'checkpoint', value: saved }] });
+      return;
+    }
+    if (kind === 'task' && body.name === 'restore') {
+      const outputs = await restoredFrom({
+        endpoint, fetch, token: await mint('ksai-cp'), link: client.link, job, flow: run.flow, promptVersion: arg('prompt_version'),
+        apply: async (patch, head) => {
+          const patchFile = join(scratch, 'restore.patch');
+          writeFileSync(patchFile, patch, { mode: 0o600 });
+          const { exit, said } = await childSaid(checkpointScript(env), { CHECKPOINT_MODE: 'apply', CHECKPOINT_PATCH: patchFile, CHECKPOINT_HEAD: head }, 'restore.json');
+          if (exit !== 0 || !said || said.error) throw new Error(`the checkpoint could not be restored: ${said?.error ?? `the restore task exited ${exit}`}`);
+        },
+        keep: (exported) => {
+          mkdirSync(join(governedDir, 'link'), { recursive: true, mode: 0o700 });
+          writeFileSync(join(governedDir, 'link', RESTORED_EXPORT), exported, { mode: 0o600 });
+        },
+      });
+      client.send('task.result', id, { ok: true, outputs });
+      return;
+    }
+    if (kind === 'task' && body.name === 'preserve') {
+      const { exit, said: kept } = await childSaid(preserveScript(env), { PRESERVE_STOPPED: arg('stopped'), PRESERVE_HARD: arg('hard'), PRESERVE_KILLED: arg('killed') }, 'preserve.json', 'PRESERVE_OUT');
       if (exit !== 0 || !kept) {
         client.send('task.result', id, { ok: false, outputs: [], error: `the stopped run's work could not be kept: the preserve task exited ${exit}` });
         return;
