@@ -140,6 +140,25 @@ async function answered(call, url, options) {
   }
 }
 
+const ATTEMPTS = 3;
+
+const backoffFor = (tries) => 2 ** tries * 1000;
+
+const holdsFor = (timeout) => Array.from({ length: ATTEMPTS }, (_, tries) => timeout + (tries > 0 ? backoffFor(tries) : 0))
+  .reduce((all, one) => all + one, 0);
+
+const held = (ms) => new Promise((done) => { setTimeout(done, ms); });
+
+async function answeredRetrying(call, url, options, pause = held) {
+  for (let tries = 0; ; tries += 1) {
+    if (tries > 0) await pause(backoffFor(tries));
+    const said = await answered(call, url, options);
+    if (!said.why) return said;
+    const unavailable = said.status === undefined || said.status >= 500 || said.status === 429;
+    if (!unavailable || tries + 1 >= ATTEMPTS) return { ...said, unavailable };
+  }
+}
+
 function usingControlPlane(env) {
   return String(env?.KSAI_GITHUB_CALLS ?? '').trim() === 'cp';
 }
@@ -167,5 +186,5 @@ function unanswered(error) {
 
 module.exports = {
   DEFAULT_TIMEOUT, OUTCOME_HEADER, renderingModeOf, usingControlPlane, minter, mask, mintedId, reachControlPlane, reachedFor,
-  gatewayHandover, answered, postTo, released, unreached, unanswered,
+  gatewayHandover, answered, answeredRetrying, held, holdsFor, postTo, released, unreached, unanswered,
 };

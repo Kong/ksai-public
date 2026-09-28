@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ksai.invalid/prompts/schemas/workflow-stage.schema.json",
+  "title": "Workflow package stage input",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "instructions",
+    "known_findings",
+    "stage",
+    "workspace"
+  ],
+  "properties": {
+    "instructions": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 65536
+    },
+    "known_findings": {
+      "type": "array",
+      "maxItems": 200,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "number",
+          "title"
+        ],
+        "properties": {
+          "number": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 1024
+          }
+        }
+      }
+    },
+    "stage": {
+      "type": "object"
+    },
+    "workspace": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    }
+  }
+}

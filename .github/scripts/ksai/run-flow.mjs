@@ -5,6 +5,8 @@ import { pathToFileURL } from 'node:url';
 import modelCatalog from '../lib/model-catalog.cjs';
 import { writeOutputs } from '../lib/outputs.mjs';
 import { SINKS, renderRequest, writeRenderRequest } from '../lib/render-request.cjs';
+import { promptRendering } from '../lib/cp-prompts.mjs';
+import { stageOf } from './workflow/stage.mjs';
 
 const EFFORTS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
 
@@ -49,16 +51,27 @@ const isFile = (path) => statSync(path).isFile();
  * A bound this path cannot honour is refused rather than dropped: the isolated profile reaches no agent,
  * so a tool list or a sandbox scope beside it would bound nothing while its caller believed otherwise.
  */
+const staged = (env) => String(env.WORKFLOW_JOB ?? '').trim() !== '';
+
 export function runPlan(env = {}, { exists = existsSync, regular = isFile } = {}) {
-  const profile = String(env.PROFILE ?? '').trim();
+  const given = String(env.PROFILE ?? '').trim();
+  const profile = staged(env) ? given || 'reviewer' : given;
   if (!Object.hasOwn(PROFILES, profile)) {
     throw new Error(`profile: flow: run takes one of ${Object.keys(PROFILES).join(', ')}, got: ${profile || '(empty)'}`);
   }
   const shape = PROFILES[profile];
 
   const file = String(env.PROMPT_FILE ?? '').trim();
-  if (!file) throw new Error('prompt_file: flow: run was given no prompt, so there is nothing to run');
-  if (!exists(file) || !regular(file)) throw new Error(`prompt_file: ${file} is not a file this runner holds`);
+  if (staged(env)) {
+    if (profile !== 'reviewer') throw new Error(`profile: a package stage runs under the reviewer profile, got: ${profile}`);
+    if (file) throw new Error('prompt_file: the control plane renders a package stage\'s whole prompt, so a prompt file would be dropped');
+    if (promptRendering(env) !== 'cp') {
+      throw new Error('prompt_rendering: a package stage\'s prompt is rendered only by the control plane that holds its package');
+    }
+  } else {
+    if (!file) throw new Error('prompt_file: flow: run was given no prompt, so there is nothing to run');
+    if (!exists(file) || !regular(file)) throw new Error(`prompt_file: ${file} is not a file this runner holds`);
+  }
 
   const asked = String(env.MODEL ?? '').trim();
   if (!asked) throw new Error('model: flow: run names no model, so one would be resolved here rather than by whoever priced the run');
@@ -115,6 +128,16 @@ export function runPlan(env = {}, { exists = existsSync, regular = isFile } = {}
 }
 
 export function runRequest(plan, env = {}) {
+  if (staged(env)) {
+    const { job, instance } = stageOf(env);
+    return renderRequest({
+      promptId: 'runtime.workflow-stage',
+      sink: SINKS.workflowRead,
+      model: plan.model,
+      metadata: { workflow_job: job, workflow_instance: instance },
+      inputs: [{ name: 'workspace', value: String(env.GITHUB_WORKSPACE ?? '') }],
+    });
+  }
   return renderRequest({
     promptId: 'runtime.claude-generic',
     sink: SINKS.generic,

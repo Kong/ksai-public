@@ -24,10 +24,15 @@ const SCHEMAS = Object.assign(Object.create(null), {
   'review-resolution': require('./prompt-schemas/review-resolution.schema.json'),
   'work-session-continue': require('./prompt-schemas/work-session-continue.schema.json'),
   'work-session-start': require('./prompt-schemas/work-session-start.schema.json'),
+  'workflow-stage': require('./prompt-schemas/workflow-stage.schema.json'),
   'write-triage-risk': require('./prompt-schemas/write-triage-risk.schema.json'),
   'write-triage-sizing': require('./prompt-schemas/write-triage-sizing.schema.json'),
 });
 Object.freeze(SCHEMAS);
+
+const SUPPLIED = Object.freeze(Object.assign(Object.create(null), {
+  'runtime.workflow-stage': Object.freeze(['instructions', 'known_findings', 'stage']),
+}));
 
 function schemaNameFor(promptId) {
   const named = String(promptId ?? '');
@@ -46,7 +51,8 @@ function checkRenderRequest(request) {
   const twice = new Set();
   for (const name of sent) (seen.has(name) ? twice : seen).add(name);
   const out = [...twice].sort().map((name) => `${promptId} sends ${name} more than once, and the control plane reads one of them`);
-  const declared = CONTRACTS[promptId];
+  const supplied = SUPPLIED[promptId] ?? [];
+  const declared = CONTRACTS[promptId]?.filter((name) => !supplied.includes(name));
   if (declared) {
     for (const name of declared) if (!seen.has(name)) out.push(`${promptId} declares ${name}, and the request leaves it out`);
     for (const name of [...seen].sort()) if (!declared.includes(name)) out.push(`${promptId} does not declare ${name}, and the request sends it`);
@@ -55,7 +61,8 @@ function checkRenderRequest(request) {
   if (!declared) out.push(`${promptId} names no contract this release carries`);
   if (!schema) return out;
   const inputs = Object.fromEntries((request.inputs ?? []).map((one) => [one.name, one.value]));
-  out.push(...validateSchema(schema, inputs, promptId));
+  const sendable = supplied.length ? { ...schema, required: (schema.required ?? []).filter((name) => !supplied.includes(name)) } : schema;
+  out.push(...validateSchema(sendable, inputs, promptId));
   return out;
 }
 
@@ -71,11 +78,12 @@ const SINKS = Object.freeze({
   implement: 'ksai-implement',
   review: 'ksai-review',
   test: 'ksai-test',
+  workflowRead: 'ksai-workflow-read',
 });
 
 const SINK_NAMES = Object.freeze(Object.values(SINKS));
 
-function renderRequest({ promptId, sink, model, inputs }) {
+function renderRequest({ promptId, sink, model, inputs, metadata = null }) {
   const named = String(promptId ?? '');
   if (!/^[a-z][a-z0-9.-]*$/.test(named)) throw new Error(`a render request names no prompt the catalog could hold: ${named || '(none)'}`);
   if (!SINK_NAMES.includes(sink)) throw new Error(`a render request names a sink no prompt is served for: ${String(sink ?? '(none)')}`);
@@ -85,6 +93,7 @@ function renderRequest({ promptId, sink, model, inputs }) {
     prompt_id: named,
     sink,
     model: String(model ?? ''),
+    ...(metadata && { metadata }),
     inputs,
   };
   const refused = checkRenderRequest(request);

@@ -964,8 +964,8 @@ outputs:
   conclusion:
     description: >-
       `success` or `failure`, from the model run; empty when no model ran. A `flow: run` caller reads it,
-      because nothing in that flow publishes the result for it.
-    value: ${{ steps.model_run.outputs.conclusion }}
+      because nothing in that flow publishes the result for it. A run the governed check refused reads `failure`.
+    value: ${{ steps.concluded.outputs.conclusion }}
   execution_file:
     description: "path to the model run's execution log, for a `flow: run` caller that reads the result itself; empty when no model ran"
     value: ${{ steps.model_run.outputs.execution_file }}
@@ -1388,7 +1388,7 @@ runs:
       id: dispatch_record
       if: >-
         ${{ steps.checkout_authz.outcome == 'success' && inputs.record_id != '' &&
-        inputs.flow != 'test-publish' && inputs.flow != 'run' }}
+        inputs.flow != 'test-publish' }}
       uses: ./_ksai/.github/actions/dispatch-record
       with:
         endpoint: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
@@ -4227,8 +4227,17 @@ runs:
         SANDBOX_ALLOW_WRITE: ${{ inputs.sandbox_allow_write }}
         SANDBOX_DENY_WRITE: ${{ inputs.sandbox_deny_write }}
         SANDBOX_DENY_ENV: ${{ inputs.sandbox_deny_env }}
+        WORKFLOW_JOB: ${{ steps.dispatch_record.outputs.workflow_job }}
+        WORKFLOW_INSTANCE: ${{ steps.dispatch_record.outputs.workflow_instance }}
+        WORKFLOW_ATTEMPT: ${{ steps.dispatch_record.outputs.workflow_attempt }}
+        WORKFLOW_LEASE: ${{ steps.dispatch_record.outputs.workflow_lease }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: node "${SCRIPTS}/ksai/run-flow.mjs"
+
+    - name: Keep the trusted checkout out of the tree a package stage reads
+      if: ${{ steps.build_run.outcome == 'success' && steps.dispatch_record.outputs.workflow_job != '' }}
+      shell: bash
+      run: rm -rf -- "${GITHUB_WORKSPACE}/_ksai"
 
     - name: Render the caller's prompt through the control plane
       id: governed_run
@@ -4358,7 +4367,7 @@ runs:
         (steps.phase.outputs.pr_number || steps.open_draft.outputs.pr_number) != '') }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
-        JOB_TIMEOUT_MINUTES: ${{ inputs.job_timeout_minutes }}
+        JOB_TIMEOUT_MINUTES: ${{ steps.dispatch_record.outputs.stage_minutes || inputs.job_timeout_minutes }}
         CHANNEL_NONCE: ${{ steps.channel.outputs.nonce }}
         PHASE: ${{ steps.size.outputs.phase }}
         PROMPT_DIR: ${{ runner.temp }}
@@ -4509,7 +4518,7 @@ runs:
         ADDITIONAL_PROMPT: ${{ inputs.additional_prompt }}
         DENIED_PATHS: ${{ steps.bare_gate.outputs.denied_paths || inputs.denied_paths }}
         CHANGE_SCOPE_FILE: ${{ steps.build_implement.outputs.change_scope_file }}
-        JOB_TIMEOUT_MINUTES: ${{ inputs.job_timeout_minutes }}
+        JOB_TIMEOUT_MINUTES: ${{ steps.dispatch_record.outputs.stage_minutes || inputs.job_timeout_minutes }}
         CHANNEL_NONCE: ${{ steps.channel.outputs.nonce }}
         GO_FACTS_FILE: ${{ runner.temp }}/ksai-go-facts.json
         PACKAGE_FACTS_FILE: ${{ runner.temp }}/ksai-package-facts.json
@@ -4570,7 +4579,7 @@ runs:
         DIFF_STATUS: ${{ steps.diff.outputs.status_file }}
         DIFF_SHORTSTAT: ${{ steps.diff.outputs.shortstat }}
         REPO_RULES: ${{ steps.repo_rules.outputs.rules }}
-        JOB_TIMEOUT_MINUTES: ${{ inputs.job_timeout_minutes }}
+        JOB_TIMEOUT_MINUTES: ${{ steps.dispatch_record.outputs.stage_minutes || inputs.job_timeout_minutes }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:
         script: |
@@ -4607,7 +4616,7 @@ runs:
         DIFF_STATUS: ${{ steps.diff.outputs.status_file }}
         DIFF_SHORTSTAT: ${{ steps.diff.outputs.shortstat }}
         REPO_RULES: ${{ steps.repo_rules.outputs.rules }}
-        JOB_TIMEOUT_MINUTES: ${{ inputs.job_timeout_minutes }}
+        JOB_TIMEOUT_MINUTES: ${{ steps.dispatch_record.outputs.stage_minutes || inputs.job_timeout_minutes }}
         MODEL: ${{ steps.select_arm.outputs.model }}
         AUDITOR_MANDATE: ${{ github.workspace }}/_ksai/plugins/kreview/agents/findings-auditor.md
         OPENCODE_VERSION: ${{ inputs.opencode_version }}
@@ -4955,7 +4964,7 @@ runs:
         steps.build_test.outcome == 'success' || steps.build_run.outputs.agent == 'true') }}
       shell: bash
       env:
-        JOB_TIMEOUT_MINUTES: ${{ inputs.job_timeout_minutes }}
+        JOB_TIMEOUT_MINUTES: ${{ steps.dispatch_record.outputs.stage_minutes || inputs.job_timeout_minutes }}
         CLI_PATTERN: ${{ steps.engine.outputs.cli_pattern }}
         ENGINE: ${{ steps.engine.outputs.name }}
         OPENCODE_EVENTS_FILE: ${{ runner.temp }}/opencode-events.jsonl
@@ -5074,7 +5083,7 @@ runs:
         REQUEST_FILE: ${{ steps.governed_test.outputs.request_file }}
         OPENCODE_ALLOWED: ${{ steps.test_tools.outputs.allowed_tools }}
         OPENCODE_DISALLOWED: ${{ steps.test_tools.outputs.disallowed_tools }}
-        JOB_TIMEOUT_MINUTES: ${{ inputs.job_timeout_minutes }}
+        JOB_TIMEOUT_MINUTES: ${{ steps.dispatch_record.outputs.stage_minutes || inputs.job_timeout_minutes }}
         KSAI_JOB_STARTED_AT_MS: ${{ steps.plugin_ref.outputs.started_at_ms }}
         ALLOWED_MODELS: ${{ inputs.allowed_models }}
         ATTRIBUTION_HEADERS: ${{ steps.model_headers.outputs.value }}
@@ -5531,7 +5540,7 @@ runs:
         DIFF_PATCH: ${{ steps.diff.outputs.patch }}
         DIFF_FILES: ${{ steps.diff.outputs.files_file }}
         REPO: ${{ github.repository }}
-        JOB_TIMEOUT_MINUTES: ${{ inputs.job_timeout_minutes }}
+        JOB_TIMEOUT_MINUTES: ${{ steps.dispatch_record.outputs.stage_minutes || inputs.job_timeout_minutes }}
         KSAI_JOB_STARTED_AT_MS: ${{ steps.plugin_ref.outputs.started_at_ms }}
         ALLOWED_MODELS: ${{ inputs.allowed_models }}
         ATTRIBUTION_HEADERS: ${{ steps.model_headers.outputs.value }}
@@ -6016,6 +6025,17 @@ runs:
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: node "${SCRIPTS}/kreview/governed-check.mjs" governed
 
+    - name: Say how the model run ended, governance included
+      id: concluded
+      if: ${{ always() && steps.model_run.outcome != 'skipped' }}
+      shell: bash
+      env:
+        CONCLUSION: >-
+          ${{ (steps.governed_held.outcome == 'failure' || steps.governed_held.outcome == 'cancelled') && 'failure' ||
+          steps.model_run.outputs.conclusion }}
+      run: echo "conclusion=${CONCLUSION}" >> "$GITHUB_OUTPUT"
+
+
     - name: Report what reached the model to the control plane
       id: governed_report
       if: >-
@@ -6271,7 +6291,7 @@ runs:
       shell: bash
       env:
         KSAI_JOB_STARTED_MS: ${{ steps.plugin_ref.outputs.started_at_ms }}
-        JOB_TIMEOUT_MINUTES: ${{ inputs.job_timeout_minutes }}
+        JOB_TIMEOUT_MINUTES: ${{ steps.dispatch_record.outputs.stage_minutes || inputs.job_timeout_minutes }}
         GH_TOKEN: ${{ inputs.source_org_github_token }}
         KSAI_GITHUB_CALLS: ${{ inputs.github_calls }}
         KSAI_CP_ENDPOINT: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
@@ -6309,7 +6329,7 @@ runs:
       shell: bash
       env:
         KSAI_JOB_STARTED_MS: ${{ steps.plugin_ref.outputs.started_at_ms }}
-        JOB_TIMEOUT_MINUTES: ${{ inputs.job_timeout_minutes }}
+        JOB_TIMEOUT_MINUTES: ${{ steps.dispatch_record.outputs.stage_minutes || inputs.job_timeout_minutes }}
         GH_TOKEN: ${{ inputs.source_org_github_token }}
         KSAI_GITHUB_CALLS: ${{ inputs.github_calls }}
         KSAI_CP_ENDPOINT: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
@@ -6378,7 +6398,7 @@ runs:
       shell: bash
       env:
         KSAI_JOB_STARTED_MS: ${{ steps.plugin_ref.outputs.started_at_ms }}
-        JOB_TIMEOUT_MINUTES: ${{ inputs.job_timeout_minutes }}
+        JOB_TIMEOUT_MINUTES: ${{ steps.dispatch_record.outputs.stage_minutes || inputs.job_timeout_minutes }}
         GH_TOKEN: ${{ inputs.source_org_github_token }}
         REPO: ${{ github.repository }}
         PR_NUMBER: ${{ steps.phase.outputs.pr_number }}
@@ -6415,7 +6435,7 @@ runs:
       shell: bash
       env:
         KSAI_JOB_STARTED_MS: ${{ steps.plugin_ref.outputs.started_at_ms }}
-        JOB_TIMEOUT_MINUTES: ${{ inputs.job_timeout_minutes }}
+        JOB_TIMEOUT_MINUTES: ${{ steps.dispatch_record.outputs.stage_minutes || inputs.job_timeout_minutes }}
         GH_TOKEN: ${{ inputs.source_org_github_token }}
         REPO: ${{ github.repository }}
         PR_NUMBER: ${{ steps.phase.outputs.pr_number }}
@@ -6453,7 +6473,7 @@ runs:
       shell: bash
       env:
         KSAI_JOB_STARTED_MS: ${{ steps.plugin_ref.outputs.started_at_ms }}
-        JOB_TIMEOUT_MINUTES: ${{ inputs.job_timeout_minutes }}
+        JOB_TIMEOUT_MINUTES: ${{ steps.dispatch_record.outputs.stage_minutes || inputs.job_timeout_minutes }}
         GH_TOKEN: ${{ inputs.source_org_github_token }}
         REPO: ${{ github.repository }}
         PR_NUMBER: ${{ steps.phase.outputs.pr_number }}
@@ -6663,7 +6683,7 @@ runs:
       shell: bash
       env:
         KSAI_JOB_STARTED_MS: ${{ steps.plugin_ref.outputs.started_at_ms }}
-        JOB_TIMEOUT_MINUTES: ${{ inputs.job_timeout_minutes }}
+        JOB_TIMEOUT_MINUTES: ${{ steps.dispatch_record.outputs.stage_minutes || inputs.job_timeout_minutes }}
         GH_TOKEN: ${{ inputs.source_org_github_token }}
         REPO: ${{ github.repository }}
         BRANCH: ${{ steps.phase.outputs.ref }}
@@ -7186,6 +7206,25 @@ runs:
       shell: bash
       run: echo 'cancelled=true' >> "$GITHUB_OUTPUT"
 
+    - name: Complete the package stage this run executed
+      id: stage_complete
+      if: >-
+        ${{ always() && inputs.flow == 'run' && steps.dispatch_record.outputs.workflow_job != '' &&
+        steps.staged_scripts.outcome == 'success' }}
+      shell: bash
+      env:
+        WORKFLOW_JOB: ${{ steps.dispatch_record.outputs.workflow_job }}
+        WORKFLOW_INSTANCE: ${{ steps.dispatch_record.outputs.workflow_instance }}
+        WORKFLOW_ATTEMPT: ${{ steps.dispatch_record.outputs.workflow_attempt }}
+        WORKFLOW_LEASE: ${{ steps.dispatch_record.outputs.workflow_lease }}
+        CONCLUSION: >-
+          ${{ steps.cancellation.outputs.cancelled == 'true' && 'cancelled' ||
+          steps.governed_held.outcome == 'success' && steps.concluded.outputs.conclusion || 'failure' }}
+        EXECUTION_FILE: ${{ steps.model_run.outputs.execution_file }}
+        KSAI_CP_ENDPOINT: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      run: node "${SCRIPTS}/ksai/workflow/stage.mjs"
+
     - name: Comment PR (run report)
       id: comment_report
       if: >-
@@ -7448,7 +7487,9 @@ runs:
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         SPEND_ENDPOINT: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
-        SPEND_ATTEMPT: ${{ github.run_id }}:${{ github.run_attempt }}:${{ github.job }}:${{ strategy.job-index || 0 }}
+        SPEND_ATTEMPT: >-
+          ${{ github.run_id }}:${{ github.run_attempt }}:${{ steps.dispatch_record.outputs.workflow_job || github.job }}:${{
+          strategy.job-index || 0 }}
         SPEND_COST: >-
           ${{ steps.write_report.outputs.spend_usd || steps.write_progress.outputs.spend_usd ||
           steps.write_comment.outputs.spend_usd || steps.eval_record.outputs.spend_usd ||

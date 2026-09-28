@@ -108,6 +108,36 @@ outputs:
       `command` too, including a test successor's, whose record names none and binds a workflow stage
       attempt instead. The retained comment must name exactly this command, and nothing classifies it
     value: ${{ steps.record.outputs.bound_command }}
+  workflow_job:
+    description: >-
+      the workflow package job whose stage this run executes, or empty for every record that dispatches no
+      stage. A stage record names no command, and its job, instance, attempt and lease are what the run
+      completes the stage against
+    value: ${{ steps.record.outputs.workflow_job }}
+  workflow_instance:
+    description: the stage instance this run executes, or empty where the record dispatches no stage
+    value: ${{ steps.record.outputs.workflow_instance }}
+  workflow_attempt:
+    description: the attempt of that stage instance this run is, or empty where the record dispatches no stage
+    value: ${{ steps.record.outputs.workflow_attempt }}
+  workflow_lease:
+    description: >-
+      the lease the control plane gave this attempt, or empty where the record dispatches no stage. It binds a
+      completion to this attempt beside the run's own token, and grants nothing on its own
+    value: ${{ steps.record.outputs.workflow_lease }}
+  source_revision:
+    description: the commit the stage reads, from the stage record, or empty where the record dispatches no stage
+    value: ${{ steps.record.outputs.source_revision }}
+  stage_minutes:
+    description: >-
+      the minutes a stage's model may run, ending three minutes before the control plane reaps the attempt, or
+      empty where the record names no deadline
+    value: ${{ steps.record.outputs.stage_minutes }}
+  stage_job_minutes:
+    description: >-
+      the minutes a stage's job may run, ending one minute before the control plane reaps the attempt, or empty
+      where the record names no deadline
+    value: ${{ steps.record.outputs.stage_job_minutes }}
   comment_id:
     description: the comment or submitted review id read from the trusted record, or empty
     value: ${{ steps.record.outputs.comment_id }}
@@ -247,7 +277,10 @@ runs:
             ['trigger_state', 'triggerState'], ['trigger_name', 'triggerName'],
             ['requester', 'requester'], ['approver', 'approver'], ['approval_id', 'approvalId'], ['model', 'model'],
             ['effort', 'effort'], ['guidance', 'guidance'], ['work_item', 'workItem'], ['ask', 'ask'],
-            ['bound_command', 'boundCommand']]) {
+            ['bound_command', 'boundCommand'], ['workflow_job', 'workflowJob'],
+            ['workflow_instance', 'workflowInstance'], ['workflow_attempt', 'workflowAttempt'],
+            ['workflow_lease', 'workflowLease'], ['source_revision', 'sourceRevision'], ['stage_minutes', 'stageMinutes'],
+            ['stage_job_minutes', 'stageJobMinutes']]) {
             core.setOutput(name, answer[held]);
           }
           core.setOutput('guidance_html', escapeHtml(answer.guidance));

@@ -139,6 +139,12 @@
       "base_prompt",
       "knowledge"
     ],
+    "runtime.workflow-stage": [
+      "instructions",
+      "known_findings",
+      "stage",
+      "workspace"
+    ],
     "runtime.write-triage-risk": [
       "ask",
       "checks",

@@ -3,44 +3,29 @@
 
 const { createHash } = require('node:crypto');
 
-const { DEFAULT_TIMEOUT, answered, gatewayHandover, mask, minter, reachedFor, usingControlPlane } = require('./control-plane.cjs');
+const {
+  DEFAULT_TIMEOUT, answeredRetrying, gatewayHandover, held, holdsFor, mask, minter, reachedFor, usingControlPlane,
+} = require('./control-plane.cjs');
 
 const API_VERSION = 'effects/v1';
 const EFFECTS = '/v1/run/effects';
-const EFFECT_ATTEMPTS = 3;
-
-const backoffFor = (tries) => 2 ** tries * 1000;
-
-const holdsFor = (timeout) => Array.from({ length: EFFECT_ATTEMPTS }, (_, tries) => timeout + (tries > 0 ? backoffFor(tries) : 0))
-  .reduce((all, one) => all + one, 0);
-
-const held = (ms) => new Promise((done) => { setTimeout(done, ms); });
 
 const text = (value) => String(value ?? '').trim();
 
-async function askControlPlane(effects, { env, fetch, timeout, secret, pause = held, handover = false }) {
+async function askControlPlane(effects, { env, fetch, timeout, secret, pause, handover = false }) {
   const reached = await reachedFor({ env, fetch, timeout, secret, holds: holdsFor(timeout) });
   if (reached.why) return reached;
   const headers = handover
     ? await gatewayHandover({ env, secret, mint: minter({ env, fetch, signal: reached.signal, holds: holdsFor(timeout) }) })
     : {};
   const body = JSON.stringify({ api_version: API_VERSION, effects });
-  let last = { why: 'the control plane was asked nothing' };
-  for (let tries = 0; tries < EFFECT_ATTEMPTS; tries += 1) {
-    if (tries > 0) await pause(backoffFor(tries));
-    const said = await answered(fetch, `${reached.base}${EFFECTS}`, { token: reached.token, body, timeout, headers });
-    if (said.why) {
-      last = { why: said.why, unavailable: said.status === undefined || said.status >= 500 || said.status === 429 };
-      if (said.status !== undefined && said.status < 500 && said.status !== 429) return last;
-      continue;
-    }
-    const done = Array.isArray(said.answer?.done) ? said.answer.done : [];
-    if (done.length < effects.length) {
-      return { why: `the control plane did ${done.length} of ${effects.length} effects`, unavailable: false, done };
-    }
-    return { done };
+  const said = await answeredRetrying(fetch, `${reached.base}${EFFECTS}`, { token: reached.token, body, timeout, headers }, pause);
+  if (said.why) return { why: said.why, unavailable: said.unavailable };
+  const done = Array.isArray(said.answer?.done) ? said.answer.done : [];
+  if (done.length < effects.length) {
+    return { why: `the control plane did ${done.length} of ${effects.length} effects`, unavailable: false, done };
   }
-  return last;
+  return { done };
 }
 
 const seen = new Map();

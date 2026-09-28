@@ -10,13 +10,13 @@ import {
 import { validateSchemaWithReferences } from '../../lib/json-schema.cjs';
 
 const RECORD_VERSION = 'ksai.konghq.com/stage-record/v1alpha1';
-const CANDIDATE_VERSION = 'ksai.konghq.com/stage-candidate/v1alpha1';
-const JOB = /^job_[A-Za-z0-9._-]{1,120}$/;
+export const CANDIDATE_VERSION = 'ksai.konghq.com/stage-candidate/v1alpha1';
+export const JOB = /^job_[A-Za-z0-9._-]{1,120}$/;
 const SHA = /^[0-9a-f]{40}$/;
 const REPOSITORY_PART = /^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,98}[A-Za-z0-9_])?$/;
 const MAX_CANDIDATE_BYTES = 1024 * 1024;
 
-const object = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+export const object = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 const fields = (value, allowed, required, where) => {
   if (!object(value)) throw new Error(`${where} is not an object`);
   for (const key of Object.keys(value)) if (!allowed.includes(key)) throw new Error(`${where} has unknown field ${key}`);
@@ -128,12 +128,16 @@ function regular(path, where) {
   return held;
 }
 
+export function candidateEnvelope(candidate) {
+  fields(candidate, ['apiVersion', 'output', 'artifacts'], ['apiVersion', 'output', 'artifacts'], 'stage candidate');
+  if (candidate.apiVersion !== CANDIDATE_VERSION || !Array.isArray(candidate.artifacts)) throw new Error('stage candidate version or artifacts are invalid');
+}
+
 /** Validate one parsed candidate with the same checks used by trusted acceptance. */
 export function validateCandidate({ candidate, bytes, artifactsRoot, held }) {
   const limit = Math.min(MAX_CANDIDATE_BYTES, held.manifest.spec.limits?.bytes?.candidateResult ?? MAX_CANDIDATE_BYTES);
   if (bytes > limit) throw new Error(`stage candidate exceeds ${limit} bytes`);
-  fields(candidate, ['apiVersion', 'output', 'artifacts'], ['apiVersion', 'output', 'artifacts'], 'stage candidate');
-  if (candidate.apiVersion !== CANDIDATE_VERSION || !Array.isArray(candidate.artifacts)) throw new Error('stage candidate version or artifacts are invalid');
+  candidateEnvelope(candidate);
   const declarations = new Map((held.stage.artifacts ?? []).map((artifact) => [artifact.id, artifact]));
   const seen = new Set();
   for (const artifact of candidate.artifacts) {

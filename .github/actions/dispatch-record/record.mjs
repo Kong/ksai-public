@@ -66,7 +66,13 @@ const WHY_STATUS = Object.freeze({
   503: 'the control plane could not reach its records, or has not tied this record to a run yet',
 });
 
+export const NO_STAGE = Object.freeze({
+  workflowJob: '', workflowInstance: '', workflowAttempt: '', workflowLease: '', sourceRevision: '',
+  stageMinutes: '', stageJobMinutes: '',
+});
+
 const NO_RECORD = Object.freeze({
+  ...NO_STAGE,
   read: false,
   recordId: '',
   issueNumber: '',
@@ -175,6 +181,51 @@ function boundCommandOf(flow, command, { job, stage, instance }) {
     throw policyStopped('the record binds a workflow successor to no stage attempt the control plane could have admitted');
   }
   return staged;
+}
+
+const STAGE_RECORD_VERSION = 'ksai.konghq.com/stage-record/v1alpha1';
+
+export const WORKFLOW_JOB = /^job_[A-Za-z0-9._-]{1,120}$/;
+
+const REVISION = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+const DEADLINE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+
+const MINUTE = 60_000;
+
+function budgetOf(deadline, at) {
+  if (deadline === undefined) return { stageMinutes: '', stageJobMinutes: '' };
+  const due = typeof deadline === 'string' && DEADLINE.test(deadline) ? Date.parse(deadline) : Number.NaN;
+  if (!Number.isFinite(due)) throw policyStopped('the record names a stage deadline that is not a UTC time');
+  const left = Math.floor((due - at) / MINUTE);
+  if (left < 5) throw stopped(`the stage's attempt is reaped in ${Math.max(0, left)} minutes, too few to run it`);
+  return { stageMinutes: String(left - 3), stageJobMinutes: String(left - 1) };
+}
+
+function stageOf(served, commanded, at) {
+  const {
+    workflow_record: written, workflow_job: job, workflow_instance: instance, workflow_attempt: tried, workflow_lease: lease,
+    workflow_deadline: deadline,
+  } = served;
+  if (written === undefined || commanded) return NO_STAGE;
+  if (!shaped(job, WORKFLOW_JOB) || !shaped(instance, STAGE_INSTANCE) || counted(tried) === ''
+    || !Number.isSafeInteger(Number(tried)) || !shaped(lease, RECORD_ID)) {
+    throw policyStopped('the record dispatches a package stage it does not fully name');
+  }
+  let record;
+  try {
+    record = typeof written === 'string' ? JSON.parse(written) : null;
+  } catch {
+    record = null;
+  }
+  const revision = record?.job?.sourceRevision;
+  if (record?.apiVersion !== STAGE_RECORD_VERSION || typeof revision !== 'string' || !REVISION.test(revision)) {
+    throw policyStopped('the record dispatches a package stage its stage record does not describe');
+  }
+  return {
+    workflowJob: job, workflowInstance: instance, workflowAttempt: tried, workflowLease: lease, sourceRevision: revision,
+    ...budgetOf(deadline, at),
+  };
 }
 
 /** oneOf answers a value from a set the control plane chooses from, or empty for anything else. */
@@ -348,7 +399,7 @@ async function attempt({ url, audience, mint, secret, fetch, timeout, named = fa
  *
  * @param {unknown} served
  */
-function recordFrom(served) {
+function recordFrom(served, at) {
   if (served === null || typeof served !== 'object' || Array.isArray(served)) {
     throw policyStopped('the control plane answered something other than a record');
   }
@@ -476,6 +527,7 @@ function recordFrom(served) {
       throw policyStopped('the record binds a work session but names no operator who continued it');
     }
   }
+  const stage = stageOf(served, command !== undefined || bound, at);
   return {
     read: true,
     command: boundCommand || (securedFix ? 'fix' : text(command)),
@@ -507,6 +559,7 @@ function recordFrom(served) {
     guidance: text(guidance),
     workItem: text(workItem),
     ask: text(ask),
+    ...stage,
   };
 }
 
@@ -596,7 +649,7 @@ export async function readRecord({
   const tries = async (left) => {
     const outcome = await attempt({ ...asked, timeout: Math.max(1, Math.min(timeout, budget - (now() - started))) });
     if ('none' in outcome) return NO_RECORD;
-    if ('served' in outcome) return recordFrom(outcome.served);
+    if ('served' in outcome) return recordFrom(outcome.served, now());
     if (left.length === 0) {
       throw stopped(`${outcome.retry}, on the last of ${delays.length + 1} attempts`);
     }
