@@ -3,14 +3,16 @@ import { fileURLToPath } from 'node:url';
 
 import { writeOutputs } from '../lib/outputs.mjs';
 import { promptRendering } from '../lib/cp-prompts.mjs';
+import { isV2 } from '../lib/opencode-v2.mjs';
 import { renderFlow } from './governed-flow.mjs';
 import { renderAudit, renderReview } from './governed-review.mjs';
 
 const RENDERS = { review: renderReview, audit: renderAudit, flow: renderFlow };
 
-async function main(argv, env) {
+export async function main(argv, env) {
   const render = RENDERS[argv[0]];
   if (!render) throw new Error(`usage: governed-render.mjs ${Object.keys(RENDERS).join('|')}`);
+  if (isV2(env.OPENCODE_VERSION)) throw new Error(`an OpenCode 2 run is linked to the engine, which renders its ${argv[0]} through the control plane itself`);
   const said = await render(env);
   if (said.shadow) {
     console.log(`::notice::the control plane rendered this ${argv[0]}'s prompt from prompt release ${said.shadow}; this run sends its own`);

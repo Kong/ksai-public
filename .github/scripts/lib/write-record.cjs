@@ -37,6 +37,14 @@ function compactJob(job) {
   return `${named.slice(0, 27)}~${createHash('sha256').update(named).digest('hex').slice(0, 12)}`;
 }
 
+function attemptIdOf(raw) {
+  const parts = String(raw).trim().split(':');
+  if (parts.length !== 4) return '';
+  const [runId, runAttempt, job, jobIndex] = parts;
+  const id = [runId, runAttempt, compactJob(job), jobIndex].join(':');
+  return ATTEMPT_ID_SHAPE.test(id) ? id : '';
+}
+
 const REASON_SHAPE = /^[a-z][a-z0-9-]{0,39}$/;
 
 const UNCLASSIFIED_REASON = 'unclassified';
@@ -331,6 +339,7 @@ module.exports = {
   ATTEMPT_FIELDS,
   ATTEMPT_ID_SHAPE,
   REASON_SHAPE,
+  attemptIdOf,
   compactJob,
   UNCLASSIFIED_REASON,
   IDENTITY_PREFIX,

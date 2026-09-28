@@ -156,6 +156,10 @@ export function appAuthorOf(env = process.env) {
   return identity.ok && env.KSAI_GIT_AUTHOR_NAME ? `${identity.name} <${identity.email}>` : null;
 }
 
+function asksControlPlane(env, appAuthor) {
+  return usingControlPlane(env) && coAuthorTrailer(appAuthor) !== null;
+}
+
 function writeBody(file, input) {
   try {
     writeFileSync(file, `${JSON.stringify({ query: CREATE_COMMIT, variables: { input } })}\n`);
@@ -217,6 +221,7 @@ export function pushSigned({
   appAuthor = appAuthorOf(env),
   jiraKey = env.JIRA_KEY,
   log = (message) => process.stdout.write(`${message}\n`),
+  controlPlaneOnly = false,
 }) {
   const second = git(['rev-parse', '--verify', '--quiet', 'HEAD^2']);
   if (second?.ok && String(second.stdout ?? '').trim() !== '') {
@@ -257,7 +262,8 @@ export function pushSigned({
     return { signed: false, reason: `the mutation could not be written to ${bodyFile}, so it is pushed as it is` };
   }
 
-  const person = usingControlPlane(env) && coAuthorTrailer(appAuthor)
+  const asking = asksControlPlane(env, appAuthor);
+  const person = asking
     ? asThePerson({
         run,
         bodyFile,
@@ -267,6 +273,7 @@ export function pushSigned({
     : null;
 
   let answer = person?.commit;
+  if (!answer && controlPlaneOnly) return { error: 'the control plane did not commit the work, and a linked run publishes it no other way' };
   if (!answer) {
     const created = run('gh', ['api', 'graphql', '--input', bodyFile]);
     if (!created.ok) {
@@ -357,7 +364,11 @@ export function publishCommit({
   remoteLfsRefs = [],
   jiraKey = env.JIRA_KEY,
   log = (message) => process.stdout.write(`${message}\n`),
+  controlPlaneOnly = false,
 }) {
+  if (controlPlaneOnly && !asksControlPlane(env, appAuthorOf(env))) {
+    return { ok: false, reason: 'this run cannot ask the control plane to commit its work, and a linked run publishes it no other way' };
+  }
   const normalised = rewriteMessage({ git, log, coAuthor, jiraKey, messageFile });
   if (normalised.error) return { ok: false, reason: normalised.error };
   const localSha = normalised.sha ?? verifiedSha;
@@ -365,10 +376,10 @@ export function publishCommit({
     git,
     from: createBranchAt ?? remoteSha,
     to: localSha,
-    pushUrl,
+    pushUrl: controlPlaneOnly ? '' : pushUrl,
     remoteRefs: remoteLfsRefs,
   });
-  if (!lfs.ok) return { ok: false, reason: lfs.reason };
+  if (!lfs.ok) return { ok: false, reason: controlPlaneOnly ? `a linked run uploads no Git LFS objects: ${lfs.reason}` : lfs.reason };
 
   if (createBranchAt) {
     const made = run('gh', [
@@ -400,6 +411,7 @@ export function publishCommit({
     env,
     jiraKey,
     log,
+    controlPlaneOnly,
   });
   if (attempt.error) return { ok: false, reason: attempt.error };
   if (attempt.signed) return { ok: true, sha: attempt.sha, signed: true };
@@ -408,6 +420,7 @@ export function publishCommit({
     log(`note: ${attempt.reason}. The commit is on the branch unsigned.`);
     return { ok: true, sha: attempt.sha, signed: false };
   }
+  if (controlPlaneOnly) return { ok: false, reason: `${attempt.reason}, and a linked run publishes nothing but through the control plane` };
 
   log(`note: ${attempt.reason}. The commit is pushed unsigned.`);
   const pushed = git(['push', pushUrl, `${branch}:refs/heads/${branch}`]);

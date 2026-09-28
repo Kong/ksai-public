@@ -1,16 +1,8 @@
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { ATTEMPT_ID_SHAPE, compactJob } = require('../lib/write-record.cjs');
+const { attemptIdOf } = require('../lib/write-record.cjs');
 const { postTo, reachControlPlane, unreached } = require('../lib/control-plane.cjs');
-
-function attemptOf(raw) {
-  const parts = String(raw).trim().split(':');
-  if (parts.length !== 4) return '';
-  const [runId, runAttempt, job, jobIndex] = parts;
-  const id = [runId, runAttempt, compactJob(job), jobIndex].join(':');
-  return ATTEMPT_ID_SHAPE.test(id) ? id : '';
-}
 
 const MAX_USD = 1000;
 
@@ -64,7 +56,7 @@ export async function reportSpend({
   const named = String(endpoint).trim();
   if (named === '') return { reported: false, why: '' };
 
-  const piece = attemptOf(attempt);
+  const piece = attemptIdOf(attempt);
   if (piece === '') {
     return { reported: false, why: 'this job could not name the piece of work it is reporting' };
   }

@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "The host started the session's sandbox and admitted its one plugin connection, whose key it vouches for",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["session", "plugin_key"],
+  "properties": {
+    "session": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$" },
+    "plugin_key": { "type": "string", "pattern": "^[A-Za-z0-9+/]{43}=$" }
+  }
+}

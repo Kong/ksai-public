@@ -1,5 +1,6 @@
 import { DIGEST, canonical, digest, sameDigest } from './artifacts.mjs';
 import { reminderText } from './conversation.mjs';
+import { notesOf } from './notes.mjs';
 import { signedWithDigest, statementOf } from './render.mjs';
 import { TrustedRoot, Verifier, bundleFromJSON, toTrustMaterial } from './sigstore.mjs';
 import { compareVersions, versionParts } from './versions.mjs';
@@ -12,6 +13,8 @@ export const TOOL_PREFIX = 'static.runtime.opencode-tool-';
 
 export const TOOL_PREFIX_V2 = 'static.runtime.opencode2-tool-';
 const REMINDER_ID = 'static.runtime.opencode-max-steps';
+export const NOTES_ID = 'static.runtime.ksai-link-notes';
+export const STATUS_TOOL = 'status';
 
 function entriesOf(lock) {
   const parsed = JSON.parse(lock.toString('utf8'));
@@ -78,6 +81,14 @@ export function governedTool(release, name, body, prefix) {
     throw new Error(`the ${name} tool definition is malformed`);
   }
   return { name, description: lines.join('\n'), input_schema: parsed.input_schema, schema: canonical(parsed.input_schema) };
+}
+
+export function governedNotes(release, body) {
+  const entry = release.entries.find((one) => one.id === NOTES_ID);
+  if (!entry || entry.dynamic || !sameDigest(entry.body_digest, digest(body))) {
+    throw new Error('the run notes are not the ones the attested release governs');
+  }
+  return notesOf(body);
 }
 
 export function governedReminder(release, body) {

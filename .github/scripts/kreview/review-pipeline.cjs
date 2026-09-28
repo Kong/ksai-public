@@ -311,4 +311,4 @@ async function runPipeline({ strategy, context, prior = '', identity, scoping = 
   return { code: missing.size ? 1 : 0, review: { summary, findings: [...kept.values()] }, ledger };
 }
 
-module.exports = { STRATEGIES, LIMITS, experimentOf, findingProblem, discoveryPrompt, auditPrompt, auditProblem, runPipeline, promptDigest: digest, renderVerdict, wireProblem, fromWire, VERDICT_LABELS, CELL_LIMIT, LINE_LIMIT, BODY_CHARS, ASSESSMENT_LIMIT, ASSESSMENT_CHARS };
+module.exports = { STRATEGIES, LIMITS, experimentOf, findingProblem, discoveryPrompt, auditPrompt, auditProblem, runPipeline, promptDigest: digest, renderVerdict, wireProblem, fromWire, packet, VERDICT_LABELS, CELL_LIMIT, LINE_LIMIT, BODY_CHARS, ASSESSMENT_LIMIT, ASSESSMENT_CHARS };

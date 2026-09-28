@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "The engine asks the host to start one sandboxed OpenCode session; what the model may be sent the host reads from the plan it relays",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["session", "phase", "env"],
+  "properties": {
+    "session": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$" },
+    "phase": { "description": "The tool policy phase the host holds the session to", "type": "string", "pattern": "^[a-z][a-z-]{0,31}$" },
+    "restarts": {
+      "description": "The session this one runs again after the gateway lost it, so what was said to that one is said again",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+    },
+    "render": {
+      "description": "The prompt and sink the engine rendered for this session, which the governor holds the signed render to",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prompt_id", "sink"],
+      "properties": {
+        "prompt_id": { "type": "string", "pattern": "^[a-z][a-z0-9.-]{0,127}$" },
+        "sink": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$" }
+      }
+    },
+    "env": {
+      "description": "Per-session settings the host passes on only where its own allowlist names them",
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "value"],
+        "properties": {
+          "name": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,63}$" },
+          "value": { "type": "string", "maxLength": 4096 }
+        }
+      }
+    }
+  }
+}

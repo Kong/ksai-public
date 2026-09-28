@@ -209,17 +209,21 @@ export function streams(env = process.env) {
   };
 }
 
+export function stagesSource(env = process.env) {
+  const { text, why, delegations, children, runtime } = source(env);
+  return { streams: [{ name: '', source: text }, ...children], why, dropped: delegations, runtime };
+}
+
 /** main runs the CLI surface `ksai/progress.mjs` does, over opencode's stream instead of a transcript. */
 export function main(argv) {
   const checking = argv.includes('--check');
   const measuring = argv.includes('--stages');
-  const { text, why, delegations, children, runtime } = source();
+  const { text, why } = source();
   if (why) {
     if (!checking) process.stdout.write(`${why}, so this run recorded no ${measuring ? 'stage timings' : 'timeline'}.\n`);
     return 0;
   }
-  if (measuring)
-    return stagesMain(process.env, { streams: [{ name: '', source: text }, ...children], why: '', dropped: delegations, runtime });
+  if (measuring) return stagesMain(process.env, stagesSource(process.env));
   const view = timeline(text, { trim: process.env.TRIM_PREFIX });
   if (checking) {
     const verdict = breaker(view, {

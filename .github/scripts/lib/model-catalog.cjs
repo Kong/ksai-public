@@ -29,9 +29,12 @@ function modelsOf(served) {
 
     const cacheRead = model.cache_read === undefined ? null : rate(model.cache_read);
     if (model.cache_read !== undefined && cacheRead === null) return null;
+    const cacheWrite = model.cache_write === undefined ? null : rate(model.cache_write);
+    if (model.cache_write !== undefined && cacheWrite === null) return null;
 
-    if (model.opencode !== undefined && !object(model.opencode)) return null;
-    if (model.opencode2 !== undefined && !object(model.opencode2)) return null;
+    if (model.runnable !== undefined && typeof model.runnable !== 'boolean') return null;
+    const variants = model.variants === undefined ? [] : model.variants;
+    if (!Array.isArray(variants) || variants.some((one) => !object(one) || typeof one.id !== 'string')) return null;
 
     for (const name of [id, ...aliases]) {
       const key = String(name).toLowerCase();
@@ -46,15 +49,14 @@ function modelsOf(served) {
       input,
       output,
       cacheRead,
+      cacheWrite,
       effort: typeof model.effort === 'string' ? model.effort : '',
-      opencode: model.opencode === undefined ? null : model.opencode,
-      opencode2: model.opencode2 === undefined ? null : model.opencode2,
+      runnable: model.runnable === true,
+      efforts: variants.map((one) => one.id),
     });
   }
 
-  const runnable = new Set(
-    held.filter((model) => model.opencode !== null).map((model) => model.id.toLowerCase()),
-  );
+  const runnable = new Set(held.filter((model) => model.runnable).map((model) => model.id.toLowerCase()));
   for (const id of Object.values(shipped.aliases ?? {})) {
     if (!runnable.has(String(id).toLowerCase())) return null;
   }
@@ -66,8 +68,7 @@ function catalogOf(models, tiers) {
   const modelTiers = Object.create(null);
   const vendorAliases = Object.create(null);
   const rates = Object.create(null);
-  const opencodeModels = Object.create(null);
-  const opencode2Models = Object.create(null);
+  const modelEfforts = Object.create(null);
   const defaultEfforts = Object.create(null);
   const knownModels = [];
   const allowedModels = [];
@@ -82,14 +83,14 @@ function catalogOf(models, tiers) {
       input: model.input,
       output: model.output,
       ...(model.cacheRead === null ? {} : { cacheRead: model.cacheRead }),
+      ...(model.cacheWrite === null ? {} : { cacheWrite: model.cacheWrite }),
     };
 
     knownModels.push(model.id);
-    if (model.opencode !== null) {
+    if (model.runnable) {
       allowedModels.push(model.id);
-      if (Object.keys(model.opencode).length > 0) opencodeModels[model.id] = model.opencode;
+      modelEfforts[model.id] = model.efforts;
     }
-    if (model.opencode2 !== null) opencode2Models[model.id] = model.opencode2;
     if (model.id.startsWith('claude-')) claudeModels.push(model.id);
   }
 
@@ -108,8 +109,7 @@ function catalogOf(models, tiers) {
     vendorTiers,
     legacyModelIds: vendorAliases,
     rates,
-    opencodeModels,
-    opencode2Models,
+    modelEfforts,
     defaultEfforts,
     knownModels,
     allowedModels,
@@ -137,3 +137,4 @@ Object.defineProperty(module.exports, 'read', { value: read, enumerable: false }
 Object.defineProperty(module.exports, 'modelsOf', { value: modelsOf, enumerable: false });
 Object.defineProperty(module.exports, 'catalogOf', { value: catalogOf, enumerable: false });
 Object.defineProperty(module.exports, 'shipped', { value: shipped, enumerable: false });
+Object.defineProperty(module.exports, 'rate', { value: rate, enumerable: false });

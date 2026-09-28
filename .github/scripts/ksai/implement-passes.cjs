@@ -67,8 +67,11 @@ function adversarialRequest(env = process.env) {
 
 function findingsOf(env) {
   const { result } = finalResult(fs.readFileSync(String(env.ADVERSARIAL_EXECUTION ?? ''), 'utf8'));
-  const said = typeof result?.result === 'string' ? result.result : '';
-  if (said.trim() === '') throw new Error('the adversarial run answered nothing, so there is nothing to repair from');
+  return typeof result?.result === 'string' ? result.result : '';
+}
+
+function heldFindings(said) {
+  if (typeof said !== 'string' || said.trim() === '') throw new Error('the adversarial run answered nothing, so there is nothing to repair from');
   if (Buffer.byteLength(said) > MAX.findings) throw new Error(`the adversarial run answered more than ${MAX.findings} bytes`);
   return said;
 }
@@ -78,8 +81,8 @@ function defects(findings) {
   return answered?.verdict !== 'clean' || answered.findings.length > 0;
 }
 
-function repairRequest(env = process.env) {
-  const findings = findingsOf(env);
+function repairRequest(env = process.env, said = findingsOf(env)) {
+  const findings = heldFindings(said);
   return {
     request: renderRequest({
       promptId: 'runtime.implement.repair',

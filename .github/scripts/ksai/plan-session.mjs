@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { parsed } from '../lib/opencode.mjs';
+import { parsed, UNCONTINUED } from '../lib/opencode.mjs';
 import { isV2, storeEnv } from '../lib/opencode-v2.mjs';
 import { encodeProject, findTranscript, transcriptRoot } from './progress.mjs';
 
@@ -124,7 +124,31 @@ export function newestRoot(raw) {
   return roots.at(-1)?.data.sessionID ?? '';
 }
 
+function keptExport(env, at) {
+  const outputs = { file: '', saved: 'false' };
+  const dir = String(env.STAGING_DIR ?? '').trim();
+  if (!dir) {
+    process.stdout.write('note: no staging directory was given, so the session is not carried.\n');
+    return outputs;
+  }
+  if (!existsSync(at)) {
+    process.stdout.write('note: the engine named no session whose export the link host kept, so the next rework starts cold.\n');
+    return outputs;
+  }
+  try {
+    mkdirSync(dir, { recursive: true });
+    const to = join(dir, OPENCODE2_FILE);
+    copyFileSync(at, to);
+    return { file: to, saved: 'true' };
+  } catch (error) {
+    process.stdout.write(`note: the export the link host kept could not be staged (${error?.message ?? error}).\n`);
+    return outputs;
+  }
+}
+
 export function saveOpencode2(env = process.env, run = spawnSync, read = readFileSync) {
+  const kept = String(env.SESSION_EXPORT ?? '').trim();
+  if (kept) return keptExport(env, kept);
   return saveOpencode(env, run, { file: OPENCODE2_FILE, newest: () => newestRoot(read(String(env.EVENTS_FILE ?? ''), 'utf8')), exporting: (id) => transfer(env, run, 'export', id) });
 }
 
@@ -170,8 +194,17 @@ export function save(env = process.env) {
   }
 }
 
+function uncontinued(env) {
+  const from = String(env.DOWNLOAD_DIR ?? '').trim();
+  if (from && existsSync(join(from, OPENCODE2_FILE))) process.stdout.write(`::warning::${UNCONTINUED}.\n`);
+  return { session_id: '', resumed: 'false' };
+}
+
 export function restore(env = process.env) {
-  if (String(env.ENGINE ?? '') === 'opencode') return isV2(env.OPENCODE_VERSION) ? restoreOpencode2(env) : restoreOpencode(env);
+  if (String(env.ENGINE ?? '') === 'opencode') {
+    if (!isV2(env.OPENCODE_VERSION)) return restoreOpencode(env);
+    return String(env.KSAI_LINKED ?? '') === 'true' ? uncontinued(env) : restoreOpencode2(env);
+  }
   const outputs = { session_id: '', resumed: 'false' };
   const from = String(env.DOWNLOAD_DIR ?? '').trim();
   if (!from || !existsSync(from)) return outputs;

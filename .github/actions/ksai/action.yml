@@ -1038,17 +1038,32 @@ runs:
       id: rendering
       if: >-
         ${{ inputs.report_rendering != '' || inputs.prompt_rendering != '' ||
-        inputs.github_calls != '' || env.KSAI_PROVIDER_OBSERVATIONS == 'true' }}
+        inputs.github_calls != '' || env.KSAI_PROVIDER_OBSERVATIONS == 'true' ||
+        startsWith(inputs.opencode_version, '2.') }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         REPORT: ${{ inputs.report_rendering }}
         PROMPT: ${{ inputs.prompt_rendering }}
+        OPENCODE_VERSION: ${{ inputs.opencode_version }}
         WRITING: ${{ inputs.github_calls }}
         ENDPOINT: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
       with:
         script: |
+          let prompt = process.env.PROMPT;
+          if (process.env.OPENCODE_VERSION.startsWith('2.')) {
+            if (prompt !== '') {
+              core.setFailed(`prompt_rendering: an OpenCode 2 run renders every prompt through the control plane, so ${prompt} would choose nothing. Drop the input`);
+              return;
+            }
+            if (process.env.WRITING !== 'cp') {
+              core.setFailed(`github_calls: an OpenCode 2 run makes its GitHub calls through the control plane, so it takes github_calls: cp, not ${process.env.WRITING || 'an empty value'}`);
+              return;
+            }
+            prompt = 'cp';
+          }
+          core.setOutput('prompt', prompt);
           core.exportVariable('KSAI_REPORT_RENDERING', process.env.REPORT);
-          core.exportVariable('KSAI_PROMPT_RENDERING', process.env.PROMPT);
+          core.exportVariable('KSAI_PROMPT_RENDERING', prompt);
           core.exportVariable('KSAI_GITHUB_CALLS', process.env.WRITING);
           core.exportVariable('KSAI_CP_ENDPOINT', process.env.ENDPOINT);
 
@@ -1300,7 +1315,7 @@ runs:
     - name: Prepare what a governed prompt is verified with
       id: governance_prepare
       if: >-
-        ${{ inputs.prompt_rendering == 'cp' && inputs.flow != 'test-publish' &&
+        ${{ steps.rendering.outputs.prompt == 'cp' && inputs.flow != 'test-publish' &&
         steps.staged_scripts.outcome == 'success' }}
       shell: bash
       env:
@@ -1318,6 +1333,7 @@ runs:
         STATUS_UPDATES: ${{ inputs.status_updates }}
         STATUS_HISTORY: ${{ inputs.status_history }}
         STATUS_MODEL: ${{ inputs.status_model }}
+        OPENCODE_MAJOR: ${{ steps.engine.outputs.opencode_major }}
       run: node "${SCRIPTS}/ksai/status.mjs"
 
     - name: Validate anthropic_base_url
@@ -2372,7 +2388,8 @@ runs:
     - name: Ask the control plane for the tester's prompt
       id: test_request
       if: >-
-        ${{ inputs.flow == 'test' && inputs.prompt_rendering != '' && inputs.prompt_rendering != 'local' &&
+        ${{ inputs.flow == 'test' &&
+        steps.rendering.outputs.prompt != '' && steps.rendering.outputs.prompt != 'local' &&
         steps.build_test.outcome == 'success' && steps.test_tools.outcome == 'success' }}
       shell: bash
       env:
@@ -2396,7 +2413,12 @@ runs:
         PROMPT_FILE: ${{ steps.build_test.outputs.file }}
         OPENCODE_VERSION: ${{ inputs.opencode_version }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
-      run: node "${SCRIPTS}/kreview/governed-render.mjs" flow
+      run: |
+        if [[ "${OPENCODE_VERSION}" == 2.* ]]; then
+          node "${SCRIPTS}/kreview/governed-request.mjs" flow
+        else
+          node "${SCRIPTS}/kreview/governed-render.mjs" flow
+        fi
 
     - name: Resolve the issue this run is about
       id: subject
@@ -4182,7 +4204,8 @@ runs:
     - name: Render the caller's prompt through the control plane
       id: governed_run
       if: >-
-        ${{ inputs.flow == 'run' && inputs.prompt_rendering != '' && inputs.prompt_rendering != 'local' &&
+        ${{ inputs.flow == 'run' &&
+        steps.rendering.outputs.prompt != '' && steps.rendering.outputs.prompt != 'local' &&
         steps.build_run.outputs.agent == 'true' }}
       shell: bash
       env:
@@ -4193,7 +4216,12 @@ runs:
         PROMPT_FILE: ${{ steps.build_run.outputs.file }}
         OPENCODE_VERSION: ${{ inputs.opencode_version }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
-      run: node "${SCRIPTS}/kreview/governed-render.mjs" flow
+      run: |
+        if [[ "${OPENCODE_VERSION}" == 2.* ]]; then
+          node "${SCRIPTS}/kreview/governed-request.mjs" flow
+        else
+          node "${SCRIPTS}/kreview/governed-render.mjs" flow
+        fi
 
     - name: Mark the install-cli phase
       if: ${{ always() }}
@@ -4277,6 +4305,7 @@ runs:
         DOWNLOAD_DIR: ${{ runner.temp }}/ksai-plan-session
         ENGINE: ${{ steps.engine.outputs.name }}
         OPENCODE_VERSION: ${{ steps.opencode_install.outputs.version }}
+        KSAI_LINKED: ${{ steps.engine.outputs.opencode_major == '2' }}
         OPENCODE_HOME: ${{ runner.temp }}/opencode-home
         XDG_DATA_HOME: ${{ runner.temp }}/opencode-home
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
@@ -4417,7 +4446,8 @@ runs:
     - name: Ask the control plane for this phase's prompt
       id: implement_request
       if: >-
-        ${{ inputs.flow == 'implement' && inputs.prompt_rendering != '' && inputs.prompt_rendering != 'local' &&
+        ${{ inputs.flow == 'implement' &&
+        steps.rendering.outputs.prompt != '' && steps.rendering.outputs.prompt != 'local' &&
         steps.build_implement.outcome == 'success' }}
       shell: bash
       env:
@@ -4475,7 +4505,12 @@ runs:
         PROMPT_FILE: ${{ steps.build_implement.outputs.file }}
         OPENCODE_VERSION: ${{ inputs.opencode_version }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
-      run: node "${SCRIPTS}/kreview/governed-render.mjs" flow
+      run: |
+        if [[ "${OPENCODE_VERSION}" == 2.* ]]; then
+          node "${SCRIPTS}/kreview/governed-request.mjs" flow
+        else
+          node "${SCRIPTS}/kreview/governed-render.mjs" flow
+        fi
 
     - name: Assemble the review prompt
       id: build_review
@@ -4518,7 +4553,7 @@ runs:
       id: governed_review
       if: >-
         ${{ inputs.flow == 'review' && steps.build_review.outcome == 'success' &&
-        (inputs.prompt_rendering == 'cp' || inputs.prompt_rendering == 'shadow') }}
+        (steps.rendering.outputs.prompt == 'cp' || steps.rendering.outputs.prompt == 'shadow') }}
       shell: bash
       env:
         CHANNEL_NONCE: ${{ steps.channel.outputs.nonce }}
@@ -4547,7 +4582,12 @@ runs:
         AUDITOR_MANDATE: ${{ github.workspace }}/_ksai/plugins/kreview/agents/findings-auditor.md
         OPENCODE_VERSION: ${{ inputs.opencode_version }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
-      run: node "${SCRIPTS}/kreview/governed-render.mjs" review
+      run: |
+        if [[ "${OPENCODE_VERSION}" == 2.* ]]; then
+          node "${SCRIPTS}/kreview/governed-request.mjs" review
+        else
+          node "${SCRIPTS}/kreview/governed-render.mjs" review
+        fi
 
     - name: Mark the sandbox phase
       if: ${{ always() }}
@@ -4801,7 +4841,7 @@ runs:
     - name: Write the opencode runtime config
       id: opencode_config
       if: >-
-        ${{ steps.opencode_install.outcome == 'success' &&
+        ${{ steps.opencode_install.outcome == 'success' && steps.engine.outputs.opencode_major != '2' &&
         (steps.build_review.outputs.lsp_tool != 'native' ||
         steps.opencode_cgroup.outcome == 'success') }}
       shell: bash
@@ -4841,17 +4881,14 @@ runs:
       working-directory: ${{ runner.temp }}
       run: |
         set -euo pipefail
-        if [[ "${OPENCODE_VERSION}" == 2.* ]]; then
-          node "${SCRIPTS}/kreview/opencode-v2-config.mjs"
-        else
-          node "${SCRIPTS}/kreview/opencode-config.mjs"
-        fi
+        node "${SCRIPTS}/kreview/opencode-config.mjs"
         echo "file=${OPENCODE_CONFIG}" >> "$GITHUB_OUTPUT"
 
     - name: Mint the bearer this review starts on
       id: mint
       if: >-
-        ${{ steps.opencode_config.outcome == 'success' &&
+        ${{ steps.opencode_install.outcome == 'success' &&
+        (steps.opencode_config.outcome == 'success' || steps.engine.outputs.opencode_major == '2') &&
         (steps.build_review.outputs.lsp_tool != 'native' ||
         steps.opencode_cgroup.outcome == 'success') }}
       shell: bash
@@ -4870,6 +4907,7 @@ runs:
       id: watchdog
       if: >-
         ${{ inputs.dry_run == 'false' && inputs.job_timeout_minutes != '0' &&
+        steps.engine.outputs.opencode_major != '2' &&
         (steps.build_implement.outcome == 'success' || steps.build_review.outcome == 'success' ||
         steps.build_test.outcome == 'success' || steps.build_run.outputs.agent == 'true') }}
       shell: bash
@@ -4892,6 +4930,52 @@ runs:
         MISSED_FILE: ${{ runner.temp }}/ksai-watchdog.missed
       run: node "${SCRIPTS}/ksai/watchdog-arm.mjs"
 
+
+    - name: Describe the run for its stats record
+      id: record_inputs
+      if: ${{ steps.mint.outcome == 'success' && steps.engine.outputs.opencode_major == '2' }}
+      shell: bash
+      env:
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+        PHASES_FILE: ${{ runner.temp }}/ksai-phases.tsv
+        PROFILE: ${{ steps.build_run.outputs.profile }}
+        ENGINE: ${{ steps.engine.outputs.name }}
+        SELECTED_BY: ${{ steps.select_arm.outputs.selected_by }}
+        RUN_SETTINGS_ARM: ${{ (inputs.run_settings_arm || inputs.dials_arm) }}
+        SHADOW: ${{ inputs.publish == 'false' && 'true' || 'false' }}
+        PUBLISH: ${{ inputs.publish }}
+        REVIEWER_ID: ${{ inputs.reviewer_id }}
+        TRIAGE_MODE: ${{ inputs.triage }}
+        TRIAGE_TIER: ${{ steps.triage.outputs.tier }}
+        TRIAGE_SKIP_BY: ${{ steps.triage.outputs.skip_by }}
+        TRIAGE_SKILLS: ${{ steps.triage.outputs.skills }}
+        TRIAGE_FILES: ${{ steps.triage.outputs.files }}
+        TRIAGE_LINES: ${{ steps.triage.outputs.lines }}
+        TRIAGE_RISK: ${{ steps.triage.outputs.risk }}
+        TRIAGE_API_SURFACE: ${{ steps.triage.outputs.api_surface }}
+        TRIAGE_SOURCE: ${{ steps.triage.outputs.source }}
+        TRIAGE_POLICY_VERSION: ${{ steps.triage.outputs.policy_version }}
+        TRIAGE_LOCAL_POLICY_VERSION: ${{ steps.triage.outputs.local_policy_version }}
+        TRIAGE_CP_POLICY_VERSION: ${{ steps.triage.outputs.cp_policy_version }}
+        TRIAGE_MISMATCH: ${{ steps.triage.outputs.mismatch }}
+        REPO_RULES_ENABLED: ${{ steps.repo_rules.outputs.enabled }}
+        REPO_RULES_MODE: ${{ steps.repo_rules.outputs.mode }}
+        PLUGIN_REF: ${{ steps.plugin_ref.outputs.ref }}
+        COMMIT_ID: >-
+          ${{ steps.checkout_pr.outputs.commit || steps.checkout_test.outputs.commit ||
+          (inputs.flow == 'run' && github.sha || '') }}
+        BASE_REF: ${{ steps.base.outputs.ref }}
+        CLASSIFIER_MODEL: ${{ steps.verdict.outputs.model }}
+        VERDICT: ${{ steps.verdict.outputs.verdict }}
+        CLASSIFIER_COST: ${{ steps.verdict.outputs.cost }}
+        CLASSIFIER_INPUT: ${{ steps.verdict.outputs.input_tokens }}
+        CLASSIFIER_OUTPUT: ${{ steps.verdict.outputs.output_tokens }}
+        ROUTE_COMMAND: ${{ steps.select_arm.outputs.command || steps.select_test.outputs.command }}
+        ROUTE_SURFACE: ${{ steps.select_arm.outputs.route_surface || steps.select_test.outputs.route_surface }}
+        ROUTE_SOURCE: ${{ steps.select_arm.outputs.route_source || steps.select_test.outputs.route_source }}
+        WORKFLOW_ID: ${{ steps.workflow_stage.outputs.workflow_id }}
+        WORKFLOW_VERSION: ${{ steps.workflow_stage.outputs.workflow_version }}
+      run: node "${SCRIPTS}/kreview/link-publish.mjs"
 
     - name: Run the tester on opencode
       id: opencode_test
@@ -4944,10 +5028,24 @@ runs:
           steps.telemetry.outputs.workflow }},intent_command=${{ steps.select_test.outputs.command }},intent_surface=${{
           steps.select_test.outputs.route_surface }},intent_source=${{ steps.select_test.outputs.route_source }}${{ inputs.otel_extra_attributes != '' &&
           format(',{0}', inputs.otel_extra_attributes) || '' }}
+        REQUEST_FILE: ${{ steps.governed_test.outputs.request_file }}
+        OPENCODE_ALLOWED: ${{ steps.test_tools.outputs.allowed_tools }}
+        OPENCODE_DISALLOWED: ${{ steps.test_tools.outputs.disallowed_tools }}
+        JOB_TIMEOUT_MINUTES: ${{ inputs.job_timeout_minutes }}
+        KSAI_JOB_STARTED_AT_MS: ${{ steps.plugin_ref.outputs.started_at_ms }}
+        ALLOWED_MODELS: ${{ inputs.allowed_models }}
+        ATTRIBUTION_HEADERS: ${{ steps.model_headers.outputs.value }}
+        MAX_CONSECUTIVE_FAILURES: ${{ inputs.max_consecutive_tool_failures }}
+        MAX_REPEATED_CALLS: ${{ inputs.max_repeated_tool_calls }}
+        STATUS_UPDATES: ${{ steps.status_gate.outputs.mode }}
+        REPORT_NUM: >-
+          ${{ steps.phase.outputs.pr_number || steps.open_draft.outputs.pr_number ||
+          steps.context.outputs.issue_number }}
+        KSAI_RECORD_INPUTS: ${{ steps.record_inputs.outputs.file }}
       working-directory: ${{ runner.temp }}
       run: |
         if [[ "${OPENCODE_VERSION}" == 2.* ]]; then
-          node "${SCRIPTS}/kreview/opencode-v2-run.mjs"
+          node "${SCRIPTS}/kreview/link-host.mjs"
         else
           node "${SCRIPTS}/kreview/opencode-run.mjs"
         fi
@@ -5174,6 +5272,7 @@ runs:
       if: >-
         ${{ inputs.flow == 'implement' && steps.bare_gate.outputs.mode == 'auto' &&
         inputs.dry_run == 'false' && inputs.publish == 'true' && steps.channel.outcome == 'success' &&
+        steps.engine.outputs.opencode_major != '2' &&
         (steps.phase.outputs.pr_number || steps.open_draft.outputs.pr_number) != '' }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
@@ -5210,7 +5309,8 @@ runs:
       id: courier
       continue-on-error: true
       if: >-
-        ${{ inputs.dry_run == 'false' && inputs.publish == 'true' && steps.channel.outcome == 'success' &&
+        ${{ steps.engine.outputs.opencode_major != '2' &&
+        inputs.dry_run == 'false' && inputs.publish == 'true' && steps.channel.outcome == 'success' &&
         (steps.phase.outputs.pr_number || steps.open_draft.outputs.pr_number ||
         steps.context.outputs.issue_number) != '' &&
         (steps.build_implement.outcome == 'success' || steps.build_review.outcome == 'success') }}
@@ -5357,10 +5457,52 @@ runs:
         OPENCODE_LSP_TOOL: ${{ steps.build_review.outputs.lsp_tool }}
         OPENCODE_LSP_MEASURE: ${{ steps.build_review.outputs.lsp_measure }}
         OPENCODE_LSP_ROOT: ${{ steps.opencode_lsp.outputs.root }}
+        REQUEST_FILE: >-
+          ${{ steps.governed_implement.outputs.request_file || steps.governed_review.outputs.request_file ||
+          steps.governed_run.outputs.request_file }}
+        GOVERNED_PLUGIN: ${{ steps.governed_implement.outputs.request_file != '' && 'ksai-implement' || '' }}
+        STOP_PRESERVE: ${{ steps.halt.outputs.preserve }}
+        STOP_MODE: ${{ steps.halt.outputs.mode }}
+        BRANCH: ${{ steps.open_draft.outputs.branch || steps.open_branch.outputs.branch || steps.phase.outputs.ref }}
+        BASE_SHA: ${{ steps.checkout_source.outputs.commit }}
+        PR_NUMBER: ${{ steps.phase.outputs.pr_number || steps.open_draft.outputs.pr_number }}
+        CHANGE_SCOPE_FILE: ${{ steps.build_implement.outputs.change_scope_file }}
+        DENIED_PATHS: ${{ steps.bare_gate.outputs.denied_paths || inputs.denied_paths }}
+        PLAN_DIR: ${{ inputs.plan_file_path }}
+        PLAN_FILE: ${{ steps.phase.outputs.plan_file }}
+        PHASE: ${{ steps.size.outputs.phase }}
+        KSAI_GIT_AUTHOR_NAME: ${{ steps.identity.outputs.author_name }}
+        KSAI_GIT_AUTHOR_EMAIL: ${{ steps.identity.outputs.author_email }}
+        KSAI_GIT_FILEMODE: ${{ steps.configure_git.outputs.filemode }}
+        CO_AUTHOR: ${{ steps.identity.outputs.coauthor }}
+        KSAI_ASK: ${{ inputs.ask }}
+        JIRA_KEY: ${{ steps.jira_ref.outputs.step_key || steps.jira_ref.outputs.plan_key }}
+        COMMIT_AUTHOR_NAME: ${{ steps.identity.outputs.author_name }}
+        COMMIT_AUTHOR_EMAIL: ${{ steps.identity.outputs.author_email }}
+        OPENCODE_ALLOWED: >-
+          ${{ steps.build_implement.outputs.allowed_tools || steps.build_review.outputs.allowed_tools ||
+          steps.build_run.outputs.allowed_tools }}
+        OPENCODE_DISALLOWED: >-
+          ${{ steps.build_implement.outputs.disallowed_tools || steps.build_review.outputs.disallowed_tools ||
+          steps.build_run.outputs.disallowed_tools }}
+        DIFF_PATCH: ${{ steps.diff.outputs.patch }}
+        DIFF_FILES: ${{ steps.diff.outputs.files_file }}
+        REPO: ${{ github.repository }}
+        JOB_TIMEOUT_MINUTES: ${{ inputs.job_timeout_minutes }}
+        KSAI_JOB_STARTED_AT_MS: ${{ steps.plugin_ref.outputs.started_at_ms }}
+        ALLOWED_MODELS: ${{ inputs.allowed_models }}
+        ATTRIBUTION_HEADERS: ${{ steps.model_headers.outputs.value }}
+        MAX_CONSECUTIVE_FAILURES: ${{ inputs.max_consecutive_tool_failures }}
+        MAX_REPEATED_CALLS: ${{ inputs.max_repeated_tool_calls }}
+        STATUS_UPDATES: ${{ steps.status_gate.outputs.mode }}
+        REPORT_NUM: >-
+          ${{ steps.phase.outputs.pr_number || steps.open_draft.outputs.pr_number ||
+          steps.context.outputs.issue_number }}
+        KSAI_RECORD_INPUTS: ${{ steps.record_inputs.outputs.file }}
       working-directory: ${{ runner.temp }}
       run: |
         if [[ "${OPENCODE_VERSION}" == 2.* ]]; then
-          node "${SCRIPTS}/kreview/opencode-v2-run.mjs"
+          node "${SCRIPTS}/kreview/link-host.mjs"
         else
           node "${SCRIPTS}/kreview/opencode-run.mjs"
         fi
@@ -5431,11 +5573,7 @@ runs:
       working-directory: ${{ runner.temp }}
       run: |
         set -euo pipefail
-        if [[ "${OPENCODE_VERSION}" == 2.* ]]; then
-          node "${SCRIPTS}/kreview/opencode-v2-config.mjs"
-        else
-          node "${SCRIPTS}/kreview/opencode-config.mjs"
-        fi
+        node "${SCRIPTS}/kreview/opencode-config.mjs"
         echo "file=${OPENCODE_CONFIG}" >> "$GITHUB_OUTPUT"
 
 
@@ -5492,12 +5630,7 @@ runs:
         OPENCODE_LSP_MEASURE: ${{ steps.build_review.outputs.lsp_measure }}
         OPENCODE_LSP_ROOT: ${{ steps.opencode_lsp.outputs.root }}
       working-directory: ${{ runner.temp }}
-      run: |
-        if [[ "${OPENCODE_VERSION}" == 2.* ]]; then
-          node "${SCRIPTS}/kreview/opencode-v2-run.mjs"
-        else
-          node "${SCRIPTS}/kreview/opencode-run.mjs"
-        fi
+      run: node "${SCRIPTS}/kreview/opencode-run.mjs"
 
 
     - name: Ask what the independent run found
@@ -5571,11 +5704,7 @@ runs:
       working-directory: ${{ runner.temp }}
       run: |
         set -euo pipefail
-        if [[ "${OPENCODE_VERSION}" == 2.* ]]; then
-          node "${SCRIPTS}/kreview/opencode-v2-config.mjs"
-        else
-          node "${SCRIPTS}/kreview/opencode-config.mjs"
-        fi
+        node "${SCRIPTS}/kreview/opencode-config.mjs"
         echo "file=${OPENCODE_CONFIG}" >> "$GITHUB_OUTPUT"
 
 
@@ -5635,12 +5764,7 @@ runs:
         OPENCODE_LSP_MEASURE: ${{ steps.build_review.outputs.lsp_measure }}
         OPENCODE_LSP_ROOT: ${{ steps.opencode_lsp.outputs.root }}
       working-directory: ${{ runner.temp }}
-      run: |
-        if [[ "${OPENCODE_VERSION}" == 2.* ]]; then
-          node "${SCRIPTS}/kreview/opencode-v2-run.mjs"
-        else
-          node "${SCRIPTS}/kreview/opencode-run.mjs"
-        fi
+      run: node "${SCRIPTS}/kreview/opencode-run.mjs"
 
 
     - name: Render the independent audit of the governed review
@@ -5699,11 +5823,7 @@ runs:
       working-directory: ${{ runner.temp }}
       run: |
         set -euo pipefail
-        if [[ "${OPENCODE_VERSION}" == 2.* ]]; then
-          node "${SCRIPTS}/kreview/opencode-v2-config.mjs"
-        else
-          node "${SCRIPTS}/kreview/opencode-config.mjs"
-        fi
+        node "${SCRIPTS}/kreview/opencode-config.mjs"
         echo "file=${OPENCODE_CONFIG}" >> "$GITHUB_OUTPUT"
 
     - name: Check the audit reads the files it was rendered for
@@ -5771,12 +5891,7 @@ runs:
         OPENCODE_LSP_MEASURE: ${{ steps.build_review.outputs.lsp_measure }}
         OPENCODE_LSP_ROOT: ${{ steps.opencode_lsp.outputs.root }}
       working-directory: ${{ runner.temp }}
-      run: |
-        if [[ "${OPENCODE_VERSION}" == 2.* ]]; then
-          node "${SCRIPTS}/kreview/opencode-v2-run.mjs"
-        else
-          node "${SCRIPTS}/kreview/opencode-run.mjs"
-        fi
+      run: node "${SCRIPTS}/kreview/opencode-run.mjs"
 
     - name: Publish only what the audit answered
       id: governed_combine
@@ -5847,7 +5962,11 @@ runs:
         (steps.governed_review.outputs.options_file != '' ||
         steps.governed_implement.outputs.options_file != '' ||
         steps.governed_test.outputs.options_file != '' ||
-        steps.governed_run.outputs.options_file != '') }}
+        steps.governed_run.outputs.options_file != '' ||
+        steps.governed_review.outputs.request_file != '' ||
+        steps.governed_implement.outputs.request_file != '' ||
+        steps.governed_test.outputs.request_file != '' ||
+        steps.governed_run.outputs.request_file != '') }}
       shell: bash
       env:
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
@@ -5856,12 +5975,17 @@ runs:
     - name: Report what reached the model to the control plane
       id: governed_report
       if: >-
-        ${{ always() && (steps.governed_review.outputs.options_file != '' ||
+        ${{ always() && steps.engine.outputs.opencode_major != '2' &&
+        (steps.governed_review.outputs.options_file != '' ||
         steps.governed_implement.outputs.options_file != '' ||
         steps.governed_adversarial.outputs.options_file != '' ||
         steps.governed_repair.outputs.options_file != '' ||
         steps.governed_test.outputs.options_file != '' ||
-        steps.governed_run.outputs.options_file != '') }}
+        steps.governed_run.outputs.options_file != '' ||
+        steps.governed_review.outputs.request_file != '' ||
+        steps.governed_implement.outputs.request_file != '' ||
+        steps.governed_test.outputs.request_file != '' ||
+        steps.governed_run.outputs.request_file != '') }}
       continue-on-error: true
       shell: bash
       env:
@@ -5871,7 +5995,7 @@ runs:
     - name: Report provider-boundary prompt observations
       if: >-
         ${{ always() && env.KSAI_PROVIDER_OBSERVATIONS == 'true' &&
-        steps.model_run.outcome != 'skipped' }}
+        steps.model_run.outcome != 'skipped' && steps.engine.outputs.opencode_major != '2' }}
       shell: bash
       env:
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
@@ -5959,7 +6083,7 @@ runs:
 
     - name: Report the run channel and status updates
       id: status_report
-      if: ${{ always() && steps.channel.outcome == 'success' }}
+      if: ${{ always() && steps.channel.outcome == 'success' && steps.engine.outputs.opencode_major != '2' }}
       shell: bash
       env:
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
@@ -5979,8 +6103,9 @@ runs:
     - name: Keep what a stopped run had already done
       id: preserve
       if: >-
-        ${{ always() && inputs.flow == 'implement' && inputs.dry_run == 'false' &&
-        steps.channel.outcome == 'success' && steps.checkout_source.outcome == 'success' }}
+        ${{ always() && steps.engine.outputs.opencode_major != '2' && inputs.flow == 'implement' &&
+        inputs.dry_run == 'false' && steps.channel.outcome == 'success' &&
+        steps.checkout_source.outcome == 'success' }}
       shell: bash
       working-directory: ${{ runner.temp }}
       env:
@@ -6014,11 +6139,14 @@ runs:
         node "${SCRIPTS}/ksai/preserve.mjs"
 
     - name: Upload what a stopped run left behind
-      if: ${{ always() && inputs.flow == 'implement' && steps.preserve.outputs.tree != '' }}
+      if: >-
+        ${{ always() && inputs.flow == 'implement' &&
+        (steps.preserve.outputs.tree || steps.opencode.outputs.preserve_tree ||
+        steps.opencode_test.outputs.preserve_tree) != '' }}
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: ksai-stopped-${{ steps.phase.outputs.pr_number || steps.open_draft.outputs.pr_number || 'none' }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index || 0 }}
-        path: ${{ steps.preserve.outputs.tree }}
+        path: ${{ steps.preserve.outputs.tree || steps.opencode.outputs.preserve_tree || steps.opencode_test.outputs.preserve_tree }}
         retention-days: ${{ inputs.artifact_retention_days }}
         if-no-files-found: ignore
 
@@ -6045,6 +6173,7 @@ runs:
         ENGINE: ${{ steps.engine.outputs.name }}
         OPENCODE_VERSION: ${{ steps.opencode_install.outputs.version }}
         EVENTS_FILE: ${{ steps.opencode.outputs.events_file }}
+        SESSION_EXPORT: ${{ steps.engine.outputs.opencode_major == '2' && format('{0}/link/worked.export.json', steps.governance_prepare.outputs.dir) || '' }}
         OPENCODE_HOME: ${{ runner.temp }}/opencode-home
         XDG_DATA_HOME: ${{ runner.temp }}/opencode-home
         TRANSCRIPT_SINCE: ${{ steps.watchdog.outputs.armed_at_ms || steps.plugin_ref.outputs.started_at_ms }}
@@ -6728,8 +6857,10 @@ runs:
         WATCHDOG_FIRED: ${{ steps.disarm_watchdog.outputs.fired }}
         WATCHDOG_CAUSE: ${{ steps.disarm_watchdog.outputs.cause }}
         WATCHDOG_REASON: ${{ steps.disarm_watchdog.outputs.reason }}
-        PRESERVED: ${{ steps.preserve.outputs.preserved }}
-        PRESERVE_REASON: ${{ steps.preserve.outputs.reason }}
+        PRESERVED: ${{ steps.preserve.outputs.preserved || steps.opencode.outputs.preserved || steps.opencode_test.outputs.preserved }}
+        PRESERVE_REASON: >-
+          ${{ steps.preserve.outputs.reason || steps.opencode.outputs.preserve_reason ||
+          steps.opencode_test.outputs.preserve_reason }}
         HELD: ${{ steps.hold_plan.outputs.held }}
         CEILING: ${{ steps.watchdog.outputs.ceiling }}
         KSAI_ASK: ${{ inputs.ask }}
@@ -6778,6 +6909,7 @@ runs:
       id: suppressions
       if: >-
         ${{ always() && inputs.flow == 'review' && steps.report.outputs.has_output == 'true' &&
+        steps.opencode.outputs.published == '' &&
         (inputs.control_plane_endpoint || inputs.fleet_dials_endpoint) != '' }}
       continue-on-error: true
       shell: bash
@@ -6793,7 +6925,9 @@ runs:
 
     - name: Post review (Claude result)
       id: comment_result
-      if: ${{ always() && inputs.flow == 'review' && steps.report.outputs.has_output == 'true' }}
+      if: >-
+        ${{ always() && inputs.flow == 'review' && steps.report.outputs.has_output == 'true' &&
+        steps.opencode.outputs.published == '' }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         RUN_RESULT: ${{ steps.report.outputs.run_result }}
@@ -6844,11 +6978,15 @@ runs:
           core.setOutput('published', JSON.stringify(summary));
 
     - name: Upload suppression record
-      if: ${{ always() && steps.comment_result.outputs.record_dir != '' }}
+      if: >-
+        ${{ always() && (steps.comment_result.outputs.record_dir != '' ||
+        steps.opencode.outputs.record_dir != '' || steps.opencode_test.outputs.record_dir != '') }}
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: kreview-suppression-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index || 0 }}
-        path: ${{ steps.comment_result.outputs.record_dir }}
+        path: >-
+          ${{ steps.comment_result.outputs.record_dir || steps.opencode.outputs.record_dir ||
+          steps.opencode_test.outputs.record_dir }}
         retention-days: ${{ inputs.artifact_retention_days }}
         if-no-files-found: warn
 
@@ -6876,7 +7014,9 @@ runs:
       shell: bash
       working-directory: ${{ runner.temp }}
       env:
-        PUBLISHED: ${{ steps.comment_result.outputs.published }}
+        PUBLISHED: >-
+          ${{ steps.comment_result.outputs.published || steps.opencode.outputs.published ||
+          steps.opencode_test.outputs.published }}
         FLOW: ${{ inputs.flow }}
         PROFILE: ${{ steps.build_run.outputs.profile }}
         MODEL: ${{ steps.select_arm.outputs.model }}
@@ -6983,7 +7123,7 @@ runs:
       id: react_review
       if: >-
         ${{ always() && inputs.publish == 'true' && inputs.flow == 'review' &&
-        steps.comment_result.outcome == 'success' }}
+        (steps.comment_result.outcome == 'success' || steps.opencode.outputs.published != '') }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         COMMENT_ID: ${{ steps.context.outputs.comment_id }}
@@ -7027,7 +7167,7 @@ runs:
         TRIAGE_SKIP_REASON: ${{ steps.triage.outputs.skip_reason }}
         SELECT_OUTCOME: ${{ steps.select_arm.outcome }}
         SELECT_SKIPPED: ${{ steps.select_arm.outputs.skipped }}
-        RESULT_OUTCOME: ${{ steps.comment_result.outcome }}
+        RESULT_OUTCOME: ${{ steps.opencode.outputs.published != '' && 'success' || steps.comment_result.outcome }}
         WATCHDOG_FIRED: ${{ steps.disarm_watchdog.outputs.fired }}
         WATCHDOG_CAUSE: ${{ steps.disarm_watchdog.outputs.cause }}
         WATCHDOG_REASON: ${{ steps.disarm_watchdog.outputs.reason }}
@@ -7119,7 +7259,7 @@ runs:
         TRIAGE_SKIP_REASON: ${{ steps.triage.outputs.skip_reason }}
         SELECT_OUTCOME: ${{ steps.select_arm.outcome }}
         SELECT_SKIPPED: ${{ steps.select_arm.outputs.skipped }}
-        RESULT_OUTCOME: ${{ steps.comment_result.outcome }}
+        RESULT_OUTCOME: ${{ steps.opencode.outputs.published != '' && 'success' || steps.comment_result.outcome }}
         WATCHDOG_FIRED: ${{ steps.disarm_watchdog.outputs.fired }}
         WATCHDOG_CAUSE: ${{ steps.disarm_watchdog.outputs.cause }}
         WATCHDOG_REASON: ${{ steps.disarm_watchdog.outputs.reason }}
@@ -7255,7 +7395,8 @@ runs:
 
     - name: Report what this run cost
       if: >-
-        ${{ always() && (inputs.control_plane_endpoint != '' || inputs.fleet_dials_endpoint != '') &&
+        ${{ always() && steps.engine.outputs.opencode_major != '2' &&
+        (inputs.control_plane_endpoint != '' || inputs.fleet_dials_endpoint != '') &&
         (steps.write_report.outputs.spend_usd != '' || steps.write_progress.outputs.spend_usd != '' ||
         steps.write_comment.outputs.spend_usd != '' || steps.eval_record.outputs.spend_usd != '' ||
         steps.test_artifact.outputs.spend_usd != '') }}

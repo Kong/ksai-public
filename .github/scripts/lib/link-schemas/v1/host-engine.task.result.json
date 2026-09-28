@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "What a trusted task answered",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ok", "outputs"],
+  "properties": {
+    "ok": { "type": "boolean" },
+    "outputs": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "value"],
+        "properties": {
+          "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" },
+          "value": { "type": "string", "maxLength": 1048576 }
+        }
+      }
+    },
+    "error": { "type": "string", "maxLength": 4000 }
+  }
+}

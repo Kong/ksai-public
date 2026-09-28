@@ -24,13 +24,9 @@ export function withoutReviewedInstructions(messages, workspace) {
   return kept;
 }
 
-export function policy(options = {}, now = Date.now) {
+export function policy(options = {}) {
   const allowed = new Set(list(options.models));
-  const attempts = Number.isInteger(options.retries) && options.retries >= 0 ? options.retries : 2;
-  const deadline = Number(options.deadline_ms) || 0;
-  const stepMs = Number(options.step_ms) || 30_000;
   const workspace = String(options.workspace ?? '');
-  const limits = options.output_limits && typeof options.output_limits === 'object' ? options.output_limits : {};
   return {
     models(editor) {
       for (const model of editor.list('anthropic')) {
@@ -49,29 +45,9 @@ export function policy(options = {}, now = Date.now) {
         throw new Error('a subagent runs on the model its own definition names; pick the agent, not a model');
       }
     },
-    retry(event) {
-      if (!event.decision.retry) return;
-      const late = deadline > 0 && now() + Number(event.decision.delay ?? 0) + stepMs > deadline;
-      if (event.attempt > attempts + 1 || late) event.decision = { retry: false };
-    },
     context(event) {
-      const ceiling = Number(limits[event.model?.id]);
-      if (Number.isInteger(ceiling) && ceiling > 0 && event.options) {
-        event.options.maxTokens = Math.min(ceiling, Number(event.options.maxTokens) || ceiling);
-      }
       if (options.strip_instructions !== true || workspace === '' || !Array.isArray(event.messages)) return;
       event.messages = withoutReviewedInstructions(event.messages, workspace);
     },
   };
 }
-
-export default {
-  id: 'ksai.policy',
-  async setup(ctx) {
-    const hooks = policy(ctx.options);
-    await ctx.model.transform(hooks.models);
-    await ctx.tool.hook('execute.before', hooks.before);
-    await ctx.session.hook('retry', hooks.retry);
-    for (const name of ['context', 'compaction', 'generate', 'title']) await ctx.session.hook(name, hooks.context);
-  },
-};

@@ -126,11 +126,17 @@ function receiptOf(predicate) {
   return receipt;
 }
 
-export function verifyRender(bundleJSON, prompt, trust, predicateType, now = new Date()) {
+export function verifyStatement(bundleJSON, trust, predicateType, now = new Date()) {
   const bundle = bundleFromJSON(JSON.parse(bundleJSON.toString('utf8')));
   const statement = statementOf(bundle);
   const key = signerKey(bundle.verificationMaterial.content, trust, now);
-  if (!signedWithDigest(bundle).signature.verifySignature(key)) throw new Error('the render signature does not verify');
+  if (!signedWithDigest(bundle).signature.verifySignature(key)) throw new Error('the statement signature does not verify');
+  if (predicateType !== null && statement.predicateType !== predicateType) throw new Error(`the statement is not a ${predicateType} statement`);
+  return statement;
+}
+
+export function verifyRender(bundleJSON, prompt, trust, predicateType, now = new Date()) {
+  const statement = verifyStatement(bundleJSON, trust, null, now);
   if (statement.predicateType !== predicateType) throw new Error('the render statement is not a render receipt');
   const promptDigest = digest(prompt);
   const subjects = Array.isArray(statement.subject) ? statement.subject : [];

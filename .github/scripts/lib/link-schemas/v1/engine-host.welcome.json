@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "The engine takes a connection, proves who it is and says how the link is kept alive",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["cert", "challenge", "ping_every_ms", "lease_ms", "resume"],
+  "properties": {
+    "cert": {
+      "description": "The sigstore bundle in which the control plane certified the engine's signing key for this link",
+      "type": "object",
+      "maxProperties": 8
+    },
+    "challenge": {
+      "description": "32 random bytes the host signs back in proof, base64",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9+/]{43}=$"
+    },
+    "ping_every_ms": { "type": "integer", "minimum": 1000, "maximum": 60000 },
+    "lease_ms": { "type": "integer", "minimum": 10000, "maximum": 900000 },
+    "resume": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["acked", "plugins"],
+      "properties": {
+        "acked": { "description": "The last host seq the engine applied", "type": "integer", "minimum": 0 },
+        "plugins": {
+          "description": "The last seq the engine applied from each session's plugin",
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["session", "acked"],
+            "properties": {
+              "session": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$" },
+              "acked": { "type": "integer", "minimum": 0 }
+            }
+          }
+        }
+      }
+    }
+  }
+}

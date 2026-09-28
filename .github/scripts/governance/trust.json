@@ -2,6 +2,7 @@
   "releaseSigner": "",
   "releaseIssuer": "",
   "renderPredicate": "",
+  "linkPredicate": "",
   "minimum": "",
   "revoked": [],
   "renderers": {}

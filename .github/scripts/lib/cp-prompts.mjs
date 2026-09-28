@@ -102,7 +102,7 @@ function renderedOf(answer, request) {
   return rendered;
 }
 
-function lockedOf(lock, version) {
+export function lockedOf(lock, version) {
   let parsed;
   try {
     parsed = JSON.parse(lock.toString('utf8'));

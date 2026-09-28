@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OpenCode's session events, recorded in order; they stay on the runner",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["session", "events", "dropped"],
+  "properties": {
+    "session": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$" },
+    "events": {
+      "type": "array",
+      "maxItems": 512,
+      "items": { "type": "object", "maxProperties": 16 }
+    },
+    "dropped": { "description": "Ephemeral deltas the plugin's bounded buffer let go", "type": "integer", "minimum": 0 }
+  }
+}

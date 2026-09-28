@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OpenCode wants to retry a failed model request, and the plugin asks whether it may",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["session", "attempt", "error"],
+  "properties": {
+    "session": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$" },
+    "attempt": { "type": "integer", "minimum": 1, "maximum": 100 },
+    "proposed_delay_ms": { "type": "integer", "minimum": 0, "maximum": 900000 },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,63}$" },
+        "status": { "type": "integer", "minimum": 0, "maximum": 599 },
+        "message": { "type": "string", "maxLength": 1000 }
+      }
+    }
+  }
+}

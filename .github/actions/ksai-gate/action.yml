@@ -178,6 +178,12 @@ inputs:
     description: base URL of the control plane the classifier's prompt is rendered by, or empty
     required: false
     default: ""
+  opencode_version:
+    description: >-
+      the OpenCode the run is on. On OpenCode 2 the classifier's prompt is always rendered by the control
+      plane, and `prompt_rendering` is refused.
+    required: false
+    default: ""
   github_calls:
     description: >-
       where this gate's GitHub writes are made. `cp` posts what it says through the control plane
@@ -491,7 +497,7 @@ runs:
         REPO: ${{ github.repository }}
       run: |
         set -euo pipefail
-        echo "::error::no App token was minted for ${REPO}, so nothing this flow does can run; check that the KSAI App is installed on this repository, which is what a mint fails on when the workflow itself is correct"
+        echo "::error::no App token was minted for ${REPO}, so nothing this flow does can run; check that the KSAI App is installed on this repository, which is what a mint fails on when the workflow itself is correct, see https://ksai.kongcloud.io/start/repo"
         exit 1
 
     - name: Compute gate cost-attribution headers
@@ -513,9 +519,28 @@ runs:
         set -euo pipefail
         node "${GITHUB_WORKSPACE}/_ksai/.github/scripts/ksai/attribution.mjs"
 
+    - name: Choose where the classifier's prompt comes from
+      id: rendering
+      if: ${{ steps.trigger.outputs.classify == 'true' }}
+      shell: bash
+      env:
+        OPENCODE_VERSION: ${{ inputs.opencode_version }}
+        PROMPT: ${{ inputs.prompt_rendering }}
+      run: |
+        set -euo pipefail
+        prompt="${PROMPT}"
+        if [[ "${OPENCODE_VERSION}" == 2.* ]]; then
+          if [[ -n "${prompt}" ]]; then
+            echo "::error::prompt_rendering: an OpenCode 2 run renders every prompt through the control plane, so ${prompt} would choose nothing. Drop the input"
+            exit 1
+          fi
+          prompt="cp"
+        fi
+        echo "prompt=${prompt}" >> "$GITHUB_OUTPUT"
+
     - name: Prepare what a governed prompt is verified with
       id: governance_prepare
-      if: ${{ steps.trigger.outputs.classify == 'true' && inputs.prompt_rendering == 'cp' }}
+      if: ${{ steps.trigger.outputs.classify == 'true' && steps.rendering.outputs.prompt == 'cp' }}
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.post_github_token }}
@@ -532,7 +557,7 @@ runs:
         EFFORT: low
         PROMPT_FILE: ${{ steps.trigger.outputs.classify_file }}
         REQUEST_FILE: ${{ steps.trigger.outputs.classify_request_file }}
-        KSAI_PROMPT_RENDERING: ${{ inputs.prompt_rendering }}
+        KSAI_PROMPT_RENDERING: ${{ steps.rendering.outputs.prompt }}
         KSAI_CP_ENDPOINT: ${{ inputs.prompt_endpoint }}
         EXECUTION_FILE: ${{ runner.temp }}/ksai-gate-classify-execution.json
         ATTRIBUTION_HEADERS: ${{ steps.gate_headers.outputs.value }}

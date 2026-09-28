@@ -3,22 +3,17 @@ import { fileURLToPath } from 'node:url';
 
 import claudeArgs from './claude-args.cjs';
 import { killedBySignal, resultRecord, stopReason } from './execution-log.mjs';
-import modelCatalog from './model-catalog.cjs';
 import {
   MASKED_HOMES,
   PROVIDER_POLICY,
-  boundedModel,
   classify,
-  declaredTools,
   detailed,
   elapsed,
-  frontmatterOf,
   mergedDenials,
   programOf,
   sandboxScopes,
   scrub,
   totals,
-  validateProviderPolicyConfig,
 } from './opencode.mjs';
 
 export const OPENCODE_V2_VERSION = '2.0.18';
@@ -178,11 +173,6 @@ export function phasePermissionRules(phase, scopes = [], dataDir = '') {
   return policy ? permissionRules(policy, scopes, dataDir) : null;
 }
 
-export function phaseShellRules(phase) {
-  const policy = claudeArgs.toolPolicy(phase);
-  return policy ? shellRules(policy) : null;
-}
-
 const compiled = new Map();
 
 const wildcard = (pattern) => {
@@ -218,23 +208,9 @@ export const V2_PROVIDER_POLICY_CONFIG = Object.freeze({
   experimental: Object.freeze({ policies: PROVIDER_POLICY }),
 });
 
-export const validateV2ProviderPolicyConfig = (value, at = 'trusted provider policy') => validateProviderPolicyConfig(value, at, V2_PROVIDER_POLICY_CONFIG);
-
 export const PROVIDER_BASE_URL = '{env:KSAI_PROVIDER_RELAY}/v1';
 
-export const CHANNEL_PLUGIN = fileURLToPath(new URL('../kreview/opencode-v2-plugins/channel/index.mjs', import.meta.url));
-
-export const REVIEW_RESULT_PLUGIN = fileURLToPath(new URL('../kreview/opencode-v2-plugins/review-result/index.mjs', import.meta.url));
-
-export const PTY_PLUGIN = fileURLToPath(new URL('../kreview/opencode-v2-plugins/pty/index.mjs', import.meta.url));
-
-export const POLICY_PLUGIN = fileURLToPath(new URL('../kreview/opencode-v2-plugins/policy/index.mjs', import.meta.url));
-
-export const GUARD_PLUGIN = fileURLToPath(new URL('../kreview/opencode-v2-plugins/guard/index.mjs', import.meta.url));
-
-export const CHILD_TOOLS_PLUGIN = fileURLToPath(new URL('../kreview/opencode-v2-plugins/child-tools/index.mjs', import.meta.url));
-
-export const GOVERNANCE_PLUGIN = fileURLToPath(new URL('../governance/opencode-v2-plugin/index.mjs', import.meta.url));
+export const KSAI_PLUGIN = fileURLToPath(new URL('../kreview/opencode-v2-plugins/ksai/index.mjs', import.meta.url));
 
 const pluginDirectory = (file) => String(file).replace(/\/index\.mjs$/, '');
 
@@ -242,22 +218,6 @@ export const pluginEntry = (one) => {
   const [file, options] = Array.isArray(one) ? one : [one, undefined];
   return options === undefined ? { package: pluginDirectory(file) } : { package: pluginDirectory(file), options };
 };
-
-export function servedModels(catalog = modelCatalog) {
-  const options = catalog.opencode2Models ?? {};
-  const rates = catalog.rates ?? {};
-  const models = {};
-  for (const [id, shape] of Object.entries(options)) {
-    const rate = rates[id];
-    const cache = Number.isFinite(rate?.cacheRead) ? { cache: { read: rate.cacheRead } } : {};
-    models[id] = rate ? { ...shape, cost: { input: rate.input, output: rate.output, ...cache } } : { ...shape };
-  }
-  return models;
-}
-
-export function runsOnV2(model, catalog = modelCatalog) {
-  return Object.hasOwn(catalog.opencode2Models ?? {}, String(model ?? ''));
-}
 
 export function v2RuntimeConfig({
   plugins = [],
@@ -268,7 +228,6 @@ export function v2RuntimeConfig({
   attribution = {},
   titleModel = '',
   defaultAgent = '',
-  models = servedModels(),
   compacting = true,
 } = {}) {
   return {
@@ -281,7 +240,6 @@ export function v2RuntimeConfig({
       anthropic: {
         settings: { apiKey: 'unused-the-provider-relay-answers-every-request', baseURL: PROVIDER_BASE_URL },
         headers: { ...attribution },
-        models,
       },
     },
     plugins: [...plugins.filter(Boolean).map((one) => pluginEntry(one)), ...REMOVED_PLUGINS.map((id) => `-${id}`)],
@@ -308,30 +266,8 @@ function keptOnly(base, kept) {
   ];
 }
 
-export function narrowedRules(base, declared) {
-  if (!declared.length) return base;
-  return keptOnly(base, new Set(declared.map((one) => OPENCODE_TOOL[one]).filter(Boolean)));
-}
-
 export function governedRules(base, tools) {
   return [...keptOnly(base, new Set(tools.map((name) => TOOL_PERMISSION_V2[name]).filter(Boolean))), rule('subagent', '*', 'deny')];
-}
-
-export function v2AgentEntry(source, { model = '', allowed = [], permissions = null } = {}) {
-  const { fields, body } = frontmatterOf(source);
-  const name = fields.name?.trim();
-  if (!name) return null;
-  const chosen = boundedModel(fields.model, allowed) ?? model;
-  return {
-    name,
-    entry: {
-      description: fields.description?.trim() || name,
-      mode: 'subagent',
-      ...(chosen ? { model: `anthropic/${chosen}` } : {}),
-      system: body.trim(),
-      ...(permissions ? { permissions: narrowedRules(permissions, declaredTools(fields.tools)) } : {}),
-    },
-  };
 }
 
 export const SESSION_EVENT = 'ksai.session';

@@ -156,8 +156,8 @@ export function runs(catalog, wanted) {
   const models = /** @type {{ models: unknown[] }} */ (catalog).models;
   return models.some((one) => {
     if (one === null || typeof one !== 'object') return false;
-    const model = /** @type {{ id?: unknown, aliases?: unknown, opencode?: unknown }} */ (one);
-    if (model.opencode === null || typeof model.opencode !== 'object') return false;
+    const model = /** @type {{ id?: unknown, aliases?: unknown, runnable?: unknown }} */ (one);
+    if (model.runnable !== true) return false;
     const names = [model.id, ...(Array.isArray(model.aliases) ? model.aliases : [])];
     return names.some((name) => String(name ?? '').toLowerCase() === wanted.toLowerCase());
   });

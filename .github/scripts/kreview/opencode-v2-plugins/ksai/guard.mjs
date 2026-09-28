@@ -23,12 +23,3 @@ export function guard(root, env = process.env) {
     },
   };
 }
-
-export default {
-  id: 'ksai.guard',
-  async setup(ctx) {
-    const hooks = guard(String(ctx.location?.directory || process.env.GITHUB_WORKSPACE || ''));
-    await ctx.shell.hook('create.before', hooks.shell);
-    await ctx.tool.hook('execute.before', hooks.before);
-  },
-};

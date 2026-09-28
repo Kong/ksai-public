@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "The host says why it is closing the link",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["reason"],
+  "properties": {
+    "reason": { "enum": ["done", "cancelled", "lease", "failed"] },
+    "detail": { "type": "string", "maxLength": 1000 }
+  }
+}

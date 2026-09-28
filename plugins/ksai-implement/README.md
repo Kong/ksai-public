@@ -17,7 +17,7 @@ Write `/ksai` and the outcome you want where the work belongs. KSAI routes an is
 | Revise a plan | Submit a commented or changes-requested review | Pull request review | Reworks the plan from submitted feedback |
 | Release work | Submit an **Approve** review | Pull request review | Releases the reviewed plan or one waiting phase |
 
-KSAI confirms the route before model work starts. Start with the implementation guide, or read request routing.
+KSAI confirms the route before model work starts. Start with the [implementation guide](https://ksai.kongcloud.io/implement), or read [request routing](https://ksai.kongcloud.io/implement/commands).
 
 The plan review and every phase checkpoint need a native GitHub **Approve** review. `/ksai approve` remains an explicit fallback. Post it on the pull request. Set `require_plan_approval: true` to add the same hold before every implementation step.
 
@@ -33,7 +33,7 @@ Use exact commands for options, compatibility, or a route you do not want classi
 | `/ksai revise [request]` | Reworks the plan from review feedback |
 | `/ksai help` | Lists enabled controls without starting model work |
 
-The request and command reference lists every surface, option, and result.
+The [request and command reference](https://ksai.kongcloud.io/reference/#commands) lists every surface, option, and result.
 
 ## CI skills
 
@@ -46,6 +46,13 @@ The request and command reference lists every surface, option, and result.
 | `ksai-do` | Completes one pull request task and reports `{ status, summary, reason }` |
 
 Each skill writes a JSON manifest and holds no GitHub credential. Trusted workflow steps validate the manifest, enforce protected paths, publish commits, and write GitHub comments.
+
+## Configure the workflow
+
+- [Enable code changes](https://ksai.kongcloud.io/implement/setup)
+- [Approve plans and phases](https://ksai.kongcloud.io/implement/approval)
+- [Set time and continuation limits](https://ksai.kongcloud.io/implement/limits)
+- [Understand the secure write path](https://ksai.kongcloud.io/security/write)
 
 ## Skill contracts
 

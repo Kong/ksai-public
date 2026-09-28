@@ -48,5 +48,6 @@ export function readArtifacts(root) {
     attestation: regularFile(join(root, 'catalog.sigstore.json'), CONTROL_BYTES),
     tool: (name) => regularFile(join(root, 'tools', `${name}.json`), CONTROL_BYTES),
     reminder: () => regularFile(join(root, 'max-steps.json'), CONTROL_BYTES),
+    notes: () => regularFile(join(root, 'link-notes.json'), CONTROL_BYTES),
   };
 }

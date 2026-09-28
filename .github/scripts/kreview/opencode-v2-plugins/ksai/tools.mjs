@@ -1,4 +1,4 @@
-import { evaluate } from '../../lib/opencode-v2.mjs';
+import { evaluate } from '../../../lib/opencode-v2.mjs';
 
 const nullable = (schema) => Array.isArray(schema?.type) && schema.type.includes('null');
 

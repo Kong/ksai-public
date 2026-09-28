@@ -7,18 +7,24 @@ import controlPlane from '../lib/control-plane.cjs';
 const { mask, reachedFor } = controlPlane;
 const wait = (ms) => new Promise((done) => { setTimeout(done, ms); });
 
-export async function reportProviderObservations(env = process.env, fetchImpl = fetch, reach = reachedFor, pause = wait) {
+export function observationsIn(env, skip = new Set()) {
   const root = join(String(env.RUNNER_TEMP ?? ''), 'ksai-provider-observations');
   const files = existsSync(root) ? readdirSync(root).filter((name) => /^[0-9a-f]{32}\.json$/.test(name)).sort() : [];
-  if (files.length === 0) {
+  return files.filter((file) => !skip.has(file.slice(0, 32))).map((file) => {
+    const one = JSON.parse(readFileSync(join(root, file), 'utf8'));
+    return { one, body: readFileSync(join(root, `${one.id}.${one.mode === 'cp' ? 'dynamic' : 'body'}`)) };
+  });
+}
+
+export async function reportProviderObservations(env = process.env, fetchImpl = fetch, reach = reachedFor, pause = wait) {
+  const seen = observationsIn(env);
+  if (seen.length === 0) {
     if (env.MODEL_CONCLUSION === 'success') throw new Error('the model succeeded without a provider-boundary prompt observation');
     return 0;
   }
   const reached = await reach({ env, fetch: fetchImpl, timeout: 10 * 60_000, secret: mask });
   if (reached.why) throw new Error(reached.why);
-  for (const file of files) {
-    const one = JSON.parse(readFileSync(join(root, file), 'utf8'));
-    const body = readFileSync(join(root, `${one.id}.${one.mode === 'cp' ? 'dynamic' : 'body'}`));
+  for (const { one, body } of seen) {
     const request = {
       method: 'POST',
       headers: {
@@ -43,7 +49,7 @@ export async function reportProviderObservations(env = process.env, fetchImpl = 
     }
     if (!response.ok) throw new Error(`the control plane refused provider observation ${one.id}: ${response.status} ${(await response.text()).slice(0, 300)}`);
   }
-  return files.length;
+  return seen.length;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

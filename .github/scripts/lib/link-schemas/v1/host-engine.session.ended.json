@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "The session's sandbox exited, and how",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["session", "exit", "conclusion"],
+  "properties": {
+    "session": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$" },
+    "exit": { "type": "integer", "minimum": 0, "maximum": 255 },
+    "conclusion": { "enum": ["succeeded", "failed", "interrupted", "killed"] },
+    "answer_sha256": { "type": "string", "pattern": "^(sha256:[0-9a-f]{64})?$" },
+    "opencode_session": {
+      "description": "The OpenCode session the plugin created, stable across a reconnect, for whatever keeps the run's sessions",
+      "type": "string",
+      "pattern": "^ses_[A-Za-z0-9]{1,64}$"
+    },
+    "export": {
+      "description": "The OpenCode export the host kept of that session when it ended, named by what it holds",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha256", "bytes"],
+      "properties": {
+        "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "bytes": { "type": "integer", "minimum": 1, "maximum": 1073741824 }
+      }
+    }
+  }
+}

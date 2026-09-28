@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "The engine is going away and the host should connect again now",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {}
+}

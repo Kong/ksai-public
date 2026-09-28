@@ -71,8 +71,23 @@ const MODEL_EFFORTS = new Map(
   Object.entries(MODEL_CATALOG.defaultEfforts ?? {}).map(([model, effort]) => [model.toLowerCase(), effort]),
 );
 
+const OFFERED_EFFORTS = new Map(
+  Object.entries(MODEL_CATALOG.modelEfforts ?? {}).map(([model, efforts]) => [model.toLowerCase(), efforts]),
+);
+
+function offeredEfforts(model) {
+  return OFFERED_EFFORTS.get(String(model ?? '').trim().toLowerCase());
+}
+
+function offersEffort(model, effort) {
+  const offered = offeredEfforts(model);
+  return !Array.isArray(offered) || offered.includes(effort);
+}
+
 function defaultEffortFor(model) {
-  return MODEL_EFFORTS.get(String(model ?? '').trim().toLowerCase()) ?? DEFAULT_EFFORT;
+  const named = MODEL_EFFORTS.get(String(model ?? '').trim().toLowerCase());
+  if (named !== undefined) return named;
+  return offersEffort(model, DEFAULT_EFFORT) ? DEFAULT_EFFORT : '';
 }
 
 /**
@@ -997,7 +1012,7 @@ function selectArm({
   const configuredCeiling = String(maxEffort ?? '').trim();
   const configuredFloor = String(minEffort ?? '').trim();
   const boundsFor = (callerEffort) => {
-    const upper = configuredCeiling || callerEffort;
+    const upper = configuredCeiling || callerEffort || ALLOWED_EFFORTS.at(-1);
     if (!ALLOWED_EFFORTS.includes(upper)) {
       return { error: `the \`max_effort\` input must be one of ${ALLOWED_EFFORTS.join(', ')}, got: ${safeEcho(upper)}` };
     }
@@ -1110,12 +1125,20 @@ function selectArm({
   }
 
   const wantEffort = String(triage?.effort ?? '');
-  if (wantEffort && !('--effort' in requested) && !pinnedEffort) {
+  if (wantEffort && !('--effort' in requested) && !pinnedEffort && offersEffort(model, wantEffort)) {
     const wantedIdx = ALLOWED_EFFORTS.indexOf(wantEffort);
     if (wantedIdx !== -1 && wantedIdx >= ALLOWED_EFFORTS.indexOf(floor) && wantedIdx < ALLOWED_EFFORTS.indexOf(fallbackEffort)) {
       effort = wantEffort;
       usedTriage = true;
     }
+  }
+
+  if (effort && !offersEffort(model, effort)) {
+    const configured = offeredEfforts(model);
+    return reject(
+      `\`${safeEcho(model)}\` runs at no \`${safeEcho(effort)}\` effort here: the control plane configures it ` +
+        (configured.length ? `at ${configured.map((one) => `\`${one}\``).join(', ')}` : 'at no effort at all'),
+    );
   }
 
   if (!MODEL_SHAPE.test(model)) {

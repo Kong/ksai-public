@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tokens one session spent in all, as its event stream counted them",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["session", "model", "input", "output", "cache_read", "cache_write"],
+  "properties": {
+    "session": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$" },
+    "model": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$" },
+    "input": { "type": "integer", "minimum": 0 },
+    "output": { "type": "integer", "minimum": 0 },
+    "cache_read": { "type": "integer", "minimum": 0 },
+    "cache_write": { "type": "integer", "minimum": 0 }
+  }
+}

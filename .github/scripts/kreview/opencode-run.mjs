@@ -38,6 +38,7 @@ import {
   validateProviderPolicyVersion,
   isolatedToolPhase,
   MASKED_HOMES,
+  UNCONTINUED,
 } from '../lib/opencode.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
 import { bearer, heldExpiry } from '../lib/opencode-token.mjs';
@@ -708,6 +709,8 @@ export function sandboxArgs(
 
   const resultDir = String(env.KSAI_REVIEW_RESULT_DIR ?? '');
   if (resultDir && exists(resultDir)) args.push('--bind', resultDir, resultDir);
+  const linkDir = String(env.KSAI_LINK_DIR ?? '');
+  if (linkDir && exists(linkDir)) args.push('--bind', linkDir, linkDir);
   args.push(...workflowBinds(env, exists, kind));
 
   const ptyMetrics = String(env.KSAI_PTY_METRICS_FILE ?? '');
@@ -794,7 +797,7 @@ export function sandboxArgs(
   const providerRelay = String(env.KSAI_PROVIDER_RELAY ?? '').trim();
   if (sockets) {
     args.push('--ro-bind', sockets, sockets);
-    for (const [name, file] of [['KSAI_PROVIDER_SOCKET', 'provider.sock'], ['KSAI_OTEL_SOCKET', 'otel.sock']]) {
+    for (const [name, file] of [['KSAI_PROVIDER_SOCKET', 'provider.sock'], ['KSAI_OTEL_SOCKET', 'otel.sock'], ['KSAI_LINK_SOCKET', 'link.sock']]) {
       if (exists(join(sockets, file))) args.push('--setenv', name, join(sockets, file));
     }
   } else if (brokered) {
@@ -979,6 +982,7 @@ async function main(env = process.env, {
   writeOutputs(env.GITHUB_OUTPUT, {
     execution_file: execution,
   });
+  if (String(env.OPENCODE_RESUME_SESSION ?? '').trim() && String(env.KSAI_GOVERNED_DIR ?? '') !== '') console.log(`::warning::${UNCONTINUED}.`);
 
   const isolatedTools = isolatedToolPhase(env.OPENCODE_PHASE);
   const brokered = isolatedTools || env.KSAI_PROVIDER_OBSERVATIONS === 'true';

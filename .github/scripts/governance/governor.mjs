@@ -4,7 +4,8 @@ import { isAbsolute } from 'node:path';
 import { DIGEST, readArtifacts, regularFile } from './artifacts.mjs';
 import { IncompleteAnswer, MAX_RESPONSE_BYTES, UpstreamFailure, boundedSteps, conversation } from './conversation.mjs';
 import { Errand, governRequest } from './provider.mjs';
-import { TOOL_PREFIX, governedReminder, governedTool, rendered, verifyRelease, versionParts } from './release.mjs';
+import { linkNotes } from './notes.mjs';
+import { TOOL_PREFIX, governedNotes, governedReminder, governedTool, rendered, verifyRelease, versionParts } from './release.mjs';
 import { certificateTrust, keyTrust, verifyRender } from './render.mjs';
 
 export const GOVERNED_HOOKS = Object.freeze([
@@ -58,6 +59,10 @@ function options(raw) {
     throw new Error('governance.tools is not a list of distinct tool names');
   }
   if (given.steps !== undefined) boundedSteps(given.steps, 'governance.steps');
+  if (given.notes !== undefined) {
+    if (typeof given.notes !== 'string' || !isAbsolute(given.notes)) throw new Error('governance.notes names no absolute directory');
+    if (typeof given.nonce !== 'string' || !/^[0-9a-f]{16}$/.test(given.nonce)) throw new Error('governance.nonce is not the run channel nonce');
+  }
   return given;
 }
 
@@ -101,8 +106,9 @@ function verified(given, env, toolPrefix) {
   const tools = new Map();
   for (const name of given.tools ?? []) tools.set(name, governedTool(release, name, artifacts.tool(name), toolPrefix));
   const limit = expected.steps === undefined ? null : { steps: expected.steps, reminder: governedReminder(release, artifacts.reminder()) };
+  const notes = given.notes === undefined ? null : governedNotes(release, artifacts.notes());
   return {
-    governed: { prompt: artifacts.prompt.toString('utf8'), model: receipt.model, tools, limit },
+    governed: { prompt: artifacts.prompt.toString('utf8'), model: receipt.model, tools, limit, notes },
     receipt,
     version: release.version,
   };
@@ -139,6 +145,7 @@ function refusing(said, report) {
     follow: (response) => response,
     failed() {},
     arm() {},
+    offered: () => null,
   };
 }
 
@@ -185,9 +192,12 @@ async function buffered(reader) {
   return Buffer.concat(chunks, size);
 }
 
-function governing(state, given, report, provider) {
+function governing(state, given, report, provider, log) {
   const { governed, receipt, version } = state;
   const talk = conversation(governed.prompt, governed.model, [...governed.tools.keys()], governed.limit);
+  const directives = governed.notes
+    ? linkNotes({ dir: given.notes, notes: governed.notes, nonce: given.nonce, flow: String(given.flow ?? '') }, { warn: (said) => log('warn', said) })
+    : null;
   const refusals = new Set();
   let broken = '';
   let messaged = false;
@@ -293,7 +303,19 @@ function governing(state, given, report, provider) {
           }
         });
       },
-      tool: governedCall,
+      tool: async (event) => {
+        const held = directives?.held();
+        if (held) throw new Error(held);
+        return governedCall(event);
+      },
+      after: async (event) => {
+        if (!directives || event?.status !== 'completed') return;
+        const drained = directives.drain();
+        if (!drained) return;
+        const content = event.result?.content;
+        const texts = typeof content === 'string' ? [{ type: 'text', text: content }] : Array.isArray(content) ? content : [];
+        event.result = { ...event.result, content: [...texts, { type: 'text', text: drained }] };
+      },
       compaction: compacting,
       title: async (event) => {
         event.result = 'ksai';
@@ -360,6 +382,7 @@ function governing(state, given, report, provider) {
     arm() {
       armed = true;
     },
+    offered: (name) => governed.tools.get(name) ?? null,
   };
 }
 
@@ -371,7 +394,7 @@ export function governance(raw, env, log, provider, toolPrefix = TOOL_PREFIX, re
     return refusing(reason(error), report);
   }
   try {
-    return governing(verified(given, env, toolPrefix), given, report, provider);
+    return governing(verified(given, env, toolPrefix), given, report, provider, log);
   } catch (error) {
     log('error', 'prompt governance refused this run', { reason: reason(error) });
     return refusing(reason(error), report);

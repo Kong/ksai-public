@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "What a session did since the last report, as digests and the agent's own status, never tool results or commands",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["session", "calls", "tokens", "subagents"],
+  "properties": {
+    "session": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$" },
+    "calls": {
+      "description": "Each tool call that ended since the last report, in the order the calls began",
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["tool", "fingerprint", "failed"],
+        "properties": {
+          "tool": { "type": "string", "pattern": "^[A-Za-z0-9_.:-]{1,64}$" },
+          "fingerprint": { "description": "The tool and its input, hashed, so two identical calls match", "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+          "failed": { "type": "boolean" }
+        }
+      }
+    },
+    "tokens": {
+      "description": "What the session has spent so far",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input", "output", "cache_read", "cache_write"],
+      "properties": {
+        "input": { "type": "integer", "minimum": 0 },
+        "output": { "type": "integer", "minimum": 0 },
+        "cache_read": { "type": "integer", "minimum": 0 },
+        "cache_write": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "subagents": { "description": "How many child sessions the session has opened so far", "type": "integer", "minimum": 0 },
+    "status": {
+      "description": "The newest status the agent gave through its status tool since the last report, as it wrote it",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stage", "update"],
+      "properties": {
+        "stage": { "type": "string", "maxLength": 32 },
+        "update": { "type": "string", "maxLength": 2000 }
+      }
+    }
+  }
+}

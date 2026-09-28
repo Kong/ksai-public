@@ -4,7 +4,6 @@ import { join } from 'node:path';
 import { GOVERNANCE_PLUGIN } from '../governance/config.mjs';
 import { renderThroughControlPlane } from '../lib/cp-prompts.mjs';
 import { pluginEntry } from '../lib/opencode.mjs';
-import { GOVERNANCE_PLUGIN as GOVERNANCE_PLUGIN_V2, isV2, pluginEntry as pluginEntryV2 } from '../lib/opencode-v2.mjs';
 import { SINKS, renderRequest } from '../lib/render-request.cjs';
 import { reviewTools } from './governed-flow.mjs';
 import { optionsOf, rootOf } from './governed-review.mjs';
@@ -44,14 +43,12 @@ export function stageRequest({ stage, context, model, mandate }) {
 
 function governStage(env, options) {
   const config = JSON.parse(readFileSync(env.OPENCODE_CONFIG, 'utf8'));
-  const v2 = isV2(env.OPENCODE_VERSION);
-  const key = v2 ? 'plugins' : 'plugin';
-  const entry = v2 ? pluginEntryV2([GOVERNANCE_PLUGIN_V2, options]) : pluginEntry([GOVERNANCE_PLUGIN, options]);
+  const entry = pluginEntry([GOVERNANCE_PLUGIN, options]);
   const sourceOf = (one) => (typeof one === 'string' ? one : Array.isArray(one) ? one[0] : one?.package);
   const governs = (one) => sourceOf(one) === sourceOf(entry);
-  const governed = (config[key] ?? []).filter((one) => governs(one));
+  const governed = (config.plugin ?? []).filter((one) => governs(one));
   if (governed.length !== 1) throw new Error(`the opencode config loads the governance plugin ${governed.length} times`);
-  config[key] = config[key].map((one) => (governs(one) ? entry : one));
+  config.plugin = config.plugin.map((one) => (governs(one) ? entry : one));
   writeFileSync(env.OPENCODE_CONFIG, `${JSON.stringify(config, null, 2)}\n`);
 }
 

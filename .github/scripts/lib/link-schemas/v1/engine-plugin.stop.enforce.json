@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Every later tool call is refused, with a text the plugin renders from an attested template",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["session", "template", "values"],
+  "properties": {
+    "session": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$" },
+    "template": { "type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,63}$" },
+    "values": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "value"],
+        "properties": {
+          "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$" },
+          "value": { "type": "string", "maxLength": 400 }
+        }
+      }
+    }
+  }
+}

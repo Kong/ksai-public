@@ -1,6 +1,6 @@
 'use strict';
 
-const SITE = '';
+const SITE = 'https://ksai.kongcloud.io';
 
 const SAFE_SITE = SITE.replace(/\/\/ksai\./, '//ks%61i.');
 

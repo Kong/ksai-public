@@ -4,8 +4,9 @@ import { writeOutputs } from '../../lib/outputs.mjs';
 import { builtInTestRecord, prepareStage } from './runner.mjs';
 
 export function main(env = process.env) {
+  const record = builtInTestRecord(env, env.WORKFLOW_REGISTRY);
   const prepared = prepareStage({
-    record: builtInTestRecord(env, env.WORKFLOW_REGISTRY),
+    record,
     registryRoot: env.WORKFLOW_REGISTRY,
     runtimeRoot: env.WORKFLOW_RUNTIME,
   });
@@ -18,6 +19,8 @@ export function main(env = process.env) {
     entrypoint: prepared.entrypoint,
     profile: prepared.profile,
     descriptor: prepared.descriptor,
+    workflow_id: record.workflow.name,
+    workflow_version: record.workflow.version,
   });
 }
 

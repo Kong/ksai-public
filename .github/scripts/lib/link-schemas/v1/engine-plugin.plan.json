@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Everything the plugin runs its session on: the signed prompt, the model, the step limit and every text the model may read",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["session", "prompt", "model", "variant", "steps", "title", "tools", "statics", "nonce", "shell_timeout_ms"],
+  "properties": {
+    "session": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$" },
+    "prompt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text", "bundle", "catalog"],
+      "properties": {
+        "text": { "type": "string", "minLength": 1, "maxLength": 3145728 },
+        "bundle": { "description": "The sigstore bundle the control plane signed the render with", "type": "object", "maxProperties": 8 },
+        "catalog": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["version", "lock", "attestation"],
+          "properties": {
+            "version": { "type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$" },
+            "lock": { "description": "The lock's bytes, base64, as its digest names them", "type": "string", "maxLength": 2796204, "pattern": "^[A-Za-z0-9+/]*={0,2}$" },
+            "attestation": { "description": "The attestation's bytes, base64", "type": "string", "maxLength": 2796204, "pattern": "^[A-Za-z0-9+/]*={0,2}$" }
+          }
+        }
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "limit", "cost", "image", "variants"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$" },
+        "name": { "type": "string", "maxLength": 200 },
+        "limit": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["context", "output"],
+          "properties": {
+            "context": { "type": "integer", "minimum": 1, "maximum": 10000000 },
+            "output": { "type": "integer", "minimum": 1, "maximum": 1000000 }
+          }
+        },
+        "cost": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["input", "output", "cache_read", "cache_write"],
+          "properties": {
+            "input": { "type": "number", "minimum": 0 },
+            "output": { "type": "number", "minimum": 0 },
+            "cache_read": { "type": "number", "minimum": 0 },
+            "cache_write": { "type": "number", "minimum": 0 }
+          }
+        },
+        "image": { "type": "boolean" },
+        "variants": {
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "settings"],
+            "properties": {
+              "id": { "enum": ["low", "medium", "high", "xhigh", "max"] },
+              "settings": { "type": "object", "maxProperties": 16 }
+            }
+          }
+        }
+      }
+    },
+    "variant": { "enum": ["", "low", "medium", "high", "xhigh", "max"] },
+    "steps": { "type": "integer", "minimum": 0, "maximum": 1000 },
+    "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "tools": {
+      "description": "The governed tools the model is offered, each defined by its static",
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$" }
+    },
+    "statics": {
+      "description": "Every static the plugin may put in front of the model, byte for byte as the attested catalog locks it",
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "body"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^static\\.[a-z0-9][a-z0-9._-]{0,127}$" },
+          "body": { "type": "string", "maxLength": 65536 },
+          "destination": {
+            "description": "Where under the run's governed plugin the host lays the static down, as the attested lock records it",
+            "type": "string",
+            "maxLength": 512,
+            "pattern": "^plugins/[a-z][a-z0-9-]*(/[A-Za-z0-9][A-Za-z0-9_-]*(\\.[A-Za-z0-9_-]+)*)+$"
+          }
+        }
+      }
+    },
+    "nonce": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
+    "shell_timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 3600000 }
+  }
+}

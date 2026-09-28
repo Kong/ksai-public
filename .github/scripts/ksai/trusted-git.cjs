@@ -46,6 +46,10 @@ const GIT_CONFIG_OVERRIDES = Object.freeze([
   'diff.external=false',
   '-c',
   'submodule.recurse=false',
+  '-c',
+  'maintenance.auto=false',
+  '-c',
+  'gc.auto=0',
 ]);
 
 const GIT_TIMEOUT_MS = 120000;

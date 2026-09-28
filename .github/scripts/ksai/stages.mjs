@@ -294,6 +294,20 @@ function publish(env, record) {
   });
 }
 
+export function recorded({ streams, dropped, runtime }, env = process.env) {
+  const measured = measure(streams, { stampedAt: Number(env.STARTED_AT_MS), dropped });
+  const heldRuntime = runtime && typeof runtime === 'object' && !Array.isArray(runtime) ? runtime : null;
+  return heldRuntime
+    ? {
+        ...(measured ?? {
+          wall_ms: null, setup_ms: null, own_ms: null, delegated_ms: null, overlap_ms: 0,
+          subagents: 0, unmeasured_subagents: dropped ?? 0, stages: [], tools: [],
+        }),
+        runtime: heldRuntime,
+      }
+    : measured;
+}
+
 /**
  * main runs the CLI surface: the stage block on stdout, the job summary, and the step output.
  *
@@ -318,17 +332,7 @@ export function main(env = process.env, source = null) {
     process.stdout.write(`${why}, so this run recorded no stage timings.\n`);
     return 0;
   }
-  const measured = measure(streams, { stampedAt: Number(env.STARTED_AT_MS), dropped });
-  const heldRuntime = runtime && typeof runtime === 'object' && !Array.isArray(runtime) ? runtime : null;
-  const record = heldRuntime
-    ? {
-        ...(measured ?? {
-          wall_ms: null, setup_ms: null, own_ms: null, delegated_ms: null, overlap_ms: 0,
-          subagents: 0, unmeasured_subagents: dropped ?? 0, stages: [], tools: [],
-        }),
-        runtime: heldRuntime,
-      }
-    : measured;
+  const record = recorded({ streams, dropped, runtime }, env);
   process.stdout.write(`${format(record)}\n`);
   try {
     publish(env, record);

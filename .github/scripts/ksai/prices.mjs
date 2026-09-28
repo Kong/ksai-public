@@ -36,11 +36,14 @@ export function estimate(usage, model) {
   const cached = Number.isFinite(rate.cacheRead) && rate.cacheRead > 0
     ? rate.cacheRead
     : rate.input * CACHE.read;
+  const shortWrite = Number.isFinite(rate.cacheWrite) ? rate.cacheWrite : rate.input * CACHE.write5m;
+  const hourWrite = shortWrite * (CACHE.write1h / CACHE.write5m);
   const dollars =
     (count(usage?.input_tokens) * rate.input +
       count(usage?.output_tokens) * rate.output +
       count(usage?.cache_read_tokens) * cached +
-      (short * CACHE.write5m + hour * CACHE.write1h + unsplit * CACHE.write5m) * rate.input) /
+      (short + unsplit) * shortWrite +
+      hour * hourWrite) /
     PER_MILLION;
   return Number.isFinite(dollars) ? dollars : null;
 }

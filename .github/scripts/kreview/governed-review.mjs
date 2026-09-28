@@ -60,52 +60,68 @@ function governing(env, root, rendered, name, steps, pinned) {
   return file;
 }
 
-export async function renderReview(env, deps = {}) {
-  const mode = promptRendering(env);
-  if (mode === 'local') return {};
+function reviewAsked(env) {
   const strategy = env.REVIEW_STRATEGY || 'baseline';
   const staged = PIPELINE.includes(strategy);
-  if (mode === 'cp' && env.ENGINE !== 'opencode') throw new Error(`a governed review runs on opencode, whose plugin verifies the render, and this one runs on ${env.ENGINE || 'no engine'}`);
-  if (mode === 'cp') rendererFor(env.KSAI_CP_ENDPOINT, deps.pinned);
   const experiment = reviewPipeline.experimentOf(env.REVIEW_EXPERIMENT || '', { head: env.COMMIT_ID || '', base: env.BASE_SHA || '', plugin: env.PLUGIN_SHA || '', publish: env.PUBLISH !== 'false' });
   const { options, refusal } = prepare.reviewOptions(env, experiment);
   if (refusal) throw new Error(refusal);
   const request = reviewRequest.reviewRenderRequest({ ...options, ...(staged ? { priorFindings: '' } : {}), model: env.MODEL, baseSha: env.BASE_SHA, additionalPrompt: env.ADDITIONAL_PROMPT, pipeline: staged });
   const root = rootOf(env);
   mkdirSync(root, { recursive: true, mode: 0o700 });
+  const requestFile = join(root, 'review.request.json');
+  writeRenderRequest(requestFile, request);
+  return { strategy, staged, request, root, requestFile };
+}
+
+export function requestReview(env) {
+  if (env.ENGINE !== 'opencode') throw new Error(`a governed review runs on opencode, whose plugin verifies the render, and this one runs on ${env.ENGINE || 'no engine'}`);
+  return { request_file: reviewAsked(env).requestFile };
+}
+
+export async function renderReview(env, deps = {}) {
+  const mode = promptRendering(env);
+  if (mode === 'local') return {};
+  if (mode === 'cp' && env.ENGINE !== 'opencode') throw new Error(`a governed review runs on opencode, whose plugin verifies the render, and this one runs on ${env.ENGINE || 'no engine'}`);
+  if (mode === 'cp') rendererFor(env.KSAI_CP_ENDPOINT, deps.pinned);
+  const { strategy, staged, request, root, requestFile } = reviewAsked(env);
   const rendered = await renderThroughControlPlane({ request, dir: join(root, 'review'), tools: reviewTools(env), env, ...deps });
   if (mode === 'shadow') {
     return { shadow: `${rendered.version}${rendered.arm ? ` (${rendered.arm})` : ''}`, parity: parityOf(readFileSync(rendered.prompt, 'utf8'), env.PROMPT_FILE) };
   }
   const prompt = readFileSync(rendered.prompt, 'utf8');
   pipelineBeside(rendered.prompt, env.PROMPT_FILE, prompt);
-  if (!staged) return { prompt_file: rendered.prompt, options_file: governing(env, root, rendered, 'review', 0, deps.pinned), version: rendered.version, strategy };
+  if (!staged) return { prompt_file: rendered.prompt, options_file: governing(env, root, rendered, 'review', 0, deps.pinned), version: rendered.version, strategy, request_file: requestFile };
   const plan = { model: String(env.MODEL ?? ''), mandate: bounded(env.AUDITOR_MANDATE, 'the auditor mandate', MANDATE_BYTES) };
   writeFileSync(join(root, 'stages.json'), JSON.stringify(plan), { mode: 0o600, flag: 'wx' });
   mkdirSync(join(root, 'stages'), { mode: 0o700 });
   const unrendered = { dir: join(root, 'stages'), expect: null, arm: rendered.arm };
-  return { prompt_file: rendered.prompt, options_file: governing(env, root, unrendered, 'review', reviewPipeline.LIMITS.stageSteps, deps.pinned), version: rendered.version, strategy };
+  return { prompt_file: rendered.prompt, options_file: governing(env, root, unrendered, 'review', reviewPipeline.LIMITS.stageSteps, deps.pinned), version: rendered.version, strategy, request_file: requestFile };
 }
 
-export function auditRequest(env) {
+function candidateOf(env) {
   const main = resultOf(bounded(env.REVIEW_EXECUTION, 'the review run log', EXECUTION_BYTES), 'review');
   if (!succeeded(main)) throw new Error('the review run did not succeed, so there is no candidate to audit');
-  if (Buffer.byteLength(main.result) > CANDIDATE_BYTES) throw new Error(`the candidate review is larger than ${CANDIDATE_BYTES} bytes`);
+  return main.result;
+}
+
+export const auditContext = (env) => ({
+  changed_files: evidence(env.DIFF_FILES, 'the changed-file list', CHANGED_FILES_BYTES),
+  diff: evidence(env.DIFF_PATCH, 'the diff', DIFF_BYTES),
+  review_prompt: evidence(env.REVIEW_PROMPT_FILE, 'the review prompt', PROMPT_BYTES),
+});
+
+export function auditRequest(env, candidate = candidateOf(env)) {
+  if (typeof candidate !== 'string' || candidate.trim() === '') throw new Error('the review left no candidate to audit');
+  if (Buffer.byteLength(candidate) > CANDIDATE_BYTES) throw new Error(`the candidate review is larger than ${CANDIDATE_BYTES} bytes`);
   return renderRequest({
     promptId: 'runtime.review-audit',
     sink: SINKS.review,
     model: String(env.MODEL ?? ''),
     inputs: [
-      {
-        name: 'audit_context',
-        value: {
-          changed_files: evidence(env.DIFF_FILES, 'the changed-file list', CHANGED_FILES_BYTES),
-          diff: evidence(env.DIFF_PATCH, 'the diff', DIFF_BYTES),
-          review_prompt: evidence(env.REVIEW_PROMPT_FILE, 'the review prompt', PROMPT_BYTES),
-        },
-      },
+      { name: 'audit_context', value: auditContext(env) },
       { name: 'auditor_mandate', value: bounded(env.AUDITOR_MANDATE, 'the auditor mandate', MANDATE_BYTES) },
-      { name: 'candidate_review', value: main.result },
+      { name: 'candidate_review', value: candidate },
     ],
   });
 }
@@ -120,8 +136,7 @@ export async function renderAudit(env, deps = {}) {
   return { prompt_file: rendered.prompt, options_file: governing(env, root, rendered, 'audit', 0, deps.pinned), version: rendered.version };
 }
 
-export function verifyAudit(env) {
-  const request = JSON.parse(readFileSync(join(rootOf(env), 'audit.request.json'), 'utf8'));
+export function verifyAudit(env, request = JSON.parse(readFileSync(join(rootOf(env), 'audit.request.json'), 'utf8'))) {
   const expected = request.inputs.find((one) => one.name === 'audit_context').value;
   const actual = {
     changed_files: evidence(expected.changed_files.path, 'the changed-file list', CHANGED_FILES_BYTES),

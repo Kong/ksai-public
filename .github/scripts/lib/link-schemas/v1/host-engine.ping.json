@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "The host asks for its lease to be renewed",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["n", "runner_wall_ms", "loop_lag_ms"],
+  "properties": {
+    "n": { "type": "integer", "minimum": 1 },
+    "runner_wall_ms": { "description": "The runner's wall clock, so instants a model reads are stated in its time", "type": "integer", "minimum": 0 },
+    "loop_lag_ms": { "type": "integer", "minimum": 0 }
+  }
+}

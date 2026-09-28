@@ -21,8 +21,6 @@ export function clientProblem(client = CLIENT_VERSION, engine = OPENCODE_V2_VERS
   return client === engine ? '' : `the vendored @opencode/client is ${client || 'unpinned'}, and this driver speaks to OpenCode ${engine}`;
 }
 
-const STOPPED = 143;
-
 const SERVE_ARGS = Object.freeze(['serve', '--stdio', '--port', '0', '--print-logs', '--log-level', 'warn']);
 
 const DROPPED = /\.delta$|^session\.step\.streamed$|^session\.reasoning\./;
@@ -58,6 +56,9 @@ export function inventoryProblem(listed, expected) {
   for (const id of expected.removed) {
     if (plugins.some((one) => one?.id === id)) return `the built-in plugin ${id} is still loaded although the config removes it`;
   }
+  const stranger = plugins.find((one) => ['local', 'package'].includes(one?.source?.type) && one?.state?.status !== 'disabled' &&
+    !expected.files.includes(one?.source?.path));
+  if (stranger) return `the plugin ${String(stranger.id ?? stranger.source?.target ?? stranger.source?.path).slice(0, 200)} is loaded although ksai named no such plugin, so it could run beside the governed session`;
   return '';
 }
 
@@ -125,8 +126,6 @@ export function forward(socketPath, listen = createServer, connect = createConne
   });
 }
 
-const line = (value) => `${JSON.stringify(value)}\n`;
-
 function startServer(env, launch = spawn) {
   const password = randomBytes(32).toString('base64url');
   const server = launch('opencode', SERVE_ARGS, {
@@ -158,7 +157,7 @@ function startServer(env, launch = spawn) {
   return { ready, password, stop };
 }
 
-async function connected(env) {
+export async function connected(env) {
   const problem = clientProblem();
   if (problem) throw new Error(problem);
   const { OpenCode } = await import(CLIENT.href);
@@ -168,7 +167,7 @@ async function connected(env) {
   return { client, url, server };
 }
 
-async function relays(env) {
+export async function relays(env) {
   const opened = [];
   const extra = {};
   if (env.KSAI_PROVIDER_SOCKET) {
@@ -182,39 +181,6 @@ async function relays(env) {
     extra.OTEL_EXPORTER_OTLP_ENDPOINT = otel.url;
   }
   return { extra, close: () => Promise.all(opened.map((one) => one.close())) };
-}
-
-function controlLines(input) {
-  const pending = [];
-  const waiting = [];
-  const push = (said) => {
-    const next = waiting.shift();
-    if (next) next(said);
-    else pending.push(said);
-  };
-  const lines = createInterface({ input });
-  lines.on('line', (said) => {
-    try {
-      push(JSON.parse(said));
-    } catch {}
-  });
-  lines.on('close', () => {
-    while (waiting.length) waiting.shift()({ stop: 'closed' });
-    pending.push({ stop: 'closed' });
-  });
-  const next = () =>
-    pending.length
-      ? Promise.resolve(pending.shift())
-      : new Promise((resolvePromise) => {
-          waiting.push(resolvePromise);
-        });
-  return Object.assign(next, {
-    push,
-    close: () => {
-      lines.close();
-      input.destroy?.();
-    },
-  });
 }
 
 const reachable = (target, connect = createConnection) =>
@@ -233,87 +199,12 @@ const reachable = (target, connect = createConnection) =>
 
 export async function networkProblem(port, env = process.env, connect = createConnection) {
   if (!env.KSAI_PROVIDER_SOCKET) return 'no provider relay socket is bound into the sandbox';
+  if (!env.KSAI_LINK_SOCKET) return 'no link socket is bound into the sandbox';
   if (await reachable({ host: '127.0.0.1', port: Number(port) }, connect)) return `the runner's loopback port ${port} is reachable from the engine sandbox`;
-  for (const name of ['KSAI_PROVIDER_SOCKET', 'KSAI_OTEL_SOCKET']) {
+  for (const name of ['KSAI_PROVIDER_SOCKET', 'KSAI_OTEL_SOCKET', 'KSAI_LINK_SOCKET']) {
     if (env[name] && !(await reachable({ path: env[name] }, connect))) return `${name} does not answer inside the sandbox`;
   }
   return '';
-}
-
-export async function run(env = process.env, { input = process.stdin, output = process.stdout, signals = process } = {}) {
-  const write = (value) =>
-    new Promise((done) => {
-      if (output.write(line(value))) done();
-      else output.once('drain', done);
-    });
-  const next = controlLines(input);
-  const signalled = () => next.push({ stop: 'signal' });
-  signals.once('SIGTERM', signalled);
-  const first = await next();
-  if (typeof first?.prompt !== 'string' || !first.prompt.trim()) {
-    signals.off('SIGTERM', signalled);
-    next.close();
-    await write({ type: 'ksai.error', created: Date.now(), data: { error: { type: 'ksai.driver', message: 'the driver was handed no prompt' } } });
-    return 1;
-  }
-  const opened = await relays(env);
-  const { client, server } = await connected({ ...env, ...opened.extra });
-  const controller = new AbortController();
-  let code = 1;
-  try {
-    const directory = process.cwd();
-    const config = JSON.parse(readFileSync(String(env.OPENCODE_CONFIG ?? ''), 'utf8'));
-    const model = modelRef(env.MODEL, env.VARIANT);
-    const resumed = String(env.KSAI_RESUME_SESSION ?? '').trim();
-    const agent = String(env.KSAI_AGENT ?? '').trim();
-    const session = resumed
-      ? await client.session.fork({ sessionID: resumed })
-      : await client.session.create({ location: { directory }, model, ...(agent ? { agent } : {}) });
-    if (resumed && agent) await client.session.switchAgent({ sessionID: session.id, agent });
-    if (resumed) await client.session.switchModel({ sessionID: session.id, model });
-    await client.session.update({ sessionID: session.id, title: 'ksai' });
-    const expected = expectedPlugins(config);
-    const problem = inventoryProblem(await settledInventory(() => client.plugin.list({ location: { directory } }), expected), expected);
-    if (problem) {
-      await write({ type: 'ksai.error', created: Date.now(), data: { sessionID: session.id, error: { type: 'ksai.plugins', message: problem } } });
-      return 1;
-    }
-    const record = recorder(session.id, resumed);
-    for (const one of record.opening()) await write(one);
-    const feed = client.event.subscribe({ signal: controller.signal })[Symbol.asyncIterator]();
-    await feed.next();
-    const finished = (async () => {
-      for (;;) {
-        const step = await feed.next().catch(() => ({ done: true }));
-        if (step.done) return 1;
-        const event = step.value;
-        if (event?.type === 'permission.asked' && record.tree.has(String(event.data?.sessionID ?? ''))) {
-          await client.permission.reply({ sessionID: event.data.sessionID, requestID: event.data.id, decision: 'reject' }).catch(() => {});
-        }
-        for (const one of record.accept(event)) await write(one);
-        const ended = record.ended(event);
-        if (ended !== null) return ended;
-      }
-    })();
-    const stopped = next().then(async (said) => {
-      if (!said?.stop) return null;
-      await client.session.interrupt({ sessionID: session.id }).catch(() => {});
-      return STOPPED;
-    });
-    await client.session.prompt({ sessionID: session.id, text: first.prompt, files: [], delivery: 'steer' });
-    code = await Promise.race([finished, stopped.then((one) => (one === null ? finished : one))]);
-    if (code === STOPPED) await Promise.race([finished, sleep(10_000)]);
-    return code;
-  } catch (error) {
-    await write({ type: 'ksai.error', created: Date.now(), data: { error: { type: 'ksai.driver', message: String(error?.message ?? error).slice(0, 500) } } });
-    return 1;
-  } finally {
-    signals.off('SIGTERM', signalled);
-    controller.abort();
-    next.close();
-    await server.stop();
-    await opened.close();
-  }
 }
 
 export async function transfer(command, argument, env = process.env, { output = process.stdout } = {}) {
@@ -345,13 +236,13 @@ export async function transfer(command, argument, env = process.env, { output = 
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const [command = 'run', argument = ''] = process.argv.slice(2);
+  const [command = '', argument = ''] = process.argv.slice(2);
   try {
     if (command === 'probe') {
       const problem = await networkProblem(argument);
       if (problem) console.error(problem);
       process.exitCode = problem ? 1 : 0;
-    } else process.exitCode = command === 'run' ? await run() : await transfer(command, argument);
+    } else process.exitCode = await transfer(command, argument);
   } catch (error) {
     console.error(`opencode driver: ${error?.message ?? error}`);
     process.exitCode = 1;

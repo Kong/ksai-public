@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Whether the request OpenCode asked about is retried, and after how long",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["session", "retry", "delay_ms"],
+  "properties": {
+    "session": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$" },
+    "retry": { "type": "boolean" },
+    "delay_ms": { "type": "integer", "minimum": 0, "maximum": 900000 }
+  }
+}

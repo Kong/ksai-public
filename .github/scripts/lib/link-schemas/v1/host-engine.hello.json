@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "The host opens a connection and names the key it signs with",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["key", "transport", "resume", "job_elapsed_ms", "runner"],
+  "properties": {
+    "key": { "description": "The host's ed25519 public key, base64", "type": "string", "pattern": "^[A-Za-z0-9+/]{43}=$" },
+    "transport": { "enum": ["websocket", "poll"] },
+    "resume": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["acked", "plugin_acked"],
+      "properties": {
+        "acked": { "description": "The last engine seq for the host that the host applied", "type": "integer", "minimum": 0 },
+        "plugin_acked": { "description": "The last engine seq for the plugin that the host passed on", "type": "integer", "minimum": 0 }
+      }
+    },
+    "job_elapsed_ms": {
+      "description": "How long the job has run, on the runner's own clock",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 172800000
+    },
+    "runner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "os", "arch"],
+      "properties": {
+        "name": { "type": "string", "maxLength": 200 },
+        "os": { "type": "string", "maxLength": 32 },
+        "arch": { "type": "string", "maxLength": 32 }
+      }
+    }
+  }
+}

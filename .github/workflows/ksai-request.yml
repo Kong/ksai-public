@@ -113,7 +113,7 @@ jobs:
           TEAM: ${{ vars.KSAI_REVIEW_TEAM || 'ksai' }}
         run: |
           set -euo pipefail
-          why="The App minted no token for this repository, so this job can neither resolve the ${TEAM} team nor ask it for a review. It must be installed here and must grant members: read and pull requests: write, which is what this mint asked for - GitHub refuses the whole mint when one of them is missing and never says which. pull requests is write here and read in the review flow, because requesting a reviewer is a write and granting only read leaves this job failing alone. Check those grants, then the client_id input or the KSAI_CLIENT_ID variable and the ksai_private_key secret"
+          why="The App minted no token for this repository, so this job can neither resolve the ${TEAM} team nor ask it for a review. It must be installed here and must grant members: read and pull requests: write, which is what this mint asked for - GitHub refuses the whole mint when one of them is missing and never says which. pull requests is write here and read in the review flow, because requesting a reviewer is a write and granting only read leaves this job failing alone. Check those grants, then the client_id input or the KSAI_CLIENT_ID variable and the ksai_private_key secret, see https://ksai.kongcloud.io/start/repo"
           echo "::error title=The App cannot request the review::${why}"
           echo "${why}" >> "${GITHUB_STEP_SUMMARY}"
           exit 1

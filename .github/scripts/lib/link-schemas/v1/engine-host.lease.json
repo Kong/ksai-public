@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "The engine answers a ping with the lease the host may count from the ping it sent",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["n", "lease_ms"],
+  "properties": {
+    "n": { "type": "integer", "minimum": 1 },
+    "lease_ms": { "type": "integer", "minimum": 10000, "maximum": 900000 }
+  }
+}

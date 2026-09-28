@@ -4,6 +4,7 @@
   "defaultEfforts": {
     "zai-org/GLM-5.3-Flash": "max"
   },
+  "modelEfforts": {},
   "allowedAliases": [
     "fast",
     "balanced",
@@ -127,7 +128,6 @@
       "cacheRead": 0.145
     }
   },
-  "opencode2Models": {},
   "opencodeModels": {
     "zai-org/GLM-5.3": {
       "reasoning": true,

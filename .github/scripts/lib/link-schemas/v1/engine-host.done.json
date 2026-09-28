@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "The engine has no more work for this job, and says what the step reports",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["conclusion", "outputs"],
+  "properties": {
+    "conclusion": { "enum": ["success", "failure", "stopped", "paused"] },
+    "outputs": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "value"],
+        "properties": {
+          "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" },
+          "value": { "type": "string", "maxLength": 1048576 }
+        }
+      }
+    }
+  }
+}

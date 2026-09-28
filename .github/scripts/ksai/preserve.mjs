@@ -40,27 +40,14 @@ export function stopRecord(text) {
   return { stopped: held.text.trim() !== '', hard: held.hard, hold: held.hold };
 }
 
-export function main(env = process.env, run = runCommand, read = readFileSync, recordScope = writeScopeResult) {
+export function preserveWork({
+  env, run = runCommand, recordScope = writeScopeResult, stopped = false, hard = false, killed = false, controlPlaneOnly = false,
+}) {
   const outputs = { preserved: '', reason: '', tree: '' };
-  let held = stopRecord('');
-  try {
-    held = stopRecord(read(String(env.STOP_FILE ?? ''), 'utf-8'));
-  } catch {}
-  let killed = false;
-  try {
-    killed = String(read(String(env.KSAI_KILLED_FILE ?? ''), 'utf-8')).trim() !== '';
-  } catch {}
-  const decided = decidePreserve({
-    preserve: env.STOP_PRESERVE,
-    mode: env.STOP_MODE,
-    stopped: held.stopped,
-    hard: held.hard,
-    killed,
-  });
+  const decided = decidePreserve({ preserve: env.STOP_PRESERVE, mode: env.STOP_MODE, stopped, hard, killed });
   if (!decided.keep) {
     outputs.reason = decided.why;
-    writeOutputs(env.GITHUB_OUTPUT, outputs);
-    return 0;
+    return outputs;
   }
 
   const cwd = String(env.WORKSPACE ?? '');
@@ -77,8 +64,7 @@ export function main(env = process.env, run = runCommand, read = readFileSync, r
   if (!scoped.ok) {
     outputs.reason = `${scoped.reason}, so only the artifact holds the remaining work`;
     outputs.tree = cwd;
-    writeOutputs(env.GITHUB_OUTPUT, outputs);
-    return 0;
+    return outputs;
   }
   const git = gitVia(run, cwd);
   if (git(['rev-parse', '--verify', '--quiet', 'MERGE_HEAD']).ok) {
@@ -86,8 +72,7 @@ export function main(env = process.env, run = runCommand, read = readFileSync, r
       'the run was stopped inside a merge, and committing that here would land a second parent and whatever ' +
       'conflict markers are still in the tree, so only the artifact holds it';
     outputs.tree = cwd;
-    writeOutputs(env.GITHUB_OUTPUT, outputs);
-    return 0;
+    return outputs;
   }
   const manifestPath = String(env.MANIFEST ?? '');
   const manifestRel = manifestPath === '' ? '' : path.relative(cwd, manifestPath);
@@ -95,15 +80,13 @@ export function main(env = process.env, run = runCommand, read = readFileSync, r
   if (!staged.ok) {
     outputs.reason = `${staged.reason}, so only the artifact holds the remaining work`;
     outputs.tree = cwd;
-    writeOutputs(env.GITHUB_OUTPUT, outputs);
-    return 0;
+    return outputs;
   }
   const nothingStaged = git(['diff', '--no-ext-diff', '--cached', '--quiet']).ok;
   if (!nothingStaged && !git(['commit', '--no-verify', '-m', wipSubject(env.PHASE)]).ok) {
     outputs.reason = 'the remaining work could not be committed, so only the artifact holds it';
     outputs.tree = cwd;
-    writeOutputs(env.GITHUB_OUTPUT, outputs);
-    return 0;
+    return outputs;
   }
 
   const named =
@@ -129,22 +112,19 @@ export function main(env = process.env, run = runCommand, read = readFileSync, r
       if (!recorded.ok) {
         outputs.reason = `${verified.reason}; the outcome record failed (${recorded.reason}), so only the artifact holds the remaining work`;
         outputs.tree = cwd;
-        writeOutputs(env.GITHUB_OUTPUT, outputs);
-        return 0;
+        return outputs;
       }
     }
     outputs.reason = `the remaining work touches a path this flow may not push (${verified.reason}), so only the artifact holds it`;
     outputs.tree = cwd;
-    writeOutputs(env.GITHUB_OUTPUT, outputs);
-    return 0;
+    return outputs;
   }
   if (scoped.scope) {
     const recorded = recordScope(env.CHANGE_SCOPE_FILE, scoped.scope, { outcome: 'verified', tree: verified.tree });
     if (!recorded.ok) {
       outputs.reason = `${recorded.reason}, so only the artifact holds the remaining work`;
       outputs.tree = cwd;
-      writeOutputs(env.GITHUB_OUTPUT, outputs);
-      return 0;
+      return outputs;
     }
   }
 
@@ -158,6 +138,8 @@ export function main(env = process.env, run = runCommand, read = readFileSync, r
     bodyFile: path.join(path.dirname(manifestPath || cwd), 'ksai-preserve-commit.json'),
     git,
     run,
+    env,
+    controlPlaneOnly,
   });
   outputs.preserved = published.ok ? (nothingStaged ? 'committed' : 'pushed') : '';
   outputs.reason = published.ok ? '' : `the remaining work did not reach the branch: ${safeEcho(published.reason)}`;
@@ -172,7 +154,20 @@ export function main(env = process.env, run = runCommand, read = readFileSync, r
     }
   }
   outputs.tree = cwd;
-  writeOutputs(env.GITHUB_OUTPUT, outputs);
+  return outputs;
+}
+
+
+export function main(env = process.env, run = runCommand, read = readFileSync, recordScope = writeScopeResult) {
+  let held = stopRecord('');
+  try {
+    held = stopRecord(read(String(env.STOP_FILE ?? ''), 'utf-8'));
+  } catch {}
+  let killed = false;
+  try {
+    killed = String(read(String(env.KSAI_KILLED_FILE ?? ''), 'utf-8')).trim() !== '';
+  } catch {}
+  writeOutputs(env.GITHUB_OUTPUT, preserveWork({ env, run, recordScope, stopped: held.stopped, hard: held.hard, killed }));
   return 0;
 }
 

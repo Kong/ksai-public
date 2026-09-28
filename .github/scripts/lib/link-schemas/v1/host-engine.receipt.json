@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Prompt deliveries the governor recorded, as the control plane's receipts endpoint reads them",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["deliveries"],
+  "properties": {
+    "deliveries": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": { "type": "object", "maxProperties": 32 }
+    }
+  }
+}

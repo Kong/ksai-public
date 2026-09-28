@@ -372,7 +372,7 @@ export function gate(env) {
       error: `status_history must be one of ${MODES.join(', ')}, got '${env.STATUS_HISTORY}'. A third value would leave a repository believing history was hidden while it was retained, or the reverse.`,
     };
   }
-  if (mode === 'off') return { mode, model: '', history };
+  if (mode === 'off' || String(env.OPENCODE_MAJOR ?? '').trim() === '2') return { mode, model: '', history };
   const asked = String(env.STATUS_MODEL ?? '').trim();
   if (asked === '') return { mode, model: '', history };
   const arm = classifierModel(asked, 'status_model');
@@ -390,10 +390,13 @@ export function main(env = process.env) {
     model,
     history,
   });
+  const linked = String(env.OPENCODE_MAJOR ?? '').trim() === '2';
   process.stdout.write(
     mode === 'off'
       ? 'Status updates are off, so this run says nothing while it works.\n'
-      : `Status updates every ${POLL_SECONDS}s${model ? `, narrated by ${model}` : ', counters only'}.\n`,
+      : linked
+        ? 'Status updates in the working agent\'s own words, published by the control plane.\n'
+        : `Status updates every ${POLL_SECONDS}s${model ? `, narrated by ${model}` : ', counters only'}.\n`,
   );
   return 0;
 }

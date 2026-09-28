@@ -187,6 +187,8 @@ function deniedOf(value) {
   }
 }
 
+const RECORDED_FLOWS = Object.freeze(['review', 'run', 'test']);
+
 function evalRunRecord(env, { now = new Date() } = {}) {
   const published = (() => {
     try {
@@ -197,6 +199,7 @@ function evalRunRecord(env, { now = new Date() } = {}) {
     }
   })();
 
+  const flow = RECORDED_FLOWS.includes(env.FLOW) ? env.FLOW : 'review';
   const triaged = env.TRIAGE_MODE === 'auto';
   const unmeasured = env.TRIAGE_FILES === '' && env.TRIAGE_LINES === '';
   const status = statusOf(env);
@@ -206,7 +209,7 @@ function evalRunRecord(env, { now = new Date() } = {}) {
     run_id: `gh:${env.GITHUB_REPOSITORY}:actions:${env.GITHUB_RUN_ID}:${env.GITHUB_RUN_ATTEMPT}:${env.GITHUB_JOB}:${env.JOB_INDEX}`,
     captured_at: now.toISOString().replace(/\.\d{3}Z$/, 'Z'),
     source: 'emitter',
-    flow: env.FLOW === 'run' ? 'run' : 'review',
+    flow,
     repo: env.GITHUB_REPOSITORY,
     pr_number: num(env.PR_NUMBER),
     head_sha: env.COMMIT_ID,
@@ -215,7 +218,7 @@ function evalRunRecord(env, { now = new Date() } = {}) {
       model: env.FLOW === 'run' ? env.RUN_MODEL : env.MODEL,
       effort: env.FLOW === 'run' ? env.RUN_EFFORT : env.EFFORT,
       plugin_ref: env.PLUGIN_REF,
-      harness: env.FLOW === 'run' ? `ksai-run:${env.PROFILE}` : 'kreview-full',
+      harness: flow === 'run' ? `ksai-run:${env.PROFILE}` : flow === 'test' ? 'ksai-test' : 'kreview-full',
       engine: env.ENGINE || 'claude',
       engine_version: env.ENGINE_VERSION || null,
       shadow: env.SHADOW === 'true',
@@ -298,6 +301,7 @@ function evalRunRecord(env, { now = new Date() } = {}) {
             surface: env.ROUTE_SURFACE,
             source: env.ROUTE_SOURCE,
           },
+    ...(env.WORKFLOW_ID ? { workflow: { id: env.WORKFLOW_ID, version: env.WORKFLOW_VERSION || null } } : {}),
   };
 }
 
