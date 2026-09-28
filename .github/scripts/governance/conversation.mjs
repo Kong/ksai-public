@@ -275,6 +275,14 @@ function withoutCacheBoundary(messages) {
   });
 }
 
+const blank = (block) => block?.type === 'text' && typeof block.text === 'string' && block.text.trim() === '';
+
+function asReplayed(message) {
+  return message?.role === 'assistant' && Array.isArray(message.content) && message.content.some(blank)
+    ? { ...message, content: message.content.filter((block) => !blank(block)) }
+    : message;
+}
+
 function toolContent(value) {
   if (typeof value === 'string') return;
   if (!Array.isArray(value) || !value.length) throw new Error('the tool_result content is invalid');
@@ -335,7 +343,7 @@ export function conversation(prompt, model, tools, limit = null) {
       if (terminal) throw new Error("a request followed the model's final answer");
       if (awaiting) throw new Error('requests overlapped');
       if (!Array.isArray(messages) || messages.length > MAX_MESSAGES) throw new Error('the request changed the message history');
-      const normalized = reminded(withoutCacheBoundary(messages), limit, taken);
+      const normalized = reminded(withoutCacheBoundary(messages), limit, taken).map((message) => asReplayed(message));
       if (normalized.length < history.length || history.some((kept, index) => canonical(normalized[index]) !== kept)) {
         throw new Error('the request changed the message history');
       }
@@ -357,7 +365,7 @@ export function conversation(prompt, model, tools, limit = null) {
       if (reply.toolUseIDs.some((id) => used.has(id))) throw new Error('the model replayed a tool_use id');
       if (history.length + 1 > MAX_MESSAGES) throw new Error('the message history is too long');
       for (const id of reply.toolUseIDs) used.add(id);
-      history = [...history, canonical(reply.assistant)];
+      history = [...history, canonical(asReplayed(reply.assistant))];
       taken += 1;
       awaiting = false;
       terminal = reply.terminal;
