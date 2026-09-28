@@ -65,3 +65,8 @@ export function prepareGovernance(env, run = spawnSync, trustedRoot = null, inst
   if (done.status !== 0) throw new Error(`the governance plugin's packages could not be installed under ${vendored}`);
   return root;
 }
+
+export function prepareOnce(env, prepared = '', run = spawnSync) {
+  const root = governedRoot(env);
+  return prepared === root ? root : prepareGovernance(env, run);
+}

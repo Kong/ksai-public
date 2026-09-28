@@ -345,6 +345,7 @@ export function toolCalls(events) {
         input: {},
         status: 'pending',
         started: millis(event.created),
+        called: Number.NaN,
         ended: Number.NaN,
         content: [],
         metadata: {},
@@ -361,6 +362,7 @@ export function toolCalls(events) {
       if (typeof data.name === 'string') call.tool = data.name;
     } else if (event.type === 'session.tool.called') {
       const call = touch(event);
+      call.called = millis(event.created);
       if (data.input && typeof data.input === 'object') call.input = data.input;
     } else if (event.type === 'session.tool.success') {
       const call = touch(event);

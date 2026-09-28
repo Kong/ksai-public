@@ -248,16 +248,29 @@ const toolOf = (name) => (TOOL_SHAPE.test(name) ? name : String(name).replace(/[
 
 const clipped = (value, most) => [...String(value ?? '')].slice(0, most).join('');
 
-export function progressOf(session, segment, reported, secrets = []) {
+const shellTimeout = (input, limit) => {
+  const asked = Number(input?.timeout);
+  return asked > 0 ? Math.min(Math.ceil(asked), limit) : limit;
+};
+
+export function progressOf(session, segment, reported, secrets = [], shellTimeoutMs = SHELL_TIMEOUT_MS) {
   const calls = [];
   let status = null;
   for (const call of toolCalls(segment)) {
-    if (call.status !== 'completed' && call.status !== 'error') continue;
+    const ended = call.status === 'completed' || call.status === 'error';
+    if (!ended && !Number.isFinite(call.called)) continue;
     const key = `${call.session_id}\u0000${call.id}`;
-    if (reported.has(key)) continue;
-    reported.add(key);
+    const state = ended ? 'ended' : 'started';
+    const was = reported.get(key);
+    if (was === state || was === 'ended') continue;
+    reported.set(key, state);
     const input = ordered(call.input);
-    calls.push({ tool: toolOf(call.tool), fingerprint: digest(`${call.tool}\u0000${input ?? `\u0000${key}`}`), failed: call.status === 'error' });
+    const began = Number.isFinite(call.called) ? call.called : call.started;
+    calls.push({
+      tool: toolOf(call.tool), fingerprint: digest(`${call.tool}\u0000${input ?? `\u0000${key}`}`), failed: call.status === 'error', id: digest(key), state,
+      ...(Number.isFinite(began) ? { began_ms: Math.max(0, Math.floor(began)) } : {}),
+      ...(call.tool === 'shell' ? { timeout_ms: shellTimeout(call.input, shellTimeoutMs) } : {}),
+    });
     if (call.tool === STATUS_TOOL && call.status === 'completed' && typeof call.input?.update === 'string') {
       status = { stage: clipped(scrub(call.input.stage, secrets), STAGE_MOST), update: clipped(scrub(call.input.update, secrets), UPDATE_MOST) };
     }
@@ -616,7 +629,7 @@ export async function main(env = process.env, {
 
   const reportProgress = (session, held) => {
     if (!held.plugin) return;
-    for (const report of progressOf(session, readOn(events, held), held.reported, secrets)) client.send('progress', undefined, report);
+    for (const report of progressOf(session, readOn(events, held), held.reported, secrets, run.shell_timeout_ms)) client.send('progress', undefined, report);
   };
 
   const uploads = [];
@@ -637,7 +650,7 @@ export async function main(env = process.env, {
     const allowed = Object.fromEntries(given.filter((one) => SESSION_ENV.includes(one.name)).map((one) => [one.name, one.value]));
     if (audits.has(session)) verifyAudit(env, audits.get(session));
     const asked = askedRender(named, render);
-    const held = { plugin: null, waiting: [], offset: statSync(events).size, read: 0, seen: [], child: null, killed: false, promptId: asked.promptId, reported: new Set() };
+    const held = { plugin: null, waiting: [], offset: statSync(events).size, read: 0, seen: [], child: null, killed: false, promptId: asked.promptId, reported: new Map() };
     sessions.set(session, held);
     const policy = policies.get(session) ?? policies.get(restarts ?? '') ?? {};
     const dir = mkdtempSync(join(scratch, 'session-'));

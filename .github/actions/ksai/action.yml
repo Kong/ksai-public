@@ -1312,17 +1312,6 @@ runs:
           echo '_ksai/' >> "${git_dir}/info/exclude"
         fi
 
-    - name: Prepare what a governed prompt is verified with
-      id: governance_prepare
-      if: >-
-        ${{ steps.rendering.outputs.prompt == 'cp' && inputs.flow != 'test-publish' &&
-        steps.staged_scripts.outcome == 'success' }}
-      shell: bash
-      env:
-        GH_TOKEN: ${{ github.token }}
-        SCRIPTS: ${{ runner.temp }}/ksai-scripts
-      run: node "${SCRIPTS}/governance/prepare.mjs"
-
     - name: Resolve the status arm
       id: status_gate
       if: >-
@@ -1662,6 +1651,18 @@ runs:
       run: |
         set -euo pipefail
         node "${SCRIPTS}/ksai/attribution.mjs"
+
+    - name: Prepare what an early governed ask is verified with
+      id: governance_early
+      if: >-
+        ${{ steps.rendering.outputs.prompt == 'cp' && inputs.flow != 'test-publish' &&
+        steps.staged_scripts.outcome == 'success' &&
+        (inputs.flow == 'implement' || steps.classify_gate.outputs.classify == 'true') }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      run: node "${SCRIPTS}/governance/prepare.mjs"
 
     - name: Classify the comment
       id: classify_run
@@ -4865,6 +4866,19 @@ runs:
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       working-directory: ${{ runner.temp }}
       run: node "${SCRIPTS}/kreview/opencode-cgroup.mjs" --preflight
+
+    - name: Prepare what a governed prompt is verified with
+      id: governance_prepare
+      if: >-
+        ${{ steps.rendering.outputs.prompt == 'cp' && inputs.flow != 'test-publish' &&
+        steps.staged_scripts.outcome == 'success' &&
+        (inputs.flow != 'review' || steps.build_review.outcome == 'success') }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GOVERNANCE_PREPARED: ${{ steps.governance_early.outputs.dir }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      run: node "${SCRIPTS}/governance/prepare.mjs" "${GOVERNANCE_PREPARED}"
 
     - name: Write the opencode runtime config
       id: opencode_config
