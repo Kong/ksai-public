@@ -102,7 +102,7 @@ export async function completeFinal({ prompt, timeoutMs, invoke, now = Date.now 
   return finish();
 }
 
-const MISSING_TEXT_PART = /^text part [0-9]{1,6} not found$/;
+const MISSING_PART = /^(text|reasoning) part [0-9]{1,6} not found$/;
 
 const TRANSPORT_CLOSED = /^Cannot connect to API\b|\bsocket connection was closed unexpectedly\b|^SSE read timed out$|^Provider response headers timed out after [0-9]{1,9}ms$/;
 
@@ -133,13 +133,14 @@ export function streamFailure(events) {
     try { message = JSON.parse(message); } catch { return null; }
   }
   if (typeof message !== 'string') return null;
-  if (named === 'UnknownError' && MISSING_TEXT_PART.test(message)) return { kind: 'missing-text-part', session_id: last.sessionID };
+  const missing = named === 'UnknownError' ? MISSING_PART.exec(message) : null;
+  if (missing) return { kind: `missing-${missing[1]}-part`, session_id: last.sessionID };
   if (named === 'APIError' && TRANSPORT_CLOSED.test(message)) return { kind: 'transport-closed', session_id: last.sessionID };
   if (named === 'UnknownError' && GATEWAY_UNAVAILABLE.test(message)) return { kind: 'gateway-unavailable', session_id: last.sessionID };
   return null;
 }
 
-const RECOVERABLE = Object.freeze(['missing-text-part', 'transport-closed', 'gateway-unavailable', 'empty-turn']);
+const RECOVERABLE = Object.freeze(['missing-text-part', 'missing-reasoning-part', 'transport-closed', 'gateway-unavailable', 'empty-turn']);
 
 const QUOTA_HEADERS = new Set(['retry-after', 'retry-after-ms', 'x-ai-ratelimit-reset', 'x-ai-ratelimit-retry-after', 'x-ai-ratelimit-query-cost', 'x-ratelimit-limit-tokens', 'x-ratelimit-remaining-tokens', 'x-ratelimit-reset-tokens', 'x-ratelimit-limit-requests', 'x-ratelimit-remaining-requests', 'x-ratelimit-reset-requests', 'ratelimit-limit', 'ratelimit-remaining', 'ratelimit-reset']);
 
