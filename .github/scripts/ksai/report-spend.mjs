@@ -43,6 +43,7 @@ export async function reportSpend({
   endpoint = '',
   audience = 'ksai-cp',
   attempt = '',
+  workflowJob = '',
   cost = '',
   model = '',
   usage = null,
@@ -75,11 +76,11 @@ export async function reportSpend({
   if (failure) return { reported: false, why: failure };
 
   const at = `${base}/spend`;
-  const body = JSON.stringify(
-    tally === null
-      ? { attempt: piece, cost_usd: usd }
-      : { attempt: piece, model: spelled, usage: tally },
-  );
+  const job = String(workflowJob).trim();
+  const body = JSON.stringify({
+    ...(tally === null ? { attempt: piece, cost_usd: usd } : { attempt: piece, model: spelled, usage: tally }),
+    ...(job ? { workflow_job: job } : {}),
+  });
 
   let last = '';
   for (let tries = 0; tries < ATTEMPTS; tries += 1) {

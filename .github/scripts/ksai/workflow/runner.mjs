@@ -11,7 +11,7 @@ import { validateSchemaWithReferences } from '../../lib/json-schema.cjs';
 
 const RECORD_VERSION = 'ksai.konghq.com/stage-record/v1alpha1';
 export const CANDIDATE_VERSION = 'ksai.konghq.com/stage-candidate/v1alpha1';
-export const JOB = /^job_[A-Za-z0-9._-]{1,120}$/;
+const JOB = /^job_[A-Za-z0-9._-]{1,120}$/;
 const SHA = /^[0-9a-f]{40}$/;
 const REPOSITORY_PART = /^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,98}[A-Za-z0-9_])?$/;
 const MAX_CANDIDATE_BYTES = 1024 * 1024;

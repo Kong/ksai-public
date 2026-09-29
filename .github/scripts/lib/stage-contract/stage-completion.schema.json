@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ksai.konghq.com/stage-completion/v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "job", "instance", "attempt", "lease", "status"],
+  "properties": {
+    "apiVersion": {"const": "ksai.konghq.com/stage-completion/v1alpha1"},
+    "job": {"type": "string", "pattern": "^job_[0-9a-f]{32}$"},
+    "instance": {"type": "string", "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\[(?:0|[1-9][0-9]*)\\])?$"},
+    "attempt": {"type": "integer", "minimum": 1},
+    "lease": {"type": "string", "minLength": 1},
+    "status": {"enum": ["succeeded", "failed", "cancelled"]},
+    "result_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "output": {},
+    "artifacts": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "job": {"type": "string"},
+          "id": {"type": "string"},
+          "locator": {"type": "string"},
+          "digest": {"type": "string"},
+          "size": {"type": "integer"},
+          "media_type": {"type": "string"},
+          "producer": {"type": "string"},
+          "accepted_attempt": {"type": "integer"},
+          "retention_deadline": {"type": "string"}
+        }
+      }
+    },
+    "failure": {"type": "string", "maxLength": 128, "pattern": "\\S"}
+  },
+  "oneOf": [
+    {
+      "properties": {"status": {"const": "succeeded"}},
+      "required": ["result_digest", "output"],
+      "not": {"required": ["failure"]}
+    },
+    {
+      "properties": {"status": {"enum": ["failed", "cancelled"]}},
+      "required": ["failure"],
+      "not": {"anyOf": [{"required": ["result_digest"]}, {"required": ["output"]}, {"required": ["artifacts"]}]}
+    }
+  ]
+}

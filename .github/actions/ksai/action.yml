@@ -7487,9 +7487,8 @@ runs:
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         SPEND_ENDPOINT: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
-        SPEND_ATTEMPT: >-
-          ${{ github.run_id }}:${{ github.run_attempt }}:${{ steps.dispatch_record.outputs.workflow_job || github.job }}:${{
-          strategy.job-index || 0 }}
+        SPEND_ATTEMPT: ${{ github.run_id }}:${{ github.run_attempt }}:${{ github.job }}:${{ strategy.job-index || 0 }}
+        SPEND_WORKFLOW_JOB: ${{ steps.dispatch_record.outputs.workflow_job }}
         SPEND_COST: >-
           ${{ steps.write_report.outputs.spend_usd || steps.write_progress.outputs.spend_usd ||
           steps.write_comment.outputs.spend_usd || steps.eval_record.outputs.spend_usd ||
@@ -7501,6 +7500,7 @@ runs:
           const answer = await reportSpend({
             endpoint: process.env.SPEND_ENDPOINT,
             attempt: process.env.SPEND_ATTEMPT,
+            workflowJob: process.env.SPEND_WORKFLOW_JOB,
             cost: process.env.SPEND_COST,
             mint: (audience) => core.getIDToken(audience),
             secret: (token) => core.setSecret(token),

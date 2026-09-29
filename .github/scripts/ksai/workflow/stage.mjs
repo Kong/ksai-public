@@ -13,10 +13,11 @@ const { finalResult } = require('../classify.cjs');
 
 const { answeredRetrying, held, holdsFor, mask, reachedFor } = controlPlane;
 
-const COMPLETION_VERSION = 'ksai.konghq.com/stage-completion/v1alpha1';
+export const COMPLETION_SCHEMA = JSON.parse(readFileSync(new URL('../../lib/stage-contract/stage-completion.schema.json', import.meta.url), 'utf8'));
+const COMPLETION_VERSION = COMPLETION_SCHEMA.properties.apiVersion.const;
 const FENCED = /^```(?:json)?[ \t]*\n([\s\S]*)\n```$/;
-const MAX_OUTPUT_BYTES = 64 * 1024;
-const MAX_FAILURE_BYTES = 128;
+const MAX_FAILURE_BYTES = COMPLETION_SCHEMA.properties.failure.maxLength;
+const TOO_LARGE = 413;
 const TIMEOUT_MS = 30_000;
 
 const said = (value) => String(value ?? '').trim();
@@ -49,20 +50,19 @@ export function outputOf(answer) {
   if (!enveloped || !object(candidate.output) || candidate.artifacts.length) {
     throw new Error('the stage answered something other than one stage candidate with no artifacts');
   }
-  if (Buffer.byteLength(canonicalJson(candidate.output)) > MAX_OUTPUT_BYTES) {
-    throw new Error(`the stage output is larger than ${MAX_OUTPUT_BYTES} bytes`);
-  }
   return candidate.output;
 }
 
-export function completionOf(stage, { conclusion, execution }) {
-  const identity = { apiVersion: COMPLETION_VERSION, ...stage };
-  const ended = (status, reason) => ({
-    ...identity, status,
+function ended(stage, status, reason) {
+  return {
+    apiVersion: COMPLETION_VERSION, ...stage, status,
     failure: withinBytes(said(reason).replace(/\s+/g, ' ') || 'the stage ended without saying why', MAX_FAILURE_BYTES),
-  });
-  const failed = (reason) => ended('failed', reason);
-  if (said(conclusion) === 'cancelled') return ended('cancelled', 'the run executing the stage was cancelled');
+  };
+}
+
+export function completionOf(stage, { conclusion, execution }) {
+  const failed = (reason) => ended(stage, 'failed', reason);
+  if (said(conclusion) === 'cancelled') return ended(stage, 'cancelled', 'the run executing the stage was cancelled');
   const { result, why } = finalResult(execution);
   if (!result) return failed(`the model ${why}`);
   if (said(conclusion) !== 'success' || result.is_error) {
@@ -74,7 +74,7 @@ export function completionOf(stage, { conclusion, execution }) {
   } catch (error) {
     return failed(error.message);
   }
-  return { ...identity, status: 'succeeded', result_digest: sha256(canonicalJson(output)), output };
+  return { apiVersion: COMPLETION_VERSION, ...stage, status: 'succeeded', result_digest: sha256(canonicalJson(output)), output };
 }
 
 function executionOf(at) {
@@ -87,12 +87,17 @@ function executionOf(at) {
 
 export async function main(env = process.env, { fetch = globalThis.fetch, secret = mask, pause = held } = {}) {
   const stage = stageOf(env);
-  const completion = completionOf(stage, { conclusion: env.CONCLUSION, execution: executionOf(env.EXECUTION_FILE) });
+  let completion = completionOf(stage, { conclusion: env.CONCLUSION, execution: executionOf(env.EXECUTION_FILE) });
   const reached = await reachedFor({ env, fetch, timeout: TIMEOUT_MS, holds: holdsFor(TIMEOUT_MS), secret });
   if (reached.why) throw new Error(`the stage's completion could not be sent: ${reached.why}`);
-  const sent = await answeredRetrying(fetch, `${reached.base}/run/complete`, {
+  const send = () => answeredRetrying(fetch, `${reached.base}/run/complete`, {
     token: reached.token, body: canonicalJson(completion), timeout: TIMEOUT_MS,
   }, pause);
+  let sent = await send();
+  if (sent.why && completion.status === 'succeeded' && sent.status === TOO_LARGE) {
+    completion = ended(stage, 'failed', `the control plane refused the stage's result: ${sent.why}`);
+    sent = await send();
+  }
   if (sent.why) throw new Error(`the control plane did not take the stage's completion: ${sent.why}`);
   return completion;
 }

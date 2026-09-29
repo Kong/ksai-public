@@ -166,7 +166,14 @@ const STAGE_BOUND_COMMANDS = new Map([['test', 'test']]);
 
 const STAGE_PART = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 
-const STAGE_INSTANCE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\[(?:0|[1-9][0-9]*)\])?$/;
+/**
+ * STAGE_JOB and STAGE_INSTANCE are the shapes ksai-cp mints a stage's job and instance in, copied
+ * from `.github/scripts/lib/stage-contract/stage-completion.schema.json` rather than read, for the
+ * reason COMMANDS is copied, and held to it by a parity test.
+ */
+export const STAGE_JOB = /^job_[0-9a-f]{32}$/;
+
+export const STAGE_INSTANCE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\[(?:0|[1-9][0-9]*)\])?$/;
 
 const shaped = (value, shape) => typeof value === 'string' && shape.test(value);
 
@@ -185,7 +192,9 @@ function boundCommandOf(flow, command, { job, stage, instance }) {
 
 const STAGE_RECORD_VERSION = 'ksai.konghq.com/stage-record/v1alpha1';
 
-export const WORKFLOW_JOB = /^job_[A-Za-z0-9._-]{1,120}$/;
+const STAGE_EXECUTION = 'stage';
+
+const STAGE_LEASE = /^[\w.-]{1,128}$/;
 
 const REVISION = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
@@ -204,12 +213,19 @@ function budgetOf(deadline, at) {
 
 function stageOf(served, commanded, at) {
   const {
-    workflow_record: written, workflow_job: job, workflow_instance: instance, workflow_attempt: tried, workflow_lease: lease,
-    workflow_deadline: deadline,
+    workflow_execution: execution, workflow_record: written, workflow_job: job, workflow_instance: instance,
+    workflow_attempt: tried, workflow_lease: lease, workflow_deadline: deadline,
   } = served;
-  if (written === undefined || commanded) return NO_STAGE;
-  if (!shaped(job, WORKFLOW_JOB) || !shaped(instance, STAGE_INSTANCE) || counted(tried) === ''
-    || !Number.isSafeInteger(Number(tried)) || !shaped(lease, RECORD_ID)) {
+  if (execution === undefined) {
+    if (written !== undefined && !commanded) {
+      throw stopped('the record carries a package stage its control plane did not mark as one, so the control plane predates this runner');
+    }
+    return NO_STAGE;
+  }
+  if (execution !== STAGE_EXECUTION) throw policyStopped('the record names a workflow execution this runner does not run');
+  if (commanded) throw policyStopped('the record dispatches a package stage and names a command or a work session beside it');
+  if (!shaped(job, STAGE_JOB) || !shaped(instance, STAGE_INSTANCE) || !shaped(lease, STAGE_LEASE) || counted(tried) === ''
+    || !Number.isSafeInteger(Number(tried))) {
     throw policyStopped('the record dispatches a package stage it does not fully name');
   }
   let record;
