@@ -83,7 +83,7 @@ const {
 } = require('./prompt.cjs');
 const { MAX_DIRECT_COMMITS, PLAN_ONLY_PHASES, deniedFor, soleWritable } = require('./verify-chunk.cjs');
 const { implementRenderRequest, implementValues } = require('./implement-request.cjs');
-const { createScope, readScope, renderAllowed } = require('./change-scope.cjs');
+const { committableExact, createScope, readScope, renderAllowed } = require('./change-scope.cjs');
 const { plansWork } = require('./write-triage.cjs');
 
 function refusedByBar({ command, bar, undecided }, { outputs, notices }) {
@@ -1832,9 +1832,13 @@ function allowedPaths(env) {
   if (String(env.CHANGE_SCOPE_FILE ?? '') === '') return null;
   const scoped = readScope(env.CHANGE_SCOPE_FILE);
   if (!scoped.ok) throw new Error(scoped.reason);
-  const { exact, patterns, protectedPatterns } = scoped.scope.allowed;
-  const excluded = [...new Set([...patterns.exclude, ...protectedPatterns.exclude])];
-  return { exact, patterns: patterns.include, protected: protectedPatterns.include, excluded };
+  const { patterns, protectedPatterns } = scoped.scope.allowed;
+  return {
+    exact: committableExact(scoped.scope),
+    patterns: patterns.include,
+    protected: protectedPatterns.include,
+    excluded: { patterns: patterns.exclude, protected: protectedPatterns.exclude },
+  };
 }
 
 function implementRequest({ env }) {

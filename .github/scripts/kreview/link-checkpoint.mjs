@@ -110,42 +110,53 @@ function fellBack(reason, parent) {
 }
 
 export async function restoredFrom({ endpoint, fetch, token, link, job, flow, promptVersion, apply, keep }) {
-  if (!VERSION.test(promptVersion)) throw new Error('the engine named no prompt version to restore under');
-  const said = await controlPlane.answered(fetch, `${endpoint}/v1/run/work-sessions/checkpoints/restore`, {
-    token, body: JSON.stringify({ job, link, flow, engine_version: OPENCODE_V2_VERSION, prompt_version: promptVersion }), timeout: CALL_MS,
-  });
-  if (said.why) throw new Error(`the control plane did not answer the restore: ${said.why}`);
+  if (!VERSION.test(promptVersion)) return fellBack('the engine named no prompt version to restore under');
+  let said;
+  try {
+    const bearer = typeof token === 'function' ? await token() : token;
+    said = await controlPlane.answered(fetch, `${endpoint}/v1/run/work-sessions/checkpoints/restore`, {
+      token: bearer, body: JSON.stringify({ job, link, flow, engine_version: OPENCODE_V2_VERSION, prompt_version: promptVersion }), timeout: CALL_MS,
+    });
+  } catch (error) {
+    return fellBack(`the control plane did not answer the restore: ${error?.message ?? error}`);
+  }
+  if (said.why) return fellBack(`the control plane did not answer the restore: ${said.why}`);
   const answer = said.answer ?? {};
   if (answer.status === 'fallback') {
-    if (answer.parent_id !== undefined && (typeof answer.parent_id !== 'string' || !CHECKPOINT.test(answer.parent_id))) {
-      throw new Error('the control plane fell back under a parent that is not a checkpoint');
-    }
-    return fellBack(String(answer.reason ?? ''), answer.parent_id);
+    const parent = typeof answer.parent_id === 'string' && CHECKPOINT.test(answer.parent_id) ? answer.parent_id : undefined;
+    return fellBack(String(answer.reason ?? ''), parent);
   }
-  if (answer.status !== 'ready') throw new Error(`the control plane answered a restore with status ${JSON.stringify(answer.status)}`);
+  if (answer.status !== 'ready') return fellBack(`the control plane answered a restore with status ${JSON.stringify(answer.status)}`);
   const saved = answer.checkpoint ?? {};
-  const exported = Buffer.from(String(answer.export ?? ''), 'base64');
-  const patch = Buffer.from(String(answer.patch ?? ''), 'base64');
-  if (!CHECKPOINT.test(String(saved.id)) || !COMMIT.test(String(saved.head_sha)) || !SESSION.test(String(saved.model_session_id))) {
-    throw new Error('the control plane offered a checkpoint that does not name itself');
-  }
-  if (sha256(exported) !== saved.export_sha256 || exported.length !== saved.export_bytes) throw new Error('the offered export is not the one the checkpoint names');
-  if (sha256(patch) !== saved.patch_sha256 || patch.length !== saved.patch_bytes) throw new Error('the offered patch is not the one the checkpoint names');
-  let session;
+  const offered = typeof saved.id === 'string' && CHECKPOINT.test(saved.id) ? saved.id : undefined;
+  let kept = false;
   try {
-    session = JSON.parse(exported.toString('utf8'))?.info?.id;
-  } catch {
-    session = '';
-  }
-  if (session !== saved.model_session_id) throw new Error('the offered export is of another OpenCode session');
-  try {
+    const exported = Buffer.from(String(answer.export ?? ''), 'base64');
+    const patch = Buffer.from(String(answer.patch ?? ''), 'base64');
+    if (!offered || !COMMIT.test(String(saved.head_sha)) || !SESSION.test(String(saved.model_session_id))) {
+      throw new Error('the control plane offered a checkpoint that does not name itself');
+    }
+    if (sha256(exported) !== saved.export_sha256 || exported.length !== saved.export_bytes) throw new Error('the offered export is not the one the checkpoint names');
+    if (sha256(patch) !== saved.patch_sha256 || patch.length !== saved.patch_bytes) throw new Error('the offered patch is not the one the checkpoint names');
+    let session;
+    try {
+      session = JSON.parse(exported.toString('utf8'))?.info?.id;
+    } catch {
+      session = '';
+    }
+    if (session !== saved.model_session_id) throw new Error('the offered export is of another OpenCode session');
+    await keep(exported);
+    kept = true;
     await apply(patch, saved.head_sha);
   } catch (error) {
-    if (!(error instanceof Unapplied)) throw error;
-    return fellBack(error.message, saved.id);
+    if (kept) {
+      try {
+        await keep(null);
+      } catch {}
+    }
+    return fellBack(String(error?.message ?? error), offered);
   }
-  keep(exported);
-  return [{ name: 'status', value: 'restored' }, { name: 'checkpoint', value: saved.id }, { name: 'model_session', value: saved.model_session_id }];
+  return [{ name: 'status', value: 'restored' }, { name: 'checkpoint', value: offered }, { name: 'model_session', value: saved.model_session_id }];
 }
 
 export function main(env = process.env, { git = trustedGit.directGit(String(env.GITHUB_WORKSPACE ?? '')), write = (said) => writeFileSync(String(env.CHECKPOINT_OUT ?? ''), said) } = {}) {

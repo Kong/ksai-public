@@ -335,6 +335,7 @@ export function keptAnswer(env, events, conclusion, outputs, worked) {
   if (review && ['evidence', 'dual'].includes(env.REVIEW_STRATEGY)) return {};
   const answerFile = `${events}.answer`;
   if (!worked && existsSync(answerFile)) return { OPENCODE_REVIEW_FILE: answerFile };
+  if (!review && !worked?.answer) return {};
   const said = !worked || (review && conclusion !== 'success') ? '' : review ? reviewAnswerOf(worked.answer ?? null, worked.whole ?? null) : worked.answer;
   writeFileSync(answerFile, scrub(String(said ?? ''), collectSecrets(env)));
   return { OPENCODE_REVIEW_FILE: answerFile };
@@ -858,7 +859,7 @@ export async function main(env = process.env, {
     }
     if (kind === 'task' && body.name === 'restore') {
       const outputs = await restoredFrom({
-        endpoint, fetch, token: await mint('ksai-cp'), link: client.link, job, flow: run.flow, promptVersion: arg('prompt_version'),
+        endpoint, fetch, token: () => mint('ksai-cp'), link: client.link, job, flow: run.flow, promptVersion: arg('prompt_version'),
         apply: async (patch, head) => {
           const patchFile = join(scratch, 'restore.patch');
           writeFileSync(patchFile, patch, { mode: 0o600 });
@@ -867,8 +868,13 @@ export async function main(env = process.env, {
           if (exit !== 0 || !said || said.error) throw new Error(`the checkpoint could not be restored: ${said?.error ?? `the restore task exited ${exit}`}`);
         },
         keep: (exported) => {
+          const at = join(governedDir, 'link', RESTORED_EXPORT);
+          if (exported === null) {
+            rmSync(at, { force: true });
+            return;
+          }
           mkdirSync(join(governedDir, 'link'), { recursive: true, mode: 0o700 });
-          writeFileSync(join(governedDir, 'link', RESTORED_EXPORT), exported, { mode: 0o600 });
+          writeFileSync(at, exported, { mode: 0o600 });
         },
       });
       client.send('task.result', id, { ok: true, outputs });

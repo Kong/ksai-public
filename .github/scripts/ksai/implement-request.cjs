@@ -4,6 +4,7 @@ const { boundedBytes } = require('../lib/evidence.cjs');
 const { usableNonce } = require('../lib/prompt-text.cjs');
 const { SALVAGE_MARGIN_MINUTES, ceilingMinutes } = require('../lib/watchdog.cjs');
 const { isBranchForWork } = require('./phase.cjs');
+const { planFilePathFor } = require('./plan.cjs');
 const { MAX_DIRECT_COMMITS, matchesBranchGrammar } = require('./verify-chunk.cjs');
 const { SINKS, renderRequest } = require('../lib/render-request.cjs');
 
@@ -415,7 +416,7 @@ function implementValues(env, phase, { denied = [], allowed = null, planDocument
     : '';
   if (phase === 'step' && stepTitle.trim() === '') throw new Error('step title is empty');
   const phaseContext = contextFor(
-    { ...env, PLAN_PATH: phase === 'plan' ? env.PLAN_PATH : env.PLAN_FILE }, phase, goFacts, packageFacts,
+    { ...env, PLAN_PATH: phase === 'plan' ? planFilePathFor({ branch: env.BRANCH, dir: env.PLAN_DIR }) ?? '' : env.PLAN_FILE }, phase, goFacts, packageFacts,
   );
   const context = {
     ...phaseContext,

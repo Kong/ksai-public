@@ -87,11 +87,39 @@
               }
             },
             "excluded": {
-              "type": "array",
-              "maxItems": 200,
-              "items": {
-                "$ref": "#/$defs/path"
-              }
+              "oneOf": [
+                {
+                  "type": "array",
+                  "maxItems": 200,
+                  "items": {
+                    "$ref": "#/$defs/path"
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "patterns",
+                    "protected"
+                  ],
+                  "properties": {
+                    "patterns": {
+                      "type": "array",
+                      "maxItems": 200,
+                      "items": {
+                        "$ref": "#/$defs/path"
+                      }
+                    },
+                    "protected": {
+                      "type": "array",
+                      "maxItems": 200,
+                      "items": {
+                        "$ref": "#/$defs/path"
+                      }
+                    }
+                  }
+                }
+              ]
             }
           }
         }

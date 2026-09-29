@@ -620,13 +620,20 @@ function verifyScopedPath({ scope, file, git, baseSha, treeish }) {
   return { ok: true };
 }
 
+function committableExact(scope) {
+  return scope.allowed.exact.filter((file) => {
+    const protectedPath = claimsAnyGlob(protectedGlobs, [file]) || strictClaimsAnyGlob(scope.protected, [file]);
+    return allowedBy(scope, file, { protectedPath });
+  });
+}
+
 function renderAllowed(scope) {
   const lines = [
-    ...scope.allowed.exact.map((file) => `  ${JSON.stringify(file)} (exact)`),
+    ...committableExact(scope).map((file) => `  ${JSON.stringify(file)} (exact)`),
     ...scope.allowed.patterns.include.map((glob) => `  ${JSON.stringify(glob)} (base policy)`),
     ...scope.allowed.protectedPatterns.include.map((glob) => `  ${JSON.stringify(glob)} (base policy; protected)`),
-    ...[...new Set([...scope.allowed.patterns.exclude, ...scope.allowed.protectedPatterns.exclude])]
-      .map((glob) => `  ${JSON.stringify(glob)} (base policy; excluded, never committable)`),
+    ...scope.allowed.patterns.exclude.map((glob) => `  ${JSON.stringify(glob)} (base policy; excluded from the patterns above, so an unprotected path it matches needs an exact path or a protected pattern, and a protected one needs a protected pattern)`),
+    ...scope.allowed.protectedPatterns.exclude.map((glob) => `  ${JSON.stringify(glob)} (base policy; excluded from the protected patterns above, so a protected path it matches is named by no list, and an unprotected one needs an exact path or a base policy pattern)`),
   ];
   return lines.length === 0 ? ['  (none)'] : lines;
 }
@@ -668,6 +675,7 @@ module.exports = {
   isProtectedChange,
   parsePolicy,
   readScope,
+  committableExact,
   renderAllowed,
   validateScope,
   verifyScopedPath,

@@ -93,6 +93,7 @@ const SAFE_CHILD_ENV = Object.freeze([
 ]);
 
 const PATH_FALLBACK = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
+const MISE_SHIMS = /\/mise\/shims\/?$/;
 const READ_ONLY_ON_TEST = Object.freeze(['.git', '.ksai']);
 
 const inside = (at, root) => at === root || at.startsWith(`${root.replace(/\/+$/, '')}/`);
@@ -131,7 +132,7 @@ export function toolChildEnvironment(env = process.env) {
   const workspace = String(env.GITHUB_WORKSPACE ?? '').replace(/\/+$/, '');
   const runnerTemp = String(env.RUNNER_TEMP ?? '').replace(/\/+$/, '');
   const safePath = String(env.PATH ?? '').split(':').filter((at) =>
-    at && (!workspace || !inside(at, workspace)) && (!runnerTemp || !inside(at, runnerTemp)),
+    at && (!workspace || !inside(at, workspace)) && (!runnerTemp || !inside(at, runnerTemp)) && !MISE_SHIMS.test(at),
   );
   const toolRoot = pinnedToolRoot(env);
   const pinned = toolRoot ? String(env.KSAI_TOOL_PATH ?? '').split(':').filter((at) => inside(at, toolRoot)) : [];

@@ -906,7 +906,9 @@ function renderFixPrompt({
     ...(Array.isArray(allowed)
       ? [
           'Paths this pass MAY commit. Exact paths and base-owned policy patterns are listed; a',
-          'trusted step refuses the whole push if any changed path falls outside them:',
+          'trusted step refuses the whole push if any changed path falls outside them. A path',
+          'commits only as a regular file: one written as a symlink, a submodule or a new',
+          'executable is refused unless a protected pattern names it:',
           '',
           ...allowed,
           '',
@@ -1577,7 +1579,9 @@ function renderDoPrompt({
     ...(Array.isArray(allowed)
       ? [
           'Paths this run MAY commit. Exact paths and base-owned policy patterns are listed; a',
-          'trusted step refuses the whole push if any changed path falls outside them:',
+          'trusted step refuses the whole push if any changed path falls outside them. A path',
+          'commits only as a regular file: one written as a symlink, a submodule or a new',
+          'executable is refused unless a protected pattern names it:',
           '',
           ...allowed,
           '',

@@ -4503,7 +4503,6 @@ runs:
         MERGE_CONFLICTED: ${{ steps.merge_base.outputs.conflicted }}
         PLAN_DIR: ${{ inputs.plan_file_path }}
         PLAN_FILE: ${{ steps.phase.outputs.plan_file }}
-        PLAN_PATH: ${{ steps.phase.outputs.plan_file }}
         STEP_TITLE: ${{ steps.read_plan.outputs.step_title }}
         REMAINING: ${{ steps.read_plan.outputs.remaining }}
         TOTAL: ${{ steps.read_plan.outputs.total }}
@@ -4804,8 +4803,9 @@ runs:
 
     - name: Install the tools the tree under work pins, fenced off the runner
       if: >-
-        ${{ inputs.flow == 'implement' && steps.mise_setup.outcome == 'success' &&
-        steps.build_implement.outcome == 'success' && steps.size.outputs.plans != 'true' }}
+        ${{ steps.mise_setup.outcome == 'success' && ((inputs.flow == 'implement' &&
+        steps.build_implement.outcome == 'success' && steps.size.outputs.plans != 'true') ||
+        (steps.test_paths.outcome == 'success' && steps.select_test.outputs.test_mode == 'test')) }}
       continue-on-error: true
       shell: bash
       env:
