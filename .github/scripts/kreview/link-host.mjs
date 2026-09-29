@@ -203,6 +203,24 @@ export function runFact(env, now = Date.now()) {
   };
 }
 
+export function factsAnswer(asked, known, { warn = (said) => console.log(said) } = {}) {
+  const facts = [];
+  const missing = [];
+  for (const name of asked) {
+    if (name === 'command') continue;
+    try {
+      if (!Object.hasOwn(known, name)) throw new Error('this host holds no such fact');
+      facts.push({ name, value: known[name]() });
+    } catch (error) {
+      warn(`::warning::the ${name} fact could not be given: ${error?.message ?? error}`);
+      missing.push(name);
+    }
+  }
+  const command = asked.includes('run') || asked.includes('command') ? known.command?.() ?? null : null;
+  if (command !== null) facts.push({ name: 'command', value: command });
+  return { facts, missing };
+}
+
 export function commandFact(env) {
   const command = selectArm.canonicalCommand(String(env.KSAI_ROUTE_COMMAND ?? '').trim());
   const source = String(env.KSAI_ROUTE_SOURCE ?? '').trim();
@@ -853,23 +871,7 @@ export async function main(env = process.env, {
     }
     if (kind === 'need') {
       const known = { run: () => JSON.stringify(run), render: () => render.request, stages: () => stagesFact(env), command: () => commandFact(env) };
-      const facts = [];
-      const missing = [];
-      for (const name of body.facts) {
-        try {
-          if (!Object.hasOwn(known, name)) throw new Error('this host holds no such fact');
-          const value = known[name]();
-          if (value === null) {
-            missing.push(name);
-            continue;
-          }
-          facts.push({ name, value });
-        } catch (error) {
-          console.log(`::warning::the ${name} fact could not be given: ${error?.message ?? error}`);
-          missing.push(name);
-        }
-      }
-      client.send('facts', id, { facts, missing });
+      client.send('facts', id, factsAnswer(body.facts, known));
       return;
     }
     if (kind === 'session.start') {
