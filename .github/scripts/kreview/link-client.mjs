@@ -282,6 +282,10 @@ export function linkClient({
       if (pluginCursor.accept(message.seq)) onPlugin(message.body.session, frame, message);
       return;
     }
+    if (Number.isInteger(peeked.epoch) && peeked.epoch < epoch) {
+      open(frame, { link, job, epoch: peeked.epoch, to: 'host', signers });
+      return;
+    }
     const message = open(frame, { link, job, epoch, to: 'host', signers });
     while (pending.length && pending[0].seq <= message.ack) pending.shift();
     if (message.kind === 'lease') {
