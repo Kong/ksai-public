@@ -25,6 +25,8 @@ import { ordered } from '../ksai/progress.mjs';
 import { isolatedToolPhase, parsed, PROVIDER_TIMEOUTS, totals, UNCONTINUED } from '../lib/opencode.mjs';
 import { answer, everything, executionLog, reportedVersion, rootSessions, SHELL_TIMEOUT_MS, spending, toolCalls, V2_MASKED_HOMES, validateV2Version } from '../lib/opencode-v2.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
+import requestIntent from '../lib/request-intent.cjs';
+import selectArm from '../lib/select-arm.cjs';
 import writeRecord from '../lib/write-record.cjs';
 import watchdogLimits from '../lib/watchdog.cjs';
 import { hypothesesOf } from '../lib/review-hypotheses.mjs';
@@ -199,6 +201,13 @@ export function runFact(env, now = Date.now()) {
     ...(charged ? { spend_attempt: charged } : {}),
     ...(JOB.test(job) && JOB_INDEX.test(index) ? { job, job_index: Number(index) } : {}),
   };
+}
+
+export function commandFact(env) {
+  const command = selectArm.canonicalCommand(String(env.KSAI_ROUTE_COMMAND ?? '').trim());
+  const source = String(env.KSAI_ROUTE_SOURCE ?? '').trim();
+  if (!selectArm.COMMANDS.includes(command) || !requestIntent.SOURCES.includes(source)) return null;
+  return JSON.stringify({ command, source });
 }
 
 export function usageOf(session, model, segment) {
@@ -843,13 +852,18 @@ export async function main(env = process.env, {
       return;
     }
     if (kind === 'need') {
-      const known = { run: () => JSON.stringify(run), render: () => render.request, stages: () => stagesFact(env) };
+      const known = { run: () => JSON.stringify(run), render: () => render.request, stages: () => stagesFact(env), command: () => commandFact(env) };
       const facts = [];
       const missing = [];
       for (const name of body.facts) {
         try {
           if (!Object.hasOwn(known, name)) throw new Error('this host holds no such fact');
-          facts.push({ name, value: known[name]() });
+          const value = known[name]();
+          if (value === null) {
+            missing.push(name);
+            continue;
+          }
+          facts.push({ name, value });
         } catch (error) {
           console.log(`::warning::the ${name} fact could not be given: ${error?.message ?? error}`);
           missing.push(name);

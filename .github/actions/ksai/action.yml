@@ -5464,6 +5464,8 @@ runs:
           steps.governed_review.outputs.prompt_file || steps.build_review.outputs.file ||
           steps.governed_run.outputs.prompt_file || steps.build_run.outputs.file }}
         KSAI_OUTCOME_EXPECTED: "true"
+        KSAI_ROUTE_COMMAND: ${{ steps.select.outputs.command || steps.select_arm.outputs.command }}
+        KSAI_ROUTE_SOURCE: ${{ steps.select.outputs.route_source || steps.select_arm.outputs.route_source }}
         MODEL: ${{ steps.write_arm.outputs.model || steps.select_test.outputs.model || steps.select_arm.outputs.model || steps.build_run.outputs.model }}
         VARIANT: ${{ steps.write_arm.outputs.effort || steps.select_test.outputs.effort || steps.select_arm.outputs.effort || steps.build_run.outputs.effort }}
         OPENCODE_CONFIG: ${{ steps.opencode_config.outputs.file }}
