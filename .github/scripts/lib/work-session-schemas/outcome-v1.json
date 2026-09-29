@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ksai.invalid/schemas/work-session-outcome/v1",
+  "type": "object",
+  "required": ["job", "link", "flow", "phase", "status", "published"],
+  "additionalProperties": false,
+  "properties": {
+    "job": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$" },
+    "link": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "flow": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$" },
+    "phase": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,99}$" },
+    "status": { "enum": ["published", "nothing", "blocked", "failed"] },
+    "published": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "oneOf": [
+          { "$ref": "#/$defs/plan" },
+          { "$ref": "#/$defs/commit" },
+          { "$ref": "#/$defs/pull_request" },
+          { "$ref": "#/$defs/review" },
+          { "$ref": "#/$defs/test" },
+          { "$ref": "#/$defs/run" }
+        ]
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "published" } } },
+      "then": { "properties": { "published": { "minItems": 1 } } }
+    },
+    {
+      "if": { "properties": { "status": { "enum": ["nothing", "blocked"] } } },
+      "then": { "properties": { "published": { "maxItems": 0 } } }
+    }
+  ],
+  "$defs": {
+    "sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "path": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "plan": {
+      "type": "object",
+      "required": ["kind", "pr", "path", "head_sha"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "const": "plan" },
+        "pr": { "type": "integer", "minimum": 1 },
+        "path": { "$ref": "#/$defs/path" },
+        "head_sha": { "$ref": "#/$defs/sha" }
+      }
+    },
+    "file": {
+      "type": "object",
+      "required": ["path", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "path": { "$ref": "#/$defs/path" },
+        "status": { "enum": ["added", "modified", "removed", "renamed"] }
+      }
+    },
+    "commit": {
+      "type": "object",
+      "required": ["kind", "pr", "branch", "head_sha"],
+      "additionalProperties": false,
+      "dependentRequired": { "files_total": ["files"], "files": ["files_total"] },
+      "properties": {
+        "kind": { "const": "commit" },
+        "pr": { "type": "integer", "minimum": 1 },
+        "branch": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "head_sha": { "$ref": "#/$defs/sha" },
+        "files_total": { "type": "integer", "minimum": 0 },
+        "files": { "type": "array", "maxItems": 50, "items": { "$ref": "#/$defs/file" } }
+      }
+    },
+    "pull_request": {
+      "type": "object",
+      "required": ["kind", "pr", "state", "head_sha"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "const": "pull_request" },
+        "pr": { "type": "integer", "minimum": 1 },
+        "state": { "enum": ["draft", "ready"] },
+        "head_sha": { "$ref": "#/$defs/sha" },
+        "effect_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" }
+      }
+    },
+    "review": {
+      "type": "object",
+      "required": ["kind", "pr", "head_sha", "review_id", "findings"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "const": "review" },
+        "pr": { "type": "integer", "minimum": 1 },
+        "head_sha": { "$ref": "#/$defs/sha" },
+        "review_id": { "type": "integer", "minimum": 1 },
+        "findings": { "type": "integer", "minimum": 0, "maximum": 10000 }
+      }
+    },
+    "test": {
+      "type": "object",
+      "required": ["kind", "pr", "head_sha", "verdict", "artifact_sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "const": "test" },
+        "pr": { "type": "integer", "minimum": 1 },
+        "head_sha": { "$ref": "#/$defs/sha" },
+        "verdict": { "enum": ["pass", "defect", "ambiguous_requirement", "infra_failure", "insufficient_evidence"] },
+        "artifact_sha256": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "run": {
+      "type": "object",
+      "required": ["kind", "conclusion", "execution_sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "const": "run" },
+        "conclusion": { "enum": ["success", "failure"] },
+        "execution_sha256": { "$ref": "#/$defs/digest" }
+      }
+    }
+  }
+}

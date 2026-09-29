@@ -1,8 +1,10 @@
-import { canonical, record } from './artifacts.mjs';
+import { canonical, digest, historyDigest, record } from './artifacts.mjs';
 
 export const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 
 export const MAX_STEPS = 256;
+
+export class CarryRefused extends Error {}
 
 export function boundedSteps(steps, name) {
   if (!Number.isSafeInteger(steps) || steps < 1 || steps > MAX_STEPS) throw new Error(`${name} is not a step limit from 1 to ${MAX_STEPS}`);
@@ -21,6 +23,8 @@ const MAX_BLOCKS = 1024;
 const MAX_EVENTS = 65_536;
 const MAX_TOOL_USES = 1024;
 const MAX_MESSAGES = 512;
+
+export const MAX_CARRIED_TURNS = MAX_MESSAGES - 2;
 const TERMINAL_REASONS = new Set(['end_turn', 'max_tokens', 'model_context_window_exceeded', 'refusal', 'stop_sequence']);
 const CACHE_BOUNDARY = 'the request moved the provider cache boundary';
 
@@ -330,13 +334,52 @@ function reminded(normalized, limit, taken) {
   return normalized.slice(0, -1);
 }
 
-export function conversation(prompt, model, tools, limit = null) {
-  let history = [canonical({ role: 'user', content: [{ type: 'text', text: prompt }] })];
+const SEALED = /^sha256:[0-9a-f]{64}$/;
+
+export function carriedOf(value) {
+  if (value === undefined || value === null) return null;
+  const carried = shape(value, ['history', 'turns', 'original'], [], 'the carried history');
+  if (!SEALED.test(String(carried.history)) || !SEALED.test(String(carried.original))) throw new Error('the carried history names no digest');
+  if (!Number.isSafeInteger(carried.turns) || carried.turns < 2 || carried.turns > MAX_CARRIED_TURNS) throw new Error('the carried history names no turn count it could hold');
+  return { history: carried.history, turns: carried.turns, original: carried.original };
+}
+
+function openedOn(message, original) {
+  const opened = message?.role === 'user' && Array.isArray(message.content) && message.content.length === 1 ? message.content[0] : null;
+  return opened?.type === 'text' && typeof opened.text === 'string' && canonical(message) === canonical({ role: 'user', content: [{ type: 'text', text: opened.text }] }) && digest(opened.text) === original;
+}
+
+function carriedHistory(normalized, carried, opening, used) {
+  if (normalized.length !== carried.turns + 1) throw new CarryRefused('the continuation does not carry exactly its governed history and one new turn');
+  const prior = normalized.slice(0, carried.turns);
+  if (!openedOn(prior[0], carried.original)) throw new CarryRefused('the continuation does not open on the render its history was governed by');
+  const kept = prior.map((message) => canonical(message));
+  if (historyDigest(kept) !== carried.history) throw new CarryRefused('the continuation changed the history it carries');
+  const last = prior.at(-1);
+  if (last?.role !== 'assistant' || !Array.isArray(last.content) || last.content.some((block) => block?.type === 'tool_use')) {
+    throw new CarryRefused('the continuation carries a turn the model did not finish');
+  }
+  if (canonical(normalized.at(-1)) !== opening) throw new CarryRefused('the continuation adds a turn other than its render');
+  for (const message of prior) {
+    for (const block of Array.isArray(message.content) ? message.content : []) {
+      if (block?.type !== 'tool_use') continue;
+      if (used.has(block.id)) throw new CarryRefused('the carried history replays a tool_use id');
+      used.add(block.id);
+    }
+  }
+  return [...kept, opening];
+}
+
+export function conversation(prompt, model, tools, limit = null, carried = null) {
+  const opening = canonical({ role: 'user', content: [{ type: 'text', text: prompt }] });
+  let history = [opening];
   let answered = history;
   let awaiting = false;
   let terminal = false;
   let pending = [];
   let taken = 0;
+  let settled = null;
+  let carrying = carried;
   const used = new Set();
   return {
     request(messages) {
@@ -344,6 +387,11 @@ export function conversation(prompt, model, tools, limit = null) {
       if (awaiting) throw new Error('requests overlapped');
       if (!Array.isArray(messages) || messages.length > MAX_MESSAGES) throw new Error('the request changed the message history');
       const normalized = reminded(withoutCacheBoundary(messages), limit, taken).map((message) => asReplayed(message));
+      if (carrying) {
+        history = carriedHistory(normalized, carrying, opening, used);
+        answered = history;
+        carrying = null;
+      }
       if (normalized.length < history.length || history.some((kept, index) => canonical(normalized[index]) !== kept)) {
         throw new Error('the request changed the message history');
       }
@@ -359,6 +407,7 @@ export function conversation(prompt, model, tools, limit = null) {
       history = answered;
       awaiting = false;
     },
+    settled: () => settled,
     response(bytes) {
       if (!awaiting) throw new Error('a response arrived with no request pending');
       const reply = parseResponse(bytes, model, tools);
@@ -371,6 +420,7 @@ export function conversation(prompt, model, tools, limit = null) {
       terminal = reply.terminal;
       pending = [...reply.toolUseIDs];
       if (terminal) {
+        settled = { history: historyDigest(history), turns: history.length };
         history = [];
         answered = [];
         used.clear();

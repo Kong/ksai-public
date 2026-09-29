@@ -6,7 +6,7 @@ const TYPE = new Set(['null', 'boolean', 'object', 'array', 'number', 'integer',
 const SCHEMA_KEYWORDS = Object.freeze([
   '$schema', '$id', '$defs', '$ref', 'type', 'enum', 'const', 'required', 'properties',
   'additionalProperties', 'items', 'minItems', 'maxItems', 'maxProperties', 'uniqueItems', 'minLength', 'maxLength', 'pattern',
-  'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'allOf', 'anyOf', 'oneOf', 'not',
+  'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'allOf', 'anyOf', 'oneOf', 'not', 'if', 'then', 'else', 'dependentRequired',
   'description', 'title', 'default', 'examples', 'format',
 ]);
 const KEYWORDS = new Set(SCHEMA_KEYWORDS);
@@ -86,6 +86,11 @@ function inspect(schema, root, path, resolveReference, seen, resourceRoot, idBas
   if (schema.required !== undefined && (!Array.isArray(schema.required)
     || schema.required.some((key) => typeof key !== 'string')
     || new Set(schema.required).size !== schema.required.length)) throw new Error(`${path} schema required is invalid`);
+  if (schema.dependentRequired !== undefined && (!object(schema.dependentRequired)
+    || Object.values(schema.dependentRequired).some((keys) => !Array.isArray(keys)
+      || keys.some((key) => typeof key !== 'string') || new Set(keys).size !== keys.length))) {
+    throw new Error(`${path} schema dependentRequired is invalid`);
+  }
   for (const keyword of ['minItems', 'maxItems', 'minLength', 'maxLength']) {
     if (schema[keyword] !== undefined) assertInteger(schema[keyword], `${path} schema ${keyword}`);
   }
@@ -114,7 +119,7 @@ function inspect(schema, root, path, resolveReference, seen, resourceRoot, idBas
     if (!object(schema[keyword])) throw new Error(`${path} schema ${keyword} is invalid`);
     for (const branch of Object.values(schema[keyword])) inspect(branch, root, path, resolveReference, seen, false, ownsIdBase);
   }
-  for (const keyword of ['items', 'additionalProperties', 'not']) {
+  for (const keyword of ['items', 'additionalProperties', 'not', 'if', 'then', 'else']) {
     if (schema[keyword] !== undefined) inspect(schema[keyword], root, path, resolveReference, seen, false, ownsIdBase);
   }
 }
@@ -144,7 +149,7 @@ function collectSchemaIds(schema, path = 'schema') {
         walk(branch, `${location}/${keyword}/${token}`);
       }
     }
-    for (const keyword of ['items', 'additionalProperties']) {
+    for (const keyword of ['items', 'additionalProperties', 'not', 'if', 'then', 'else']) {
       if (held[keyword] !== undefined) walk(held[keyword], `${location}/${keyword}`);
     }
   };
@@ -212,6 +217,13 @@ function check(schema, value, root, path, where, problems, seen, resolveReferenc
     if (notBlocked || held.length === 0) problems.push(`${where} matches a schema it must not`);
     if (notBlocked) blocked = true;
   }
+  if (schema.if !== undefined) {
+    const held = [];
+    const ifBlocked = check(schema.if, value, root, path, where, held, seen, resolveReference);
+    if (ifBlocked) blocked = true;
+    const branch = !ifBlocked && held.length === 0 ? schema.then : schema.else;
+    if (branch !== undefined && check(branch, value, root, path, where, problems, seen, resolveReference)) blocked = true;
+  }
 
   if (typeof value === 'string') {
     if (Number.isInteger(schema.minLength) && value.length < schema.minLength * 2 && [...value].length < schema.minLength) problems.push(`${where} is too short`);
@@ -237,6 +249,10 @@ function check(schema, value, root, path, where, problems, seen, resolveReferenc
     const required = schema.required ?? [];
     if (!Array.isArray(required) || required.some((key) => typeof key !== 'string')) throw new Error(`${where} schema required is invalid`);
     for (const key of required) if (!Object.hasOwn(value, key)) problems.push(`${where}.${key} is required`);
+    for (const [present, keys] of Object.entries(object(schema.dependentRequired) ? schema.dependentRequired : {})) {
+      if (!Object.hasOwn(value, present)) continue;
+      for (const key of keys) if (!Object.hasOwn(value, key)) problems.push(`${where}.${key} is required with ${present}`);
+    }
     const properties = schema.properties ?? {};
     if (!object(properties)) throw new Error(`${where} schema properties is invalid`);
     for (const [key, held] of Object.entries(value)) {

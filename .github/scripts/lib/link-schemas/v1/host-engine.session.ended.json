@@ -8,6 +8,7 @@
     "session": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$" },
     "exit": { "type": "integer", "minimum": 0, "maximum": 255 },
     "conclusion": { "enum": ["succeeded", "failed", "interrupted", "killed"] },
+    "resume_error": { "type": "string", "minLength": 1, "maxLength": 200, "pattern": "^[^\\x00]+$" },
     "answer_sha256": { "type": "string", "pattern": "^(sha256:[0-9a-f]{64})?$" },
     "opencode_session": {
       "description": "The OpenCode session the plugin created, stable across a reconnect, for whatever keeps the run's sessions",

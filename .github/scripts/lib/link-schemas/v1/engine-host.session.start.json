@@ -12,6 +12,11 @@
       "type": "string",
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
     },
+    "resumes": {
+      "description": "The checkpoint whose signed export the host restores into this session",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
     "render": {
       "description": "The prompt and sink the engine rendered for this session, which the governor holds the signed render to",
       "type": "object",

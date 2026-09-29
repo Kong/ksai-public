@@ -27,8 +27,8 @@ export const contextTool = (defined, ask) => ({
   input: defined.input_schema,
   options: { codemode: false },
   execute: async (input) => {
-    const log = input?.job_log_id;
-    const answer = ask ? await ask(Number.isSafeInteger(log) && log > 0 ? { job_log_id: log } : {}) : null;
+    const named = Object.keys(defined.input_schema?.properties ?? {}).filter((name) => Object.hasOwn(input ?? {}, name));
+    const answer = ask ? await ask(Object.fromEntries(named.map((name) => [name, input[name]]))) : null;
     if (!answer) throw new Error(CONTEXT_UNANSWERED);
     if (typeof answer.error === 'string') throw new Error(answer.error);
     return { content: JSON.stringify(answer.manifest) };

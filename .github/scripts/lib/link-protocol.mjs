@@ -85,6 +85,18 @@ const ROUTES = loadRoutes();
 
 export const routes = () => Object.values(ROUTES).map(({ from, to, kind, named, ephemeral }) => ({ from, to, kind, named, ephemeral }));
 
+export function declaredFields(from, to, kind, given, except = []) {
+  const route = ROUTES[routeOf(from, to, kind)];
+  if (!route) throw new Error(`link: ${routeOf(from, to, kind)} is not a route`);
+  const kept = {};
+  if (given === null || typeof given !== 'object' || Array.isArray(given)) return kept;
+  for (const [name, schema] of Object.entries(route.schema.properties ?? {})) {
+    if (except.includes(name) || !Object.hasOwn(given, name)) continue;
+    if (validateSchema(schema, given[name], name).length === 0) kept[name] = given[name];
+  }
+  return kept;
+}
+
 export function privateKeyOf(seed) {
   if (!Buffer.isBuffer(seed) || seed.length !== 32) throw new Error('link: an ed25519 seed is 32 bytes');
   return createPrivateKey({ key: Buffer.concat([PKCS8_ED25519, seed]), format: 'der', type: 'pkcs8' });
@@ -104,6 +116,13 @@ export const keyId = (raw) => createHash('sha256').update(raw).digest('hex');
 
 export const linkId = ({ repository, runId, attempt, job }) =>
   `link-${createHash('sha256').update(`${String(repository).toLowerCase()}/${runId}/${attempt}/${job}`).digest('hex').slice(0, 24)}`;
+
+export function jobOf(env) {
+  const index = String(env.KSAI_JOB_INDEX ?? '').trim();
+  const job = `${String(env.GITHUB_JOB ?? '').trim()}${index && index !== '0' ? `-${index}` : ''}`;
+  if (!JOB.test(job)) throw new Error(`this job is named ${JSON.stringify(job)}, which names no link`);
+  return job;
+}
 
 export function pae(payloadType, payload) {
   const type = Buffer.from(payloadType, 'utf8');

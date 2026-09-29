@@ -34,6 +34,7 @@ export async function reportProviderObservations(env = process.env, fetchImpl = 
         'x-ksai-observation-id': one.id,
         'x-ksai-request-digest': one.request_digest,
         'x-ksai-prompt-digest': one.prompt_digest,
+        ...(one.continuation_digest ? { 'x-ksai-continuation-digest': one.continuation_digest } : {}),
         'x-ksai-model': one.model,
         'x-ksai-provider-status': String(one.status),
         'x-ksai-request-bytes': String(one.request_bytes),

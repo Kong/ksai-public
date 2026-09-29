@@ -55,7 +55,7 @@ export function applied(git, patchFile, saved) {
   if (!git(['apply', '--binary', patchFile]).ok) throw new Error('the checkpoint could not be applied');
 }
 
-export function checkpointUpload({ exported, patch, head, base, parent, promptVersion, link, job, flow, secrets = [] }) {
+export function checkpointUpload({ exported, patch, head, base, parent, promptVersion, link, job, flow, secrets = [], conversation = null }) {
   if (!VERSION.test(promptVersion)) throw new Error('the engine named no prompt version to save the checkpoint under');
   if (!COMMIT.test(base)) throw new Error('the run names no base commit to save the checkpoint against');
   if (parent && !CHECKPOINT.test(parent)) throw new Error('the engine named a previous checkpoint that is not one');
@@ -73,12 +73,15 @@ export function checkpointUpload({ exported, patch, head, base, parent, promptVe
   }
   const hidden = withEscaped(secrets);
   const kept = Buffer.from(scrub(exported.toString('utf8'), hidden), 'utf8');
-  const changed = Buffer.from(scrub(patch.toString('utf8'), hidden), 'utf8');
+  if (!Buffer.from(scrub(patch.toString('utf8'), hidden), 'utf8').equals(patch)) {
+    throw new Error('the work holds a secret the runner has, and a restore must apply the patch byte for byte, so no checkpoint is kept');
+  }
   if (kept.length > PART_MOST) throw new Error(`the export is ${kept.length} bytes, and a checkpoint keeps at most ${PART_MOST}`);
-  if (changed.length > PART_MOST) throw new Error(`the patch is ${changed.length} bytes, and a checkpoint keeps at most ${PART_MOST}`);
+  if (patch.length > PART_MOST) throw new Error(`the patch is ${patch.length} bytes, and a checkpoint keeps at most ${PART_MOST}`);
   return {
     job, link, flow, model_session_id: session, base_sha: base, head_sha: head, engine_version: OPENCODE_V2_VERSION,
-    prompt_version: promptVersion, ...(parent ? { parent_id: parent } : {}), export: kept.toString('base64'), patch: changed.toString('base64'),
+    prompt_version: promptVersion, ...(parent ? { parent_id: parent } : {}), export: kept.toString('base64'), patch: patch.toString('base64'),
+    ...(conversation ? { conversation: conversation.resumable && kept.equals(exported) ? conversation : { resumable: false } } : {}),
   };
 }
 

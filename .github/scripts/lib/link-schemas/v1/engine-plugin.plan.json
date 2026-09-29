@@ -25,6 +25,24 @@
         }
       }
     },
+    "resume": {
+      "description": "The signed permit and original render required before the plugin replays checkpoint history",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["permit", "original"],
+      "properties": {
+        "permit": { "description": "The sigstore bundle the control plane signed for this exact continuation", "type": "object", "maxProperties": 8 },
+        "original": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["text", "bundle"],
+          "properties": {
+            "text": { "type": "string", "minLength": 1, "maxLength": 3145728 },
+            "bundle": { "description": "The original signed render bundle", "type": "object", "maxProperties": 8 }
+          }
+        }
+      }
+    },
     "model": {
       "type": "object",
       "additionalProperties": false,

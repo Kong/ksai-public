@@ -97,13 +97,16 @@ function controlPlaneWriter({ env, fetch, timeout, secret, pause = held }) {
       return { changed: said.changed === true, remaining: Number(said.remaining) };
     },
     async openPull(facts) {
-      const said = await sendRaw({ kind: 'open_pull', open_pull: facts });
+      const effect = { kind: 'open_pull', open_pull: facts };
+      const id = name(effect);
+      const said = await sendRaw({ ...effect, id });
+      if (text(said.id) !== '' && text(said.id) !== id) throw new Error('the control plane answered another effect than it was asked');
       const prNumber = Number(said.pull ?? 0);
       const prUrl = String(said.pull_url ?? '');
       if (!Number.isInteger(prNumber) || prNumber <= 0 || !/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/[1-9][0-9]*$/.test(prUrl)) {
         throw new Error('the control plane returned no pull request');
       }
-      return { prNumber, prUrl };
+      return { prNumber, prUrl, effectId: text(said.id) === id ? id : '' };
     },
     async publishPlan({ number, facts }) {
       const said = await sendRaw({ kind: 'publish_plan', number: Number(number), plan_publish: facts });

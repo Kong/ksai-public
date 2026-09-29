@@ -81,9 +81,9 @@ export async function settledInventory(list, expected, { timeoutMs = 30_000, eve
   }
 }
 
-export function recorder(root, parentID = '') {
+export function recorder(root, parentID = '', resumed = parentID !== '') {
   const tree = new Set([root]);
-  const lines = [{ type: SESSION_EVENT, created: Date.now(), data: { sessionID: root, parentID: null, resumed: parentID !== '' } }];
+  const lines = [{ type: SESSION_EVENT, created: Date.now(), data: { sessionID: root, parentID: null, resumed } }];
   return {
     tree,
     accept(event) {
@@ -207,26 +207,31 @@ export async function networkProblem(port, env = process.env, connect = createCo
   return '';
 }
 
+export async function importedSession({ client, url, server }, exported, directory = process.cwd()) {
+  const location = await client.location.get({ location: { directory } });
+  const response = await fetch(new URL('/api/experimental/session/import', url), {
+    method: 'POST',
+    headers: { authorization: `Basic ${Buffer.from(`opencode:${server.password}`).toString('base64')}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ ...exported, location: { directory: location.directory } }),
+  });
+  if (!response.ok) throw new Error(`the session was not imported: ${response.status}`);
+  const imported = await response.json();
+  const data = imported && typeof imported === 'object' && 'data' in imported ? imported.data : null;
+  const id = data && typeof data === 'object' && 'id' in data ? data.id : '';
+  if (typeof id !== 'string' || !id) throw new Error('the import named no session');
+  return id;
+}
+
 export async function transfer(command, argument, env = process.env, { output = process.stdout } = {}) {
-  const { client, url, server } = await connected(env);
+  const connection = await connected(env);
+  const { client, server } = connection;
   try {
     if (command === 'export') {
       output.write(`${JSON.stringify(await client.session.export({ sessionID: argument }))}\n`);
       return 0;
     }
     if (command === 'import') {
-      const location = await client.location.get({ location: { directory: process.cwd() } });
-      const response = await fetch(new URL('/api/experimental/session/import', url), {
-        method: 'POST',
-        headers: { authorization: `Basic ${Buffer.from(`opencode:${server.password}`).toString('base64')}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ ...JSON.parse(readFileSync(argument, 'utf8')), location: { directory: location.directory } }),
-      });
-      if (!response.ok) throw new Error(`the session was not imported: ${response.status}`);
-      const imported = await response.json();
-      const data = imported && typeof imported === 'object' && 'data' in imported ? imported.data : null;
-      const id = data && typeof data === 'object' && 'id' in data ? data.id : '';
-      if (typeof id !== 'string' || !id) throw new Error('the import named no session');
-      output.write(`${id}\n`);
+      output.write(`${await importedSession(connection, JSON.parse(readFileSync(argument, 'utf8')))}\n`);
       return 0;
     }
     throw new Error(`unknown driver command ${command}`);

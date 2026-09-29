@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { authHeaders, bearer } from '../lib/opencode-token.mjs';
 import { ARTIFACTS, promptRendering } from '../lib/cp-prompts.mjs';
 import { canonical, digest, record as objectOf } from '../governance/artifacts.mjs';
-import { boundedSteps, conversation, MAX_RESPONSE_BYTES, reminderText } from '../governance/conversation.mjs';
+import { boundedSteps, CarryRefused, carriedOf, conversation, MAX_RESPONSE_BYTES, reminderText } from '../governance/conversation.mjs';
 import { governRequest } from '../governance/provider.mjs';
 import { originProblem } from './federated-token.mjs';
 
@@ -27,12 +27,17 @@ function heldArtifact(dir, expected) {
   const limit = expected.steps === undefined
     ? null
     : { steps: boundedSteps(expected.steps, 'the governed step limit'), reminder: reminderText(readFileSync(join(dir, ARTIFACTS.reminder))) };
-  const governed = { prompt, model: expected.model, tools, limit };
-  return { key: `${expected.finalDigest}\u0000${expected.model}`, governed, talk: talkOf(governed) };
+  const carried = carriedOf(expected.carried);
+  const opens = carried ? readFileSync(join(dir, ARTIFACTS.original), 'utf8') : prompt;
+  if (carried && digest(opens) !== carried.original) throw new Error('the carried render differs from the one its history was governed by');
+  const governed = { prompt, opens, model: expected.model, tools, limit, carried };
+  return { key: `${openingOf(expected)}\u0000${expected.model}`, governed, talk: talkOf(governed) };
 }
 
+const openingOf = (expected) => expected.carried?.original ?? expected.finalDigest;
+
 function talkOf(governed) {
-  return conversation(governed.prompt, governed.model, [...governed.tools.keys()], governed.limit);
+  return conversation(governed.prompt, governed.model, [...governed.tools.keys()], governed.limit, governed.carried);
 }
 
 function governedArtifact(root, wanted, model, depth = 0) {
@@ -45,7 +50,7 @@ function governedArtifact(root, wanted, model, depth = 0) {
     }
     if (entry.name !== ARTIFACTS.expect || !entry.isFile()) continue;
     const expected = JSON.parse(readFileSync(path, 'utf8'));
-    if (expected.finalDigest === wanted && expected.model === model) return heldArtifact(root, expected);
+    if (openingOf(expected) === wanted && expected.model === model) return heldArtifact(root, expected);
   }
   return null;
 }
@@ -94,7 +99,7 @@ async function finishGovernedResponse(response, talk) {
   }
 }
 
-export function recordProviderRequest(body, env) {
+export function recordProviderRequest(body, env, governed = null) {
   const root = join(String(env.RUNNER_TEMP ?? ''), 'ksai-provider-observations');
   if (!env.RUNNER_TEMP) throw new Error('provider observations require RUNNER_TEMP');
   const request = JSON.parse(body.toString('utf8'));
@@ -108,6 +113,7 @@ export function recordProviderRequest(body, env) {
   const mode = ['cp', 'shadow'].includes(setting) ? setting : 'local';
   const metadata = {
     id, mode, model: request.model, prompt_digest: text ? digest(text) : '',
+    ...(governed?.carried ? { continuation_digest: digest(governed.prompt) } : {}),
     request_digest: digest(body), request_bytes: body.length, status: 0,
   };
   mkdirSync(root, { recursive: true, mode: 0o700 });
@@ -171,7 +177,7 @@ export async function relayProviderRequest(request, env, fetchImpl = fetch, toke
     if (env.KSAI_PROVIDER_OBSERVATIONS === 'true' && promptRendering(env) === 'cp') {
       ({ body, talk } = enforceGovernedRequest(body, env, state));
     }
-    const completed = record?.(body, env);
+    const completed = record?.(body, env, talk ? state?.held?.governed : null);
     const upstream = await fetchImpl(`${origin}${target.pathname}${target.search}`, {
       method: 'POST',
       headers,
@@ -191,7 +197,7 @@ export async function relayProviderRequest(request, env, fetchImpl = fetch, toke
 
 /** startProviderRelay keeps the bearer and provider origin outside the model process. */
 export async function startProviderRelay({ env = process.env, fetchImpl = fetch, token = bearer, record = env.KSAI_PROVIDER_OBSERVATIONS === 'true' ? recordProviderRequest : null, socket = '', stallMs = 0, queries = [''] } = {}) {
-  const state = { completion: null, held: null };
+  const state = { completion: null, held: null, governing: '', carryRefused: new Map() };
   const server = createServer(async (request, response) => {
     const gone = new AbortController();
     response.once('close', () => {
@@ -225,6 +231,7 @@ export async function startProviderRelay({ env = process.env, fetchImpl = fetch,
       }
       response.end();
     } catch (error) {
+      if (error instanceof CarryRefused && !state.carryRefused.has(state.governing)) state.carryRefused.set(state.governing, error.message);
       if (response.headersSent) {
         response.destroy(error);
         return;
@@ -249,7 +256,10 @@ export async function startProviderRelay({ env = process.env, fetchImpl = fetch,
     govern: (dir) => {
       state.held = governedAt(dir);
       state.completion = null;
+      state.governing = dir;
     },
+    settled: () => state.held?.talk.settled() ?? null,
+    carryRefused: (dir) => state.carryRefused.get(dir) ?? '',
     restart: () => {
       if (state.held) state.held = { ...state.held, talk: talkOf(state.held.governed) };
       state.completion = null;

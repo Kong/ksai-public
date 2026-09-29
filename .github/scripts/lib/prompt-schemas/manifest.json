@@ -22,8 +22,8 @@
     "runtime.review-discovery": "sha256:0f68480688f803ed388236a40890d0b0801c98e7e0d2cb61f9f20f357dee2bdf",
     "runtime.review-findings-audit": "sha256:0f57bc71eb0eff36d94ed6690bd400b0b3e860bc875eec7990f33eaa64eeefd0",
     "runtime.review-resolution": "sha256:4ff8cee7f91cf28e23e5d8ea78a55292bbb2ee37efeb9aa46e5f64a4b5e626c2",
-    "runtime.work-session-continue": "sha256:8d7de02999ec0afde09020f866822cd95e452143fee48be88dee6566431e82a9",
-    "runtime.work-session-start": "sha256:c2f4ded0f809efe5679846f1691c00a81d369a106df227f4e310120a061f6b9e",
+    "runtime.work-session-continue": "sha256:62786681955b7876492fb8d6cd0fd8867e8ec2e58ce36c893d3653b5c06c1785",
+    "runtime.work-session-start": "sha256:cf07855a7993e37696f2fa2228e9d88fb1681136359579db20c030fb2c6dd2db",
     "runtime.workflow-stage": "sha256:8f5b307552f5c3023d6b773c9fc175a0b374d973def5ce01c123cfa109b29853",
     "runtime.write-triage-risk": "sha256:8299eaa01ea1fa286391ab491e9843b1b79de347445d6305d57529fd32111482",
     "runtime.write-triage-sizing": "sha256:2bfe1c84fd53f31635d8057a39071f6456ee3d770770f50db49f724db8ce437f"
@@ -43,8 +43,8 @@
     "prompts/schemas/review-findings-audit.schema.json": "sha256:0f57bc71eb0eff36d94ed6690bd400b0b3e860bc875eec7990f33eaa64eeefd0",
     "prompts/schemas/review-resolution.schema.json": "sha256:4ff8cee7f91cf28e23e5d8ea78a55292bbb2ee37efeb9aa46e5f64a4b5e626c2",
     "prompts/schemas/review.schema.json": "sha256:ff787cf7666db8aa4e714cda73ffebe5798003e854b4050f6a6a2fe27966f114",
-    "prompts/schemas/work-session-continue.schema.json": "sha256:8d7de02999ec0afde09020f866822cd95e452143fee48be88dee6566431e82a9",
-    "prompts/schemas/work-session-start.schema.json": "sha256:c2f4ded0f809efe5679846f1691c00a81d369a106df227f4e310120a061f6b9e",
+    "prompts/schemas/work-session-continue.schema.json": "sha256:62786681955b7876492fb8d6cd0fd8867e8ec2e58ce36c893d3653b5c06c1785",
+    "prompts/schemas/work-session-start.schema.json": "sha256:cf07855a7993e37696f2fa2228e9d88fb1681136359579db20c030fb2c6dd2db",
     "prompts/schemas/workflow-stage.schema.json": "sha256:8f5b307552f5c3023d6b773c9fc175a0b374d973def5ce01c123cfa109b29853",
     "prompts/schemas/write-triage-risk.schema.json": "sha256:8299eaa01ea1fa286391ab491e9843b1b79de347445d6305d57529fd32111482",
     "prompts/schemas/write-triage-sizing.schema.json": "sha256:2bfe1c84fd53f31635d8057a39071f6456ee3d770770f50db49f724db8ce437f"

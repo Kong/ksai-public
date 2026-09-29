@@ -9,6 +9,11 @@
     "mode": { "enum": ["cp", "local", "shadow"] },
     "request_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
     "prompt_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "continuation_digest": {
+      "description": "On a carried conversation only: the digest of the continuation render the session is governed by, while prompt_digest stays the original render its history opens on",
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
     "model": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$" },
     "status": { "type": "integer", "minimum": 0, "maximum": 599 },
     "request_bytes": { "type": "integer", "minimum": 0 },

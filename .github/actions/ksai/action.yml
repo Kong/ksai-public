@@ -832,7 +832,7 @@ inputs:
   continuation_workflow:
     description: >-
       the caller's own workflow filename, e.g. `ksai.yml`. Set it to turn on the continuation chain: one run
-      does one plan step. Where the control-plane entrypoint enrolls the repository,
+      does one plan step. Where the repository calls the control-plane entrypoint,
       that control plane decides whether the chain goes on and starts the next run itself. Otherwise this is
       what the run dispatches to start the next: the
       workflow must declare `workflow_dispatch` with the continuation inputs below and the job needs
@@ -5073,6 +5073,7 @@ runs:
         OPENCODE_RESUME_SESSION: ${{ steps.plan_session.outputs.session_id }}
         SUBPROCESS_ENV_SCRUB: "1"
         KSAI_JOB_INDEX: ${{ strategy.job-index || 0 }}
+        KSAI_OUTCOME_EXPECTED: "true"
         OTEL_EXPORTER_OTLP_ENDPOINT: ${{ inputs.otel_endpoint }}
         OTEL_EXPORTER_OTLP_HEADERS: ${{ inputs.otel_headers }}
         OTEL_RESOURCE_ATTRIBUTES: >-
@@ -5231,6 +5232,7 @@ runs:
         if-no-files-found: ignore
 
     - name: Upload the verdict
+      id: upload_verdict
       if: >-
         ${{ always() && inputs.flow == 'test' &&
         steps.test_artifact.outputs.staged == 'true' &&
@@ -5461,6 +5463,7 @@ runs:
           steps.governed_test.outputs.prompt_file || steps.build_test.outputs.file ||
           steps.governed_review.outputs.prompt_file || steps.build_review.outputs.file ||
           steps.governed_run.outputs.prompt_file || steps.build_run.outputs.file }}
+        KSAI_OUTCOME_EXPECTED: "true"
         MODEL: ${{ steps.write_arm.outputs.model || steps.select_test.outputs.model || steps.select_arm.outputs.model || steps.build_run.outputs.model }}
         VARIANT: ${{ steps.write_arm.outputs.effort || steps.select_test.outputs.effort || steps.select_arm.outputs.effort || steps.build_run.outputs.effort }}
         OPENCODE_CONFIG: ${{ steps.opencode_config.outputs.file }}
@@ -7422,6 +7425,54 @@ runs:
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       working-directory: ${{ runner.temp }}
       run: node "${SCRIPTS}/kreview/tool-spans.mjs"
+
+    - name: Report what this run published to the control plane
+      id: outcome
+      if: >-
+        ${{ always() && steps.engine.outputs.opencode_major == '2' && steps.model_run.outcome != 'skipped' }}
+      shell: bash
+      working-directory: ${{ runner.temp }}
+      env:
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+        FLOW: ${{ inputs.flow }}
+        PHASE: ${{ steps.size.outputs.phase || inputs.flow }}
+        KSAI_JOB_INDEX: ${{ strategy.job-index || 0 }}
+        GITHUB_WORKSPACE: ${{ github.workspace }}
+        PR_NUMBER: >-
+          ${{ steps.phase.outputs.pr_number || steps.open_draft.outputs.pr_number ||
+          steps.publish_direct.outputs.pr_number }}
+        REPORT_NUM: ${{ steps.phase.outputs.pr_number || steps.open_draft.outputs.pr_number || steps.context.outputs.issue_number }}
+        BRANCH: ${{ steps.open_draft.outputs.branch || steps.open_branch.outputs.branch || steps.phase.outputs.ref }}
+        BASE_SHA: ${{ steps.checkout_source.outputs.commit }}
+        PLAN_DIR: ${{ inputs.plan_file_path }}
+        PLAN_HEAD_SHA: ${{ steps.publish.outputs.pushed_sha }}
+        COMMIT_HEAD_SHA: >-
+          ${{ steps.publish_direct.outputs.pushed_sha || steps.record.outputs.pushed_sha ||
+          steps.record_fix.outputs.pushed_sha || steps.record_do.outputs.pushed_sha }}
+        PR_OPENED: ${{ steps.open_draft.outputs.pr_number != '' }}
+        PR_READY: ${{ steps.finish.outcome == 'success' || steps.publish_direct.outputs.pr_number != '' }}
+        PR_EFFECT_ID: ${{ steps.open_draft.outputs.effect_id || steps.publish_direct.outputs.effect_id }}
+        DRAFT_HEAD_SHA: ${{ steps.open_draft.outputs.head_sha }}
+        REVIEW_PUBLISHED: >-
+          ${{ steps.comment_result.outputs.published || steps.opencode.outputs.published ||
+          steps.opencode_test.outputs.published }}
+        REVIEW_HEAD_SHA: ${{ steps.checkout_pr.outputs.commit || steps.checkout_test.outputs.commit }}
+        TEST_VERDICT_FILE: >-
+          ${{ steps.upload_verdict.outcome == 'success' && steps.test_artifact.outputs.dir != '' &&
+          format('{0}/.pr-test-verdict.json', steps.test_artifact.outputs.dir) || '' }}
+        TEST_HEAD_SHA: ${{ steps.checkout_test.outputs.commit || steps.checkout_pr.outputs.commit }}
+        TEST_ARTIFACT_SHA256: ${{ steps.test_artifact.outputs.sha256 }}
+        BLOCKED: >-
+          ${{ steps.publish.outputs.status == 'blocked' || steps.publish_direct.outputs.status == 'blocked' ||
+          steps.record.outputs.status == 'blocked' || steps.record_fix.outputs.status == 'blocked' ||
+          steps.record_do.outputs.status == 'blocked' }}
+        RUN_CONCLUSION: ${{ steps.concluded.outputs.conclusion }}
+        EXECUTION_FILE: ${{ steps.model_run.outputs.execution_file }}
+        PUBLISH_FAILED: >-
+          ${{ steps.publish.outcome == 'failure' || steps.publish_direct.outcome == 'failure' ||
+          steps.record.outcome == 'failure' || steps.record_fix.outcome == 'failure' ||
+          steps.record_do.outcome == 'failure' || steps.finish.outcome == 'failure' || steps.upload_verdict.outcome == 'failure' }}
+      run: node "${SCRIPTS}/ksai/work-outcome.mjs"
 
     - name: Report what this run spent as metrics
       if: >-

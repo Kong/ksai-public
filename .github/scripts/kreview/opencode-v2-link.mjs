@@ -1,4 +1,4 @@
-import { generateKeyPairSync } from 'node:crypto';
+import { createHash, generateKeyPairSync } from 'node:crypto';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { createConnection, createServer } from 'node:net';
 import { join } from 'node:path';
@@ -9,8 +9,9 @@ import { deliveriesAt, governanceOptions } from '../governance/anchors.mjs';
 import { digest } from '../governance/artifacts.mjs';
 import { linkTrust, verifyLinkCertificate } from '../governance/link-certificate.mjs';
 import { NOTES_ID, TOOL_PREFIX_V2 } from '../governance/release.mjs';
-import { VERSION, keyId, open, rawPublicKey, sign } from '../lib/link-protocol.mjs';
-import { connected, expectedPlugins, inventoryProblem, modelRef, recorder, relays, settledInventory } from './opencode-v2-driver.mjs';
+import { planToolsDigest, resumeTrust, verifyResumePermit } from '../governance/resume-permit.mjs';
+import { VERSION, declaredFields, keyId, open, rawPublicKey, sign } from '../lib/link-protocol.mjs';
+import { connected, expectedPlugins, importedSession, inventoryProblem, modelRef, recorder, relays, settledInventory } from './opencode-v2-driver.mjs';
 
 const REMINDER_ID = 'static.runtime.opencode-max-steps';
 const DIRECTIVES = new Set(['note', 'stop', 'stop.enforce']);
@@ -18,7 +19,51 @@ const STOPPED = 143;
 const EXPORT_MS = 15_000;
 export const EXPORT_FILE = 'session.export.json';
 export const SESSION_FILE = 'opencode-session';
+export const RESUME_EXPORT = 'resume.export.json';
+export const RESUME_ERROR = 'resume-error';
+export const CARRY_REFUSED = 'carry-refused';
+
+export function carryRefusedIn(dir) {
+  try {
+    return readFileSync(join(dir, CARRY_REFUSED), 'utf8').trim();
+  } catch {
+    return '';
+  }
+}
+const RESUME_ERROR_BYTES = 200;
 const GRACE_MS = 10_000;
+
+export function resumeError(error) {
+  let said = String(error?.message ?? error).replace(/[\0\s]+/g, ' ').trim() || 'the carried session was refused';
+  while (Buffer.byteLength(said) > RESUME_ERROR_BYTES) said = said.slice(0, -1);
+  return said;
+}
+
+const ranOn = (variant) => (variant === '' || variant === undefined || variant === null ? 'default' : variant);
+
+export function carriedSession(env, plan, binding, dir, now = new Date()) {
+  const original = plan.resume?.original;
+  if (typeof original?.text !== 'string' || !original.text) throw new Error('the plan carries no original render to go on from');
+  const permit = verifyResumePermit(plan.resume.permit, resumeTrust(env.KSAI_CP_ENDPOINT, pinsOf(env)), {
+    repository: env.GITHUB_REPOSITORY, runId: env.GITHUB_RUN_ID, attempt: env.GITHUB_RUN_ATTEMPT, job: binding.job, link: binding.link,
+    model: plan.model.id, variant: plan.variant ?? '', toolsDigest: planToolsDigest(plan),
+    continuation: digest(Buffer.from(plan.prompt.text, 'utf8')), original: digest(Buffer.from(original.text, 'utf8')),
+  }, now);
+  const bytes = readFileSync(join(dir, RESUME_EXPORT));
+  if (bytes.length !== permit.export.bytes || createHash('sha256').update(bytes).digest('hex') !== permit.export.sha256) {
+    throw new Error('the carried export is not the one the permit names');
+  }
+  const held = JSON.parse(bytes.toString('utf8'));
+  if (held?.info?.id !== permit.modelSession) throw new Error('the carried export is of another OpenCode session');
+  const ran = held.info.model ?? {};
+  if (ran.id !== plan.model.id || ranOn(ran.variant) !== ranOn(plan.variant)) throw new Error('the carried session ran another model');
+  const messages = Array.isArray(held.messages) ? held.messages : [];
+  const answered = messages.findLast((one) => one?.type === 'assistant');
+  if (messages.at(-1)?.type !== 'idle' || messages.at(-1)?.outcome !== 'succeeded' || answered?.finish !== 'stop') {
+    throw new Error('the carried session did not end on a finished answer');
+  }
+  return { permit, exported: held };
+}
 
 const line = (value) => `${JSON.stringify(value)}\n`;
 
@@ -67,6 +112,10 @@ export function laidDown(dir, plan) {
   const notes = statics.get(NOTES_ID);
   if (notes === undefined) throw new Error('the plan carries no run notes to say its directives in');
   writeFileSync(join(artifacts, 'link-notes.json'), notes, { mode: 0o600 });
+  if (plan.resume) {
+    writeFileSync(join(artifacts, 'original.md'), plan.resume.original.text, { mode: 0o600 });
+    writeFileSync(join(artifacts, 'original.sigstore.json'), JSON.stringify(plan.resume.original.bundle), { mode: 0o600 });
+  }
   return artifacts;
 }
 
@@ -76,7 +125,7 @@ export function writeDirective(dir, message) {
   renameSync(`${at}.part`, at);
 }
 
-export const contextAsked = (asked) => (Number.isSafeInteger(asked?.job_log_id) && asked.job_log_id > 0 ? { job_log_id: asked.job_log_id } : {});
+export const contextAsked = (asked) => declaredFields('plugin', 'engine', 'context.ask', asked, ['session']);
 
 const pinsOf = (env) => (env.KSAI_TRUST_PINS ? JSON.parse(env.KSAI_TRUST_PINS) : undefined);
 
@@ -119,7 +168,7 @@ export function questions(path, name, ask, reply) {
   };
 }
 
-export function governed(env, dir, plan, artifacts, { retry = '', context = '', directory = process.cwd() } = {}) {
+export function governed(env, dir, plan, artifacts, { retry = '', context = '', directory = process.cwd(), carried = null } = {}) {
   if (!Number.isSafeInteger(plan.shell_timeout_ms) || plan.shell_timeout_ms <= 0) throw new Error('the plan bounds no shell call, so one could hold the run until the job is cancelled');
   const notes = join(dir, 'notes');
   mkdirSync(notes, { recursive: true, mode: 0o700 });
@@ -134,11 +183,15 @@ export function governed(env, dir, plan, artifacts, { retry = '', context = '', 
       model: plan.model.id,
       finalDigest: digest(Buffer.from(plan.prompt.text, 'utf8')),
       ...(plan.steps > 0 ? { steps: plan.steps } : {}),
+      ...(carried ? { carried } : {}),
     },
     tools: plan.tools,
     arm: '',
   }, pinsOf(env));
-  writeFileSync(join(dir, 'governance.json'), JSON.stringify({ ...options, notes, nonce: plan.nonce, flow: String(env.FLOW ?? ''), directory, ...(retry ? { retry } : {}), ...(context ? { context } : {}) }), { mode: 0o600 });
+  writeFileSync(join(dir, 'governance.json'), JSON.stringify({
+    ...options, notes, nonce: plan.nonce, flow: String(env.FLOW ?? ''), directory, ...(retry ? { retry } : {}), ...(context ? { context } : {}),
+    ...(carried ? { carryRefusal: join(dir, CARRY_REFUSED) } : {}),
+  }), { mode: 0o600 });
   writeFileSync(join(dir, 'model.json'), JSON.stringify(plan.model), { mode: 0o600 });
   writeFileSync(join(dir, 'shell.json'), JSON.stringify({ timeout_ms: plan.shell_timeout_ms }), { mode: 0o600 });
   return notes;
@@ -189,15 +242,31 @@ export async function linked(env = process.env, { connect = createConnection, ou
   if (first?.kind !== 'plan') throw new Error(`the engine sent ${first?.kind ?? 'nothing'} before a plan`);
   const plan = first.body;
   const dir = String(env.KSAI_LINK_DIR ?? '');
+  const refusedResume = async (error) => {
+    const said = resumeError(error);
+    writeFileSync(join(dir, RESUME_ERROR), said, { mode: 0o600 });
+    await write({ type: 'ksai.error', created: Date.now(), data: { error: { type: 'ksai.resume', message: said } } });
+    return 1;
+  };
+  let carrying = null;
+  if (plan.resume) {
+    try {
+      carrying = carriedSession(env, plan, hello, dir);
+    } catch (error) {
+      socket.end();
+      return refusedResume(error);
+    }
+  }
   const retrySocket = join(dir, 'retry.sock');
   const retry = questions(retrySocket, 'retry', (id, asked) => say('retry.ask', id, { ...asked, session }), retryReply);
   const contextSocket = join(dir, 'context.sock');
   const context = questions(contextSocket, 'context', (id, asked) => say('context.ask', id, { session, ...contextAsked(asked) }), contextReply);
   await Promise.all([retry.listening, context.listening]);
-  const notes = governed(env, dir, plan, laidDown(dir, plan), { retry: retrySocket, context: contextSocket });
+  const notes = governed(env, dir, plan, laidDown(dir, plan), { retry: retrySocket, context: contextSocket, carried: carrying?.permit.carried });
 
   const opened = await relays(env);
-  const { client, server } = await connected({ ...env, ...opened.extra });
+  const connection = await connected({ ...env, ...opened.extra });
+  const { client, server } = connection;
   const controller = new AbortController();
   let code = 1;
   let signalled = null;
@@ -216,10 +285,20 @@ export async function linked(env = process.env, { connect = createConnection, ou
       await write({ type: 'ksai.error', created: Date.now(), data: { error: { type: 'ksai.plugins', message: problem } } });
       return 1;
     }
-    opencodeSession = await client.session.create({ location: { directory }, model: modelRef(plan.model.id, plan.variant) });
+    if (carrying) {
+      try {
+        const id = await importedSession(connection, carrying.exported, directory);
+        if (id !== carrying.permit.modelSession) throw new Error('the import named another OpenCode session');
+        opencodeSession = { id };
+      } catch (error) {
+        return await refusedResume(error);
+      }
+    } else {
+      opencodeSession = await client.session.create({ location: { directory }, model: modelRef(plan.model.id, plan.variant) });
+    }
     await client.session.update({ sessionID: opencodeSession.id, title: plan.title });
     say('ready', '', { session, inventory: listed.map((one) => String(one?.id ?? '')).filter(Boolean).slice(0, 64) });
-    const record = recorder(opencodeSession.id);
+    const record = recorder(opencodeSession.id, '', Boolean(carrying));
     for (const one of record.opening()) await write(one);
     const feed = client.event.subscribe({ signal: controller.signal })[Symbol.asyncIterator]();
     await feed.next();
@@ -254,6 +333,11 @@ export async function linked(env = process.env, { connect = createConnection, ou
       await Promise.race([finished, new Promise((resolve) => {
         setTimeout(resolve, GRACE_MS);
       })]);
+    }
+    const replayed = carrying && code !== 0 && code !== STOPPED ? carryRefusedIn(dir) : '';
+    if (replayed) {
+      opencodeSession = null;
+      return await refusedResume(`the governor refused the carried history: ${replayed}`);
     }
     return code;
   } catch (error) {

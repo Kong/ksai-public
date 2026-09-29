@@ -17,6 +17,8 @@ export function digest(value) {
   return `sha256:${createHash('sha256').update(value).digest('hex')}`;
 }
 
+export const historyDigest = (history) => digest(JSON.stringify(history));
+
 export function sameDigest(left, right) {
   if (!DIGEST.test(left) || !DIGEST.test(right)) return false;
   return timingSafeEqual(Buffer.from(left.slice(7), 'hex'), Buffer.from(right.slice(7), 'hex'));
@@ -49,5 +51,7 @@ export function readArtifacts(root) {
     tool: (name) => regularFile(join(root, 'tools', `${name}.json`), CONTROL_BYTES),
     reminder: () => regularFile(join(root, 'max-steps.json'), CONTROL_BYTES),
     notes: () => regularFile(join(root, 'link-notes.json'), CONTROL_BYTES),
+    original: () => regularFile(join(root, 'original.md'), PROMPT_BYTES),
+    originalRender: () => regularFile(join(root, 'original.sigstore.json'), CONTROL_BYTES),
   };
 }

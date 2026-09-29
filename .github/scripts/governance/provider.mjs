@@ -97,7 +97,7 @@ export function governRequest(body, governed, talk, parsed = null) {
       throw new Error('the tool choice names something nothing governs');
     }
   }
-  if (!Array.isArray(request.messages) || !request.messages.length || !governedPrompt(request.messages[0], governed.prompt)) {
+  if (!Array.isArray(request.messages) || !request.messages.length || !governedPrompt(request.messages[0], governed.opens ?? governed.prompt)) {
     throw new Errand('the provider request lost the governed prompt');
   }
   const tools = governedTools(request.tools, governed.tools);

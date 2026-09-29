@@ -22,13 +22,22 @@ function titleFrom(issueFile) {
   }
 }
 
-export function branchExists(run, repo, branch) {
-  const standing = run('gh', ['api', `repos/${repo}/git/matching-refs/heads/${branch}`, '--jq', '.[].ref']);
+const OBJECT = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
+
+export function standingHead(run, repo, branch) {
+  const standing = run('gh', ['api', `repos/${repo}/git/matching-refs/heads/${branch}`, '--jq', '.[] | "\\(.ref) \\(.object.sha)"']);
   if (!standing.ok) return null;
-  return String(standing.stdout)
+  const found = String(standing.stdout)
     .split('\n')
-    .map((line) => line.trim())
-    .includes(`refs/heads/${branch}`);
+    .map((line) => line.trim().split(/\s+/))
+    .find(([ref]) => ref === `refs/heads/${branch}`);
+  if (!found) return false;
+  return { sha: OBJECT.test(found[1] ?? '') ? found[1] : '' };
+}
+
+export function branchExists(run, repo, branch) {
+  const head = standingHead(run, repo, branch);
+  return head === null ? null : Boolean(head);
 }
 
 export function nameBranch({ issueNumber = null, issueFile = null, jiraKey = null, jiraFile = null } = {}) {
@@ -89,7 +98,7 @@ export function openDraft({
   const runGit = gitVia(run, cwd);
   const git = (...args) => runGit(args);
 
-  const standing = branchExists(run, repo, branch);
+  const standing = standingHead(run, repo, branch);
   if (standing === null) {
     return block(
       `I could not check whether a branch named \`${branch}\` already exists, so nothing was opened rather ` +
@@ -99,7 +108,7 @@ export function openDraft({
     );
   }
   if (standing) {
-    return open(false);
+    return { ...open(false), headSha: standing.sha };
   }
 
   if (!git('checkout', '-b', branch).ok) {
@@ -135,7 +144,7 @@ export function openDraft({
     return block(`The plan branch did not reach the remote: ${published.reason} - see the workflow run.`, 'push', published.reason);
   }
 
-  return open();
+  return { ...open(), headSha: published.sha };
 }
 
 function openOn({ branch, repo, defaultBranch, subject, bodyFile, run, block, pushed = true,
@@ -217,6 +226,8 @@ export function main(env = process.env, { run = runCommand,
       branch: result.branch,
       pr_url: result.prUrl,
       pr_number: result.prNumber,
+      effect_id: result.effectId ?? '',
+      head_sha: result.status === 'opened' ? (result.headSha ?? '') : '',
       message_file: messageFile,
       notice_reason: result.reason,
       notice_detail: result.detail,
@@ -226,8 +237,8 @@ export function main(env = process.env, { run = runCommand,
   };
 
   if (opened.status === 'pending') {
-    return Promise.resolve().then(() => open(opened.facts)).then(({ prNumber, prUrl }) => finish({
-      status: 'opened', branch: opened.branch, prNumber, prUrl,
+    return Promise.resolve().then(() => open(opened.facts)).then(({ prNumber, prUrl, effectId }) => finish({
+      status: 'opened', branch: opened.branch, prNumber, prUrl, effectId, headSha: opened.headSha,
       message: `Working on this in ${prUrl}. The plan is written to a document on that branch for review, and every later update lands on that pull request.`,
     }), () => finish({ status: 'blocked', reason: 'pull-open', detail: opened.branch,
       message: 'The plan branch reached the remote, but the control plane could not open its pull request.' }));

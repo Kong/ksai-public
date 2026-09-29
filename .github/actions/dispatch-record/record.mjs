@@ -62,7 +62,7 @@ const NO_RECORD_HEADER = 'Ksai-No-Record';
 const WHY_STATUS = Object.freeze({
   401: 'the control plane could not tell which run this is',
   403: 'the control plane refused this run its record',
-  404: 'the control plane holds no readable record for this run - it may have expired, or this repository may not be enrolled',
+  404: 'the control plane holds no readable record for this run - it may have expired, or this repository may not be on the control plane',
   503: 'the control plane could not reach its records, or has not tied this record to a run yet',
 });
 

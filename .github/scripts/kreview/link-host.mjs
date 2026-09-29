@@ -9,14 +9,17 @@ import { pathToFileURL } from 'node:url';
 import { deliveriesAt, trustedRootAt } from '../governance/anchors.mjs';
 import shipped from '../governance/trust.json' with { type: 'json' };
 import { digest } from '../governance/artifacts.mjs';
+import { MAX_CARRIED_TURNS } from '../governance/conversation.mjs';
 import { linkTrust, verifyLinkCertificate } from '../governance/link-certificate.mjs';
 import { STATUS_TOOL, TOOL_PREFIX_V2 } from '../governance/release.mjs';
+import { bare, planToolsDigest, resumeTrust, verifyResumePermit } from '../governance/resume-permit.mjs';
 import { adversarial } from '../ksai/implement-adversarial.mjs';
 import implementPasses from '../ksai/implement-passes.cjs';
 import { forgetDeliveries } from '../lib/channel-hook.mjs';
 import controlPlane from '../lib/control-plane.cjs';
 import { ARTIFACTS, deliveriesUnder, digestOf, lockedOf } from '../lib/cp-prompts.mjs';
 import { exitedOn } from '../lib/execution-log.mjs';
+import { jobOf } from '../lib/link-protocol.mjs';
 import { linkClient, pollTransport, websocketTransport } from './link-client.mjs';
 import { ordered } from '../ksai/progress.mjs';
 import { isolatedToolPhase, parsed, PROVIDER_TIMEOUTS, totals, UNCONTINUED } from '../lib/opencode.mjs';
@@ -35,11 +38,12 @@ import { observationsIn } from './provider-observations.mjs';
 import { monitorProcess, runtimeSummary, sandboxArgs, since } from './opencode-run.mjs';
 import { mcpServerCount, traceObserver } from './opencode-runtime.mjs';
 import { RESTORED_EXPORT, Unapplied, checkpointSaved, checkpointUpload, restoredFrom } from './link-checkpoint.mjs';
+import { outcomeExpected } from './link-expect.mjs';
 import { transcriptOf, transcriptSent } from './link-transcript.mjs';
 import { published } from './link-publish.mjs';
 import { toolIsolationProbe } from './opencode-tool-sandbox.mjs';
 import { compactions, streamFailure, toolTiming } from './opencode-v2-review.mjs';
-import { EXPORT_FILE, SESSION_FILE } from './opencode-v2-link.mjs';
+import { EXPORT_FILE, RESUME_ERROR, RESUME_EXPORT, SESSION_FILE, resumeError } from './opencode-v2-link.mjs';
 import { main as writeConfig } from './opencode-v2-config.mjs';
 import { main as reduceLog } from './opencode-v2-log.mjs';
 import { startRelay } from './otel-relay.mjs';
@@ -141,12 +145,7 @@ export async function sandboxProblem(env, sandbox, run = spawned) {
   }
 }
 
-export function jobOf(env) {
-  const index = String(env.KSAI_JOB_INDEX ?? '').trim();
-  const job = `${String(env.GITHUB_JOB ?? '').trim()}${index && index !== '0' ? `-${index}` : ''}`;
-  if (!JOB.test(job)) throw new Error(`this job is named ${JSON.stringify(job)}, which names no link`);
-  return job;
-}
+export { jobOf };
 
 function deadlineOf(env, now) {
   const killAt = Number(env.KSAI_CHANNEL_KILL_AT) || 0;
@@ -226,7 +225,7 @@ export function freshObservations(env, observed, warn = (line) => console.log(li
     observed.add(one.id);
     const record = {
       id: one.id, mode: one.mode, request_digest: one.request_digest, prompt_digest: one.prompt_digest, model: one.model,
-      status: one.status, request_bytes: one.request_bytes,
+      status: one.status, request_bytes: one.request_bytes, ...(one.continuation_digest ? { continuation_digest: one.continuation_digest } : {}),
     };
     if (body.length > OBSERVED_MOST) {
       warn(`::warning::provider observation ${one.id} is ${body.length} bytes, past the ${OBSERVED_MOST} the control plane takes, so the run cannot succeed`);
@@ -364,12 +363,13 @@ function layPlugin(dir, plan, plugin) {
   }
 }
 
-export function layGoverned(root, session, plan, { plugin = '', promptId = '' } = {}) {
+export function layGoverned(root, session, plan, { plugin = '', promptId = '', carried = null } = {}) {
   const dir = linkDirOf(root, session);
   mkdirSync(join(dir, ARTIFACTS.tools), { recursive: true, mode: 0o700 });
   layPlugin(dir, plan, plugin);
   const statics = new Map(plan.statics.map((one) => [one.id, one.body]));
   writeFileSync(join(dir, ARTIFACTS.prompt), plan.prompt.text, { mode: 0o600 });
+  if (carried) writeFileSync(join(dir, ARTIFACTS.original), plan.resume.original.text, { mode: 0o600 });
   for (const name of plan.tools) {
     const body = statics.get(`${TOOL_PREFIX_V2}${name}`);
     if (body === undefined) throw new Error(`the plan governs the ${name} tool and carries no definition of it`);
@@ -378,8 +378,58 @@ export function layGoverned(root, session, plan, { plugin = '', promptId = '' } 
   if (plan.steps > 0) writeFileSync(join(dir, ARTIFACTS.reminder), statics.get(REMINDER_ID) ?? '', { mode: 0o600 });
   writeFileSync(join(dir, ARTIFACTS.expect), JSON.stringify({
     ...(promptId ? { promptId } : {}), finalDigest: digest(Buffer.from(plan.prompt.text, 'utf8')), model: plan.model.id, ...(plan.steps > 0 ? { steps: plan.steps } : {}),
+    ...(carried ? { carried } : {}),
   }), { mode: 0o600 });
   return dir;
+}
+
+export class ResumeRefused extends Error {}
+
+export function sessionEnd({ exit, killed, refused = '' }) {
+  if (refused) return { exit: 1, conclusion: 'failed', resume_error: refused };
+  return { exit: Math.min(255, Math.max(0, exit)), conclusion: conclusionOf(exit, killed) };
+}
+
+export function refusedResumeIn(dir) {
+  try {
+    const said = readFileSync(join(dir, RESUME_ERROR), 'utf8');
+    return said ? resumeError(said) : '';
+  } catch {
+    return '';
+  }
+}
+
+export function carriedPlan(plan, { resumes, restored, endpoint, pinned, env, job, link }) {
+  if (!plan.resume && !resumes) return null;
+  if (!plan.resume) throw new ResumeRefused('the engine started this session to resume a checkpoint and sent a plan that carries no permit');
+  if (!resumes) throw new ResumeRefused('the plan carries a permit to resume, and the engine started this session to resume nothing');
+  let verified;
+  try {
+    verified = verifyResumePermit(plan.resume.permit, resumeTrust(endpoint, pinned), {
+      repository: env.GITHUB_REPOSITORY, runId: env.GITHUB_RUN_ID, attempt: env.GITHUB_RUN_ATTEMPT, job, link,
+      model: plan.model.id, variant: plan.variant ?? '', toolsDigest: planToolsDigest(plan),
+      continuation: digest(Buffer.from(plan.prompt.text, 'utf8')), original: digest(Buffer.from(String(plan.resume.original?.text ?? ''), 'utf8')),
+    });
+  } catch (error) {
+    throw new ResumeRefused(error.message);
+  }
+  if (verified.checkpoint !== resumes) throw new ResumeRefused('the permit names another checkpoint than the one this session resumes');
+  let bytes;
+  try {
+    bytes = readFileSync(restored);
+  } catch (error) {
+    throw new ResumeRefused(`the restored export could not be read: ${error.code ?? error.message}`);
+  }
+  if (bytes.length !== verified.export.bytes || createHash('sha256').update(bytes).digest('hex') !== verified.export.sha256) {
+    throw new ResumeRefused('the restored export is not the one the permit names');
+  }
+  return verified;
+}
+
+export function conversationOf(held, conclusion) {
+  const settled = held?.settled;
+  if (!settled || !held.conversation || conclusion !== 'succeeded' || settled.turns > MAX_CARRIED_TURNS) return { resumable: false };
+  return { resumable: true, history_sha256: bare(settled.history), turns: settled.turns, ...held.conversation };
 }
 
 export function keptSession(dir, root, session) {
@@ -567,6 +617,7 @@ export async function main(env = process.env, {
   const probed = new Map();
   const recorded = {};
   let certificate = null;
+  let restoredCheckpoint = null;
   let configuredMcp = null;
   let resolveDone;
   const finished = new Promise((resolve) => {
@@ -602,11 +653,24 @@ export async function main(env = process.env, {
       const held = sessions.get(session);
       if (!held) return;
       if (message.kind === 'plan') {
+        const plan = message.body;
         let dir;
         try {
-          dir = layGoverned(governedDir, session, message.body, { plugin: run.plugin, promptId: held.promptId });
+          const permit = carriedPlan(plan, {
+            resumes: held.resumes, restored: join(governedDir, 'link', RESTORED_EXPORT), endpoint, pinned, env, job, link: client.link,
+          });
+          dir = layGoverned(governedDir, session, plan, { plugin: run.plugin, promptId: held.promptId, carried: permit?.carried ?? null });
+          held.conversation = {
+            render_sha256: permit?.carried.original ?? digest(Buffer.from(plan.prompt.text, 'utf8')), model: plan.model.id, variant: plan.variant ?? '',
+            tools_sha256: bare(planToolsDigest(plan)),
+          };
         } catch (error) {
-          console.log(`::error::session ${session} was handed a plan this host will not lay down: ${error.message}`);
+          if (error instanceof ResumeRefused) {
+            console.log(`::warning::session ${session} will not go on in its carried conversation, so the control plane starts it afresh: ${error.message}`);
+            held.resumeError = resumeError(error);
+          } else {
+            console.log(`::error::session ${session} was handed a plan this host will not lay down: ${error.message}`);
+          }
           held.killed = true;
           held.child?.kill('SIGKILL');
           return;
@@ -660,16 +724,31 @@ export async function main(env = process.env, {
     }
   };
 
-  const startSession = async ({ session, phase, render: named, restarts, env: given = [] }) => {
+  let expected = null;
+  const startSession = async ({ session, phase, render: named, restarts, resumes, env: given = [] }) => {
+    if (String(env.KSAI_OUTCOME_EXPECTED ?? '').trim() === 'true') {
+      expected ??= mint('ksai-cp').then((token) => outcomeExpected({ endpoint, fetch, token, job, link: client.link, flow: run.flow }));
+      await expected;
+    }
     if (restarts) forgetDeliveries(String(env.KSAI_CHANNEL_DIR ?? ''));
     const allowed = Object.fromEntries(given.filter((one) => SESSION_ENV.includes(one.name)).map((one) => [one.name, one.value]));
     if (audits.has(session)) verifyAudit(env, audits.get(session));
     const asked = askedRender(named, render);
-    const held = { plugin: null, waiting: [], offset: statSync(events).size, read: 0, seen: [], child: null, killed: false, promptId: asked.promptId, reported: new Map() };
+    const held = { plugin: null, waiting: [], offset: statSync(events).size, read: 0, seen: [], child: null, killed: false, promptId: asked.promptId, reported: new Map(), resumes };
     sessions.set(session, held);
     const policy = policies.get(session) ?? policies.get(restarts ?? '') ?? {};
     const dir = mkdtempSync(join(scratch, 'session-'));
     chmodSync(dir, 0o700);
+    held.dir = dir;
+    if (resumes) {
+      if (resumes !== restoredCheckpoint) throw new ResumeRefused('this attempt restored no checkpoint the session could resume');
+      try {
+        copyFileSync(join(governedDir, 'link', RESTORED_EXPORT), join(dir, RESUME_EXPORT));
+        chmodSync(join(dir, RESUME_EXPORT), 0o600);
+      } catch (error) {
+        throw new ResumeRefused(`the restored export could not be bound into the session: ${error.code ?? error.message}`);
+      }
+    }
     const config = join(dir, 'opencode.json');
     const skills = run.plugin ? skillsOf(governedDir, session, run.plugin) : '';
     if (skills) mkdirSync(skills, { recursive: true, mode: 0o700 });
@@ -721,7 +800,7 @@ export async function main(env = process.env, {
       client.send('session.started', `session/${session}/started`, { session, plugin_key: plugin.key.toString('base64') });
     });
     if (held.killed) {
-      client.send('session.ended', `session/${session}/ended`, { session, exit: KILLED_EXIT, conclusion: conclusionOf(KILLED_EXIT, true) });
+      client.send('session.ended', `session/${session}/ended`, { session, ...sessionEnd({ exit: KILLED_EXIT, killed: true, refused: held.resumeError }) });
       return;
     }
     held.offset = statSync(events).size;
@@ -742,10 +821,16 @@ export async function main(env = process.env, {
       reportProgress(session, held);
       reportRecords(session, held);
       const kept = keptSession(dir, governedDir, session);
-      client.send('session.ended', `session/${session}/ended`, {
-        session, exit: Math.min(255, Math.max(0, exit)), conclusion: conclusionOf(exit, held.killed), ...kept,
-      });
-      if (kept.opencode_session) uploads.push(keepTranscript(session, kept.opencode_session, segment));
+      const handed = held.resumeError ?? refusedResumeIn(dir);
+      const replayed = handed || !held.prompt ? '' : provider.carryRefused(dirname(held.prompt));
+      const refused = handed || (replayed ? resumeError(`the governor refused the carried history: ${replayed}`) : '');
+      if (replayed) appendFileSync(events, `${JSON.stringify({ type: 'ksai.error', created: Date.now(), data: { error: { type: 'ksai.resume', message: refused } } })}\n`);
+      const ending = sessionEnd({ exit, killed: held.killed, refused });
+      held.conclusion = ending.conclusion;
+      held.settled = provider.settled();
+      const carried = ending.resume_error ? {} : kept;
+      client.send('session.ended', `session/${session}/ended`, { session, ...ending, ...carried });
+      if (carried.opencode_session) uploads.push(keepTranscript(session, carried.opencode_session, segment));
     });
   };
 
@@ -779,7 +864,9 @@ export async function main(env = process.env, {
       } catch (error) {
         console.log(`::error::session ${body.session} could not start: ${error?.message ?? error}`);
         if (!sessions.has(body.session)) sessions.set(body.session, { plugin: null, waiting: [], offset: statSync(events).size, child: null, killed: false });
-        client.send('session.ended', `session/${body.session}/ended`, { session: body.session, exit: 1, conclusion: 'failed' });
+        client.send('session.ended', `session/${body.session}/ended`, {
+          session: body.session, exit: 1, conclusion: 'failed', ...(error instanceof ResumeRefused ? { resume_error: resumeError(error) } : {}),
+        });
       }
       return;
     }
@@ -852,6 +939,7 @@ export async function main(env = process.env, {
       const upload = checkpointUpload({
         exported, patch: Buffer.from(said.patch, 'base64'), head: said.head, base: String(env.BASE_SHA ?? '').trim() || said.head, parent: arg('parent'),
         promptVersion: arg('prompt_version'), link: client.link, job, flow: run.flow, secrets: collectSecrets(env),
+        conversation: conversationOf(sessions.get(session), sessions.get(session)?.conclusion),
       });
       const saved = await checkpointSaved({ endpoint, fetch, token: await mint('ksai-cp'), upload });
       client.send('task.result', id, { ok: true, outputs: [{ name: 'checkpoint', value: saved }] });
@@ -877,6 +965,8 @@ export async function main(env = process.env, {
           writeFileSync(at, exported, { mode: 0o600 });
         },
       });
+      const said = (name) => outputs.find((one) => one.name === name)?.value;
+      restoredCheckpoint = said('status') === 'restored' ? said('checkpoint') : null;
       client.send('task.result', id, { ok: true, outputs });
       return;
     }

@@ -23,6 +23,8 @@ export const ARTIFACTS = Object.freeze({
   tools: 'tools',
   reminder: 'max-steps.json',
   expect: 'expect.json',
+  original: 'original.md',
+  originalRender: 'original.sigstore.json',
 });
 
 const VERSION = /^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;

@@ -1,8 +1,8 @@
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, writeFileSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 
 import { DIGEST, readArtifacts, regularFile } from './artifacts.mjs';
-import { IncompleteAnswer, MAX_RESPONSE_BYTES, UpstreamFailure, boundedSteps, conversation } from './conversation.mjs';
+import { CarryRefused, IncompleteAnswer, MAX_RESPONSE_BYTES, UpstreamFailure, boundedSteps, carriedOf, conversation } from './conversation.mjs';
 import { Errand, governRequest } from './provider.mjs';
 import { linkNotes } from './notes.mjs';
 import { TOOL_PREFIX, governedNotes, governedReminder, governedTool, rendered, verifyRelease, versionParts } from './release.mjs';
@@ -43,6 +43,7 @@ function options(raw) {
     throw new Error('governance.expect names the prompt id, sink, model and final digest the runner rendered');
   }
   if (expected.steps !== undefined) boundedSteps(expected.steps, 'governance.expect.steps');
+  carriedOf(expected.carried);
   if (typeof given.releaseSigner !== 'string' || !given.releaseSigner) throw new Error('governance.releaseSigner names no workflow');
   if (typeof given.releaseIssuer !== 'string' || !given.releaseIssuer) throw new Error('governance.releaseIssuer names no token issuer');
   if (typeof given.renderPredicate !== 'string' || !given.renderPredicate) throw new Error('governance.renderPredicate names no receipt type');
@@ -107,8 +108,19 @@ function verified(given, env, toolPrefix) {
   for (const name of given.tools ?? []) tools.set(name, governedTool(release, name, artifacts.tool(name), toolPrefix));
   const limit = expected.steps === undefined ? null : { steps: expected.steps, reminder: governedReminder(release, artifacts.reminder()) };
   const notes = given.notes === undefined ? null : governedNotes(release, artifacts.notes());
+  const carried = carriedOf(expected.carried);
+  const prompt = artifacts.prompt.toString('utf8');
+  let opens = prompt;
+  if (carried) {
+    const original = artifacts.original();
+    const prior = verifyRender(artifacts.originalRender(), original, renderTrust(given), given.renderPredicate);
+    if (prior.final_digest !== carried.original || prior.model !== receipt.model || prior.run.repository?.toLowerCase() !== env.GITHUB_REPOSITORY?.toLowerCase()) {
+      throw new CarryRefused('the carried render is not the one its history was governed by');
+    }
+    opens = original.toString('utf8');
+  }
   return {
-    governed: { prompt: artifacts.prompt.toString('utf8'), model: receipt.model, tools, limit, notes },
+    governed: { prompt, opens, model: receipt.model, tools, limit, notes, carried },
     receipt,
     version: release.version,
   };
@@ -118,6 +130,15 @@ function reason(error) {
   let said = (error instanceof Error ? error.message : String(error)).replace(/\s+/g, ' ').trim();
   while (Buffer.byteLength(said) > MAX_REASON) said = said.slice(0, -1);
   return said || 'refused';
+}
+
+function carryRefused(given, text, log) {
+  if (typeof given?.carryRefusal !== 'string' || !isAbsolute(given.carryRefusal)) return;
+  try {
+    writeFileSync(given.carryRefusal, text, { flag: 'wx', mode: 0o600 });
+  } catch (error) {
+    if (error?.code !== 'EEXIST') log('warn', 'could not keep the refused carry for the link party to report', { reason: reason(error) });
+  }
 }
 
 export function reporter(given, log) {
@@ -194,7 +215,7 @@ async function buffered(reader) {
 
 function governing(state, given, report, provider, log) {
   const { governed, receipt, version } = state;
-  const talk = conversation(governed.prompt, governed.model, [...governed.tools.keys()], governed.limit);
+  const talk = conversation(governed.prompt, governed.model, [...governed.tools.keys()], governed.limit, governed.carried);
   const directives = governed.notes
     ? linkNotes({ dir: given.notes, notes: governed.notes, nonce: given.nonce, flow: String(given.flow ?? '') }, { warn: (said) => log('warn', said) })
     : null;
@@ -217,6 +238,7 @@ function governing(state, given, report, provider, log) {
   const refuse = (why, breaks) => {
     const text = reason(why);
     if (breaks) broken ||= text;
+    if (why instanceof CarryRefused) carryRefused(given, text, log);
     if (!refusals.has(text) && refusals.size < MAX_REFUSALS) {
       refusals.add(text);
       report(said('refused', text));
@@ -297,8 +319,12 @@ function governing(state, given, report, provider, log) {
         clearedSystem({ model: { providerID: event?.model?.providerID, modelID: event?.model?.id } }, event?.system);
         return guarded(() => {
           const [first, ...rest] = Array.isArray(event?.messages) ? event.messages : [];
-          if (first?.role !== 'user' || onlyText(first.content) !== governed.prompt) throw new Error('the conversation lost the governed prompt');
-          if (rest.some((entry) => entry?.role !== 'assistant' && entry?.role !== 'tool')) {
+          if (first?.role !== 'user' || onlyText(first.content) !== governed.opens) throw new Error('the conversation lost the governed prompt');
+          const asked = rest.filter((entry) => entry?.role === 'user');
+          if (governed.carried && (asked.length !== 1 || onlyText(asked[0].content) !== governed.prompt)) {
+            throw new CarryRefused('the carried conversation does not go on with its render alone');
+          }
+          if (rest.some((entry) => entry?.role !== 'assistant' && entry?.role !== 'tool' && !(governed.carried && entry === asked[0]))) {
             throw new Error('the conversation holds a turn after the prompt that the model did not take');
           }
         });
@@ -397,6 +423,7 @@ export function governance(raw, env, log, provider, toolPrefix = TOOL_PREFIX, re
     return governing(verified(given, env, toolPrefix), given, report, provider, log);
   } catch (error) {
     log('error', 'prompt governance refused this run', { reason: reason(error) });
+    if (error instanceof CarryRefused) carryRefused(given, reason(error), log);
     return refusing(reason(error), report);
   }
 }

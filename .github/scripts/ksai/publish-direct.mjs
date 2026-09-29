@@ -206,8 +206,11 @@ export function main(env = process.env, { run = runCommand,
     return 0;
   };
   if (result.status === 'pending') {
-    return Promise.resolve().then(() => open(result.facts)).then(({ prNumber, prUrl }) => {
-      writeOutputs(env.GITHUB_OUTPUT, { pr_number: prNumber });
+    return Promise.resolve().then(() => open(result.facts)).then(({ prNumber, prUrl, effectId }) => {
+      writeOutputs(env.GITHUB_OUTPUT, {
+        pr_number: prNumber,
+        effect_id: effectId ?? '',
+      });
       return finish({ status: 'built', prUrl,
         message: linked(scrub('This was small enough to build without a plan, so the whole change is in ' +
           `[one pull request](LINK), open for review${shortenedNote(null, result.summaryShortened)}`,

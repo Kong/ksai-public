@@ -3,6 +3,7 @@
   "releaseIssuer": "",
   "renderPredicate": "",
   "linkPredicate": "",
+  "resumePredicate": "",
   "minimum": "",
   "revoked": [],
   "renderers": {}
