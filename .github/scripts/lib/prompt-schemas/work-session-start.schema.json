@@ -21,6 +21,7 @@
         "built_at": {"type": "string", "minLength": 1, "maxLength": 64},
         "head_sha": {"type": "string", "pattern": "^(?:[0-9a-f]{40})?$"},
         "next_review_thread_cursor": {"type": "string", "minLength": 1, "maxLength": 512},
+        "next_history_cursor": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "items": {
           "type": "array",
           "maxItems": 20,

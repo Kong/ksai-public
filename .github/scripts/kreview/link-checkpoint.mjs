@@ -12,6 +12,9 @@ import { scrub, withEscaped } from './secrets.cjs';
 
 export const PART_MOST = 8 * 1024 * 1024;
 export const RESTORED_EXPORT = 'restored.export.json';
+export const PATCH_FORMAT = 'exact-v1';
+export const PATCH_FORMAT_HEADER = 'X-KSAI-Checkpoint-Patch-Format';
+export const INEXACT = 'the checkpoint names no exact patch, so a restore could lay down work the run never wrote';
 const CALL_MS = 120_000;
 const REASON_MOST = 200;
 export const UNSAID = 'the checkpoint was not restored, and nothing said why';
@@ -86,10 +89,13 @@ export function checkpointUpload({ exported, patch, head, base, parent, promptVe
 }
 
 export async function checkpointSaved({ endpoint, fetch, token, upload }) {
-  const said = await controlPlane.answered(fetch, `${endpoint}/v1/run/work-sessions/checkpoints`, { token, body: JSON.stringify(upload), timeout: CALL_MS });
+  const said = await controlPlane.answered(fetch, `${endpoint}/v1/run/work-sessions/checkpoints`, {
+    token, body: JSON.stringify(upload), timeout: CALL_MS, headers: { [PATCH_FORMAT_HEADER]: PATCH_FORMAT },
+  });
   if (said.why) throw new Error(`the control plane did not keep the checkpoint: ${said.why}`);
   const id = String(said.answer?.id ?? '');
   if (!CHECKPOINT.test(id)) throw new Error('the control plane kept the checkpoint under no id');
+  if (said.answer?.patch_format !== PATCH_FORMAT) throw new Error(`the control plane kept the checkpoint without the ${PATCH_FORMAT} patch format this runner sent, so no restore could trust it`);
   return id;
 }
 
@@ -132,6 +138,7 @@ export async function restoredFrom({ endpoint, fetch, token, link, job, flow, pr
   if (answer.status !== 'ready') return fellBack(`the control plane answered a restore with status ${JSON.stringify(answer.status)}`);
   const saved = answer.checkpoint ?? {};
   const offered = typeof saved.id === 'string' && CHECKPOINT.test(saved.id) ? saved.id : undefined;
+  if (saved.patch_format !== PATCH_FORMAT) return fellBack(INEXACT, offered);
   let kept = false;
   try {
     const exported = Buffer.from(String(answer.export ?? ''), 'base64');

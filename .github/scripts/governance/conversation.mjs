@@ -52,7 +52,12 @@ function identifier(value, name) {
 }
 
 function indexOf(event, expected) {
-  if (event.index !== expected) throw new Error("the response's content block indices are not contiguous");
+  if (event.index !== expected) throw new Error('a content block event names a block other than the open one');
+}
+
+function nextIndex(event, after) {
+  if (!Number.isSafeInteger(event.index) || event.index <= after) throw new Error("the response's content block indices do not increase");
+  return event.index;
 }
 
 function frames(bytes) {
@@ -105,9 +110,8 @@ function messageStart(event, model) {
   }
 }
 
-function startBlock(event, expected, tools) {
+function startBlock(event, tools) {
   shape(event, ['type', 'index', 'content_block'], [], 'content_block_start');
-  indexOf(event, expected);
   const block = record(event.content_block, 'the content block');
   if (block.type === 'text') {
     shape(block, ['type', 'text'], ['citations'], 'the text block');
@@ -195,6 +199,7 @@ export class IncompleteAnswer extends Error {}
 function parseResponse(bytes, model, tools) {
   const blocks = [];
   let open = null;
+  let openIndex = -1;
   let stop = '';
   let state = 'initial';
   for (const event of frames(bytes)) {
@@ -210,16 +215,17 @@ function parseResponse(bytes, model, tools) {
         break;
       case 'content_block_start':
         if (state !== 'content' || open || blocks.length >= MAX_BLOCKS) throw new Error('content_block_start is out of sequence');
-        open = startBlock(event, blocks.length, tools);
+        open = startBlock(event, tools);
+        openIndex = nextIndex(event, openIndex);
         break;
       case 'content_block_delta':
         if (state !== 'content' || !open) throw new Error('content_block_delta is out of sequence');
-        appendDelta(event, open, blocks.length);
+        appendDelta(event, open, openIndex);
         break;
       case 'content_block_stop':
         shape(event, ['type', 'index'], [], 'content_block_stop');
         if (state !== 'content' || !open) throw new Error('content_block_stop is out of sequence');
-        indexOf(event, blocks.length);
+        indexOf(event, openIndex);
         blocks.push(finishBlock(open));
         open = null;
         break;
