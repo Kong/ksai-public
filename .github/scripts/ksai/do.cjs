@@ -669,6 +669,7 @@ async function resolveDoPhase({
   guidance = null,
   commentId = null,
   trigger = null,
+  successor = null,
   checksFile = null,
   retryFile = null,
   threadRootId = null,
@@ -718,7 +719,11 @@ async function resolveDoPhase({
   if (unasked) {
     core?.info?.(`#${number}: nobody asked for this run in a comment, so there is no earlier answer to look for.`);
   }
-  const seen = unasked
+  const continues = String(successor ?? '').trim() !== '';
+  if (continues) {
+    core?.info?.(`#${number}: this run continues a work session, so the report its first run opened is the work it carries on, not an answer.`);
+  }
+  const seen = unasked || continues
     ? { answered: false, unreadable: null }
     : await alreadyReported({ github, owner, repo, prNumber: number, botLogin, commentId, env, fetch });
   if (seen.unreadable) {

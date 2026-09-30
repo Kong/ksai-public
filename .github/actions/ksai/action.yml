@@ -1386,6 +1386,7 @@ runs:
         RECORD_LABEL: ${{ steps.dispatch_record.outputs.label }}
         RECORD_PR: ${{ steps.dispatch_record.outputs.pr }}
         RECORD_HEAD_SHA: ${{ steps.dispatch_record.outputs.head_sha }}
+        RECORD_BOUND_COMMAND: ${{ steps.dispatch_record.outputs.bound_command }}
         RECORD_ENDPOINT: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
         RECORD_ID: ${{ inputs.record_id }}
         RECORD_AUDIENCE: ksai-cp
@@ -2509,6 +2510,7 @@ runs:
         WRITE_ACCESS_COMMANDS: ${{ steps.select.outputs.write_access_commands }}
         RECORD_SCOPE: ${{ steps.dispatch_record.outputs.scope }}
         SAW_TRIGGER: ${{ steps.dispatch_record.outputs.trigger }}
+        WORK_SESSION_SUCCESSOR: ${{ steps.dispatch_record.outputs.bound_command }}
         COMMENT_ID: ${{ steps.context.outputs.comment_id }}
         AUTHZ_WHY: ${{ steps.authz.outputs.why }}
         CHECKS_FILE: ${{ runner.temp }}/ksai-checks.json

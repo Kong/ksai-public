@@ -1,6 +1,7 @@
 
 const {
   boundRefusal,
+  boundVerdict,
   operatorRefusal,
   selectArm,
   parseOptions,
@@ -202,14 +203,20 @@ async function resolveRequest({
   const unbound = boundRefusal(result, boundTo);
   if (unbound) return { error: unbound, mine: true };
 
-  const verdict = result.commandNamed || boundTo !== ''
-    ? ''
-    : String(classifiedCommand ?? '').trim() === CLARIFY_VERDICT
-      ? CLARIFY_VERDICT
-      : classifiedCommandOf(classifiedCommand, arm?.disabledCommands, classifierSurface);
+  const replayed = boundVerdict(result, boundTo);
+  const verdict = replayed !== ''
+    ? replayed
+    : result.commandNamed || boundTo !== ''
+      ? ''
+      : String(classifiedCommand ?? '').trim() === CLARIFY_VERDICT
+        ? CLARIFY_VERDICT
+        : classifiedCommandOf(classifiedCommand, arm?.disabledCommands, classifierSurface);
   if (verdict === CLARIFY_VERDICT) return { mine: false, clarify: true };
   if (verdict === NUDGE_VERDICT) return { mine: false, nudge: true, routeSource: CLASSIFIER_SOURCE };
   const classified = verdict !== '' && commandFitsSurface(verdict, { onIssue, threadRootId }) ? verdict : '';
+  if (replayed !== '' && classified === '') {
+    return { error: `\`${boundTo}\`, the command this successor is bound to, does not run where the retained comment was left, so nothing ran`, mine: true };
+  }
   if (asked && classified === '') return { mine: false };
   const command = classified || result.command;
   const named = result.commandNamed || classified !== '';

@@ -162,6 +162,10 @@ const SESSION_ACTIONS = Object.freeze(['continue', 'restart']);
 
 const BOUND_COMMANDS = new Map([['review', ['review']], ['implement', ['implement', SECURED_FIX_COMMAND]]]);
 
+const COMMENTED_BOUND_COMMANDS = new Map([['implement', ['fix', 'revise']]]);
+
+const COMMENTED_KINDS = Object.freeze(['issue', 'review']);
+
 const STAGE_BOUND_COMMANDS = new Map([['test', 'test']]);
 
 const STAGE_PART = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
@@ -177,10 +181,11 @@ export const STAGE_INSTANCE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\[(?:0|[1
 
 const shaped = (value, shape) => typeof value === 'string' && shape.test(value);
 
-function boundCommandOf(flow, command, { job, stage, instance }) {
+function boundCommandOf(flow, command, { job, stage, instance, commented }) {
   const named = typeof flow === 'string' ? flow : '';
   const staged = STAGE_BOUND_COMMANDS.get(named);
-  if (staged === undefined ? !BOUND_COMMANDS.get(named)?.includes(command) : command !== undefined) {
+  const runs = BOUND_COMMANDS.get(named)?.includes(command) || (commented && COMMENTED_BOUND_COMMANDS.get(named)?.includes(command));
+  if (staged === undefined ? !runs : command !== undefined) {
     throw policyStopped('the record binds a work session to a flow its command does not run');
   }
   if (staged === undefined) return command === SECURED_FIX_COMMAND ? 'fix' : command;
@@ -535,7 +540,12 @@ function recordFrom(served, at) {
       : sessionParent !== undefined) {
       throw policyStopped('the record binds a work session to a parent its action does not name');
     }
-    boundCommand = boundCommandOf(sessionFlow, command, { job: workflowJob, stage: workflowStage, instance: workflowInstance });
+    boundCommand = boundCommandOf(sessionFlow, command, {
+      job: workflowJob,
+      stage: workflowStage,
+      instance: workflowInstance,
+      commented: typeof commentKind === 'string' && COMMENTED_KINDS.includes(commentKind),
+    });
     if (classification !== undefined) {
       throw policyStopped('the record binds a work session to a classified comment, which a successor never replays');
     }

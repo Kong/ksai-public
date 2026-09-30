@@ -8,6 +8,7 @@ const { mintedId, postTo, reachControlPlane, unreached } = require('../lib/contr
 const {
   HELP_COMMAND,
   boundRefusal,
+  boundVerdict,
   operatorRefusal,
   commandAuthorized,
   commandEnabled,
@@ -395,8 +396,9 @@ async function selectReviewArm({ github, core, owner, repo, env }) {
     return { ...outputs, rejected: `Rejected model/effort selection: ${result.error}`, note: '' };
   }
   const bound = String(env.BOUND_COMMAND ?? '').trim();
+  const replayed = boundVerdict(result, bound);
   const unbound = boundRefusal(result, bound) || (bound === '' ? '' : operatorRefusal(
-    result.command,
+    replayed || result.command,
     { login: env.OPERATOR, codeowner: env.OPERATOR_CODEOWNER, write: env.OPERATOR_WRITE_ACCESS },
     [...result.writeAccess],
   ));
@@ -406,7 +408,7 @@ async function selectReviewArm({ github, core, owner, repo, env }) {
   }
 
   const helps = result.command === HELP_COMMAND;
-  const read = result.commandNamed || bound !== '' ? '' : String(env.CLASSIFIED_COMMAND ?? '').trim();
+  const read = replayed !== '' ? replayed : result.commandNamed || bound !== '' ? '' : String(env.CLASSIFIED_COMMAND ?? '').trim();
   const verdict = read === CLARIFY_VERDICT ? CLARIFY_VERDICT : read === '' ? '' : verdictOf(read, env.DISABLED_COMMANDS);
   const routed = verdict !== '' && verdict !== NO_VERDICT;
   const clarified = verdict === CLARIFY_VERDICT;

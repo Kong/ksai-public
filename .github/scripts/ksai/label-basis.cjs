@@ -35,7 +35,7 @@ function recordBasis(env = {}) {
   const grants = LABEL_COMMANDS.map((one) => `\`${one}\``).join(' or ');
 
   if (label === '') {
-    if (!LABEL_COMMANDS.includes(command)) return null;
+    if (!LABEL_COMMANDS.includes(command) || String(env.RECORD_BOUND_COMMAND ?? '').trim() !== '') return null;
     return {
       error: `the control plane asked for \`${command}\` with no label behind it, and a run nobody typed has to rest on one, so nothing ran`,
     };

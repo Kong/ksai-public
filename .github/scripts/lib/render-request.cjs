@@ -23,6 +23,7 @@ const SCHEMAS = Object.assign(Object.create(null), {
   'review-findings-audit': require('./prompt-schemas/review-findings-audit.schema.json'),
   'review-resolution': require('./prompt-schemas/review-resolution.schema.json'),
   'work-session-continue': require('./prompt-schemas/work-session-continue.schema.json'),
+  'work-session-followup': require('./prompt-schemas/work-session-followup.schema.json'),
   'work-session-start': require('./prompt-schemas/work-session-start.schema.json'),
   'workflow-stage': require('./prompt-schemas/workflow-stage.schema.json'),
   'write-triage-risk': require('./prompt-schemas/write-triage-risk.schema.json'),

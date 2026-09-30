@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ksai.invalid/prompts/schemas/work-session-followup.schema.json",
+  "title": "Owned Work session follow-up classifier input",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["sessions", "requests", "comment"],
+  "properties": {
+    "sessions": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "flow", "state"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1, "maxLength": 128},
+          "flow": {"type": "string", "minLength": 1, "maxLength": 64},
+          "state": {"type": "string", "minLength": 1, "maxLength": 64}
+        }
+      }
+    },
+    "requests": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "request"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1, "maxLength": 128},
+          "request": {"type": "string", "maxLength": 8192}
+        }
+      }
+    },
+    "comment": {"type": "string", "maxLength": 65536}
+  }
+}

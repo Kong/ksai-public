@@ -135,6 +135,11 @@
       "handoff",
       "knowledge"
     ],
+    "runtime.work-session-followup": [
+      "comment",
+      "requests",
+      "sessions"
+    ],
     "runtime.work-session-start": [
       "base_prompt",
       "knowledge"

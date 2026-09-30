@@ -223,7 +223,7 @@ async function selectImplementArm({ github, core, owner, repo, env }) {
     write: env.WRITE_ACCESS,
     classifiedCommand: env.CLASSIFIED_COMMAND,
     bound: env.BOUND_COMMAND,
-    operator: { codeowner: env.OPERATOR_CODEOWNER, write: env.OPERATOR_WRITE_ACCESS },
+    operator: { login: env.OPERATOR, codeowner: env.OPERATOR_CODEOWNER, write: env.OPERATOR_WRITE_ACCESS },
   });
 
   const named = `${owner}/${repo}`;
@@ -971,6 +971,7 @@ async function decidePhase({ github, core, owner, repo, env, authorize, writeAcc
     threadStateFile: env.THREAD_STATE_FILE,
     commentId: env.COMMENT_ID,
     sawTrigger: env.SAW_TRIGGER,
+    successor: env.WORK_SESSION_SUCCESSOR,
     checksFile: env.CHECKS_FILE,
     retryFile: env.RETRY_FILE,
     threadRootId: env.THREAD_ROOT_ID,

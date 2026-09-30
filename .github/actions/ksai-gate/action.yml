@@ -95,7 +95,7 @@ inputs:
   record_bound_command:
     description: >-
       the command a work-session successor's record binds it to, or empty. The gate routes on it, and the
-      retained comment must name exactly it. Nothing classifies a bound comment
+      retained comment must name it or name no command. Nothing classifies a bound comment
     required: false
     default: ""
   record_requester:
@@ -362,6 +362,7 @@ runs:
         RECORD_LABEL: ${{ inputs.record_label }}
         RECORD_PR: ${{ inputs.record_pr }}
         RECORD_HEAD_SHA: ${{ inputs.record_head_sha }}
+        RECORD_BOUND_COMMAND: ${{ inputs.record_bound_command }}
         RECORD_AUTOFIX_CAPABILITY: ${{ inputs.record_autofix_capability }}
         RECORD_ENDPOINT: ${{ inputs.record_endpoint }}
         RECORD_ID: ${{ inputs.record_id }}

@@ -1221,9 +1221,18 @@ function selectArm({
   };
 }
 
+function boundVerdict(result, bound) {
+  return bound !== '' && !result.commandNamed && String(result.prompt ?? '').trim() !== '' ? bound : '';
+}
+
 function boundRefusal(result, bound) {
   if (bound === '') return '';
-  if (result.command === bound && (result.commandNamed || String(result.prompt ?? '').trim() === '')) return '';
+  if (boundVerdict(result, bound) !== '') {
+    return namedOnly(bound)
+      ? `the retained comment names no command and \`${bound}\`, the command this successor is bound to, is only ever named, so nothing ran`
+      : '';
+  }
+  if (result.command === bound) return '';
   return `the retained comment no longer asks for \`${bound}\`, the command this successor is bound to, so nothing ran`;
 }
 
@@ -1332,6 +1341,7 @@ function renderConfigRejection(error, trigger) {
 
 module.exports = {
   boundRefusal,
+  boundVerdict,
   operatorRefusal,
   FLAGS,
   PLAN_MODES,

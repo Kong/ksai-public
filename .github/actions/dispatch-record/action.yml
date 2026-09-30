@@ -106,7 +106,7 @@ outputs:
     description: >-
       the command a work-session successor is bound to, or empty for every other record. It is the
       `command` too, including a test successor's, whose record names none and binds a workflow stage
-      attempt instead. The retained comment must name exactly this command, and nothing classifies it
+      attempt instead. The retained comment must name this command or name none, and nothing classifies it
     value: ${{ steps.record.outputs.bound_command }}
   workflow_job:
     description: >-

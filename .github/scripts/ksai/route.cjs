@@ -16,6 +16,7 @@ const {
   resolveWriteAccess,
   commandAuthorized,
   namedCommand,
+  NEVER_INFERRED,
   undecidedWriteAccess,
 } = require('../lib/select-arm.cjs');
 const {
@@ -83,13 +84,18 @@ function decide({ command, spelled, onIssue, onReview = null, disabledCommands }
 
 const FLOW_OUTPUTS = Object.freeze({ reviewer: 'review', implement: 'implement', tester: 'test' });
 
-function boundUnrunnable({ bound, asked = null, surface = null, disabledCommands, decision }) {
+function boundUnrunnable({ bound, asked = null, unnamed = false, bare = false, surface = null, disabledCommands, decision }) {
   const refused = (why) => `${why}, so the successor bound to \`${bound}\` did not run`;
   if (parseDisabledCommands(disabledCommands).some((command) => !COMMANDS.includes(command))) {
     return refused("this repository's disabled commands name something that is not a command");
   }
   if (!commandEnabled(bound, { flow: ownerOf(bound), disabledCommands })) return refused('this repository turned that command off');
-  if (asked !== null && asked !== bound) return refused('the retained request no longer asks for that command');
+  if (asked === '' && unnamed) {
+    if (NEVER_INFERRED.includes(bound)) return refused('the retained request names no command and that one is only ever named');
+    if (bare && ownerOf(bound) !== 'implement') return refused('the retained request carries no trigger phrase, which only the implement flow reads');
+  } else if (asked !== null && asked !== bound) {
+    return refused('the retained request no longer asks for that command');
+  }
   if (surface !== null && !commandFitsSurface(bound, surface)) return refused('that command does not run where it was asked');
   const owner = ownerOf(bound);
   if (Object.entries(FLOW_OUTPUTS).some(([flow, output]) => Boolean(decision[output]) !== (flow === owner))) {
@@ -133,7 +139,7 @@ async function routeCommand({ eventName, onIssue, threadRootId, onReview, review
 
   if (parsed.error) return both();
   if (config.error && parsed.command === null) return both();
-  if (parsed.command === null && String(parsed.prompt ?? '').trim() !== '') return both();
+  if (parsed.command === null && String(parsed.prompt ?? '').trim() !== '') return { ...both(), worded: true };
   if (deliveredCommand(parsed.command)) return { review: false, implement: false, command: parsed.command };
 
   return decide({ command: parsed.command ?? here, spelled: parsed.command, onIssue, disabledCommands });
@@ -352,10 +358,19 @@ async function route({ github, core, context, env }) {
     disabledCommands,
     loadConfig: readConfig,
   });
+  const continued = eventName === 'workflow_dispatch';
+  const request = continued ? null : afterTrigger(body, env.TRIGGER);
+  const boundBare =
+    bound !== '' &&
+    dispatched.held &&
+    request === null &&
+    (await bareTarget({ github, core, context, payload, eventName, env, onIssue, threadRootId, body, readConfig, opened }));
   const decision = bound === '' ? routed : decide({ command: bound, spelled: bound, onIssue, onReview, disabledCommands });
   const unrunnable = bound === '' ? '' : boundUnrunnable({
     bound,
     asked: dispatched.held ? routed.command ?? '' : null,
+    unnamed: routed.worded === true || boundBare,
+    bare: boundBare,
     surface: dispatched.held ? { onIssue, threadRootId, onReview } : null,
     disabledCommands,
     decision,
@@ -379,13 +394,12 @@ async function route({ github, core, context, env }) {
     String(dispatched.held ? dispatched.number : (payload?.issue?.number ?? payload?.pull_request?.number ?? '')),
   );
 
-  const continued = eventName === 'workflow_dispatch';
-  const request = continued ? null : afterTrigger(body, env.TRIGGER);
   const asked = continued ? null : afterTrigger(unquoted(body), env.TRIGGER);
   const requested = ownReview || continued || asked !== null;
   core.setOutput('requested', requested ? 'true' : 'false');
   if (bound !== '') {
-    core.setOutput('write_access_commands', requested ? await opened() : '');
+    core.setOutput('write_access_commands', requested || boundBare ? await opened() : '');
+    if (boundBare) core.setOutput('own_pull', 'true');
     core.info(`This run continues a work session bound to \`${bound}\`, so its comment is not classified.`);
     return decision;
   }
