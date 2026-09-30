@@ -344,11 +344,17 @@ const SEALED = /^sha256:[0-9a-f]{64}$/;
 
 export function carriedOf(value) {
   if (value === undefined || value === null) return null;
-  const carried = shape(value, ['history', 'turns', 'original'], [], 'the carried history');
+  const carried = shape(value, ['history', 'turns', 'original'], ['earlier'], 'the carried history');
   if (!SEALED.test(String(carried.history)) || !SEALED.test(String(carried.original))) throw new Error('the carried history names no digest');
   if (!Number.isSafeInteger(carried.turns) || carried.turns < 2 || carried.turns > MAX_CARRIED_TURNS) throw new Error('the carried history names no turn count it could hold');
-  return { history: carried.history, turns: carried.turns, original: carried.original };
+  const earlier = carried.earlier ?? null;
+  if (earlier !== null && !(Array.isArray(earlier) && earlier.length <= carried.turns - 2 && earlier.every((one) => typeof one === 'string' && SEALED.test(one)))) {
+    throw new Error('the carried history names no renders it could have gone on with');
+  }
+  return { history: carried.history, turns: carried.turns, original: carried.original, ...(earlier === null ? {} : { earlier: [...earlier] }) };
 }
+
+const answers = (message) => Array.isArray(message?.content) && message.content.length > 0 && message.content.every((block) => block?.type === 'tool_result');
 
 function openedOn(message, original) {
   const opened = message?.role === 'user' && Array.isArray(message.content) && message.content.length === 1 ? message.content[0] : null;
@@ -359,6 +365,12 @@ function carriedHistory(normalized, carried, opening, used) {
   if (normalized.length !== carried.turns + 1) throw new CarryRefused('the continuation does not carry exactly its governed history and one new turn');
   const prior = normalized.slice(0, carried.turns);
   if (!openedOn(prior[0], carried.original)) throw new CarryRefused('the continuation does not open on the render its history was governed by');
+  if (carried.earlier) {
+    const went = prior.slice(1).filter((message) => message?.role === 'user' && !answers(message));
+    if (went.length !== carried.earlier.length || went.some((message, index) => !openedOn(message, carried.earlier[index]))) {
+      throw new CarryRefused('the continuation does not carry exactly the renders its history went on with, in their order');
+    }
+  }
   const kept = prior.map((message) => canonical(message));
   if (historyDigest(kept) !== carried.history) throw new CarryRefused('the continuation changed the history it carries');
   const last = prior.at(-1);

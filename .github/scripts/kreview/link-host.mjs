@@ -455,6 +455,8 @@ export function carriedPlan(plan, { resumes, restored, endpoint, pinned, env, jo
   return verified;
 }
 
+export const continuedBy = (plan, permit) => (permit?.carried.earlier ? digest(Buffer.from(plan.prompt.text, 'utf8')) : '');
+
 export function conversationOf(held, conclusion) {
   const settled = held?.settled;
   if (!settled || !held.conversation || conclusion !== 'succeeded' || settled.turns > MAX_CARRIED_TURNS) return { resumable: false };
@@ -693,6 +695,7 @@ export async function main(env = process.env, {
             render_sha256: permit?.carried.original ?? digest(Buffer.from(plan.prompt.text, 'utf8')), model: plan.model.id, variant: plan.variant ?? '',
             tools_sha256: bare(planToolsDigest(plan)),
           };
+          held.continuation = continuedBy(plan, permit);
         } catch (error) {
           if (error instanceof ResumeRefused) {
             console.log(`::warning::session ${session} will not go on in its carried conversation, so the control plane starts it afresh: ${error.message}`);
@@ -957,7 +960,7 @@ export async function main(env = process.env, {
       const upload = checkpointUpload({
         exported, patch: Buffer.from(said.patch, 'base64'), head: said.head, base: String(env.BASE_SHA ?? '').trim() || said.head, parent: arg('parent'),
         promptVersion: arg('prompt_version'), link: client.link, job, flow: run.flow, secrets: collectSecrets(env),
-        conversation: conversationOf(sessions.get(session), sessions.get(session)?.conclusion),
+        conversation: conversationOf(sessions.get(session), sessions.get(session)?.conclusion), continuation: sessions.get(session)?.continuation ?? '',
       });
       const saved = await checkpointSaved({ endpoint, fetch, token: await mint('ksai-cp'), upload });
       client.send('task.result', id, { ok: true, outputs: [{ name: 'checkpoint', value: saved }] });

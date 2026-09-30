@@ -31,6 +31,7 @@ export function resumeTrust(endpoint, pinned = shipped) {
 export const PERMIT_SUBJECT = 'export';
 
 const HEX = /^[0-9a-f]{64}$/;
+const SEALED = /^sha256:[0-9a-f]{64}$/;
 const SESSION = /^ses_[A-Za-z0-9]{1,64}$/;
 const MAX_TURNS = MAX_CARRIED_TURNS;
 
@@ -61,6 +62,11 @@ export function verifyResumePermit(bundle, { trust, predicate }, expected, now =
   const notAfter = new Date(permit.not_after);
   if (!(notAfter.getTime() > now.getTime())) throw new Error(`the resume permit expired at ${permit.not_after}`);
   const history = permit.history ?? {};
+  const turns = valid(history.turns, (value) => Number.isSafeInteger(value) && value >= 2 && value <= MAX_TURNS, 'history.turns');
+  const earlier = permit.earlier ?? null;
+  if (earlier !== null) {
+    valid(earlier, (value) => Array.isArray(value) && value.length <= turns - 2 && value.every((one) => typeof one === 'string' && SEALED.test(one)), 'earlier');
+  }
   return {
     checkpoint: valid(permit.checkpoint_id, (value) => HEX.test(String(value)), 'checkpoint_id'),
     modelSession: valid(permit.model_session_id, (value) => SESSION.test(String(value)), 'model_session_id'),
@@ -68,8 +74,9 @@ export function verifyResumePermit(bundle, { trust, predicate }, expected, now =
     export: { sha256: exportSha, bytes: valid(kept.bytes, (value) => Number.isSafeInteger(value) && value > 0, 'export.bytes') },
     carried: {
       history: `sha256:${valid(history.sha256, (value) => HEX.test(String(value)), 'history.sha256')}`,
-      turns: valid(history.turns, (value) => Number.isSafeInteger(value) && value >= 2 && value <= MAX_TURNS, 'history.turns'),
+      turns,
       original: expected.original,
+      ...(earlier === null ? {} : { earlier: [...earlier] }),
     },
     notAfter,
   };

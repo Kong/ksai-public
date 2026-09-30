@@ -1,7 +1,7 @@
 import { appendFileSync, writeFileSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 
-import { DIGEST, readArtifacts, regularFile } from './artifacts.mjs';
+import { DIGEST, digest, readArtifacts, regularFile } from './artifacts.mjs';
 import { CarryRefused, IncompleteAnswer, MAX_RESPONSE_BYTES, UpstreamFailure, boundedSteps, carriedOf, conversation } from './conversation.mjs';
 import { Errand, governRequest } from './provider.mjs';
 import { linkNotes } from './notes.mjs';
@@ -321,10 +321,14 @@ function governing(state, given, report, provider, log) {
           const [first, ...rest] = Array.isArray(event?.messages) ? event.messages : [];
           if (first?.role !== 'user' || onlyText(first.content) !== governed.opens) throw new Error('the conversation lost the governed prompt');
           const asked = rest.filter((entry) => entry?.role === 'user');
-          if (governed.carried && (asked.length !== 1 || onlyText(asked[0].content) !== governed.prompt)) {
+          const earlier = governed.carried?.earlier ?? [];
+          if (governed.carried && (asked.length !== earlier.length + 1 || onlyText(asked.at(-1).content) !== governed.prompt)) {
             throw new CarryRefused('the carried conversation does not go on with its render alone');
           }
-          if (rest.some((entry) => entry?.role !== 'assistant' && entry?.role !== 'tool' && !(governed.carried && entry === asked[0]))) {
+          if (earlier.some((named, index) => onlyText(asked[index].content) === null || digest(onlyText(asked[index].content)) !== named)) {
+            throw new CarryRefused('the carried conversation went on with a render its permit does not name there');
+          }
+          if (rest.some((entry) => entry?.role !== 'assistant' && entry?.role !== 'tool' && !(governed.carried && asked.includes(entry)))) {
             throw new Error('the conversation holds a turn after the prompt that the model did not take');
           }
         });
