@@ -14,6 +14,7 @@ export const PART_MOST = 8 * 1024 * 1024;
 export const RESTORED_EXPORT = 'restored.export.json';
 export const PATCH_FORMAT = 'exact-v1';
 export const PATCH_FORMAT_HEADER = 'X-KSAI-Checkpoint-Patch-Format';
+export const CONTINUATION_HEADER = 'X-KSAI-Checkpoint-Continuation-Render';
 export const INEXACT = 'the checkpoint names no exact patch, so a restore could lay down work the run never wrote';
 const CALL_MS = 120_000;
 const REASON_MOST = 200;
@@ -58,7 +59,7 @@ export function applied(git, patchFile, saved) {
   if (!git(['apply', '--binary', patchFile]).ok) throw new Error('the checkpoint could not be applied');
 }
 
-export function checkpointUpload({ exported, patch, head, base, parent, promptVersion, link, job, flow, secrets = [], conversation = null, continuation = '' }) {
+export function checkpointUpload({ exported, patch, head, base, parent, promptVersion, link, job, flow, secrets = [], conversation = null }) {
   if (!VERSION.test(promptVersion)) throw new Error('the engine named no prompt version to save the checkpoint under');
   if (!COMMIT.test(base)) throw new Error('the run names no base commit to save the checkpoint against');
   if (parent && !CHECKPOINT.test(parent)) throw new Error('the engine named a previous checkpoint that is not one');
@@ -81,23 +82,34 @@ export function checkpointUpload({ exported, patch, head, base, parent, promptVe
   }
   if (kept.length > PART_MOST) throw new Error(`the export is ${kept.length} bytes, and a checkpoint keeps at most ${PART_MOST}`);
   if (patch.length > PART_MOST) throw new Error(`the patch is ${patch.length} bytes, and a checkpoint keeps at most ${PART_MOST}`);
-  const resumable = Boolean(conversation?.resumable) && kept.equals(exported);
   return {
     job, link, flow, model_session_id: session, base_sha: base, head_sha: head, engine_version: OPENCODE_V2_VERSION,
     prompt_version: promptVersion, ...(parent ? { parent_id: parent } : {}), export: kept.toString('base64'), patch: patch.toString('base64'),
-    ...(conversation ? { conversation: resumable ? conversation : { resumable: false } } : {}),
-    ...(resumable && continuation ? { continuation_render_sha256: continuation } : {}),
+    ...(conversation ? { conversation: conversation.resumable && kept.equals(exported) ? conversation : { resumable: false } } : {}),
   };
 }
 
-export async function checkpointSaved({ endpoint, fetch, token, upload }) {
-  const said = await controlPlane.answered(fetch, `${endpoint}/v1/run/work-sessions/checkpoints`, {
-    token, body: JSON.stringify(upload), timeout: CALL_MS, headers: { [PATCH_FORMAT_HEADER]: PATCH_FORMAT },
+export const uploadHeaders = (upload, continuation = '') => ({
+  [PATCH_FORMAT_HEADER]: PATCH_FORMAT, ...(continuation && upload.conversation?.resumable ? { [CONTINUATION_HEADER]: continuation } : {}),
+});
+
+export const UNCARRIED = "the control plane refused the conversation this checkpoint carries, so the work is kept without it and the next run goes on from the control plane's handoff";
+
+const unsaid = (said) => said;
+
+export async function checkpointSaved({ endpoint, fetch, token, upload, continuation = '', note = unsaid }) {
+  const kept = async (body, carried) => controlPlane.answered(fetch, `${endpoint}/v1/run/work-sessions/checkpoints`, {
+    token: typeof token === 'function' ? await token() : token, body: JSON.stringify(body), timeout: CALL_MS, headers: uploadHeaders(body, carried),
   });
+  const first = await kept(upload, continuation);
+  const refused = first.status === 409 && Boolean(upload.conversation?.resumable);
+  const bare = refused ? await kept({ ...upload, conversation: { resumable: false } }, '') : first;
+  const said = bare.why ? first : bare;
   if (said.why) throw new Error(`the control plane did not keep the checkpoint: ${said.why}`);
   const id = String(said.answer?.id ?? '');
   if (!CHECKPOINT.test(id)) throw new Error('the control plane kept the checkpoint under no id');
   if (said.answer?.patch_format !== PATCH_FORMAT) throw new Error(`the control plane kept the checkpoint without the ${PATCH_FORMAT} patch format this runner sent, so no restore could trust it`);
+  if (refused) note(UNCARRIED);
   return id;
 }
 

@@ -132,6 +132,7 @@
     ],
     "runtime.work-session-continue": [
       "base_prompt",
+      "followup",
       "handoff",
       "knowledge"
     ],

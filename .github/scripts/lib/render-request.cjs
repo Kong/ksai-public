@@ -32,6 +32,7 @@ const SCHEMAS = Object.assign(Object.create(null), {
 Object.freeze(SCHEMAS);
 
 const SUPPLIED = Object.freeze(Object.assign(Object.create(null), {
+  'runtime.work-session-continue': Object.freeze(['followup']),
   'runtime.workflow-stage': Object.freeze(['instructions', 'known_findings', 'stage']),
 }));
 

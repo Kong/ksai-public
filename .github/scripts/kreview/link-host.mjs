@@ -960,9 +960,11 @@ export async function main(env = process.env, {
       const upload = checkpointUpload({
         exported, patch: Buffer.from(said.patch, 'base64'), head: said.head, base: String(env.BASE_SHA ?? '').trim() || said.head, parent: arg('parent'),
         promptVersion: arg('prompt_version'), link: client.link, job, flow: run.flow, secrets: collectSecrets(env),
-        conversation: conversationOf(sessions.get(session), sessions.get(session)?.conclusion), continuation: sessions.get(session)?.continuation ?? '',
+        conversation: conversationOf(sessions.get(session), sessions.get(session)?.conclusion),
       });
-      const saved = await checkpointSaved({ endpoint, fetch, token: await mint('ksai-cp'), upload });
+      const saved = await checkpointSaved({
+        endpoint, fetch, token: () => mint('ksai-cp'), upload, continuation: sessions.get(session)?.continuation ?? '', note: (dropped) => console.log(`::warning::${dropped}`),
+      });
       client.send('task.result', id, { ok: true, outputs: [{ name: 'checkpoint', value: saved }] });
       return;
     }

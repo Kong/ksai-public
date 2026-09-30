@@ -5,7 +5,13 @@
   "type": "object",
   "additionalProperties": false,
   "required": ["base_prompt", "handoff", "knowledge"],
+  "allOf": [{
+    "if": {"required": ["followup"]},
+    "then": {"properties": {"handoff": {"required": ["followup_actor", "followup_actor_id", "followup_source"]}}},
+    "else": {"properties": {"handoff": {"not": {"anyOf": [{"required": ["followup_actor"]}, {"required": ["followup_actor_id"]}, {"required": ["followup_source"]}]}}}}
+  }],
   "properties": {
+    "followup": {"type": "string", "minLength": 1, "maxLength": 65536},
     "base_prompt": {
       "type": "string",
       "minLength": 1,
@@ -16,6 +22,9 @@
       "additionalProperties": false,
       "required": ["action", "session_id", "source_session_id", "source_prompt_id", "source_render_digest", "source_head_sha", "current_head_sha", "checkpoint"],
       "properties": {
+        "followup_actor": {"type": "string", "minLength": 1, "maxLength": 256},
+        "followup_actor_id": {"type": "integer", "minimum": 1},
+        "followup_source": {"type": "string", "minLength": 1, "maxLength": 4096},
         "action": {"enum": ["continue", "restart"]},
         "session_id": {"type": "string", "minLength": 1, "maxLength": 128},
         "source_session_id": {"type": "string", "minLength": 1, "maxLength": 128},
