@@ -23,7 +23,7 @@ import { jobOf } from '../lib/link-protocol.mjs';
 import { linkClient, pollTransport, websocketTransport } from './link-client.mjs';
 import { ordered } from '../ksai/progress.mjs';
 import { isolatedToolPhase, parsed, PROVIDER_TIMEOUTS, totals, UNCONTINUED } from '../lib/opencode.mjs';
-import { answer, everything, executionLog, reportedVersion, rootSessions, SHELL_TIMEOUT_MS, spending, toolCalls, V2_MASKED_HOMES, validateV2Version } from '../lib/opencode-v2.mjs';
+import { answer, everything, executionLog, openCallOf, reportedVersion, rootSessions, SHELL_TIMEOUT_MS, spending, toolCalls, V2_MASKED_HOMES, validateV2Version } from '../lib/opencode-v2.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
 import requestIntent from '../lib/request-intent.cjs';
 import selectArm from '../lib/select-arm.cjs';
@@ -281,13 +281,15 @@ const shellTimeout = (input, limit) => {
   return asked > 0 ? Math.min(Math.ceil(asked), limit) : limit;
 };
 
-export function progressOf(session, segment, reported, secrets = [], shellTimeoutMs = SHELL_TIMEOUT_MS) {
+export function progressOf(session, segment, reported, secrets = [], shellTimeoutMs = SHELL_TIMEOUT_MS, open = new Map()) {
   const calls = [];
   let status = null;
-  for (const call of toolCalls(segment)) {
+  for (const call of toolCalls(segment, open)) {
     const ended = call.status === 'completed' || call.status === 'error';
-    if (!ended && !Number.isFinite(call.called)) continue;
     const key = `${call.session_id}\u0000${call.id}`;
+    if (ended) open.delete(key);
+    else open.set(key, openCallOf(call));
+    if (!ended && !Number.isFinite(call.called)) continue;
     const state = ended ? 'ended' : 'started';
     const was = reported.get(key);
     if (was === state || was === 'ended') continue;
@@ -735,7 +737,7 @@ export async function main(env = process.env, {
 
   const reportProgress = (session, held) => {
     if (!held.plugin) return;
-    for (const report of progressOf(session, readOn(events, held), held.reported, secrets, run.shell_timeout_ms)) client.send('progress', undefined, report);
+    for (const report of progressOf(session, readOn(events, held), held.reported, secrets, run.shell_timeout_ms, held.open)) client.send('progress', undefined, report);
   };
 
   const uploads = [];
@@ -761,7 +763,7 @@ export async function main(env = process.env, {
     const allowed = Object.fromEntries(given.filter((one) => SESSION_ENV.includes(one.name)).map((one) => [one.name, one.value]));
     if (audits.has(session)) verifyAudit(env, audits.get(session));
     const asked = askedRender(named, render);
-    const held = { plugin: null, waiting: [], offset: statSync(events).size, read: 0, seen: [], child: null, killed: false, promptId: asked.promptId, reported: new Map(), resumes };
+    const held = { plugin: null, waiting: [], offset: statSync(events).size, read: 0, seen: [], child: null, killed: false, promptId: asked.promptId, reported: new Map(), open: sessions.get(session)?.open ?? new Map(), resumes };
     sessions.set(session, held);
     const policy = policies.get(session) ?? policies.get(restarts ?? '') ?? {};
     const dir = mkdtempSync(join(scratch, 'session-'));

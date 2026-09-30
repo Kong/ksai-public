@@ -332,7 +332,9 @@ const millis = (value) => {
   return Number.isFinite(at) ? at : Number.NaN;
 };
 
-export function toolCalls(events) {
+export const openCallOf = (call) => ({ message_id: call.message_id, tool: call.tool, input: call.input, started: call.started, called: call.called });
+
+export function toolCalls(events, open = new Map()) {
   const calls = new Map();
   const touch = (event) => {
     const key = callKey(event);
@@ -350,6 +352,7 @@ export function toolCalls(events) {
         content: [],
         metadata: {},
         error: null,
+        ...open.get(key),
       });
     }
     return calls.get(key);
