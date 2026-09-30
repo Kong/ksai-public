@@ -39,9 +39,8 @@ on:
       federation_rule_id:
         description: >-
           the team's Anthropic federation identifiers, from federations/<team>.yaml in the ksai source repository.
-          Optional so a review request in the reviewer sidebar, which mints no Anthropic token, does
-          not have to carry four values it never reads. Any other call that leaves one of them blank
-          is refused by its first step, before a token is minted.
+          Optional: a run does not need them. Only `anthropic_auth: federation` mints on them, and
+          that mint refuses a blank one by name; otherwise they are read for cost attribution alone.
         required: false
         type: string
         default: ""
@@ -852,23 +851,11 @@ jobs:
         with:
           egress-policy: audit
 
-      - name: Refuse a call that names no federation
+      - name: Refuse a review request from the reviewer sidebar
         env:
           SIDEBAR: ${{ github.event_name == 'pull_request' && github.event.action == 'review_requested' }}
-          RULE_ID: ${{ inputs.federation_rule_id }}
-          ORGANIZATION_ID: ${{ inputs.organization_id }}
-          SERVICE_ACCOUNT_ID: ${{ inputs.service_account_id }}
-          WORKSPACE_ID: ${{ inputs.workspace_id }}
         run: |
           set -euo pipefail
-
-          blank() {
-            case "$1" in
-              *[0-9A-Za-z]*) return 1 ;;
-              *) return 0 ;;
-            esac
-          }
-
           case "${SIDEBAR}" in
             false) ;;
             true)
@@ -878,47 +865,6 @@ jobs:
               echo "::error::could not tell whether this run is a review request in the reviewer sidebar, and being unable to tell is not the same as no"
               exit 1 ;;
           esac
-
-          missing=""
-          placeholder=""
-          misshaped=""
-          shaped() {
-            case "$2" in
-              uuid)
-                case "$1" in
-                  [0-9A-Fa-f]*-[0-9A-Fa-f]*-[0-9A-Fa-f]*-[0-9A-Fa-f]*-[0-9A-Fa-f]*) return 0 ;;
-                esac ;;
-              *)
-                case "$1" in
-                  "$2"*) return 0 ;;
-                esac ;;
-            esac
-            return 1
-          }
-          check() {
-            if blank "$2"; then missing="${missing} $1"; return; fi
-            case "$2" in
-              *[\<\>]*) placeholder="${placeholder} $1"; return ;;
-            esac
-            shaped "$2" "$3" || misshaped="${misshaped} $1"
-          }
-          check federation_rule_id "${RULE_ID}" fdrl_
-          check organization_id "${ORGANIZATION_ID}" uuid
-          check service_account_id "${SERVICE_ACCOUNT_ID}" svac_
-          check workspace_id "${WORKSPACE_ID}" wrkspc_
-
-          if [ -n "${missing}" ]; then
-            echo "::error::this call names no federation, so no Anthropic token can be minted and nothing would run; pass:${missing} - they come from federations/<team>.yaml in the ksai source repository, see https://ksai.kongcloud.io/federation"
-          fi
-          if [ -n "${placeholder}" ]; then
-            echo "::error::this call still carries the template's placeholder for:${placeholder} - the workflow was saved before a team was selected, so no Anthropic token can be minted; generate it again with your team selected, or paste the values from federations/<team>.yaml in the ksai source repository, see https://ksai.kongcloud.io/federation"
-          fi
-          if [ -n "${misshaped}" ]; then
-            echo "::error::an identifier has the wrong shape for:${misshaped} - federation_rule_id starts with fdrl_, service_account_id with svac_, workspace_id with wrkspc_, and organization_id is a UUID; they come from federations/<team>.yaml in the ksai source repository, see https://ksai.kongcloud.io/federation"
-          fi
-          if [ -n "${missing}${placeholder}${misshaped}" ]; then
-            exit 1
-          fi
 
       - name: Read the run settings
         id: run_settings
@@ -1101,7 +1047,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-help
           repository: Kong/ksai-public
-          ref: v3.125.3
+          ref: v3.125.4
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1565,7 +1511,7 @@ jobs:
         with:
           token: ${{ github.token }}
           repository: Kong/ksai-public
-          ref: v3.125.3
+          ref: v3.125.4
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1731,23 +1677,11 @@ jobs:
             ${{ needs.endpoints.outputs.endpoint }}
           disable-telemetry: true
 
-      - name: Refuse a call that names no federation
+      - name: Refuse a review request from the reviewer sidebar
         env:
           SIDEBAR: ${{ github.event_name == 'pull_request' && github.event.action == 'review_requested' }}
-          RULE_ID: ${{ inputs.federation_rule_id }}
-          ORGANIZATION_ID: ${{ inputs.organization_id }}
-          SERVICE_ACCOUNT_ID: ${{ inputs.service_account_id }}
-          WORKSPACE_ID: ${{ inputs.workspace_id }}
         run: |
           set -euo pipefail
-
-          blank() {
-            case "$1" in
-              *[0-9A-Za-z]*) return 1 ;;
-              *) return 0 ;;
-            esac
-          }
-
           case "${SIDEBAR}" in
             false) ;;
             true)
@@ -1757,47 +1691,6 @@ jobs:
               echo "::error::could not tell whether this run is a review request in the reviewer sidebar, and being unable to tell is not the same as no"
               exit 1 ;;
           esac
-
-          missing=""
-          placeholder=""
-          misshaped=""
-          shaped() {
-            case "$2" in
-              uuid)
-                case "$1" in
-                  [0-9A-Fa-f]*-[0-9A-Fa-f]*-[0-9A-Fa-f]*-[0-9A-Fa-f]*-[0-9A-Fa-f]*) return 0 ;;
-                esac ;;
-              *)
-                case "$1" in
-                  "$2"*) return 0 ;;
-                esac ;;
-            esac
-            return 1
-          }
-          check() {
-            if blank "$2"; then missing="${missing} $1"; return; fi
-            case "$2" in
-              *[\<\>]*) placeholder="${placeholder} $1"; return ;;
-            esac
-            shaped "$2" "$3" || misshaped="${misshaped} $1"
-          }
-          check federation_rule_id "${RULE_ID}" fdrl_
-          check organization_id "${ORGANIZATION_ID}" uuid
-          check service_account_id "${SERVICE_ACCOUNT_ID}" svac_
-          check workspace_id "${WORKSPACE_ID}" wrkspc_
-
-          if [ -n "${missing}" ]; then
-            echo "::error::this call names no federation, so no Anthropic token can be minted and nothing would run; pass:${missing} - they come from federations/<team>.yaml in the ksai source repository, see https://ksai.kongcloud.io/federation"
-          fi
-          if [ -n "${placeholder}" ]; then
-            echo "::error::this call still carries the template's placeholder for:${placeholder} - the workflow was saved before a team was selected, so no Anthropic token can be minted; generate it again with your team selected, or paste the values from federations/<team>.yaml in the ksai source repository, see https://ksai.kongcloud.io/federation"
-          fi
-          if [ -n "${misshaped}" ]; then
-            echo "::error::an identifier has the wrong shape for:${misshaped} - federation_rule_id starts with fdrl_, service_account_id with svac_, workspace_id with wrkspc_, and organization_id is a UUID; they come from federations/<team>.yaml in the ksai source repository, see https://ksai.kongcloud.io/federation"
-          fi
-          if [ -n "${missing}${placeholder}${misshaped}" ]; then
-            exit 1
-          fi
 
       - name: Refuse a call that blocks every destination and names none
         env:
@@ -2104,7 +1997,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-recover
           repository: Kong/ksai-public
-          ref: v3.125.3
+          ref: v3.125.4
           sparse-checkout: |
             .github/scripts
           persist-credentials: false

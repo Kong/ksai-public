@@ -150,18 +150,20 @@ outputs:
     value: ${{ steps.run_settings.outputs.require_plan_approval }}
   federation_rule_id:
     description: >-
-      the Konnect federation this run exchanges its OIDC token under. This and
-      the three below it are answered together or not at all, because a run
-      federating with one of them missing fails at the exchange.
+      the Anthropic federation rule (fdrl_...) the repository is enrolled under,
+      or empty. A run does not need it: every model call goes through Kong AI
+      Gateway or the control plane's exchange, and nothing is minted on it.
+      Read for cost attribution and by `anthropic_auth: federation` callers.
+      This and the three below it are answered together or not at all.
     value: ${{ steps.run_settings.outputs.federation_rule_id }}
   organization_id:
-    description: the Konnect organization the federation belongs to, or empty
+    description: the Anthropic organization the federation belongs to, or empty
     value: ${{ steps.run_settings.outputs.organization_id }}
   service_account_id:
-    description: the Konnect service account the run federates as, or empty
+    description: the Anthropic service account the federation names, or empty
     value: ${{ steps.run_settings.outputs.service_account_id }}
   workspace_id:
-    description: the Konnect workspace the run federates into, or empty
+    description: the Anthropic workspace the federation names, or empty
     value: ${{ steps.run_settings.outputs.workspace_id }}
   shadow_percent:
     description: >-

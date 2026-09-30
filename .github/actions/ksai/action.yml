@@ -121,22 +121,21 @@ inputs:
     default: ""
   federation_rule_id:
     description: >-
-      team federation rule id (fdrl_...). Required for every flow but test-publish, which mints no
-      Anthropic token and so needs none of the four federation identifiers - validated below rather
-      than left `required: true`, which would force that flow to hold `id-token: write` for a token
-      it never exchanges.
+      team federation rule id (fdrl_...), or empty. A run does not need it: only `anthropic_auth: federation`
+      mints on the four federation identifiers, and that mint refuses a blank one by name; otherwise they are
+      read for cost attribution alone.
     required: false
     default: ""
   organization_id:
-    description: "Anthropic organization UUID; see federation_rule_id for which flows need it"
+    description: "Anthropic organization UUID; see federation_rule_id for when it is read"
     required: false
     default: ""
   service_account_id:
-    description: "team service account id (svac_...); see federation_rule_id for which flows need it"
+    description: "team service account id (svac_...); see federation_rule_id for when it is read"
     required: false
     default: ""
   workspace_id:
-    description: "team workspace id (wrkspc_...) - the per-team billing boundary; see federation_rule_id for which flows need it"
+    description: "team workspace id (wrkspc_...) - the per-team billing boundary; see federation_rule_id for when it is read"
     required: false
     default: ""
   anthropic_base_url:
@@ -1112,26 +1111,6 @@ runs:
             exit 1
           fi
         fi
-
-    - name: Refuse a call that names no federation
-      if: ${{ inputs.flow != 'test-publish' }}
-      shell: bash
-      env:
-        RULE_ID: ${{ inputs.federation_rule_id }}
-        ORGANIZATION_ID: ${{ inputs.organization_id }}
-        SERVICE_ACCOUNT_ID: ${{ inputs.service_account_id }}
-        WORKSPACE_ID: ${{ inputs.workspace_id }}
-      run: |
-        set -euo pipefail
-        missing=""
-        for name in RULE_ID ORGANIZATION_ID SERVICE_ACCOUNT_ID WORKSPACE_ID; do
-          if [ -z "${!name}" ]; then missing="${missing} ${name}"; fi
-        done
-        if [ -n "${missing}" ]; then
-          echo "::error::this call names no federation, so no Anthropic token can be minted and nothing would run; pass:${missing}"
-          exit 1
-        fi
-
 
     - name: Say so when there is no conversation to review
       if: >-
