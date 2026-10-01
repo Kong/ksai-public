@@ -342,7 +342,7 @@ inputs:
       unpinned reviewer is a different reviewer every run.
     required: false
     # renovate: datasource=npm depName=opencode-ai
-    default: "1.18.33"
+    default: "1.18.34"
   opencode_pty:
     description: >-
       Opt-in pilot for audited background PTY sessions in OpenCode test and active implementation

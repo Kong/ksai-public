@@ -6,8 +6,8 @@
     "opencode-pty": "0.3.6"
   },
   "overrides": {
-    "@opencode-ai/plugin": "1.18.33",
-    "@opencode-ai/sdk": "1.18.33",
+    "@opencode-ai/plugin": "1.18.34",
+    "@opencode-ai/sdk": "1.18.34",
     "bun-pty": "0.4.10",
     "open": "11.0.0"
   }

@@ -260,7 +260,7 @@ export const PROVIDER_TIMEOUTS = Object.freeze({ headerTimeout: 120_000, chunkTi
 
 export const UNCONTINUED = 'this rework carries the planning session its plan left, and a governed run starts every session from the prompt the control plane rendered, so the rework does not continue it. The export stays with the plan for the control plane to carry once it keeps sessions';
 
-export const PROVIDER_POLICY_VERSION = '1.18.33';
+export const PROVIDER_POLICY_VERSION = '1.18.34';
 
 export const PROVIDER_POLICY = Object.freeze([
   Object.freeze({ effect: 'deny', action: 'provider.use', resource: '*' }),
