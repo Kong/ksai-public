@@ -207,7 +207,7 @@ async function resolveRequester({ github, context, env }) {
     issueNumber: env.PR_NUMBER,
     actor: env.TRIGGERING_ACTOR,
     appSlug: env.APP_SLUG,
-    ...commentReaders({ github, context }),
+    ...commentReaders({ github, context, env }),
   });
   if (held.error) {
     return { login: '', failure: held.error, securityPolicyRefused: held.securityPolicyRefused };
@@ -270,7 +270,7 @@ async function route({ github, core, context, env }) {
   }
   if (basis) return routeLabelled({ github, core, context, env, basis });
 
-  const readers = commentReaders({ github, context });
+  const readers = commentReaders({ github, context, env });
   const dispatched = await resolveDispatchedComment({
     eventName: context.eventName,
     commentId: env.COMMENT_ID,

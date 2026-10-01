@@ -374,6 +374,7 @@ runs:
         PR_NUMBER: ${{ inputs.pr_number }}
         TRIGGERING_ACTOR: ${{ github.triggering_actor }}
         APP_SLUG: ${{ inputs.app_slug }}
+        KSAI_WORK_REQUEST_ENDPOINT: ${{ startsWith(inputs.opencode_version, '2.') && inputs.prompt_endpoint || '' }}
         SCRIPTS: ${{ github.workspace }}/_ksai/.github/scripts
       with:
         github-token: ${{ inputs.authorization_github_token }}
@@ -465,6 +466,7 @@ runs:
         PR_NUMBER: ${{ inputs.pr_number }}
         TRIGGERING_ACTOR: ${{ github.triggering_actor }}
         APP_SLUG: ${{ inputs.app_slug }}
+        KSAI_WORK_REQUEST_ENDPOINT: ${{ startsWith(inputs.opencode_version, '2.') && inputs.prompt_endpoint || '' }}
         PROMPT_FILE: ${{ runner.temp }}/ksai-classify-prompt.txt
         SCRIPTS: ${{ github.workspace }}/_ksai/.github/scripts
       with:

@@ -253,11 +253,13 @@ function decideCheckpoint({
   pendingSince: since = null,
   head = null,
   approvalRef = null,
+  withdrawn = false,
   ...asked
 } = {}) {
   const settled = withoutRelease({ ...asked, approvalRef });
   if (settled) return settled;
   if (unreadable) return { release: false, waiting: true, reason: 'unreadable' };
+  if (withdrawn) return { release: false, waiting: true, reason: 'withdrawn-review' };
   if (released === true) return { release: false, waiting: true, reason: 'already-released' };
   // An approval typed in Jira names the head its approver was shown rather than a moment, and that is
   // the stronger test: a step landing after they approved moves the head, so the approval covers work
@@ -306,6 +308,15 @@ const WAITING = Object.freeze(
         outstanding +
         ' Anybody with write access can edit anybody else\'s comment, so a release is only ever read off one ' +
         'nobody has touched: post a new comment asking for it',
+    }),
+    'withdrawn-review': Object.freeze({
+      kind: 'phase-waiting',
+      level: 'WARNING',
+      say: ({ outstanding }) =>
+        'This phase of the plan is done and the review asking to release it no longer stands as it was ' +
+        'submitted, so it released nothing.' +
+        outstanding +
+        ' A review that was dismissed after it was asked releases nothing: submit a new review asking for it',
     }),
     'edit-unreadable': Object.freeze({
       kind: 'phase-waiting',

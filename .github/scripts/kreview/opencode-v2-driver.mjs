@@ -106,8 +106,13 @@ export function recorder(root, parentID = '', resumed = parentID !== '') {
 
 export function forward(socketPath, listen = createServer, connect = createConnection) {
   return new Promise((resolvePromise, reject) => {
+    const open = new Set();
     const server = listen((socket) => {
       const upstream = connect(socketPath);
+      open.add(socket);
+      open.add(upstream);
+      socket.once('close', () => open.delete(socket));
+      upstream.once('close', () => open.delete(upstream));
       socket.pipe(upstream);
       upstream.pipe(socket);
       socket.on('error', () => upstream.destroy());
@@ -120,6 +125,7 @@ export function forward(socketPath, listen = createServer, connect = createConne
       const close = () =>
         new Promise((done) => {
           server.close(() => done());
+          for (const one of open) one.destroy();
         });
       resolvePromise({ url: `http://127.0.0.1:${port}`, close });
     });

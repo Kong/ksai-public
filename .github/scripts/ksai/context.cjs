@@ -3,6 +3,7 @@
 const { readCount, MAX_ATTEMPTS } = require('./continue.cjs');
 const { JIRA_KEY_SHAPE, anyCommandOpen, safeEcho } = require('../lib/select-arm.cjs');
 const { editState, isOwnLogin, withLastEdits, UNEDITED } = require('./approval.cjs');
+const { readWorkRequest, requestedReaders } = require('../lib/work-request.cjs');
 
 const editRefusal = (comment, where) => {
   const state = editState(comment);
@@ -384,13 +385,17 @@ async function withLastEdit(github, comment) {
   }
 }
 
-const commentReaders = ({ github, context }) => ({
-  getIssueComment: async (comment_id) =>
-    withLastEdit(github, (await github.rest.issues.getComment({ ...context.repo, comment_id })).data),
-  getReviewComment: async (comment_id) =>
-    withLastEdit(github, (await github.rest.pulls.getReviewComment({ ...context.repo, comment_id })).data),
-  getSubmittedReview: async (pull_number, review_id) =>
-    (await github.rest.pulls.getReview({ ...context.repo, pull_number, review_id })).data,
+const commentReaders = ({ github, context, env = {}, fetch = globalThis.fetch }) => requestedReaders({
+  live: {
+    getIssueComment: async (comment_id) =>
+      withLastEdit(github, (await github.rest.issues.getComment({ ...context.repo, comment_id })).data),
+    getReviewComment: async (comment_id) =>
+      withLastEdit(github, (await github.rest.pulls.getReviewComment({ ...context.repo, comment_id })).data),
+    getSubmittedReview: async (pull_number, review_id) =>
+      (await github.rest.pulls.getReview({ ...context.repo, pull_number, review_id })).data,
+  },
+  read: () => readWorkRequest({ env, fetch }),
+  repository: `${context.repo.owner}/${context.repo.repo}`,
 });
 
 function asCommentEvent({ dispatched, onIssue, payload = null }) {

@@ -1405,6 +1405,8 @@ runs:
         IN_COMMENT_ID: ${{ inputs.record_id == '' && inputs.comment_id || steps.dispatch_record.outputs.comment_id }}
         IN_COMMENT_KIND: ${{ inputs.record_id == '' && inputs.comment_kind || steps.dispatch_record.outputs.comment_kind }}
         IN_APP_SLUG: ${{ inputs.app_slug }}
+        KSAI_WORK_REQUEST_ENDPOINT: >-
+          ${{ steps.engine.outputs.opencode_major == '2' && (inputs.control_plane_endpoint || inputs.fleet_dials_endpoint) || '' }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:
         github-token: ${{ inputs.authorization_github_token || inputs.source_org_github_token }}
@@ -2607,6 +2609,9 @@ runs:
         DISPATCHED: ${{ steps.context.outputs.dispatched }}
         REVIEW_ID: ${{ steps.context.outputs.review_id }}
         REVIEW_SUBMITTED_AT: ${{ steps.context.outputs.review_submitted_at }}
+        REVIEW_STATE: ${{ steps.context.outputs.review_state }}
+        THREAD_NUM: ${{ steps.context.outputs.issue_number }}
+        WORK_REQUEST: ${{ steps.context.outputs.work_request }}
         CONTROL_PLANE_APPROVER: ${{ steps.context.outputs.threadless == 'true' && steps.dispatch_record.outputs.approver || '' }}
         CONTROL_PLANE_APPROVAL_ID: ${{ steps.context.outputs.threadless == 'true' && steps.dispatch_record.outputs.approval_id || '' }}
         CONTROL_PLANE_HEAD_SHA: ${{ steps.context.outputs.threadless == 'true' && steps.dispatch_record.outputs.head_sha || '' }}
@@ -2717,6 +2722,7 @@ runs:
         REVIEW_URL: ${{ steps.context.outputs.review_url }}
         REVIEW_ASSOCIATION: ${{ steps.context.outputs.review_association }}
         REVIEWER_TYPE: ${{ steps.context.outputs.review_actor_type }}
+        WORK_REQUEST: ${{ steps.context.outputs.work_request }}
         DISABLED_COMMANDS: ${{ inputs.disabled_commands }}
         WRITE_ACCESS_COMMANDS: ${{ inputs.write_access_commands }}
         RELEASED_REF: ${{ steps.read_plan.outputs.release_ref }}
@@ -5055,6 +5061,7 @@ runs:
         SUBPROCESS_ENV_SCRUB: "1"
         KSAI_JOB_INDEX: ${{ strategy.job-index || 0 }}
         KSAI_OUTCOME_EXPECTED: "true"
+        KSAI_WORK_REQUEST: ${{ steps.context.outputs.work_request }}
         OTEL_EXPORTER_OTLP_ENDPOINT: ${{ inputs.otel_endpoint }}
         OTEL_EXPORTER_OTLP_HEADERS: ${{ inputs.otel_headers }}
         OTEL_RESOURCE_ATTRIBUTES: >-
@@ -5445,6 +5452,7 @@ runs:
           steps.governed_review.outputs.prompt_file || steps.build_review.outputs.file ||
           steps.governed_run.outputs.prompt_file || steps.build_run.outputs.file }}
         KSAI_OUTCOME_EXPECTED: "true"
+        KSAI_WORK_REQUEST: ${{ steps.context.outputs.work_request }}
         KSAI_ROUTE_COMMAND: ${{ steps.select.outputs.command || steps.select_arm.outputs.command }}
         KSAI_ROUTE_SOURCE: ${{ steps.select.outputs.route_source || steps.select_arm.outputs.route_source }}
         MODEL: ${{ steps.write_arm.outputs.model || steps.select_test.outputs.model || steps.select_arm.outputs.model || steps.build_run.outputs.model }}

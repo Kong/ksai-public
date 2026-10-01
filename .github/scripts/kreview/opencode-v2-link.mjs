@@ -17,6 +17,7 @@ const REMINDER_ID = 'static.runtime.opencode-max-steps';
 const DIRECTIVES = new Set(['note', 'stop', 'stop.enforce']);
 const STOPPED = 143;
 const EXPORT_MS = 15_000;
+const CLOSE_MS = 5_000;
 export const EXPORT_FILE = 'session.export.json';
 export const SESSION_FILE = 'opencode-session';
 export const RESUME_EXPORT = 'resume.export.json';
@@ -134,8 +135,11 @@ export const contextReply = (body) => (body.error === undefined ? { manifest: bo
 
 export function questions(path, name, ask, reply) {
   const waiting = new Map();
+  const held = new Set();
   let asks = 0;
   const server = createServer((socket) => {
+    held.add(socket);
+    socket.once('close', () => held.delete(socket));
     createInterface({ input: socket }).once('line', (said) => {
       let asked;
       try {
@@ -162,8 +166,8 @@ export function questions(path, name, ask, reply) {
       socket?.end(line(reply(body)));
     },
     close: () => new Promise((resolve) => {
-      for (const socket of waiting.values()) socket.destroy();
       server.close(() => resolve());
+      for (const socket of held) socket.destroy();
     }),
   };
 }
@@ -344,13 +348,37 @@ export async function linked(env = process.env, { connect = createConnection, ou
     await write({ type: 'ksai.error', created: Date.now(), data: { error: { type: 'ksai.driver', message: String(error?.message ?? error).slice(0, 500) } } });
     return 1;
   } finally {
-    controller.abort();
-    await Promise.all([retry.close(), context.close()]);
-    if (opencodeSession) await exported(client, opencodeSession.id, dir);
-    await server.stop();
-    await opened.close();
-    socket.end();
+    const ending = opencodeSession;
+    await closedDown({
+      abort: () => controller.abort(),
+      asking: () => Promise.all([retry.close(), context.close()]),
+      exporting: () => (ending ? exported(client, ending.id, dir) : undefined),
+      stopping: () => server.stop(),
+      relaying: () => opened.close(),
+      linking: () => new Promise((resolve) => {
+        socket.end(() => resolve(undefined));
+      }),
+    });
   }
+}
+
+export function bounded(closing, within = CLOSE_MS) {
+  let timer = null;
+  const given = new Promise((resolve) => {
+    timer = setTimeout(resolve, within);
+  });
+  return Promise.race([closing, given]).finally(() => clearTimeout(timer));
+}
+
+const survived = (step) => Promise.resolve().then(step).catch(() => {});
+
+export async function closedDown({ abort, asking, exporting, stopping, relaying, linking }, within = CLOSE_MS) {
+  await survived(abort);
+  await bounded(survived(asking), within);
+  await survived(exporting);
+  await survived(stopping);
+  await bounded(survived(relaying), within);
+  await bounded(survived(linking), within);
 }
 
 export async function exported(client, id, dir) {
@@ -371,4 +399,5 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     console.error(`opencode link: ${error?.message ?? error}`);
     process.exitCode = 1;
   }
+  process.exit();
 }

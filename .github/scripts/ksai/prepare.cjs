@@ -72,6 +72,7 @@ const {
 const path = require('node:path');
 const { isPlanFile, planDirOf, planFilePathFor, readRelease, scrub, withoutHold } = require('./plan.cjs');
 const { usingControlPlane } = require('../lib/control-plane.cjs');
+const { readFromArchive } = require('../lib/work-request.cjs');
 const {
   renderDirectPrompt,
   renderDoPrompt,
@@ -562,7 +563,7 @@ async function reviewBasisOf({ github, context, env, read }) {
   });
 }
 
-async function eventContext({ github, context, env, commented }) {
+async function eventContext({ github, context, env, commented, readers = commentReaders({ github, context, env }) }) {
   const dispatched = await resolveDispatchedComment({
     eventName: context.eventName,
     commentId: env.IN_COMMENT_ID,
@@ -570,7 +571,7 @@ async function eventContext({ github, context, env, commented }) {
     issueNumber: env.IN_ISSUE_NUMBER,
     actor: env.IN_TRIGGERING_ACTOR,
     appSlug: env.IN_APP_SLUG,
-    ...commentReaders({ github, context }),
+    ...readers,
   });
   if (dispatched.error) return { error: dispatched.error, securityPolicyRefused: dispatched.securityPolicyRefused };
 
@@ -626,12 +627,14 @@ async function resolveRunContext({ github, context, env }) {
   if (labelled?.error) return refuse(labelled.error, labelled.securityPolicyRefused);
 
   const securedReview = labelled && secured && String(env.SAW_TRIGGER ?? '') === 'review_submitted';
+  const readers = commentReaders({ github, context, env });
   const exactReview = securedReview
     ? await eventContext({
         github,
         context,
         env: { ...env, IN_ISSUE_NUMBER: String(basis.pr) },
         commented: false,
+        readers,
       })
     : null;
   if (exactReview?.error) return refuse(exactReview.error, exactReview.securityPolicyRefused);
@@ -658,7 +661,7 @@ async function resolveRunContext({ github, context, env }) {
     );
   }
 
-  const read = labelled ? labelledContext(labelled) : await eventContext({ github, context, env, commented });
+  const read = labelled ? labelledContext(labelled) : await eventContext({ github, context, env, commented, readers });
   if (read.error) return refuse(read.error, read.securityPolicyRefused);
   const reviewed = labelled ? null : await reviewBasisOf({ github, context, env, read });
   if (reviewed?.error) return refuse(reviewed.error, reviewed.securityPolicyRefused);
@@ -713,6 +716,7 @@ async function resolveRunContext({ github, context, env }) {
     attempt: String(out.attempt),
     stall: String(out.stall),
     prev_remaining: out.prevRemaining == null ? '' : String(out.prevRemaining),
+    work_request: await readers.seen(),
     refusal: '',
     refused_on: '',
   };
@@ -824,6 +828,17 @@ async function checkpointFactsFromCP({ github, owner, repo, env, token, fetch })
   }
 }
 
+async function reviewStanding({ github, owner, repo, env }) {
+  const asked = String(env.REVIEW_ID ?? '').trim();
+  if (!readFromArchive(env.WORK_REQUEST) || asked === '' || String(env.COMMENT_ID ?? '').trim() !== '') return { withdrawn: false, unreadable: null };
+  try {
+    const { data } = await github.rest.pulls.getReview({ owner, repo, pull_number: Number(env.THREAD_NUM), review_id: Number(asked) });
+    return { withdrawn: String(data?.state ?? '').toUpperCase() !== String(env.REVIEW_STATE ?? '').toUpperCase(), unreadable: null };
+  } catch (error) {
+    return { withdrawn: false, unreadable: `could not read review #${asked} on #${String(env.THREAD_NUM)}: ${error.message}` };
+  }
+}
+
 async function resolveCheckpoint({ github, core, owner, repo, env, authorize, writeAccess, fetch = globalThis.fetch }) {
   const approvalRef = approvedInJira(env);
   const token = releaseTokenFor({
@@ -848,7 +863,9 @@ async function resolveCheckpoint({ github, core, owner, repo, env, authorize, wr
   };
   let seen = { released: false, head: '', unreadable: null };
   let dated = { at: null, unreadable: null };
+  let standing = { withdrawn: false, unreadable: null };
   if (needsReleaseRead(asked)) {
+    standing = await reviewStanding({ github, owner, repo, env });
     const facts = usingControlPlane(env)
       ? await checkpointFactsFromCP({ github, owner, repo, env, token, fetch })
       : null;
@@ -864,12 +881,14 @@ async function resolveCheckpoint({ github, core, owner, repo, env, authorize, wr
     }
   }
 
+  if (standing.unreadable) seen = { ...seen, unreadable: standing.unreadable };
   const out = decideCheckpoint({
     ...asked,
     released: seen.released,
     unreadable: seen.unreadable,
     head: seen.head,
     pendingSince: dated.at,
+    withdrawn: standing.withdrawn,
   });
 
   const detail = String((out.reason === 'undated-request' ? dated.unreadable : seen.unreadable) ?? '');
@@ -1937,7 +1956,7 @@ async function resolveApprovalGate({ github, core, owner, repo, env, authorize, 
     releasedRef: env.RELEASED_REF,
     knownOwner: env.CHECKED_OWNER,
     disabledCommands: env.DISABLED_COMMANDS,
-    nativeReview: {
+    nativeReview: readFromArchive(env.WORK_REQUEST) ? null : {
       id: env.REVIEW_ID,
       state: env.REVIEW_STATE,
       submitted_at: env.REVIEW_SUBMITTED_AT,

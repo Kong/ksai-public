@@ -22,6 +22,7 @@ import { exitedOn } from '../lib/execution-log.mjs';
 import { jobOf } from '../lib/link-protocol.mjs';
 import { linkClient, pollTransport, websocketTransport } from './link-client.mjs';
 import { ordered } from '../ksai/progress.mjs';
+import workRequest from '../lib/work-request.cjs';
 import { isolatedToolPhase, parsed, PROVIDER_TIMEOUTS, totals, UNCONTINUED } from '../lib/opencode.mjs';
 import { answer, everything, executionLog, openCallOf, reportedVersion, rootSessions, SHELL_TIMEOUT_MS, spending, toolCalls, V2_MASKED_HOMES, validateV2Version } from '../lib/opencode-v2.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
@@ -757,7 +758,13 @@ export async function main(env = process.env, {
   };
 
   let expected = null;
+  let accepted = null;
   const startSession = async ({ session, phase, render: named, restarts, resumes, env: given = [] }) => {
+    accepted ??= workRequest.heldByLink({ env, endpoint, job, link: client.link, seen: env.KSAI_WORK_REQUEST, fetch }).catch((error) => {
+      resolveDone({ conclusion: 'failure', outputs: [{ name: 'error', value: error.message }], reason: 'failed' });
+      throw error;
+    });
+    await accepted;
     if (String(env.KSAI_OUTCOME_EXPECTED ?? '').trim() === 'true') {
       expected ??= mint('ksai-cp').then((token) => outcomeExpected({ endpoint, fetch, token, job, link: client.link, flow: run.flow }));
       await expected;
