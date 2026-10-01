@@ -16,7 +16,7 @@ import {
   totals,
 } from './opencode.mjs';
 
-export const OPENCODE_V2_VERSION = '2.0.18';
+export const OPENCODE_V2_VERSION = '2.0.21';
 
 export const majorOf = (version) => {
   const major = /^([0-9]{1,4})\./.exec(String(version ?? '').trim())?.[1];
