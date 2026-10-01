@@ -670,6 +670,7 @@ async function resolveDoPhase({
   commentId = null,
   trigger = null,
   successor = null,
+  retried = null,
   checksFile = null,
   retryFile = null,
   threadRootId = null,
@@ -723,7 +724,11 @@ async function resolveDoPhase({
   if (continues) {
     core?.info?.(`#${number}: this run continues a work session, so the report its first run opened is the work it carries on, not an answer.`);
   }
-  const seen = unasked || continues
+  const repeats = String(retried ?? '').trim() === 'true';
+  if (repeats) {
+    core?.info?.(`#${number}: the control plane retries the request it kept, so the report an earlier attempt opened is not an answer to it.`);
+  }
+  const seen = unasked || continues || repeats
     ? { answered: false, unreadable: null }
     : await alreadyReported({ github, owner, repo, prNumber: number, botLogin, commentId, env, fetch });
   if (seen.unreadable) {

@@ -7,6 +7,7 @@ const controlPlane = require('./control-plane.cjs');
 const ARCHIVE_PATH = '/v1/run/work-sessions/request';
 const ARCHIVE_VERSION = 1;
 const NOT_RECORDED = 'not_recorded_legacy';
+const UNKEPT = 'this run reads no kept requests';
 const TIMEOUT = 10_000;
 const WORK_JOB = 'run';
 const LEGACY = 'legacy';
@@ -98,11 +99,11 @@ function commentOf(held, accepted) {
   };
 }
 
-function workflowOf(held) {
+function contentOf(held, where) {
   if (held === undefined) return null;
-  const workflow = closed(held, ['json_base64', 'sha256', 'trust'], [], 'original workflow');
-  if (workflow.trust !== 'untrusted_content') throw new WorkRequestRefused('its original workflow is not kept as untrusted content');
-  return exactBytes(workflow.json_base64, workflow.sha256, 'original workflow');
+  const content = closed(held, ['json_base64', 'sha256', 'trust'], [], where);
+  if (content.trust !== 'untrusted_content') throw new WorkRequestRefused(`its ${where} is not kept as untrusted content`);
+  return exactBytes(content.json_base64, content.sha256, where);
 }
 
 function recordOf(dispatched) {
@@ -125,7 +126,7 @@ function readyOf(answer) {
   if (!HEX32.test(String(answer.session_id)) || !named(answer.request_id) || !named(answer.engine) || !named(answer.flow) || !unsigned(answer.retry_generation)) {
     throw new WorkRequestRefused('it names no session, request, engine, flow or generation');
   }
-  const request = closed(answer.request, ['digest', 'accepted_at', 'spec', 'spec_sha256'], ['comment', 'workflow'], 'request');
+  const request = closed(answer.request, ['digest', 'accepted_at', 'spec', 'spec_sha256'], ['comment', 'workflow', 'source'], 'request');
   const dispatch = closed(answer.dispatch, ['record_id', 'job', 'generation', 'accepted_at', 'digest', 'spec', 'spec_sha256'], [], 'dispatch');
   if (!HEX64.test(String(request.digest)) || !STAMP.test(String(request.accepted_at))) throw new WorkRequestRefused('its request names no digest or acceptance');
   if (!HEX32.test(String(dispatch.record_id)) || !named(dispatch.job) || !unsigned(dispatch.generation) || !HEX64.test(String(dispatch.digest)) || !STAMP.test(String(dispatch.accepted_at))) {
@@ -135,7 +136,8 @@ function readyOf(answer) {
   const dispatched = exactBytes(dispatch.spec, dispatch.spec_sha256, 'dispatch');
   return {
     session: answer.session_id, request: answer.request_id, engine: answer.engine, flow: answer.flow, generation: answer.retry_generation,
-    digest: request.digest, comment: commentOf(request.comment, request.accepted_at), workflow: workflowOf(request.workflow),
+    digest: request.digest, comment: commentOf(request.comment, request.accepted_at),
+    workflow: contentOf(request.workflow, 'original workflow'), source: contentOf(request.source, 'original source'),
     dispatch: { record: dispatch.record_id, job: dispatch.job, generation: dispatch.generation, digest: dispatch.digest, ...recordOf(dispatched) },
   };
 }
@@ -167,6 +169,8 @@ async function readWorkRequest({
 }
 
 const seenOf = (answer) => (answer.ready ? answer.ready.digest : answer.legacy ? LEGACY : '');
+
+const retriedOf = (answer) => Boolean(answer.ready) && answer.ready.dispatch.generation > 0 && answer.ready.dispatch.generation === answer.ready.generation;
 
 async function heldByLink({ seen, ...asking }) {
   const read = String(seen ?? '').trim();
@@ -203,7 +207,7 @@ const readFromArchive = (seen) => HEX64.test(String(seen ?? '').trim());
 
 const noticed = (said) => console.log(`::notice title=ksai::${said}, so the comment is read as it stands now`);
 
-function requestedReaders({ live, read, repository, note = noticed }) {
+function requestedReaders({ live, read, repository, note = noticed, keptOnly = false }) {
   let asked = null;
   const archive = () => {
     asked ??= read();
@@ -212,6 +216,7 @@ function requestedReaders({ live, read, repository, note = noticed }) {
   const through = (kind, liveRead) => async (...args) => {
     const answer = await archive();
     if (Object.hasOwn(answer, 'legacy')) {
+      if (keptOnly) throw new WorkRequestRefused(`a retry repeats the request the control plane kept, and ${answer.legacy || UNKEPT}`);
       if (answer.legacy) note(answer.legacy);
       return liveRead(...args);
     }
@@ -222,6 +227,7 @@ function requestedReaders({ live, read, repository, note = noticed }) {
     getReviewComment: through('review', live.getReviewComment),
     getSubmittedReview: through('submitted_review', live.getSubmittedReview),
     seen: async () => (asked ? seenOf(await asked) : ''),
+    retried: async () => (asked ? retriedOf(await asked) : false),
   };
 }
 

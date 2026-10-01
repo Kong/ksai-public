@@ -97,15 +97,24 @@ export const UNCARRIED = "the control plane refused the conversation this checkp
 
 const unsaid = (said) => said;
 
+const OUTCOME = /^[a-z0-9][a-z0-9_.-]{0,63}$/;
+const commitOf = (sha) => (COMMIT.test(String(sha ?? '')) ? String(sha).slice(0, 12) : 'none');
+
+function unkept(upload, said) {
+  const outcome = String(said.headers?.get?.(controlPlane.OUTCOME_HEADER) ?? '').trim();
+  const named = OUTCOME.test(outcome) ? ` (${outcome})` : '';
+  return `the control plane did not keep the checkpoint saved against head ${commitOf(upload.head_sha)} on base ${commitOf(upload.base_sha)}: ${said.why}${named}`;
+}
+
 export async function checkpointSaved({ endpoint, fetch, token, upload, continuation = '', note = unsaid }) {
   const kept = async (body, carried) => controlPlane.answered(fetch, `${endpoint}/v1/run/work-sessions/checkpoints`, {
-    token: typeof token === 'function' ? await token() : token, body: JSON.stringify(body), timeout: CALL_MS, headers: uploadHeaders(body, carried),
+    token: typeof token === 'function' ? await token() : token, body: JSON.stringify(body), timeout: CALL_MS, headers: uploadHeaders(body, carried), said: true,
   });
   const first = await kept(upload, continuation);
   const refused = first.status === 409 && Boolean(upload.conversation?.resumable);
   const bare = refused ? await kept({ ...upload, conversation: { resumable: false } }, '') : first;
   const said = bare.why ? first : bare;
-  if (said.why) throw new Error(`the control plane did not keep the checkpoint: ${said.why}`);
+  if (said.why) throw new Error(unkept(upload, said));
   const id = String(said.answer?.id ?? '');
   if (!CHECKPOINT.test(id)) throw new Error('the control plane kept the checkpoint under no id');
   if (said.answer?.patch_format !== PATCH_FORMAT) throw new Error(`the control plane kept the checkpoint without the ${PATCH_FORMAT} patch format this runner sent, so no restore could trust it`);
@@ -138,7 +147,7 @@ export async function restoredFrom({ endpoint, fetch, token, link, job, flow, pr
   try {
     const bearer = typeof token === 'function' ? await token() : token;
     said = await controlPlane.answered(fetch, `${endpoint}/v1/run/work-sessions/checkpoints/restore`, {
-      token: bearer, body: JSON.stringify({ job, link, flow, engine_version: OPENCODE_V2_VERSION, prompt_version: promptVersion }), timeout: CALL_MS,
+      token: bearer, body: JSON.stringify({ job, link, flow, engine_version: OPENCODE_V2_VERSION, prompt_version: promptVersion }), timeout: CALL_MS, said: true,
     });
   } catch (error) {
     return fellBack(`the control plane did not answer the restore: ${error?.message ?? error}`);

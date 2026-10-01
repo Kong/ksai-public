@@ -108,6 +108,12 @@ outputs:
       `command` too, including a test successor's, whose record names none and binds a workflow stage
       attempt instead. The retained comment must name this command or name none, and nothing classifies it
     value: ${{ steps.record.outputs.bound_command }}
+  session_action:
+    description: >-
+      how a work-session successor carries on the session its record binds: `continue`, `restart` or
+      `retry`, or empty for every other record. A retry repeats the request the control plane kept, so it
+      never reads a comment as it stands now
+    value: ${{ steps.record.outputs.session_action }}
   workflow_job:
     description: >-
       the workflow package job whose stage this run executes, or empty for every record that dispatches no
@@ -277,7 +283,7 @@ runs:
             ['trigger_state', 'triggerState'], ['trigger_name', 'triggerName'],
             ['requester', 'requester'], ['approver', 'approver'], ['approval_id', 'approvalId'], ['model', 'model'],
             ['effort', 'effort'], ['guidance', 'guidance'], ['work_item', 'workItem'], ['ask', 'ask'],
-            ['bound_command', 'boundCommand'], ['workflow_job', 'workflowJob'],
+            ['bound_command', 'boundCommand'], ['session_action', 'sessionAction'], ['workflow_job', 'workflowJob'],
             ['workflow_instance', 'workflowInstance'], ['workflow_attempt', 'workflowAttempt'],
             ['workflow_lease', 'workflowLease'], ['source_revision', 'sourceRevision'], ['stage_minutes', 'stageMinutes'],
             ['stage_job_minutes', 'stageJobMinutes']]) {

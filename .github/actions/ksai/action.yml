@@ -1407,6 +1407,7 @@ runs:
         IN_APP_SLUG: ${{ inputs.app_slug }}
         KSAI_WORK_REQUEST_ENDPOINT: >-
           ${{ steps.engine.outputs.opencode_major == '2' && (inputs.control_plane_endpoint || inputs.fleet_dials_endpoint) || '' }}
+        KSAI_WORK_SESSION_ACTION: ${{ steps.dispatch_record.outputs.session_action }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:
         github-token: ${{ inputs.authorization_github_token || inputs.source_org_github_token }}
@@ -2513,6 +2514,7 @@ runs:
         RECORD_SCOPE: ${{ steps.dispatch_record.outputs.scope }}
         SAW_TRIGGER: ${{ steps.dispatch_record.outputs.trigger }}
         WORK_SESSION_SUCCESSOR: ${{ steps.dispatch_record.outputs.bound_command }}
+        WORK_REQUEST_RETRY: ${{ steps.context.outputs.work_request_retry }}
         COMMENT_ID: ${{ steps.context.outputs.comment_id }}
         AUTHZ_WHY: ${{ steps.authz.outputs.why }}
         CHECKS_FILE: ${{ runner.temp }}/ksai-checks.json

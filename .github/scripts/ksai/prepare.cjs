@@ -717,6 +717,7 @@ async function resolveRunContext({ github, context, env }) {
     stall: String(out.stall),
     prev_remaining: out.prevRemaining == null ? '' : String(out.prevRemaining),
     work_request: await readers.seen(),
+    work_request_retry: (await readers.retried()) ? 'true' : '',
     refusal: '',
     refused_on: '',
   };
@@ -991,6 +992,7 @@ async function decidePhase({ github, core, owner, repo, env, authorize, writeAcc
     commentId: env.COMMENT_ID,
     sawTrigger: env.SAW_TRIGGER,
     successor: env.WORK_SESSION_SUCCESSOR,
+    retried: env.WORK_REQUEST_RETRY,
     checksFile: env.CHECKS_FILE,
     retryFile: env.RETRY_FILE,
     threadRootId: env.THREAD_ROOT_ID,

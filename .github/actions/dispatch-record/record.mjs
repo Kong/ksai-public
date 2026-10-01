@@ -103,6 +103,7 @@ const NO_RECORD = Object.freeze({
   workItem: '',
   ask: '',
   boundCommand: '',
+  sessionAction: '',
 });
 
 const PR_SHAPE = /^[1-9][0-9]{0,9}$/;
@@ -158,7 +159,7 @@ const WORK_REF_SHAPE = /^jira\/[A-Za-z][A-Za-z0-9_]*-[0-9]{1,10}$/;
 
 const COMMENT_KINDS = Object.freeze(['issue', 'review', 'submitted_review']);
 
-const SESSION_ACTIONS = Object.freeze(['continue', 'restart']);
+const SESSION_ACTIONS = Object.freeze(['continue', 'restart', 'retry']);
 
 const BOUND_COMMANDS = new Map([['review', ['review']], ['implement', ['implement', SECURED_FIX_COMMAND]]]);
 
@@ -558,6 +559,7 @@ function recordFrom(served, at) {
     read: true,
     command: boundCommand || (securedFix ? 'fix' : text(command)),
     boundCommand,
+    sessionAction: text(sessionAction),
     autofixCapability: securedFix ? AUTOFIX_CAPABILITY : '',
     label: text(label),
     pr: text(pr),

@@ -385,7 +385,7 @@ async function withLastEdit(github, comment) {
   }
 }
 
-const commentReaders = ({ github, context, env = {}, fetch = globalThis.fetch }) => requestedReaders({
+const commentReaders = ({ github, context, env = process.env, fetch = globalThis.fetch }) => requestedReaders({
   live: {
     getIssueComment: async (comment_id) =>
       withLastEdit(github, (await github.rest.issues.getComment({ ...context.repo, comment_id })).data),
@@ -396,6 +396,7 @@ const commentReaders = ({ github, context, env = {}, fetch = globalThis.fetch })
   },
   read: () => readWorkRequest({ env, fetch }),
   repository: `${context.repo.owner}/${context.repo.repo}`,
+  keptOnly: env.KSAI_WORK_SESSION_ACTION === 'retry',
 });
 
 function asCommentEvent({ dispatched, onIssue, payload = null }) {
