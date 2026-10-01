@@ -22,6 +22,9 @@ const SCHEMAS = Object.assign(Object.create(null), {
   'review-discovery': require('./prompt-schemas/review-discovery.schema.json'),
   'review-findings-audit': require('./prompt-schemas/review-findings-audit.schema.json'),
   'review-resolution': require('./prompt-schemas/review-resolution.schema.json'),
+  'task-continue': require('./prompt-schemas/task-continue.schema.json'),
+  'task-followup': require('./prompt-schemas/task-followup.schema.json'),
+  'task-start': require('./prompt-schemas/task-start.schema.json'),
   'work-session-continue': require('./prompt-schemas/work-session-continue.schema.json'),
   'work-session-followup': require('./prompt-schemas/work-session-followup.schema.json'),
   'work-session-start': require('./prompt-schemas/work-session-start.schema.json'),
@@ -32,6 +35,7 @@ const SCHEMAS = Object.assign(Object.create(null), {
 Object.freeze(SCHEMAS);
 
 const SUPPLIED = Object.freeze(Object.assign(Object.create(null), {
+  'runtime.task-continue': Object.freeze(['followup']),
   'runtime.work-session-continue': Object.freeze(['followup']),
   'runtime.workflow-stage': Object.freeze(['instructions', 'known_findings', 'stage']),
 }));

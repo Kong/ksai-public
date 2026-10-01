@@ -130,6 +130,21 @@
       "patch",
       "resolution"
     ],
+    "runtime.task-continue": [
+      "base_prompt",
+      "followup",
+      "handoff",
+      "knowledge"
+    ],
+    "runtime.task-followup": [
+      "comment",
+      "requests",
+      "sessions"
+    ],
+    "runtime.task-start": [
+      "base_prompt",
+      "knowledge"
+    ],
     "runtime.work-session-continue": [
       "base_prompt",
       "followup",
