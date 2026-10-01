@@ -2,7 +2,7 @@ import { appendFileSync, writeFileSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 
 import { DIGEST, digest, readArtifacts, regularFile } from './artifacts.mjs';
-import { CarryRefused, IncompleteAnswer, MAX_RESPONSE_BYTES, UpstreamFailure, boundedSteps, carriedOf, conversation } from './conversation.mjs';
+import { CarryRefused, GivenUp, IncompleteAnswer, MAX_RESPONSE_BYTES, UpstreamFailure, boundedSteps, carriedOf, conversation } from './conversation.mjs';
 import { Errand, governRequest } from './provider.mjs';
 import { linkNotes } from './notes.mjs';
 import { TOOL_PREFIX, governedNotes, governedReminder, governedTool, rendered, verifyRelease, versionParts } from './release.mjs';
@@ -362,8 +362,9 @@ function governing(state, given, report, provider, log) {
       }
     },
     follow(response) {
+      const ticket = talk.ticket();
       if (!response.ok || !response.body) {
-        talk.failed();
+        talk.failed(ticket);
         return response;
       }
       sealed();
@@ -377,14 +378,15 @@ function governing(state, given, report, provider, log) {
             try {
               bytes = await buffered(upstream);
             } catch (error) {
-              talk.failed();
+              talk.failed(ticket);
               throw error;
             }
             try {
-              talk.response(bytes);
+              talk.response(bytes, ticket);
             } catch (error) {
+              if (error instanceof GivenUp) throw error;
               if (!(error instanceof UpstreamFailure) && !(error instanceof IncompleteAnswer)) refuse(error, true);
-              talk.failed();
+              talk.failed(ticket);
               throw error;
             }
             if (!delivered) {

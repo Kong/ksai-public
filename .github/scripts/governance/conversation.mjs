@@ -196,6 +196,8 @@ export class UpstreamFailure extends Error {}
 
 export class IncompleteAnswer extends Error {}
 
+export class GivenUp extends Error {}
+
 function parseResponse(bytes, model, tools) {
   const blocks = [];
   let open = null;
@@ -393,6 +395,7 @@ export function conversation(prompt, model, tools, limit = null, carried = null)
   let history = [opening];
   let answered = history;
   let awaiting = false;
+  let asked = 0;
   let terminal = false;
   let pending = [];
   let taken = 0;
@@ -418,16 +421,19 @@ export function conversation(prompt, model, tools, limit = null, carried = null)
       answered = history;
       history = normalized.map((message, index) => history[index] ?? canonical(message));
       awaiting = true;
+      asked += 1;
       return Boolean(limit) && taken + 1 === limit.steps;
     },
-    failed() {
-      if (!awaiting) return;
+    ticket: () => (awaiting ? asked : 0),
+    failed(ticket = asked) {
+      if (!awaiting || ticket !== asked) return;
       history = answered;
       awaiting = false;
     },
     settled: () => settled,
-    response(bytes) {
-      if (!awaiting) throw new Error('a response arrived with no request pending');
+    response(bytes, ticket = awaiting ? asked : 0) {
+      if (!ticket) throw new Error('a response arrived with no request pending');
+      if (!awaiting || ticket !== asked) throw new GivenUp('a response arrived for a request that was given up');
       const reply = parseResponse(bytes, model, tools);
       if (reply.toolUseIDs.some((id) => used.has(id))) throw new Error('the model replayed a tool_use id');
       if (history.length + 1 > MAX_MESSAGES) throw new Error('the message history is too long');
