@@ -212,7 +212,7 @@ const expiryOf = (token) => {
 
 export function linkClient({
   endpoint, repository, runId, attempt, job, mint, verifyCertificate, runner, jobStartedAt = Date.now(),
-  onMessage, onPlugin = (_session, _frame, _message) => {}, onLapse, onEnded = (_error) => {}, onTick = () => {}, log = (_said) => {},
+  onMessage, onPlugin = (_session, _frame, _message) => {}, onLapse, onEnded = (_error) => {}, onTick = () => {}, onAcked = (_message) => {}, log = (_said) => {},
   transports = { websocket: websocketTransport(endpoint), poll: pollTransport(endpoint, job) },
   clock = () => performance.now(), wall = Date.now, pause = (ms) => new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -266,7 +266,7 @@ export function linkClient({
     pingEvery = pingMs;
     if (!welcomed) leaseUntil = clock() + leaseMs;
     welcomed = true;
-    while (pending.length && pending[0].seq <= resume.acked) pending.shift();
+    while (pending.length && pending[0].seq <= resume.acked) onAcked(pending.shift());
     for (const [session, frames] of relayed) {
       const acked = resume.plugins.find((one) => one.session === session)?.acked ?? 0;
       relayed.set(session, frames.filter((one) => one.seq > acked));
@@ -287,7 +287,7 @@ export function linkClient({
       return;
     }
     const message = open(frame, { link, job, epoch, to: 'host', signers });
-    while (pending.length && pending[0].seq <= message.ack) pending.shift();
+    while (pending.length && pending[0].seq <= message.ack) onAcked(pending.shift());
     if (message.kind === 'lease') {
       const sent = pinged.get(message.body.n);
       pinged.delete(message.body.n);

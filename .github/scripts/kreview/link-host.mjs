@@ -19,6 +19,7 @@ import { forgetDeliveries } from '../lib/channel-hook.mjs';
 import controlPlane from '../lib/control-plane.cjs';
 import { ARTIFACTS, deliveriesUnder, digestOf, lockedOf } from '../lib/cp-prompts.mjs';
 import { exitedOn } from '../lib/execution-log.mjs';
+import { acknowledging } from '../lib/link-acknowledged.mjs';
 import { jobOf } from '../lib/link-protocol.mjs';
 import { linkClient, pollTransport, websocketTransport } from './link-client.mjs';
 import { ordered } from '../ksai/progress.mjs';
@@ -58,7 +59,7 @@ const KILLED_EXIT = 137;
 const CANCELLING = Object.freeze(['SIGINT', 'SIGTERM']);
 const CANCELLED = 'the job was cancelled, so the run stopped itself and the engine was told it was not lost';
 const { repairRequest } = implementPasses;
-const { attemptIdOf } = writeRecord;
+const { spendAttemptOf } = writeRecord;
 const { MAX_CEILING_MINUTES, SALVAGE_MARGIN_MINUTES, ceilingMinutes, wholeNumber } = watchdogLimits;
 const SESSION_ENV = Object.freeze(['KSAI_GOVERNED_STEPS']);
 const JOB = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/;
@@ -182,7 +183,7 @@ export function runFact(env, now = Date.now()) {
   const status = String(env.STATUS_UPDATES ?? '').trim();
   const number = Number(String(env.REPORT_NUM ?? '').trim());
   const index = String(env.KSAI_JOB_INDEX ?? '').trim() || '0';
-  const charged = attemptIdOf(`${env.GITHUB_RUN_ID}:${env.GITHUB_RUN_ATTEMPT}:${env.GITHUB_JOB}:${index}`);
+  const charged = spendAttemptOf(env);
   const job = String(env.GITHUB_JOB ?? '').trim();
   return {
     flow,
@@ -238,8 +239,8 @@ export function usageOf(session, model, segment) {
   };
 }
 
-export function freshDeliveries(governedDir, delivered) {
-  const { deliveries } = deliveriesUnder({ files: [deliveriesAt(governedDir)], root: governedDir });
+export function freshDeliveries(governedDir, delivered, whole = false) {
+  const { deliveries } = deliveriesUnder({ files: [deliveriesAt(governedDir)], root: governedDir, whole });
   const fresh = deliveries.filter((one) => !delivered.has(JSON.stringify(one)));
   for (const one of fresh) delivered.add(JSON.stringify(one));
   const batches = [];
@@ -247,9 +248,9 @@ export function freshDeliveries(governedDir, delivered) {
   return batches;
 }
 
-export function freshObservations(env, observed, warn = (line) => console.log(line)) {
+export function freshObservations(env, observed, warn = (line) => console.log(line), answered = false) {
   const said = [];
-  for (const { one, body } of observationsIn(env, observed)) {
+  for (const { one, body } of observationsIn(env, observed, answered)) {
     observed.add(one.id);
     const record = {
       id: one.id, mode: one.mode, request_digest: one.request_digest, prompt_digest: one.prompt_digest, model: one.model,
@@ -674,10 +675,16 @@ export async function main(env = process.env, {
     runner: { name: String(env.RUNNER_NAME ?? 'unknown'), os: String(env.RUNNER_OS ?? 'unknown'), arch: String(env.RUNNER_ARCH ?? 'unknown') },
     jobStartedAt: Number(env.KSAI_JOB_STARTED_AT_MS) || Date.now(),
     log: (line) => console.log(line),
+    onAcked: acknowledging(runnerTemp),
     onTick: () => {
+      let live = '';
       for (const [session, held] of sessions) {
-        if (held.child && held.child.exitCode === null) reportProgress(session, held);
+        if (held.child && held.child.exitCode === null) {
+          reportProgress(session, held);
+          live = session;
+        }
       }
+      if (live) reportKept(live, true);
     },
     onLapse: () => resolveDone({ conclusion: 'failure', outputs: [{ name: 'error', value: 'the link to the engine lapsed, so the run stopped itself' }], reason: 'lease' }),
     onEnded: (error) => resolveDone({ conclusion: 'failure', outputs: [{ name: 'error', value: error.message }], reason: 'failed' }),
@@ -725,18 +732,22 @@ export async function main(env = process.env, {
   const delivered = new Set();
   const observed = new Set();
   const secrets = collectSecrets(env);
+  const say = (line) => console.log(line);
+  const reportKept = (session, live) => {
+    try {
+      for (const receipt of freshDeliveries(governedDir, delivered, live)) client.send('receipt', undefined, receipt);
+    } catch (error) {
+      if (!live) say(`::warning::the prompts session ${session} was delivered could not be read: ${error?.message ?? error}`);
+    }
+    try {
+      for (const seen of freshObservations(env, observed, say, live)) client.send('observation', undefined, seen);
+    } catch (error) {
+      if (!live) say(`::warning::what session ${session} sent the provider could not be read: ${error?.message ?? error}`);
+    }
+  };
   const reportRecords = (session, held) => {
     client.send('usage', undefined, usageOf(session, run.model, parsed(since(events, held.offset))));
-    try {
-      for (const receipt of freshDeliveries(governedDir, delivered)) client.send('receipt', undefined, receipt);
-    } catch (error) {
-      console.log(`::warning::the prompts session ${session} was delivered could not be read: ${error?.message ?? error}`);
-    }
-    try {
-      for (const seen of freshObservations(env, observed)) client.send('observation', undefined, seen);
-    } catch (error) {
-      console.log(`::warning::what session ${session} sent the provider could not be read: ${error?.message ?? error}`);
-    }
+    reportKept(session, false);
   };
 
   const reportProgress = (session, held) => {

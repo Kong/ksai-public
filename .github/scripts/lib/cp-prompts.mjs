@@ -288,7 +288,7 @@ function onlyDelivery(line) {
   return held;
 }
 
-function kept(files, read) {
+function kept(files, read, whole) {
   return files.flatMap((file) => {
     let text;
     try {
@@ -297,7 +297,8 @@ function kept(files, read) {
       if (error?.code === 'ENOENT') return [];
       throw error;
     }
-    return text.split('\n').filter((line) => line.trim() !== '').flatMap((line) => {
+    const ended = whole ? text.slice(0, text.lastIndexOf('\n') + 1) : text;
+    return ended.split('\n').filter((line) => line.trim() !== '').flatMap((line) => {
       try {
         return [onlyDelivery(record(JSON.parse(line), 'a kept delivery'))];
       } catch {
@@ -342,9 +343,9 @@ function reconciled(deliveries, made) {
   });
 }
 
-export function deliveriesUnder({ files, root, read = readFileSync, list = readdirSync }) {
+export function deliveriesUnder({ files, root, read = readFileSync, list = readdirSync, whole = false }) {
   if (!String(root ?? '')) throw new Error('a delivery report names the directory whose renders explain it');
-  const written = kept(files, read);
+  const written = kept(files, read, whole);
   return { written, deliveries: reconciled(written, rendersUnder(root, list, read)) };
 }
 

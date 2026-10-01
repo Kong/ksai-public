@@ -45,6 +45,11 @@ function attemptIdOf(raw) {
   return ATTEMPT_ID_SHAPE.test(id) ? id : '';
 }
 
+function spendAttemptOf(env) {
+  const index = String(env.KSAI_JOB_INDEX ?? '').trim() || '0';
+  return attemptIdOf(`${env.GITHUB_RUN_ID}:${env.GITHUB_RUN_ATTEMPT}:${env.GITHUB_JOB}:${index}`);
+}
+
 const REASON_SHAPE = /^[a-z][a-z0-9-]{0,39}$/;
 
 const UNCLASSIFIED_REASON = 'unclassified';
@@ -341,6 +346,7 @@ module.exports = {
   REASON_SHAPE,
   attemptIdOf,
   compactJob,
+  spendAttemptOf,
   UNCLASSIFIED_REASON,
   IDENTITY_PREFIX,
   MAX_ATTEMPTS,

@@ -7,12 +7,19 @@ import controlPlane from '../lib/control-plane.cjs';
 const { mask, reachedFor } = controlPlane;
 const wait = (ms) => new Promise((done) => { setTimeout(done, ms); });
 
-export function observationsIn(env, skip = new Set()) {
+export function observationsIn(env, skip = new Set(), answered = false) {
   const root = join(String(env.RUNNER_TEMP ?? ''), 'ksai-provider-observations');
   const files = existsSync(root) ? readdirSync(root).filter((name) => /^[0-9a-f]{32}\.json$/.test(name)).sort() : [];
-  return files.filter((file) => !skip.has(file.slice(0, 32))).map((file) => {
-    const one = JSON.parse(readFileSync(join(root, file), 'utf8'));
-    return { one, body: readFileSync(join(root, `${one.id}.${one.mode === 'cp' ? 'dynamic' : 'body'}`)) };
+  return files.filter((file) => !skip.has(file.slice(0, 32))).flatMap((file) => {
+    let one;
+    try {
+      one = JSON.parse(readFileSync(join(root, file), 'utf8'));
+    } catch (error) {
+      if (answered) return [];
+      throw error;
+    }
+    if (answered && !(one.status > 0)) return [];
+    return [{ one, body: readFileSync(join(root, `${one.id}.${one.mode === 'cp' ? 'dynamic' : 'body'}`)) }];
   });
 }
 
