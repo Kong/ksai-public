@@ -94,19 +94,19 @@ inputs:
     default: ""
   record_bound_command:
     description: >-
-      the command a work-session successor's record binds it to, or empty. The gate routes on it, and the
+      the command a task successor's record binds it to, or empty. The gate routes on it, and the
       retained comment must name it or name no command. Nothing classifies a bound comment
     required: false
     default: ""
   record_session_action:
     description: >-
-      how a work-session successor's record carries on its session, or empty. A `retry` reads only the request
+      how a task successor's record carries on its task, or empty. A `retry` reads only the request
       the control plane kept and refuses to read the comment as it stands now
     required: false
     default: ""
   record_requester:
     description: >-
-      the operator a work-session successor's record names as the one who continued or restarted it, or
+      the operator a task successor's record names as the one who continued or restarted it, or
       empty. It is never a grant: the retained request's own author is still the one authorized, and the
       operator must clear the same bar or the successor does not run
     required: false
@@ -419,7 +419,7 @@ runs:
         username: ${{ steps.requester.outputs.login }}
         write_access: ${{ inputs.write_access_commands != '' }}
 
-    - name: Authorize the operator who continued a work session
+    - name: Authorize the operator who continued a task
       id: authz_operator
       if: ${{ inputs.authorization_github_token != '' && inputs.record_bound_command != '' }}
       uses: ./_ksai/.github/actions/codeowners-authz

@@ -1443,7 +1443,7 @@ runs:
         username: ${{ steps.context.outputs.commenter || steps.context.outputs.work_actor }}
         write_access: ${{ inputs.write_access_commands != '' }}
 
-    - name: Authorize the operator who continued a work session
+    - name: Authorize the operator who continued a task
       id: check_operator
       if: ${{ inputs.flow != 'test-publish' && steps.dispatch_record.outputs.bound_command != '' }}
       uses: ./_ksai/.github/actions/codeowners-authz

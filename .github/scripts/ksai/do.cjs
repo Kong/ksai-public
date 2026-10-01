@@ -722,7 +722,7 @@ async function resolveDoPhase({
   }
   const continues = String(successor ?? '').trim() !== '';
   if (continues) {
-    core?.info?.(`#${number}: this run continues a work session, so the report its first run opened is the work it carries on, not an answer.`);
+    core?.info?.(`#${number}: this run continues a task, so the report its first run opened is the work it carries on, not an answer.`);
   }
   const repeats = String(retried ?? '').trim() === 'true';
   if (repeats) {

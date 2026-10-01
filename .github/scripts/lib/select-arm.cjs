@@ -1239,7 +1239,7 @@ function boundRefusal(result, bound) {
 
 function operatorRefusal(command, { login = '', codeowner = null, write = null } = {}, writeAccessCommands = []) {
   const answer = commandAuthorized(command, { codeowner, write, writeAccessCommands });
-  const who = String(login ?? '').trim() === '' ? 'the operator who continued this work session' : `${login}, who continued this work session,`;
+  const who = String(login ?? '').trim() === '' ? 'the operator who continued this task' : `${login}, who continued this task,`;
   if (answer.undecided || !answer.read) return `whether ${who} clears the ${answer.bar} bar \`${command}\` holds here could not be read, so it did not run`;
   if (!answer.authorized) return `${who} does not clear the ${answer.bar} bar \`${command}\` holds here, so it did not run`;
   return '';

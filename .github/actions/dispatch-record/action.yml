@@ -104,13 +104,13 @@ outputs:
     value: ${{ steps.record.outputs.autofix_capability }}
   bound_command:
     description: >-
-      the command a work-session successor is bound to, or empty for every other record. It is the
+      the command a task successor is bound to, or empty for every other record. It is the
       `command` too, including a test successor's, whose record names none and binds a workflow stage
       attempt instead. The retained comment must name this command or name none, and nothing classifies it
     value: ${{ steps.record.outputs.bound_command }}
   session_action:
     description: >-
-      how a work-session successor carries on the session its record binds: `continue`, `restart` or
+      how a task successor carries on the task its record binds: `continue`, `restart` or
       `retry`, or empty for every other record. A retry repeats the request the control plane kept, so it
       never reads a comment as it stands now
     value: ${{ steps.record.outputs.session_action }}

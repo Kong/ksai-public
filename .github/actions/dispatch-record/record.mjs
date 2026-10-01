@@ -187,7 +187,7 @@ function boundCommandOf(flow, command, { job, stage, instance, commented }) {
   const staged = STAGE_BOUND_COMMANDS.get(named);
   const runs = BOUND_COMMANDS.get(named)?.includes(command) || (commented && COMMENTED_BOUND_COMMANDS.get(named)?.includes(command));
   if (staged === undefined ? !runs : command !== undefined) {
-    throw policyStopped('the record binds a work session to a flow its command does not run');
+    throw policyStopped('the record binds a task to a flow its command does not run');
   }
   if (staged === undefined) return command === SECURED_FIX_COMMAND ? 'fix' : command;
   if (!shaped(job, STAGE_PART) || !shaped(stage, STAGE_PART) || !shaped(instance, STAGE_INSTANCE)) {
@@ -229,7 +229,7 @@ function stageOf(served, commanded, at) {
     return NO_STAGE;
   }
   if (execution !== STAGE_EXECUTION) throw policyStopped('the record names a workflow execution this runner does not run');
-  if (commanded) throw policyStopped('the record dispatches a package stage and names a command or a work session beside it');
+  if (commanded) throw policyStopped('the record dispatches a package stage and names a command or a task beside it');
   if (!shaped(job, STAGE_JOB) || !shaped(instance, STAGE_INSTANCE) || !shaped(lease, STAGE_LEASE) || counted(tried) === ''
     || !Number.isSafeInteger(Number(tried))) {
     throw policyStopped('the record dispatches a package stage it does not fully name');
@@ -531,15 +531,15 @@ function recordFrom(served, at) {
   let boundCommand = '';
   if (bound) {
     if (typeof sessionId !== 'string' || !RECORD_ID.test(sessionId)) {
-      throw policyStopped('the record binds a work session the control plane could not have minted');
+      throw policyStopped('the record binds a task the control plane could not have minted');
     }
     if (typeof sessionAction !== 'string' || !SESSION_ACTIONS.includes(sessionAction)) {
-      throw policyStopped('the record binds a work session to an action a successor does not take');
+      throw policyStopped('the record binds a task to an action a successor does not take');
     }
     if (sessionAction === 'restart'
       ? typeof sessionParent !== 'string' || !RECORD_ID.test(sessionParent) || sessionParent === sessionId
       : sessionParent !== undefined) {
-      throw policyStopped('the record binds a work session to a parent its action does not name');
+      throw policyStopped('the record binds a task to a parent its action does not name');
     }
     boundCommand = boundCommandOf(sessionFlow, command, {
       job: workflowJob,
@@ -548,10 +548,10 @@ function recordFrom(served, at) {
       commented: typeof commentKind === 'string' && COMMENTED_KINDS.includes(commentKind),
     });
     if (classification !== undefined) {
-      throw policyStopped('the record binds a work session to a classified comment, which a successor never replays');
+      throw policyStopped('the record binds a task to a classified comment, which a successor never replays');
     }
     if (requester === undefined) {
-      throw policyStopped('the record binds a work session but names no operator who continued it');
+      throw policyStopped('the record binds a task but names no operator who continued it');
     }
   }
   const stage = stageOf(served, command !== undefined || bound, at);

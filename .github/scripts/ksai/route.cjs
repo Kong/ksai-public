@@ -400,7 +400,7 @@ async function route({ github, core, context, env }) {
   if (bound !== '') {
     core.setOutput('write_access_commands', requested || boundBare ? await opened() : '');
     if (boundBare) core.setOutput('own_pull', 'true');
-    core.info(`This run continues a work session bound to \`${bound}\`, so its comment is not classified.`);
+    core.info(`This run continues a task bound to \`${bound}\`, so its comment is not classified.`);
     return decision;
   }
   const bare =
