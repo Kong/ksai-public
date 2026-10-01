@@ -11,6 +11,7 @@ import { armed, compact } from './status.mjs';
 
 const require = createRequire(import.meta.url);
 const { appendHistory, stageOf, visibleHistory } = require('../lib/run-progress.cjs');
+const { markdownTable } = require('../lib/markdown-table.cjs');
 
 const MAX_ROWS = 200;
 
@@ -73,26 +74,17 @@ export function format(record) {
   if (record.updates === 0) {
     return '## What the run was doing\n\nNo status was published. Either the run was shorter than one interval, or status updates were off.\n';
   }
-  const cell = (value) => String(value).replaceAll('|', '\\|').replaceAll('`', "'");
-  const lines = [
-    '## What the run was doing',
-    '',
-    '| Elapsed | Left | Tokens | Calls | What it was doing |',
-    '| ---: | ---: | ---: | ---: | :--- |',
-  ];
-  for (const row of record.rows) {
+  const cell = (value) => String(value).replaceAll('`', "'");
+  const rows = record.rows.map((row) => {
     const seen =
       Number(row.tokens?.input_tokens ?? 0) +
       Number(row.tokens?.cache_read_tokens ?? 0) +
       Number(row.tokens?.cache_creation_tokens ?? 0);
     const tokens = `${compact(seen)} in / ${compact(row.tokens?.output_tokens)} out`;
     const what = row.said || row.doing || '-';
-    lines.push(
-      `| \`${cell(row.elapsed || '-')}\` | \`${cell(row.left || '-')}\` | \`${cell(tokens)}\` | \`${row.calls}\` | ${cell(what)} |`,
-    );
-  }
-  lines.push('');
-  return `${lines.join('\n')}\n`;
+    return [`\`${cell(row.elapsed || '-')}\``, `\`${cell(row.left || '-')}\``, `\`${cell(tokens)}\``, `\`${row.calls}\``, cell(what)];
+  });
+  return `## What the run was doing\n\n${markdownTable(['Elapsed', 'Left', 'Tokens', 'Calls', 'What it was doing'], rows)}\n\n`;
 }
 
 const readOr = (path, fallback) => {

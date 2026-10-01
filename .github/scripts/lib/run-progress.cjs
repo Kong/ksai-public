@@ -1,5 +1,6 @@
 'use strict';
 
+const { markdownTable } = require('./markdown-table.cjs');
 const { scrubTrigger } = require('./select-arm.cjs');
 
 const MAX_HISTORY = 24;
@@ -156,11 +157,7 @@ const BLANK_CELL = '—';
 function reportTable(columns, rows, blank = BLANK_CELL) {
   const kept = columns.map((_, at) => rows.length === 0 || rows.some((row) => row[at] !== blank));
   const only = (row) => row.filter((_, at) => kept[at]);
-  return [
-    `| ${only(columns).join(' | ')} |`,
-    `| ${only(columns).map(() => '---').join(' | ')} |`,
-    ...rows.map((row) => `| ${only(row).join(' | ')} |`),
-  ];
+  return markdownTable(only(columns), rows.map((row) => only(row))).split('\n');
 }
 
 const spendSaid = (clauses) =>

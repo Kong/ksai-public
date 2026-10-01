@@ -35,7 +35,7 @@ function flatProblem(submission) {
 
 const VERDICT_ROWS = Object.freeze(['Check', 'Scope', 'Mandate', 'Findings', 'Findings audit']);
 const RULE_CELL = /^:?-{3,}:?$/;
-const TABLE_PROBLEM = 'the verdict table must open summary: a `| Check | Result |` header, a `| :--- | :--- |` rule, then the rows Scope, Mandate, Findings and Findings audit, each on its own line with exactly two cells';
+const TABLE_PROBLEM = 'the verdict table must open summary: a `| Check | Result |` header, a `| --- | --- |` rule, then the rows Scope, Mandate, Findings and Findings audit, each on its own line with exactly two cells';
 
 /**
  * cells splits a row where GFM splits it, at an unescaped pipe.

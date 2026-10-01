@@ -1,6 +1,7 @@
 
 const { docsLink } = require('./docs.cjs');
 const MODEL_CATALOG = require('./model-catalog.cjs');
+const { markdownTable } = require('./markdown-table.cjs');
 const { extractGivenPlan } = require('./plan-given.cjs');
 const { DEFAULT_TRIGGER_PHRASE, triggerAlternation, triggerMatcher } = require('./text.cjs');
 
@@ -1309,18 +1310,18 @@ function renderRejection({ error, allowed, ceiling, floor, command, callerFlags 
     `<trigger>${named === '' ? '' : ` ${named}`} --model balanced --effort medium focus on the auth path`,
     '```',
     '',
-    `| Option | Accepted |`,
-    `| ---: | :--- |`,
-    `| \`--model\` | ${allowed.map((m) => `\`${m}\``).join(', ') || '_none configured_'} |`,
-    `| \`--effort\` | ${efforts.map((e) => `\`${e}\``).join(', ')} |`,
+  ];
+  const rows = [
+    ['`--model`', allowed.map((m) => `\`${m}\``).join(', ') || '_none configured_'],
+    ['`--effort`', efforts.map((e) => `\`${e}\``).join(', ')],
   ];
   for (const one of Array.isArray(callerFlags) ? callerFlags : []) {
-    if (one?.honoured === true) lines.push(`| \`${one.flag}\` | ${String(one.accepted ?? 'no value')} |`);
+    if (one?.honoured === true) rows.push([`\`${one.flag}\``, String(one.accepted ?? 'no value')]);
   }
   if (aliases.length) {
-    lines.push(`| aliases | ${aliases.map((a) => `\`${a}\` → \`${ALIASES[a]}\``).join(', ')} |`);
+    rows.push(['aliases', aliases.map((a) => `\`${a}\` → \`${ALIASES[a]}\``).join(', ')]);
   }
-  lines.push('', 'Omit an option to use the repo default');
+  lines.push(markdownTable(['Option', 'Accepted'], rows), '', 'Omit an option to use the repo default');
 
   return scrub(lines.join('\n'));
 }

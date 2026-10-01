@@ -1,3 +1,5 @@
+const { rendered } = require('./review-wire.cjs');
+
 const NO_OUTPUT = 'no-output';
 const NOT_JSON = 'not-json';
 const NO_FINDINGS = 'no-findings';
@@ -132,15 +134,15 @@ function readReviewOutput(raw) {
 
   const regions = candidateRegions(text);
   const strict = findReview(regions, parsedObject);
-  if (strict.review) return { review: strict.review, reason: null };
+  if (strict.review) return { review: rendered(strict.review), reason: null };
 
   const escaped = findReview(regions, objectOf);
-  if (escaped.review) return { review: escaped.review, reason: REPAIRED };
+  if (escaped.review) return { review: rendered(escaped.review), reason: REPAIRED };
 
   let sawRepaired = escaped.sawObject;
   for (const region of regions) {
     const salvaged = findReview([escapeStrayQuotes(region)], objectOf);
-    if (salvaged.review) return { review: salvaged.review, reason: REPAIRED };
+    if (salvaged.review) return { review: rendered(salvaged.review), reason: REPAIRED };
     sawRepaired ||= salvaged.sawObject;
   }
 

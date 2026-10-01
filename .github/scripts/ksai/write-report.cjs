@@ -748,7 +748,7 @@ function commandsBlock(verification) {
   if (verification === null || verification === undefined) return [];
   const commands = Array.isArray(verification.commands) ? verification.commands : [];
   const codeCell = (value) => {
-    const text = String(value).replace(/\|/g, '\\|').replace(/\r\n?|\n/g, ' ');
+    const text = String(value).replace(/\r\n?|\n/g, ' ');
     const longest = Math.max(0, ...[...text.matchAll(/`+/g)].map((run) => run[0].length));
     const fence = '`'.repeat(longest + 1);
     const pad = text.startsWith('`') || text.endsWith('`') ? ' ' : '';
