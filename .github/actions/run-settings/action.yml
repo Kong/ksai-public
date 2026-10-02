@@ -241,6 +241,13 @@ outputs:
       - so a run that could not reach the control plane still resolves the model
       it was dispatched with.
     value: ${{ steps.run_settings.outputs.catalog_path }}
+  catalog:
+    description: >-
+      the served model catalog itself as JSON, or empty where the control plane
+      served none this action will pass on. A later job hands it on through
+      `KSAI_MODEL_CATALOG_JSON`, since the file `catalog_path` names stays on
+      this job's runner.
+    value: ${{ steps.run_settings.outputs.catalog }}
 
 runs:
   using: composite
@@ -317,3 +324,4 @@ runs:
             }
           }
           core.setOutput('catalog_path', at);
+          core.setOutput('catalog', at === '' ? '' : JSON.stringify(answer.catalog));

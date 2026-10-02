@@ -1406,6 +1406,8 @@ module.exports = {
   DEFAULT_MIN_EFFORT,
   DEFAULT_EFFORT,
   defaultEffortFor,
+  offeredEfforts,
+  offersEffort,
   ALIASES,
   MODEL_TIERS,
   COMMANDS,

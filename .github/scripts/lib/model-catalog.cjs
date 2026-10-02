@@ -119,11 +119,12 @@ function catalogOf(models, tiers) {
 
 function read(env = process.env, load = require) {
   const at = String(env.KSAI_MODEL_CATALOG ?? '').trim();
-  if (at === '') return { ...shipped };
+  const inline = String(env.KSAI_MODEL_CATALOG_JSON ?? '').trim();
+  if (at === '' && inline === '') return { ...shipped };
 
   let served;
   try {
-    served = load(at);
+    served = at === '' ? JSON.parse(inline) : load(at);
   } catch {
     return { ...shipped };
   }

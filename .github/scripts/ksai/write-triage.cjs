@@ -18,6 +18,8 @@ const {
   resolveModel,
   safeEcho,
   defaultEffortFor,
+  offeredEfforts,
+  offersEffort,
 } = require('../lib/select-arm.cjs');
 const { neutralCut, withinBytes } = require('../lib/prompt-text.cjs');
 const { SINKS, renderRequest, writeRenderRequest } = require('../lib/render-request.cjs');
@@ -2979,13 +2981,22 @@ function effortBounds({ fallback, max, min }) {
   return { floor, ceiling };
 }
 
-function automaticEffort({ target, fallback, max, min }) {
+function automaticEffort({ target, fallback, max, min, model }) {
   const bounds = effortBounds({ fallback, max, min });
   if (!bounds) return { error: 'the configured effort floor and ceiling leave no automatic profile available' };
-  const wanted = ALLOWED_EFFORTS.indexOf(target);
   const floor = ALLOWED_EFFORTS.indexOf(bounds.floor);
   const ceiling = ALLOWED_EFFORTS.indexOf(bounds.ceiling);
-  return { effort: ALLOWED_EFFORTS[Math.min(ceiling, Math.max(floor, wanted))] };
+  const wanted = Math.min(ceiling, Math.max(floor, ALLOWED_EFFORTS.indexOf(target)));
+  const nearest = Array.from({ length: ceiling - floor + 1 }, (_, step) => [wanted + step, wanted - step])
+    .flat()
+    .filter((at) => at >= floor && at <= ceiling)
+    .map((at) => ALLOWED_EFFORTS[at])
+    .find((one) => offersEffort(model, one));
+  if (nearest) return { effort: nearest };
+  return {
+    error: `\`${safeEcho(model)}\` runs at none of the efforts from \`${bounds.floor}\` to \`${bounds.ceiling}\`: ` +
+      `the control plane configures it at ${(offeredEfforts(model) ?? []).map((one) => `\`${one}\``).join(', ') || 'no effort at all'}`,
+  };
 }
 
 function withinEffortBounds(effort, { fallback, max, min, model }) {
@@ -3025,7 +3036,7 @@ function controlPlaneArm(env, early) {
     min: env.MIN_EFFORT,
     model,
   });
-  const offered = offeredModel(model, parseAllowedModels(env.ALLOWED_MODELS));
+  const offered = offeredModel(model, parseAllowedModels(env.ALLOWED_MODELS)) && offersEffort(model, effort);
   if (!MODEL_SHAPE.test(model) || !ALLOWED_EFFORTS.includes(effort) || !offered || !within) return null;
 
   return {
@@ -3086,11 +3097,13 @@ function selectWriteArm(env = process.env) {
       allowed: parseAllowedModels(env.ALLOWED_MODELS),
       current: model,
     });
-    selectedModel = resolved.model;
-    selectedTier = resolved.tier;
-    automaticModelApplied = resolved.applied;
-    limited = resolved.limited || retryAtCeiling;
-    if (automaticModelApplied) selectedModelSource = 'triage';
+    if (!armFixed(effortSource) || offersEffort(resolved.model, effort)) {
+      selectedModel = resolved.model;
+      selectedTier = resolved.tier;
+      automaticModelApplied = resolved.applied;
+      limited = resolved.limited || retryAtCeiling;
+      if (automaticModelApplied) selectedModelSource = 'triage';
+    }
   }
   if (!armFixed(effortSource)) {
     const resolved = automaticEffort({
@@ -3098,6 +3111,7 @@ function selectWriteArm(env = process.env) {
       fallback: String(env.DEFAULT_EFFORT ?? effort).trim() || defaultEffortFor(selectedModel),
       max: env.MAX_EFFORT,
       min: env.MIN_EFFORT,
+      model: selectedModel,
     });
     if (resolved.error) return { error: resolved.error, outputs };
     selectedEffort = resolved.effort;

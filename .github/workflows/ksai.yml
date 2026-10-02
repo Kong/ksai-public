@@ -827,6 +827,7 @@ jobs:
       shadow_percent: ${{ steps.run_settings.outputs.shadow_percent }}
       review_triage_mode: ${{ steps.run_settings.outputs.review_triage_mode }}
       allowed_models: ${{ steps.run_settings.outputs.allowed_models }}
+      model_catalog: ${{ steps.run_settings.outputs.catalog }}
       max_effort: ${{ steps.run_settings.outputs.max_effort }}
       min_effort: ${{ steps.run_settings.outputs.min_effort }}
       job_timeout_minutes: ${{ steps.run_settings.outputs.job_timeout_minutes }}
@@ -1048,7 +1049,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-help
           repository: Kong/ksai-public
-          ref: v3.133.0
+          ref: v3.133.1
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1144,6 +1145,7 @@ jobs:
       id-token: write
     env:
       KSAI_NO_APP: ${{ !inputs.push_as_app && secrets.ksai_private_key == '' }}
+      KSAI_MODEL_CATALOG_JSON: ${{ needs.gate.outputs.model_catalog }}
     # A review in flight finishes and publishes against the commit it read. A newer request queues
     # behind it, and GitHub keeps only the newest pending run per group, so requests never pile up.
     concurrency:
@@ -1271,6 +1273,7 @@ jobs:
       id-token: write
     env:
       KSAI_NO_APP: ${{ !inputs.push_as_app && secrets.ksai_private_key == '' }}
+      KSAI_MODEL_CATALOG_JSON: ${{ needs.gate.outputs.model_catalog }}
     concurrency:
       group: >-
         ksai-test-${{ inputs.pr || needs.gate.outputs.number || github.run_id }}
@@ -1434,6 +1437,8 @@ jobs:
       actions: read
       contents: read
       pull-requests: write
+    env:
+      KSAI_MODEL_CATALOG_JSON: ${{ needs.gate.outputs.model_catalog }}
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
@@ -1499,6 +1504,7 @@ jobs:
       id-token: write
     env:
       KSAI_NO_APP: ${{ !inputs.push_as_app && secrets.ksai_private_key == '' }}
+      KSAI_MODEL_CATALOG_JSON: ${{ needs.gate.outputs.model_catalog }}
     concurrency:
       group: >-
         ksai-shadow-${{ inputs.pr || needs.gate.outputs.number || github.run_id }}
@@ -1512,7 +1518,7 @@ jobs:
         with:
           token: ${{ github.token }}
           repository: Kong/ksai-public
-          ref: v3.133.0
+          ref: v3.133.1
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1660,6 +1666,7 @@ jobs:
       actions: write
     env:
       KSAI_NO_APP: ${{ !inputs.push_as_app && secrets.ksai_private_key == '' }}
+      KSAI_MODEL_CATALOG_JSON: ${{ needs.gate.outputs.model_catalog }}
     concurrency:
       group: >-
         ksai-implement-${{ vars.KSAI_IMPLEMENT_LANE ||
@@ -1998,7 +2005,7 @@ jobs:
           token: ${{ github.token }}
           path: _ksai-recover
           repository: Kong/ksai-public
-          ref: v3.133.0
+          ref: v3.133.1
           sparse-checkout: |
             .github/scripts
           persist-credentials: false
