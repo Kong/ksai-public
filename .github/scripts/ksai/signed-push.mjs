@@ -30,17 +30,20 @@ export function parseRawDiff(stdout) {
   for (let at = 0; at < fields.length; at += 1) {
     const head = fields[at];
     if (!head.startsWith(':')) continue;
-    const [oldMode, newMode, , , status] = head.slice(1).split(' ');
+    const [oldMode, newMode, , newSha, status] = head.slice(1).split(' ');
     const file = fields[at + 1] ?? '';
     if (!file) continue;
     at += 1;
-    out.push({ oldMode, newMode, status: String(status ?? '').slice(0, 1), path: file });
+    out.push({ oldMode, newMode, newSha, status: String(status ?? '').slice(0, 1), path: file });
   }
   return out;
 }
 
-export function fileChangesFor({ from, to, git }) {
-  const diff = git(['diff', '--raw', '-z', '--no-renames', '--no-ext-diff', '--ignore-submodules=none', from, to]);
+const GITLINK = '160000';
+
+export function fileChangesFor({ from, to, git, modes = false, paths = null }) {
+  const asked = ['diff', '--raw', '--no-abbrev', '-z', '--no-renames', '--no-ext-diff', '--ignore-submodules=none', from, to];
+  const diff = git(paths ? [...asked, '--', ...paths.map((one) => `:(top,literal)${one}`)] : asked);
   if (!diff?.ok) return { unreadable: 'git could not list what the commit changed' };
 
   const additions = [];
@@ -50,14 +53,46 @@ export function fileChangesFor({ from, to, git }) {
       deletions.push({ path: entry.path });
       continue;
     }
-    if (entry.newMode !== PLAIN_FILE) {
+    if (entry.newMode !== PLAIN_FILE && !modes) {
       return { unrepresentable: `\`${safeEcho(entry.path)}\` is mode ${entry.newMode}` };
+    }
+    if (entry.newMode === GITLINK) {
+      additions.push({ path: entry.path, contents: Buffer.from(String(entry.newSha)).toString('base64'), mode: GITLINK });
+      continue;
     }
     const blob = git(['cat-file', 'blob', `${to}:${entry.path}`], { base64: true });
     if (!blob?.ok) return { unreadable: `\`${safeEcho(entry.path)}\` could not be read out of the commit` };
-    additions.push({ path: entry.path, contents: String(blob.stdout) });
+    additions.push(
+      entry.newMode === PLAIN_FILE
+        ? { path: entry.path, contents: String(blob.stdout) }
+        : { path: entry.path, contents: String(blob.stdout), mode: entry.newMode },
+    );
   }
   return { additions, deletions };
+}
+
+function namesChanged(git, from, to) {
+  const listed = git(['diff', '--name-only', '-z', '--no-renames', '--no-ext-diff', '--ignore-submodules=none', from, to]);
+  return listed?.ok ? String(listed.stdout).split('\0').filter(Boolean) : null;
+}
+
+function conflictsOf(git, ours, theirs) {
+  const replayed = git(['merge-tree', '--write-tree', '--name-only', '-z', ours, theirs]);
+  const [tree, ...listed] = String(replayed?.stdout ?? '').split('\0');
+  if (!SHA_SHAPE.test(tree.trim()) || (replayed?.status !== 0 && replayed?.status !== 1)) return null;
+  const end = listed.indexOf('');
+  return end === -1 ? listed : listed.slice(0, end);
+}
+
+export function mergeChanges({ git, tip, parent }) {
+  const ours = namesChanged(git, `${tip}^1`, tip);
+  const theirs = namesChanged(git, parent, tip);
+  const clashed = conflictsOf(git, `${tip}^1`, parent);
+  if (!ours || !theirs || !clashed) return { unreadable: 'git could not list what the merge changed' };
+  const merged = new Set(theirs);
+  const conflicted = [...new Set([...clashed, ...ours.filter((one) => merged.has(one))])];
+  if (!conflicted.length) return { additions: [], deletions: [], conflicted };
+  return { ...fileChangesFor({ from: parent, to: tip, git, modes: true, paths: conflicted }), conflicted };
 }
 
 const claimsTheCommit = (line) => {
@@ -173,10 +208,7 @@ const oneLine = (said) => String(said ?? '').replace(/\p{Cc}+/gu, ' ').trim().sl
 
 function asThePerson({ run, input, bodyFile, log }) {
   const personFile = bodyFile.replace(/(\.json)?$/, '-person.json');
-  if (!writeBody(personFile, input)) {
-    log(`note: the commit could not be written to ${personFile}, so this App makes it.`);
-    return null;
-  }
+  if (!writeBody(personFile, input)) return { why: `the commit could not be written to ${personFile}` };
   const asked = run(process.execPath, [CP_COMMIT, personFile], { timeout: COMMIT_WAIT_LIMIT });
   let said = null;
   try {
@@ -188,9 +220,8 @@ function asThePerson({ run, input, bodyFile, log }) {
     log(`note: the control plane made this commit as ${oneLine(said.author)}, who asked for it.`);
     return said;
   }
-  const why = oneLine(said?.why) || 'the control plane could not be asked';
-  log(`note: the control plane did not commit as whoever asked, so this App does: ${why}`);
-  return null;
+  const why = oneLine(said?.why);
+  return { why: why || 'the control plane could not be asked', lost: !why };
 }
 
 function headOf({ run, repo, sha }) {
@@ -209,6 +240,34 @@ function headOf({ run, repo, sha }) {
   };
 }
 
+function descends({ run, repo, sha, from }) {
+  const read = run('gh', ['api', `repos/${repo}/compare/${from}...${sha}`, '--jq', '.status']);
+  return read.ok && String(read.stdout).trim() === 'ahead';
+}
+
+function readBack({ run, repo, branch, remoteSha, parent, localTree }) {
+  const head = run('gh', ['api', `repos/${repo}/git/refs/heads/${branch}`, '--jq', '.object.sha']);
+  const moved = head.ok ? String(head.stdout).trim() : '';
+  if (!moved || moved === remoteSha) return null;
+  const landed = headOf({ run, repo, sha: moved });
+  const ours =
+    landed.tree === localTree &&
+    (parent === ''
+      ? landed.parent === remoteSha
+      : descends({ run, repo, sha: moved, from: remoteSha }) && descends({ run, repo, sha: moved, from: parent }));
+  if (!ours) return { error: 'GitHub did not answer and the branch has moved - see the workflow run' };
+  return landed.verified
+    ? { signed: true, sha: moved }
+    : { signed: false, sha: moved, reason: 'the verified work landed while its answer was lost, and GitHub did not sign it' };
+}
+
+function putBack({ run, repo, branch, sha, remoteSha }) {
+  const held = sha ? run('gh', ['api', `repos/${repo}/git/refs/heads/${branch}`, '--jq', '.object.sha']) : { ok: false, stdout: '' };
+  if (!held.ok || String(held.stdout).trim() !== sha) return 'left as it is because it no longer holds that commit - see the workflow run';
+  const back = run('gh', ['api', '--method', 'PATCH', `repos/${repo}/git/refs/heads/${branch}`, '-f', `sha=${remoteSha}`, '-F', 'force=true', '--silent']);
+  return back.ok ? 'put back' : 'left as it is - see the workflow run';
+}
+
 export function pushSigned({
   cwd: _cwd,
   repo,
@@ -223,8 +282,10 @@ export function pushSigned({
   log = (message) => process.stdout.write(`${message}\n`),
   controlPlaneOnly = false,
 }) {
+  const asking = asksControlPlane(env, appAuthor);
   const second = git(['rev-parse', '--verify', '--quiet', 'HEAD^2']);
-  if (second?.ok && String(second.stdout ?? '').trim() !== '') {
+  const parent = second?.ok ? String(second.stdout ?? '').trim() : '';
+  if (parent !== '' && !asking) {
     return {
       signed: false,
       reason:
@@ -240,8 +301,15 @@ export function pushSigned({
     return { signed: false, reason: 'the local commit could not be read, so it is pushed as it is' };
   }
   const localTree = String(tree.stdout).trim();
+  const tipSha = String(tip.stdout).trim();
 
-  const changes = fileChangesFor({ from: remoteSha, to: String(tip.stdout).trim(), git });
+  if (parent !== '') {
+    const first = git(['rev-parse', 'HEAD^1']);
+    if (!first?.ok || String(first.stdout).trim() !== remoteSha) {
+      return { error: 'the merge was not made on the head of the branch, so nothing was published' };
+    }
+  }
+  const changes = parent !== '' ? mergeChanges({ git, tip: tipSha, parent }) : fileChangesFor({ from: remoteSha, to: tipSha, git, modes: asking });
   if (changes.unrepresentable) {
     return {
       signed: false,
@@ -250,7 +318,9 @@ export function pushSigned({
         'as a plain file, so signing this one would drop the mode',
     };
   }
-  if (changes.unreadable) return { signed: false, reason: `${changes.unreadable}, so it is pushed as it is` };
+  if (changes.unreadable) {
+    return asking ? { error: `${changes.unreadable}, so nothing was published` } : { signed: false, reason: `${changes.unreadable}, so it is pushed as it is` };
+  }
 
   const input = {
     branch: { repositoryNameWithOwner: repo, branchName: branch },
@@ -258,37 +328,49 @@ export function pushSigned({
     message: splitMessage(message.stdout),
     fileChanges: { additions: changes.additions, deletions: changes.deletions },
   };
-  if (!writeBody(bodyFile, input)) {
-    return { signed: false, reason: `the mutation could not be written to ${bodyFile}, so it is pushed as it is` };
+  const plain = parent === '' && changes.additions.every((one) => one.mode === undefined);
+  if (plain && !writeBody(bodyFile, input)) {
+    return asking
+      ? { error: `the mutation could not be written to ${bodyFile}, so nothing was published` }
+      : { signed: false, reason: `the mutation could not be written to ${bodyFile}, so it is pushed as it is` };
   }
 
-  const asking = asksControlPlane(env, appAuthor);
   const person = asking
     ? asThePerson({
         run,
         bodyFile,
         log,
-        input: { ...input, message: splitMessage(withTrailers(normaliseMessage(message.stdout), { coAuthor: appAuthor, jiraKey })) },
+        input: {
+          ...input,
+          message: splitMessage(withTrailers(normaliseMessage(message.stdout), { coAuthor: appAuthor, jiraKey })),
+          ...(parent !== '' ? { merge: { parent, conflicted: changes.conflicted } } : {}),
+        },
       })
     : null;
 
   let answer = person?.commit;
+  if (!answer && person?.lost && (controlPlaneOnly || !plain)) {
+    const landed = readBack({ run, repo, branch, remoteSha, parent, localTree });
+    if (landed) return landed;
+  }
   if (!answer && controlPlaneOnly) return { error: 'the control plane did not commit the work, and a linked run publishes it no other way' };
+  if (!answer && !plain) {
+    return {
+      error:
+        `the control plane did not commit ${parent !== '' ? 'the merge' : 'a change to a file mode'} as whoever asked, ` +
+        `and nothing else can sign it: ${person?.why ?? 'it was not asked'}`,
+    };
+  }
+  if (!answer && person?.why) log(`note: the control plane did not commit as whoever asked, so this App does: ${person.why}`);
   if (!answer) {
     const created = run('gh', ['api', 'graphql', '--input', bodyFile]);
     if (!created.ok) {
-      const head = run('gh', ['api', `repos/${repo}/git/refs/heads/${branch}`, '--jq', '.object.sha']);
-      const moved = head.ok ? String(head.stdout).trim() : '';
-      if (moved && moved !== remoteSha) {
-        const landed = headOf({ run, repo, sha: moved });
-        if (landed.tree !== localTree || landed.parent !== remoteSha) {
-          return { error: 'GitHub did not answer and the branch has moved - see the workflow run' };
+      return (
+        readBack({ run, repo, branch, remoteSha, parent, localTree }) ?? {
+          signed: false,
+          reason: 'GitHub would not create the commit - see the workflow run',
         }
-        return landed.verified
-          ? { signed: true, sha: moved }
-          : { signed: false, sha: moved, reason: 'the verified work landed while its answer was lost, and GitHub did not sign it' };
-      }
-      return { signed: false, reason: 'GitHub would not create the commit - see the workflow run' };
+      );
     }
     try {
       answer = JSON.parse(created.stdout).data.createCommitOnBranch.commit;
@@ -298,28 +380,11 @@ export function pushSigned({
   }
 
   if (answer?.tree?.oid !== localTree) {
-    const held = answer?.oid
-      ? run('gh', ['api', `repos/${repo}/git/refs/heads/${branch}`, '--jq', '.object.sha'])
-      : { ok: false, stdout: '' };
-    const stillOurs = held.ok && String(held.stdout).trim() === String(answer.oid);
-    const back = stillOurs
-      ? run('gh', [
-          'api',
-          '--method',
-          'PATCH',
-          `repos/${repo}/git/refs/heads/${branch}`,
-          '-f',
-          `sha=${remoteSha}`,
-          '-F',
-          'force=true',
-          '--silent',
-        ])
-      : { ok: false };
     return {
       error:
         `the commit GitHub created holds ${answer?.tree?.oid ?? 'an unreadable tree'} where the verified one holds ` +
         `${localTree}, so it was not the work that was checked. The branch was ` +
-        `${back.ok ? 'put back' : `left as it is${stillOurs ? '' : ' because it no longer holds that commit'} - see the workflow run`}.`,
+        `${putBack({ run, repo, branch, sha: answer?.oid ? String(answer.oid) : '', remoteSha })}.`,
     };
   }
 
@@ -394,6 +459,9 @@ export function publishCommit({
       '--silent',
     ]);
     if (!made.ok) {
+      if (usingControlPlane(env)) {
+        return { ok: false, reason: 'the branch could not be created through the API, and a v5 run pushes nothing unsigned' };
+      }
       log(`note: the branch could not be created through the API, so this commit is pushed unsigned.`);
       const pushed = git(['push', pushUrl, `${branch}:refs/heads/${branch}`]);
       return pushed.ok ? { ok: true, sha: localSha, signed: false } : { ok: false, reason: 'the push failed' };
@@ -416,11 +484,16 @@ export function publishCommit({
   if (attempt.error) return { ok: false, reason: attempt.error };
   if (attempt.signed) return { ok: true, sha: attempt.sha, signed: true };
 
+  if (attempt.sha && usingControlPlane(env)) {
+    const back = putBack({ run, repo, branch, sha: attempt.sha, remoteSha: createBranchAt ?? remoteSha });
+    return { ok: false, reason: `${attempt.reason}, and a v5 run keeps nothing unsigned, so the branch was ${back}` };
+  }
   if (attempt.sha) {
     log(`note: ${attempt.reason}. The commit is on the branch unsigned.`);
     return { ok: true, sha: attempt.sha, signed: false };
   }
   if (controlPlaneOnly) return { ok: false, reason: `${attempt.reason}, and a linked run publishes nothing but through the control plane` };
+  if (usingControlPlane(env)) return { ok: false, reason: `${attempt.reason}, and a v5 run pushes nothing unsigned` };
 
   log(`note: ${attempt.reason}. The commit is pushed unsigned.`);
   const pushed = git(['push', pushUrl, `${branch}:refs/heads/${branch}`]);
