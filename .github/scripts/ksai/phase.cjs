@@ -534,7 +534,8 @@ async function resolvePhase({
       if (!threadStateFile) return refuse('no path was given to write the review thread state to');
       const { phase, ref, prNumber, pending, threads, deferred, disputed, baseRef, held, target, total } = out;
       known = target ?? null;
-      if (scoped || pending.length > 0 || total > 0) {
+      const answeredAlready = total > 0 && !(elsewhere && require('./do.cjs').unaskedRun({ trigger: sawTrigger, commentId }));
+      if (scoped || pending.length > 0 || answeredAlready) {
         const evidence = admits.builds
           ? await require('./checks.cjs').readFailingChecks({
             github: checksGithub ?? github,
@@ -580,7 +581,9 @@ async function resolvePhase({
         });
       }
       core?.info?.(
-        `#${String(prNumber ?? number)}: this pull request has no review thread at all, so this run looks for other work.`,
+        total > 0
+          ? `#${String(prNumber ?? number)}: every review thread here is answered, and nobody typed a command for this run, so it looks for other work.`
+          : `#${String(prNumber ?? number)}: this pull request has no review thread at all, so this run looks for other work.`,
       );
     }
 
