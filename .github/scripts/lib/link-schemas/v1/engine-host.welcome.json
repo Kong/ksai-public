@@ -17,6 +17,14 @@
     },
     "ping_every_ms": { "type": "integer", "minimum": 1000, "maximum": 60000 },
     "lease_ms": { "type": "integer", "minimum": 10000, "maximum": 900000 },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["counters"],
+      "properties": {
+        "counters": { "const": "invocation-calls-v1" }
+      }
+    },
     "resume": {
       "type": "object",
       "additionalProperties": false,

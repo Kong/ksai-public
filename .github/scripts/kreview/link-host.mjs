@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync, chmodSync, closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
@@ -20,7 +20,7 @@ import controlPlane from '../lib/control-plane.cjs';
 import { ARTIFACTS, deliveriesUnder, digestOf, lockedOf } from '../lib/cp-prompts.mjs';
 import { exitedOn } from '../lib/execution-log.mjs';
 import { acknowledging } from '../lib/link-acknowledged.mjs';
-import { jobOf } from '../lib/link-protocol.mjs';
+import { jobOf, linkId } from '../lib/link-protocol.mjs';
 import { linkClient, pollTransport, websocketTransport } from './link-client.mjs';
 import { ordered } from '../ksai/progress.mjs';
 import workRequest from '../lib/work-request.cjs';
@@ -38,6 +38,9 @@ import { auditContext, verifyAudit } from './governed-review.mjs';
 import reviewPipeline from './review-pipeline.cjs';
 import { collectSecrets, scrub } from './secrets.cjs';
 import { startProviderRelay } from './opencode-provider-relay.mjs';
+import { USAGE_ASK, usageCollector } from './usage-collector.mjs';
+import { COUNTERS, callUsage } from './usage-counter.mjs';
+import { usageFileOf } from './usage-source.mjs';
 import { observationsIn } from './provider-observations.mjs';
 import { monitorProcess, runtimeSummary, sandboxArgs, since } from './opencode-run.mjs';
 import { mcpServerCount, traceObserver } from './opencode-runtime.mjs';
@@ -220,7 +223,22 @@ export function factsAnswer(asked, known, { warn = (said) => console.log(said) }
   }
   const command = asked.includes('run') || asked.includes('command') ? known.command?.() ?? null : null;
   if (command !== null) facts.push({ name: 'command', value: command });
+  if (asked.includes('run') && !asked.includes('checkout') && Object.hasOwn(known, 'checkout')) facts.push({ name: 'checkout', value: known.checkout() });
   return { facts, missing };
+}
+
+const COMMIT = /^[0-9a-f]{40}$/;
+
+export function checkoutFact(env, run = spawnSync) {
+  const at = String(env.GITHUB_WORKSPACE ?? '').trim();
+  if (!at) throw new Error('a linked run names no workspace, so it cannot say which commit it works at');
+  const said = run('git', ['-C', at, 'rev-parse', '--verify', 'HEAD^{commit}'], { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
+  const head = String(said.stdout ?? '').trim();
+  if (said.status !== 0 || !COMMIT.test(head)) throw new Error(`the workspace checkout has no commit git can name, so this run cannot say which commit it works at (git exited ${said.status ?? said.signal})`);
+  const started = String(env.COMMIT_ID ?? '').trim();
+  if (started !== '' && !COMMIT.test(started)) throw new Error('this run was started for a commit that is not a full lowercase commit id, so its checkout cannot be checked against it');
+  if (started !== '' && started !== head) throw new Error(`the workspace checkout is at ${head}, and this run was started for ${started}, so it does not run on another commit than it names`);
+  return JSON.stringify({ head_sha: head });
 }
 
 export function commandFact(env) {
@@ -416,8 +434,30 @@ export function layGoverned(root, session, plan, { plugin = '', promptId = '', c
 
 export class ResumeRefused extends Error {}
 
-export function sessionEnd({ exit, killed, refused = '' }) {
+export function usageCountersOf(env) {
+  const asked = String(env.KSAI_USAGE_COUNTERS ?? '').trim();
+  if (asked === '' || asked === COUNTERS) return { collecting: asked === COUNTERS, error: '' };
+  return { collecting: false, error: `KSAI_USAGE_COUNTERS asks for ${JSON.stringify(asked.slice(0, 64))}, and this runner counts usage only as ${COUNTERS}, so it refuses rather than report the legacy way while claiming to count` };
+}
+
+export function stoppable(held) {
+  held.stopped = new Promise((resolve) => {
+    held.stop = resolve;
+  });
+  return held;
+}
+
+export const untilKilled = (held, waited) => Promise.race([waited, held.stopped]);
+
+export async function closedThenDrained(held, exit, drain) {
+  const killed = held.killed === true;
+  await untilKilled(held, drain());
+  return { exit, killed };
+}
+
+export function sessionEnd({ exit, killed, refused = '', unaccounted = '' }) {
   if (refused) return { exit: 1, conclusion: 'failed', resume_error: refused };
+  if (unaccounted) return { exit: Math.max(1, Math.min(255, exit)), conclusion: killed ? 'killed' : 'failed' };
   return { exit: Math.min(255, Math.max(0, exit)), conclusion: conclusionOf(exit, killed) };
 }
 
@@ -578,6 +618,11 @@ export async function main(env = process.env, {
     console.log('::error::a linked run needs RUNNER_TEMP, KSAI_CP_ENDPOINT, KSAI_GOVERNED_DIR, EVENTS_FILE and EXECUTION_FILE');
     return 1;
   }
+  const { collecting, error: uncountable } = usageCountersOf(env);
+  if (uncountable) {
+    console.log(`::error::${uncountable}`);
+    return 1;
+  }
   let job;
   let render;
   let run;
@@ -585,6 +630,23 @@ export async function main(env = process.env, {
     job = jobOf(env);
     render = renderFact(env);
     run = runFact(env);
+  } catch (error) {
+    console.log(`::error::${error.message}`);
+    return 1;
+  }
+  let usage = null;
+  if (collecting) {
+    const link = linkId({ repository: env.GITHUB_REPOSITORY, runId: env.GITHUB_RUN_ID, attempt: env.GITHUB_RUN_ATTEMPT, job });
+    try {
+      usage = usageCollector({ path: usageFileOf(runnerTemp, link), scope: { link, job, flow: run.flow }, send: (kind, id, body) => client.send(kind, id, body) });
+    } catch (error) {
+      console.log(`::error::this run's usage counter could not be opened, so it does not link: ${error?.message ?? error}`);
+      return 1;
+    }
+  }
+  let checkout;
+  try {
+    checkout = checkoutFact(env);
   } catch (error) {
     console.log(`::error::${error.message}`);
     return 1;
@@ -608,7 +670,11 @@ export async function main(env = process.env, {
     console.log(`::warning::runtime telemetry could not start (${error?.message}), so span timings are unavailable`);
   }
   try {
-    provider = await startProvider({ env: relayEnv, socket: join(sockets, 'provider.sock'), stallMs: PROVIDER_TIMEOUTS.headerTimeout, queries: ['', '?beta=true'] });
+    provider = await startProvider({
+      env: relayEnv, socket: join(sockets, 'provider.sock'), stallMs: PROVIDER_TIMEOUTS.headerTimeout, queries: ['', '?beta=true'],
+      counted: collecting ? (session, model, relayed) => usage?.counted(session, model, callUsage({ ...relayed, model })) : null,
+      admit: collecting ? (session, model) => usage?.admit(session, model) ?? '' : null,
+    });
   } catch (error) {
     console.log(`::error::the trusted provider relay could not start: ${error?.message ?? error}`);
     await telemetry?.close();
@@ -659,13 +725,14 @@ export async function main(env = process.env, {
   const cancel = () => resolveDone({ conclusion: 'failure', outputs: [{ name: 'error', value: CANCELLED }], reason: 'cancelled' });
   cancelled.addEventListener('abort', cancel, { once: true });
 
+  const acknowledged = acknowledging(runnerTemp);
   const client = linkClient({
     endpoint,
     repository: env.GITHUB_REPOSITORY,
     runId: env.GITHUB_RUN_ID,
     attempt: env.GITHUB_RUN_ATTEMPT,
     job,
-    transports: { websocket: websocketTransport(reach), poll: pollTransport(reach, job, { fetch }) },
+    transports: { websocket: websocketTransport(reach, { asks: collecting ? USAGE_ASK : {} }), poll: pollTransport(reach, job, { fetch, asks: collecting ? USAGE_ASK : {} }) },
     mint: () => mint('ksai-cp'),
     verifyCertificate: (cert, expected) => {
       const verified = verifyLinkCertificate(cert, linkTrust(endpoint, pinned), expected);
@@ -675,8 +742,13 @@ export async function main(env = process.env, {
     runner: { name: String(env.RUNNER_NAME ?? 'unknown'), os: String(env.RUNNER_OS ?? 'unknown'), arch: String(env.RUNNER_ARCH ?? 'unknown') },
     jobStartedAt: Number(env.KSAI_JOB_STARTED_AT_MS) || Date.now(),
     log: (line) => console.log(line),
-    onAcked: acknowledging(runnerTemp),
+    onAcked: (message) => {
+      acknowledged(message);
+      usage?.acked(message);
+    },
+    onWelcome: (body) => usage?.welcomed(body),
     onTick: () => {
+      usage?.tick();
       let live = '';
       for (const [session, held] of sessions) {
         if (held.child && held.child.exitCode === null) {
@@ -693,6 +765,13 @@ export async function main(env = process.env, {
       if (!held) return;
       if (message.kind === 'plan') {
         const plan = message.body;
+        const unadmitted = usage?.admit(session, plan.model.id) ?? '';
+        if (unadmitted) {
+          console.log(`::error::${unadmitted}`);
+          held.killed = true;
+          held.child?.kill('SIGKILL');
+          return;
+        }
         let dir;
         try {
           const permit = carriedPlan(plan, {
@@ -716,7 +795,7 @@ export async function main(env = process.env, {
           return;
         }
         held.prompt = join(dir, ARTIFACTS.prompt);
-        provider.govern(dir);
+        provider.govern(dir, session);
       }
       if (held.plugin) held.plugin.socket.write(`${JSON.stringify({ type: 'frame', frame })}\n`);
       else held.waiting.push(frame);
@@ -746,8 +825,13 @@ export async function main(env = process.env, {
     }
   };
   const reportRecords = (session, held) => {
-    client.send('usage', undefined, usageOf(session, run.model, parsed(since(events, held.offset))));
+    if (!usage || usage.legacy()) client.send('usage', undefined, usageOf(session, run.model, parsed(since(events, held.offset))));
     reportKept(session, false);
+  };
+  const usageDelivered = async () => {
+    if (!usage) return;
+    await Promise.race([provider.drained(), finished]);
+    await Promise.race([usage.delivered(() => client.ping()), finished]);
   };
 
   const reportProgress = (session, held) => {
@@ -784,8 +868,9 @@ export async function main(env = process.env, {
     const allowed = Object.fromEntries(given.filter((one) => SESSION_ENV.includes(one.name)).map((one) => [one.name, one.value]));
     if (audits.has(session)) verifyAudit(env, audits.get(session));
     const asked = askedRender(named, render);
-    const held = { plugin: null, waiting: [], offset: statSync(events).size, read: 0, seen: [], child: null, killed: false, promptId: asked.promptId, reported: new Map(), open: sessions.get(session)?.open ?? new Map(), resumes };
+    const held = stoppable({ plugin: null, waiting: [], offset: statSync(events).size, read: 0, seen: [], child: null, killed: false, promptId: asked.promptId, reported: new Map(), open: sessions.get(session)?.open ?? new Map(), resumes });
     sessions.set(session, held);
+    if (usage) await untilKilled(held, usage.ready());
     const policy = policies.get(session) ?? policies.get(restarts ?? '') ?? {};
     const dir = mkdtempSync(join(scratch, 'session-'));
     chmodSync(dir, 0o700);
@@ -860,22 +945,28 @@ export async function main(env = process.env, {
     const finishTrace = traces.begin(began);
     held.child = launch('bwrap', [...sandbox, process.execPath, linkScript(env)], { env: sessionEnv, stdio: ['ignore', out, 'inherit'] });
     const stopMonitoring = monitor(held.child.pid);
-    held.child.once('close', (code, signal) => {
-      const exit = exitedOn(code, signal);
+    held.child.once('close', async (code, signal) => {
+      const exited = exitedOn(code, signal);
       const ended = Date.now();
       const segment = parsed(since(events, held.offset));
       metrics.push({
-        invocation: metrics.length + 1, exit_code: exit, total_ms: Math.max(0, ended - began),
+        invocation: metrics.length + 1, exit_code: exited, total_ms: Math.max(0, ended - began),
         ...compactions(segment, began), ...finishTrace(ended), ...stopMonitoring(), ...toolTiming(segment, began, ended),
       });
       reportProgress(session, held);
+      const { exit, killed } = await closedThenDrained(held, exited, usageDelivered);
       reportRecords(session, held);
       const kept = keptSession(dir, governedDir, session);
       const handed = held.resumeError ?? refusedResumeIn(dir);
       const replayed = handed || !held.prompt ? '' : provider.carryRefused(dirname(held.prompt));
       const refused = handed || (replayed ? resumeError(`the governor refused the carried history: ${replayed}`) : '');
       if (replayed) appendFileSync(events, `${JSON.stringify({ type: 'ksai.error', created: Date.now(), data: { error: { type: 'ksai.resume', message: refused } } })}\n`);
-      const ending = sessionEnd({ exit, killed: held.killed, refused });
+      const unaccounted = usage?.ending().error ?? '';
+      if (unaccounted) {
+        console.log(`::error::session ${session} ended with usage the control plane cannot take: ${unaccounted}`);
+        appendFileSync(events, `${JSON.stringify({ type: 'ksai.error', created: Date.now(), data: { error: { type: 'ksai.usage', message: unaccounted.slice(0, 500) } } })}\n`);
+      }
+      const ending = sessionEnd({ exit, killed, refused, unaccounted });
       held.conclusion = ending.conclusion;
       held.settled = provider.settled();
       const carried = ending.resume_error ? {} : kept;
@@ -893,7 +984,7 @@ export async function main(env = process.env, {
       return;
     }
     if (kind === 'need') {
-      const known = { run: () => JSON.stringify(run), render: () => render.request, stages: () => stagesFact(env), command: () => commandFact(env) };
+      const known = { run: () => JSON.stringify(run), render: () => render.request, stages: () => stagesFact(env), command: () => commandFact(env), checkout: () => checkout };
       client.send('facts', id, factsAnswer(body.facts, known));
       return;
     }
@@ -1030,16 +1121,26 @@ export async function main(env = process.env, {
       const held = sessions.get(body.session);
       if (!held) return;
       held.killed = true;
+      held.stop?.();
       if (!held.child) return;
       held.child.kill('SIGTERM');
       setTimeout(() => held.child.kill('SIGKILL'), KILL_GRACE_MS).unref();
+      return;
+    }
+    if (kind === 'usage.source.answer') {
+      usage?.answered(body);
       return;
     }
     if (kind === 'done') resolveDone({ ...body, reason: 'done' });
   };
 
   const linking = client.start();
-  const done = await finished;
+  const ended = await finished;
+  const counted = usage?.ending();
+  const settledOk = ended.conclusion === 'success' || ended.conclusion === 'stopped';
+  const done = !counted?.error ? ended : settledOk
+    ? { ...ended, conclusion: 'failure', outputs: [...ended.outputs, { name: 'error', value: counted.error }] }
+    : { ...ended, outputs: [...ended.outputs, { name: 'warning', value: counted.error }] };
   await Promise.allSettled(uploads);
   cancelled.removeEventListener('abort', cancel);
   for (const held of sessions.values()) {

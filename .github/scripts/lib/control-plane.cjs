@@ -29,26 +29,83 @@ function expiryOf(token) {
   }
 }
 
-const minter = ({ env, fetch, signal, now = Date.now, held = tokens, holds }) => async (audience) => {
+const MINT_TRIES = 3;
+
+const MINT_PAUSE_MS = 500;
+
+const OIDC = 'GitHub\'s OIDC token endpoint';
+
+const passing = (status) => status === 408 || status === 429 || status >= 500;
+
+class MintFailed extends Error {}
+
+const NATIVE_ERRORS = new Set(['AbortError', 'TimeoutError', 'TypeError', 'Error']);
+
+const unminted = (error) => {
+  const code = String(error?.cause?.code ?? '');
+  const name = String(error?.name ?? '');
+  return `${OIDC} could not be reached (${/^[A-Z][A-Z0-9_]{0,40}$/.test(code) ? code : NATIVE_ERRORS.has(name) ? name : 'Error'})`;
+};
+
+const GAVE_UP = `the caller gave up before ${OIDC} minted a token`;
+
+const pausing = (ms, signal) => new Promise((resolve) => {
+  if (signal?.aborted === true) {
+    resolve();
+    return;
+  }
+  const done = () => {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', done);
+    resolve();
+  };
+  const timer = setTimeout(done, ms);
+  signal?.addEventListener('abort', done, { once: true });
+});
+
+const minter = ({ env, fetch, signal, now = Date.now, held = tokens, holds, pause = pausing }) => async (audience) => {
   const asking = [audience, env.ACTIONS_ID_TOKEN_REQUEST_URL, env.ACTIONS_ID_TOKEN_REQUEST_TOKEN].join('\n');
   const was = held.get(asking);
   const stated = Number.isFinite(holds) && holds >= 0;
   if (was !== undefined && stated && now() + holds + EARLY < was.exp) return was.token;
 
-  const response = await fetch(`${env.ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${encodeURIComponent(audience)}`, {
-    headers: { authorization: `Bearer ${env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}` },
-    signal,
-  });
-  if (!response.ok) {
-    await released(response);
-    return '';
-  }
-  const body = await response.json();
-  const token = typeof body?.value === 'string' ? body.value : '';
+  for (let attempt = 1; ; attempt += 1) {
+    if (signal?.aborted === true) throw new MintFailed(GAVE_UP);
+    const last = attempt >= MINT_TRIES;
+    let response;
+    try {
+      response = await fetch(`${env.ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${encodeURIComponent(audience)}`, {
+        headers: { authorization: `Bearer ${env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}` },
+        signal,
+      });
+    } catch (error) {
+      if (signal?.aborted === true) throw new MintFailed(GAVE_UP, { cause: error });
+      if (last) throw new MintFailed(unminted(error), { cause: error });
+      await pause(MINT_PAUSE_MS * attempt, signal);
+      continue;
+    }
+    if (!response.ok) {
+      await released(response);
+      if (passing(response.status) && !last) {
+        await pause(MINT_PAUSE_MS * attempt, signal);
+        continue;
+      }
+      throw new MintFailed(`${OIDC} answered ${response.status}`);
+    }
+    let body;
+    try {
+      body = await response.json();
+    } catch (error) {
+      if (signal?.aborted === true) throw new MintFailed(GAVE_UP, { cause: error });
+      throw new MintFailed(`${OIDC} answered ${response.status} with a body that is not JSON`, { cause: error });
+    }
+    const token = typeof body?.value === 'string' ? body.value : '';
+    if (token === '') throw new MintFailed(`${OIDC} answered ${response.status} with no token`);
 
-  const exp = expiryOf(token);
-  if (token !== '' && exp > 0) held.set(asking, { token, exp });
-  return token;
+    const exp = expiryOf(token);
+    if (exp > 0) held.set(asking, { token, exp });
+    return token;
+  }
 };
 
 const mask = (token) => process.stdout.write(`::add-mask::${token}\n`);
@@ -81,10 +138,10 @@ async function controlPlaneToken({ audience, env, mint, secret }) {
   let token;
   try {
     token = await mint(audience);
-  } catch {
-    return { failure: 'a token for the control plane could not be minted' };
+  } catch (error) {
+    return { failure: error instanceof MintFailed ? `a token for the control plane could not be minted: ${error.message}` : 'a token for the control plane could not be minted' };
   }
-  if (typeof token !== 'string' || token === '') return { failure: 'the token endpoint answered with no token' };
+  if (typeof token !== 'string' || token === '') return { failure: `a token for the control plane could not be minted: ${OIDC} answered with no token` };
   secret(token);
   return { token };
 }

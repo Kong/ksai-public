@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "The host reports cumulative counters for one registered invocation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["source", "events"],
+  "properties": {
+    "source": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "events": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "usage"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^u1-[0-9a-f]{32}$" },
+          "usage": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["session", "model", "input", "output", "cache_read", "cache_write"],
+            "properties": {
+              "session": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$" },
+              "model": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$" },
+              "input": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+              "output": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+              "cache_read": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+              "cache_write": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+            }
+          }
+        }
+      }
+    }
+  }
+}

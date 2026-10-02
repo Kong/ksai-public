@@ -4,7 +4,7 @@ const { createHash } = require('node:crypto');
 
 const controlPlane = require('./control-plane.cjs');
 
-const ARCHIVE_PATH = '/v1/run/work-sessions/request';
+const ARCHIVE_PATH = '/v1/run/tasks/request';
 const ARCHIVE_VERSION = 1;
 const NOT_RECORDED = 'not_recorded_legacy';
 const UNKEPT = 'this run reads no kept requests';

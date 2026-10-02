@@ -145,7 +145,7 @@ const passing = (status) => status === 409 || status === undefined || status ===
 export async function outcomeSent({ endpoint, fetch, token, body, wait = sleep }) {
   const sending = JSON.stringify(body);
   for (let tried = 1; ; tried += 1) {
-    const said = await controlPlane.answered(fetch, `${endpoint}/v1/run/work-sessions/outcome`, { token, body: sending, timeout: CALL_MS });
+    const said = await controlPlane.answered(fetch, `${endpoint}/v1/run/tasks/outcome`, { token, body: sending, timeout: CALL_MS });
     if (!said.why) return { sent: true };
     if (!passing(said.status) || tried >= CONFLICT_TRIES) {
       throw new Error(`the control plane did not keep this run's outcome: ${said.why}${tried > 1 ? ` after ${tried} tries` : ''}`);

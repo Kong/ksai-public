@@ -258,7 +258,7 @@ export const RUNTIME_CONFIG = Object.freeze({
 
 export const PROVIDER_TIMEOUTS = Object.freeze({ headerTimeout: 120_000, chunkTimeout: 120_000 });
 
-export const UNCONTINUED = 'this rework carries the planning session its plan left, and a governed run starts every session from the prompt the control plane rendered, so the rework does not continue it. The export stays with the plan for the control plane to carry once it keeps sessions';
+export const UNCONTINUED = 'this rework found the conversation export its planning session left, which no control plane verified, so the governed run does not continue it and starts from the context the control plane renders. The plan and its export are kept as they are; a conversation the control plane verified is carried instead as a checkpoint it restores';
 
 export const PROVIDER_POLICY_VERSION = '1.18.34';
 

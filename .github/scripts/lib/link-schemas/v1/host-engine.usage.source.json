@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "The host registers its retained invocation counters",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["intent", "counters"],
+  "properties": {
+    "intent": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "counters": { "const": "invocation-calls-v1" }
+  }
+}

@@ -13,7 +13,7 @@ const passing = (status) => status === 409 || status === undefined || status ===
 export async function outcomeExpected({ endpoint, fetch, token, job, link, flow, wait = sleep }) {
   const body = JSON.stringify({ job, link, flow, event: { id: `outcome-expected/${link}`, kind: OUTCOME_EXPECTED } });
   for (let tried = 1; ; tried += 1) {
-    const said = await controlPlane.answered(fetch, `${endpoint}/v1/run/work-sessions`, { token, body, timeout: CALL_MS });
+    const said = await controlPlane.answered(fetch, `${endpoint}/v1/run/tasks`, { token, body, timeout: CALL_MS });
     if (!said.why) return;
     if (!passing(said.status) || tried >= TRIES) {
       throw new Error(`the control plane holds no expectation of this run's outcome: ${said.why}${tried > 1 ? ` after ${tried} tries` : ''}`);

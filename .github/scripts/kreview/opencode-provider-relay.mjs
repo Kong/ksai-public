@@ -10,6 +10,8 @@ import { boundedSteps, CarryRefused, carriedOf, conversation, MAX_RESPONSE_BYTES
 import { governRequest } from '../governance/provider.mjs';
 import { originProblem } from './federated-token.mjs';
 
+export { MAX_RESPONSE_BYTES };
+
 const REQUEST_BYTES = 32 * 1024 * 1024;
 const OBSERVATION_BYTES = 256 * 1024 * 1024;
 const retainedBytes = new Map();
@@ -74,7 +76,7 @@ export function enforceGovernedRequest(body, env, state = null) {
   return { body: Buffer.from(governRequest(text, held.governed, held.talk, request)), talk: held.talk };
 }
 
-async function finishGovernedResponse(response, talk) {
+async function finishGovernedResponse(response, talk, answered = (_bytes) => {}) {
   if (!response.ok || !response.body) {
     talk.failed();
     return;
@@ -82,6 +84,12 @@ async function finishGovernedResponse(response, talk) {
   const reader = response.clone().body.getReader();
   const chunks = [];
   let size = 0;
+  let tallied = false;
+  const tally = () => {
+    if (tallied) return;
+    tallied = true;
+    answered(Buffer.concat(chunks));
+  };
   try {
     for (;;) {
       const { done, value } = await reader.read();
@@ -90,8 +98,10 @@ async function finishGovernedResponse(response, talk) {
       if (size > MAX_RESPONSE_BYTES) throw new Error('the provider response exceeds the governed limit');
       chunks.push(Buffer.from(value));
     }
+    tally();
     talk.response(Buffer.concat(chunks));
   } catch (error) {
+    tally();
     talk.failed();
     throw error;
   } finally {
@@ -177,6 +187,9 @@ export async function relayProviderRequest(request, env, fetchImpl = fetch, toke
     if (env.KSAI_PROVIDER_OBSERVATIONS === 'true' && promptRendering(env) === 'cp') {
       ({ body, talk } = enforceGovernedRequest(body, env, state));
     }
+    const pinned = { session: state?.session ?? '', model: state?.held?.governed.model };
+    const unadmitted = talk ? (state?.admit?.(pinned.session, pinned.model) ?? '') : '';
+    if (unadmitted) throw new Error(`the provider call was not made, because its usage could not be counted: ${unadmitted}`);
     const completed = record?.(body, env, talk ? state?.held?.governed : null);
     const upstream = await fetchImpl(`${origin}${target.pathname}${target.search}`, {
       method: 'POST',
@@ -185,7 +198,10 @@ export async function relayProviderRequest(request, env, fetchImpl = fetch, toke
       signal: AbortSignal.any([abort.signal, gone]),
     });
     completed?.(upstream.status);
-    if (talk && state) state.completion = finishGovernedResponse(upstream, talk).then(() => null, (error) => error);
+    if (talk && state) {
+      const answered = (bytes) => state.counted?.(pinned.session, pinned.model, { status: upstream.status, bytes });
+      state.completion = finishGovernedResponse(upstream, talk, answered).then(() => null, (error) => error);
+    }
     return upstream;
   } catch (error) {
     talk?.failed();
@@ -196,8 +212,8 @@ export async function relayProviderRequest(request, env, fetchImpl = fetch, toke
 }
 
 /** startProviderRelay keeps the bearer and provider origin outside the model process. */
-export async function startProviderRelay({ env = process.env, fetchImpl = fetch, token = bearer, record = env.KSAI_PROVIDER_OBSERVATIONS === 'true' ? recordProviderRequest : null, socket = '', stallMs = 0, queries = [''] } = {}) {
-  const state = { completion: null, held: null, governing: '', carryRefused: new Map() };
+export async function startProviderRelay({ env = process.env, fetchImpl = fetch, token = bearer, record = env.KSAI_PROVIDER_OBSERVATIONS === 'true' ? recordProviderRequest : null, socket = '', stallMs = 0, queries = [''], counted = null, admit = null } = {}) {
+  const state = { completion: null, held: null, governing: '', session: '', counted, admit, carryRefused: new Map() };
   const server = createServer(async (request, response) => {
     const gone = new AbortController();
     response.once('close', () => {
@@ -253,12 +269,14 @@ export async function startProviderRelay({ env = process.env, fetchImpl = fetch,
   return {
     url: socket ? '' : `http://127.0.0.1:${typeof address === 'object' ? address?.port : ''}`,
     socket,
-    govern: (dir) => {
+    govern: (dir, session = '') => {
+      state.session = session;
       state.held = governedAt(dir);
       state.completion = null;
       state.governing = dir;
     },
     settled: () => state.held?.talk.settled() ?? null,
+    drained: () => state.completion,
     carryRefused: (dir) => state.carryRefused.get(dir) ?? '',
     restart: () => {
       if (state.held) state.held = { ...state.held, talk: talkOf(state.held.governed) };

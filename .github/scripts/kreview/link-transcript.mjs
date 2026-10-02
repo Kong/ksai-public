@@ -76,7 +76,7 @@ export async function transcriptSent({ endpoint, fetch, token, link, job, flow, 
   const base = { job, link, flow, model_session_id: session };
   for (const held of batches(kept, base)) {
     for (let tried = 1; ; tried += 1) {
-      const said = await controlPlane.answered(fetch, `${endpoint}/v1/run/work-sessions/transcript`, { token, body: JSON.stringify({ ...base, lines: held }), timeout: CALL_MS });
+      const said = await controlPlane.answered(fetch, `${endpoint}/v1/run/tasks/transcript`, { token, body: JSON.stringify({ ...base, lines: held }), timeout: CALL_MS });
       if (!said.why) break;
       if (said.status === 404) return { sent: 0, left: 0, unserved: true };
       if (said.status !== 409 || tried >= CONFLICT_TRIES) throw new Error(`the control plane did not keep the transcript: ${said.why}`);

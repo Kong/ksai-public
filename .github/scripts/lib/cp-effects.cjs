@@ -56,6 +56,7 @@ function controlPlaneWriter({ env, fetch, timeout, secret, pause = held }) {
   const send = async (effect, options) => {
     const done = await sendRaw(effect, options);
     return { id: Number(done.comment ?? 0) || null, review: Number(done.review ?? 0) || null,
+      ...(Number(done.noted ?? 0) > 0 ? { noted: Number(done.noted) } : {}),
       ...(done.updated === true ? { updated: true } : {}) };
   };
   return {

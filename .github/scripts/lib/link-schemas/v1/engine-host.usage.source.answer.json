@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "The engine answers the host's invocation counter registration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["intent", "outcome"],
+  "properties": {
+    "intent": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "outcome": { "enum": ["registered", "unavailable", "refused"] },
+    "source": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "reason": { "enum": ["receiver-unavailable", "intent-conflict", "invalid-request", "scope-refused", "registration-unavailable"] }
+  },
+  "if": { "properties": { "outcome": { "const": "registered" } } },
+  "then": { "required": ["source"], "not": { "required": ["reason"] } },
+  "else": { "not": { "required": ["source"] } }
+}

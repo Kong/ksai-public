@@ -45,6 +45,9 @@ const NAMED = new Set([
   'plugin>engine:retry.ask',
   'plugin>engine:context.ask',
   'plugin>engine:note.delivered',
+  'host>engine:usage.source',
+  'host>engine:usage.snapshot',
+  'engine>host:usage.source.answer',
 ]);
 
 const EPHEMERAL = new Set([

@@ -5066,6 +5066,7 @@ runs:
         OPENCODE_RESUME_SESSION: ${{ steps.plan_session.outputs.session_id }}
         SUBPROCESS_ENV_SCRUB: "1"
         KSAI_JOB_INDEX: ${{ strategy.job-index || 0 }}
+        COMMIT_ID: ${{ steps.checkout_pr.outputs.commit || steps.checkout_test.outputs.commit }}
         KSAI_OUTCOME_EXPECTED: "true"
         KSAI_WORK_REQUEST: ${{ steps.context.outputs.work_request }}
         OTEL_EXPORTER_OTLP_ENDPOINT: ${{ inputs.otel_endpoint }}
@@ -5499,6 +5500,7 @@ runs:
         SANDBOX_DENY_WRITE: ${{ inputs.sandbox_deny_write }}
         SANDBOX_DENY_ENV: ${{ inputs.sandbox_deny_env }}
         KSAI_JOB_INDEX: ${{ strategy.job-index || 0 }}
+        COMMIT_ID: ${{ steps.checkout_pr.outputs.commit || steps.checkout_test.outputs.commit }}
         OTEL_EXPORTER_OTLP_ENDPOINT: ${{ inputs.otel_endpoint }}
         OTEL_EXPORTER_OTLP_HEADERS: ${{ inputs.otel_headers }}
         OTEL_RESOURCE_ATTRIBUTES: >-

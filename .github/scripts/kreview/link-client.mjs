@@ -79,7 +79,7 @@ function inbox() {
   };
 }
 
-export function websocketTransport(endpoint, { connect = (url, init) => new WebSocket(url, init) } = {}) {
+export function websocketTransport(endpoint, { connect = (url, init) => new WebSocket(url, init), asks = {} } = {}) {
   const url = `${String(endpoint).replace(/^http/, 'ws').replace(/\/$/, '')}/v1/run/link`;
   return {
     name: 'websocket',
@@ -89,7 +89,7 @@ export function websocketTransport(endpoint, { connect = (url, init) => new WebS
           reject(reasonOf(signal));
           return;
         }
-        const socket = connect(url, { protocols: [SUBPROTOCOL], headers: { authorization: `Bearer ${token}` } });
+        const socket = connect(url, { protocols: [SUBPROTOCOL], headers: { ...asks, authorization: `Bearer ${token}` } });
         const frames = inbox();
         let opened = false;
         signal.addEventListener('abort', () => {
@@ -138,10 +138,10 @@ function closeOf(response) {
   return Number.isInteger(code) && code > 0 ? code : response.status === 503 ? CLOSED.restart : CLOSED.protocol;
 }
 
-export function pollTransport(endpoint, job, { fetch = globalThis.fetch, holdMs = 30_000 } = {}) {
+export function pollTransport(endpoint, job, { fetch = globalThis.fetch, holdMs = 30_000, asks = {} } = {}) {
   const base = `${String(endpoint).replace(/\/$/, '')}/v1/run/link`;
   const post = (path, token, body, signal) =>
-    fetch(`${base}${path}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body, signal });
+    fetch(`${base}${path}`, { method: 'POST', headers: { ...asks, authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body, signal });
   return {
     name: 'poll',
     async open({ token, hello, cursors, fresh, signal = new AbortController().signal }) {
@@ -212,7 +212,7 @@ const expiryOf = (token) => {
 
 export function linkClient({
   endpoint, repository, runId, attempt, job, mint, verifyCertificate, runner, jobStartedAt = Date.now(),
-  onMessage, onPlugin = (_session, _frame, _message) => {}, onLapse, onEnded = (_error) => {}, onTick = () => {}, onAcked = (_message) => {}, log = (_said) => {},
+  onMessage, onPlugin = (_session, _frame, _message) => {}, onLapse, onEnded = (_error) => {}, onTick = () => {}, onAcked = (_message) => {}, onWelcome = (_body) => {}, log = (_said) => {},
   transports = { websocket: websocketTransport(endpoint), poll: pollTransport(endpoint, job) },
   clock = () => performance.now(), wall = Date.now, pause = (ms) => new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -273,6 +273,7 @@ export function linkClient({
     }
     for (const message of pending) await transmit(message);
     for (const frames of relayed.values()) for (const one of frames) await conn.send(one.frame);
+    onWelcome(welcome.body);
   };
 
   const received = (frame) => {
@@ -298,15 +299,19 @@ export function linkClient({
     if (hostCursor.accept(message.seq)) onMessage(message);
   };
 
+  const pingOn = (connection, now) => {
+    pingN += 1;
+    pinged.set(pingN, now);
+    connection.send(signed({ epoch, seq: 0, kind: 'ping', body: { n: pingN, runner_wall_ms: wall(), loop_lag_ms: lagMs } })).catch(() => {});
+  };
+
   const pinging = (connection) => {
     let last = clock();
     return every(pingEvery, () => {
       const now = clock();
       lagMs = Math.max(0, Math.round(now - last - pingEvery));
       last = now;
-      pingN += 1;
-      pinged.set(pingN, now);
-      connection.send(signed({ epoch, seq: 0, kind: 'ping', body: { n: pingN, runner_wall_ms: wall(), loop_lag_ms: lagMs } })).catch(() => {});
+      pingOn(connection, now);
       onTick();
     });
   };
@@ -433,6 +438,9 @@ export function linkClient({
       pending.push(message);
       if (conn) transmit(message).catch(() => {});
       return seq;
+    },
+    ping() {
+      if (conn) pingOn(conn, clock());
     },
     relay(session, frame) {
       const { seq: at } = payloadOf(frame);

@@ -107,7 +107,7 @@ function unkept(upload, said) {
 }
 
 export async function checkpointSaved({ endpoint, fetch, token, upload, continuation = '', note = unsaid }) {
-  const kept = async (body, carried) => controlPlane.answered(fetch, `${endpoint}/v1/run/work-sessions/checkpoints`, {
+  const kept = async (body, carried) => controlPlane.answered(fetch, `${endpoint}/v1/run/tasks/checkpoints`, {
     token: typeof token === 'function' ? await token() : token, body: JSON.stringify(body), timeout: CALL_MS, headers: uploadHeaders(body, carried), said: true,
   });
   const first = await kept(upload, continuation);
@@ -146,7 +146,7 @@ export async function restoredFrom({ endpoint, fetch, token, link, job, flow, pr
   let said;
   try {
     const bearer = typeof token === 'function' ? await token() : token;
-    said = await controlPlane.answered(fetch, `${endpoint}/v1/run/work-sessions/checkpoints/restore`, {
+    said = await controlPlane.answered(fetch, `${endpoint}/v1/run/tasks/checkpoints/restore`, {
       token: bearer, body: JSON.stringify({ job, link, flow, engine_version: OPENCODE_V2_VERSION, prompt_version: promptVersion }), timeout: CALL_MS, said: true,
     });
   } catch (error) {
