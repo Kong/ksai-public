@@ -5,6 +5,8 @@ const { FLOW_BRANCH_SHAPE } = require('./verify-chunk.cjs');
 const { isOwnLogin } = require('./threads.cjs');
 const { MARKER: FINDING_MARKER } = require('../lib/folded-findings.cjs');
 
+const CP_FINDING_MARKER = /<!--\s*ksai-finding\s+f1-[0-9a-f]{32}(?:\s+match=m1-[0-9a-f]{32})?\s*-->/;
+
 const BARE_MODES = Object.freeze(['auto', 'off']);
 
 const NUDGE =
@@ -29,42 +31,56 @@ function bareMode({ input = null, fromFile = null } = {}) {
   return { mode: asked === 'off' || narrowed === 'off' ? 'off' : 'auto' };
 }
 
-async function ownedBy({ core, botLogin, id, named, read, holds }) {
+async function ownedBy({ core, botLogin, id, named, read, complete, holds, onUnreadable }) {
   const number = Number(String(id ?? '').trim());
-  if (!Number.isSafeInteger(number) || number <= 0) return false;
-  if (!String(botLogin ?? '').trim()) return false;
+  if (!Number.isSafeInteger(number) || number <= 0 || !String(botLogin ?? '').trim()) {
+    onUnreadable();
+    return false;
+  }
   let data;
   try {
     ({ data } = await read(number));
   } catch (error) {
+    onUnreadable();
     core?.info?.(`could not read ${named(number)} (${error?.message ?? error}).`);
+    return false;
+  }
+  if (data === null || typeof data !== 'object' || Array.isArray(data) || !complete(data)) {
+    onUnreadable();
     return false;
   }
   return holds(data);
 }
 
-const ownPull = ({ github = null, core = null, owner = null, repo = null, prNumber = null, botLogin = null } = {}) =>
+const ownPull = ({ github = null, core = null, owner = null, repo = null, prNumber = null, botLogin = null, onUnreadable = () => {} } = {}) =>
   ownedBy({
     core,
+    onUnreadable,
     botLogin,
     id: prNumber,
     named: (number) => `#${number} to tell whether this flow opened it`,
     read: (number) => github.rest.pulls.get({ owner, repo, pull_number: number }),
+    complete: (pull) => typeof pull.user?.login === 'string' && pull.user.login.trim() !== '' &&
+      typeof (pull.user.type ?? '') === 'string' && typeof pull.head?.ref === 'string' && pull.head.ref.trim() !== '',
     holds: (pull) => FLOW_BRANCH_SHAPE.test(String(pull?.head?.ref ?? '')) && isOwnLogin(pull?.user?.login, botLogin, pull?.user?.type),
   });
 
-const ownThread = ({ github = null, core = null, owner = null, repo = null, rootId = null, botLogin = null } = {}) =>
+const ownThread = ({ github = null, core = null, owner = null, repo = null, rootId = null, botLogin = null, onUnreadable = () => {} } = {}) =>
   ownedBy({
     core,
+    onUnreadable,
     botLogin,
     id: rootId,
     named: (number) => `review comment ${number} to tell whether this flow's review opened it`,
     read: (number) => github.rest.pulls.getReviewComment({ owner, repo, comment_id: number }),
-    holds: (root) => isOwnLogin(root?.user?.login, botLogin, root?.user?.type) && String(root?.body ?? '').includes(FINDING_MARKER),
+    complete: (root) => typeof root.user?.login === 'string' && root.user.login.trim() !== '' &&
+      typeof (root.user.type ?? '') === 'string' && typeof root.body === 'string',
+    holds: (root) => isOwnLogin(root?.user?.login, botLogin, root?.user?.type) &&
+      (String(root?.body ?? '').includes(FINDING_MARKER) || CP_FINDING_MARKER.test(String(root?.body ?? ''))),
   });
 
-function ownSurface({ github = null, core = null, owner = null, repo = null, botLogin = null, rootId = null, prNumber = null } = {}) {
-  const where = { github, core, owner, repo, botLogin };
+function ownSurface({ github = null, core = null, owner = null, repo = null, botLogin = null, rootId = null, prNumber = null, onUnreadable = () => {} } = {}) {
+  const where = { github, core, owner, repo, botLogin, onUnreadable };
   return String(rootId ?? '').trim() === '' ? ownPull({ ...where, prNumber }) : ownThread({ ...where, rootId });
 }
 

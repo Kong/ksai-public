@@ -228,6 +228,11 @@ function requestedReaders({ live, read, repository, note = noticed, keptOnly = f
     getSubmittedReview: through('submitted_review', live.getSubmittedReview),
     seen: async () => (asked ? seenOf(await asked) : ''),
     retried: async () => (asked ? retriedOf(await asked) : false),
+    initialPending: async () => {
+      const ready = asked ? (await asked).ready : null;
+      return Boolean(ready) && ready.flow === 'pending' && ready.workflow === null && ready.generation === 0 &&
+        ready.dispatch.job === 'run' && ready.dispatch.generation === 0;
+    },
   };
 }
 

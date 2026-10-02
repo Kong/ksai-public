@@ -298,6 +298,12 @@ outputs:
   requested:
     description: whether anything was asked of this flow at all
     value: ${{ steps.trigger.outputs.requested }}
+  no_work:
+    description: whether routing intentionally answered the comment with nothing to run
+    value: ${{ steps.verdict.outputs.no_work || steps.trigger.outputs.no_work }}
+  native_pending:
+    description: whether this gate read the validated original pending Task request from its archive
+    value: ${{ steps.trigger.outputs.native_pending }}
   thread_root_id:
     description: id of the review thread the comment was left in, empty elsewhere
     value: ${{ steps.trigger.outputs.thread_root_id }}

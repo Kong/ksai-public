@@ -145,7 +145,7 @@ async function routeCommand({ eventName, onIssue, threadRootId, onReview, review
   return decide({ command: parsed.command ?? here, spelled: parsed.command, onIssue, disabledCommands });
 }
 
-async function bareTarget({ github, core, context, payload, eventName, env, onIssue, threadRootId, body, readConfig, opened }) {
+async function bareTarget({ github, core, context, payload, eventName, env, onIssue, threadRootId, body, readConfig, opened, onUnreadable }) {
   const inThread = String(threadRootId ?? '').trim() !== '';
   if (eventName !== (inThread ? REVIEW_COMMENT_EVENT : COMMENT_EVENT)) return false;
   if (onIssue) return false;
@@ -166,10 +166,14 @@ async function bareTarget({ github, core, context, payload, eventName, env, onIs
     botLogin: env.BOT_LOGIN,
     rootId: threadRootId,
     prNumber: payload?.issue?.number,
+    onUnreadable,
   });
   if (!mine) return false;
   const config = await readConfig();
-  if (config.error) return false;
+  if (config.error) {
+    onUnreadable();
+    return false;
+  }
   const narrowed = bareMode({ input: env.BARE_COMMENTS, fromFile: config.bareComments });
   return !narrowed.error && narrowed.mode === 'auto';
 }
@@ -284,7 +288,6 @@ async function route({ github, core, context, env }) {
     core.setFailed(dispatched.error);
     return null;
   }
-
   let carried = null;
   if (dispatched.held) {
     const surface = dispatched.review
@@ -320,6 +323,8 @@ async function route({ github, core, context, env }) {
 
   let openedPending;
   const opened = () => (openedPending ??= resolvedWriteCommands({ core, env, readConfig }));
+  let unreadableBare = false;
+  const onUnreadable = () => { unreadableBare = true; };
 
   const ownReview =
     onReview &&
@@ -364,7 +369,7 @@ async function route({ github, core, context, env }) {
     bound !== '' &&
     dispatched.held &&
     request === null &&
-    (await bareTarget({ github, core, context, payload, eventName, env, onIssue, threadRootId, body, readConfig, opened }));
+    (await bareTarget({ github, core, context, payload, eventName, env, onIssue, threadRootId, body, readConfig, opened, onUnreadable }));
   const decision = bound === '' ? routed : decide({ command: bound, spelled: bound, onIssue, onReview, disabledCommands });
   const unrunnable = bound === '' ? '' : boundUnrunnable({
     bound,
@@ -380,6 +385,8 @@ async function route({ github, core, context, env }) {
     return null;
   }
 
+  core.setOutput('no_work', 'false');
+  core.setOutput('native_pending', (await readers.initialPending()) ? 'true' : 'false');
   core.setOutput('review', decision.review ? 'true' : 'false');
   core.setOutput('implement', decision.implement ? 'true' : 'false');
   core.setOutput('test', decision.test ? 'true' : 'false');
@@ -405,7 +412,7 @@ async function route({ github, core, context, env }) {
   }
   const bare =
     request === null &&
-    (await bareTarget({ github, core, context, payload, eventName, env, onIssue, threadRootId, body, readConfig, opened }));
+    (await bareTarget({ github, core, context, payload, eventName, env, onIssue, threadRootId, body, readConfig, opened, onUnreadable }));
   core.setOutput('write_access_commands', requested || bare ? await opened() : '');
   if (bare) {
     core.setOutput('own_pull', 'true');
@@ -415,7 +422,12 @@ async function route({ github, core, context, env }) {
         : 'This comment names no command and sits on a pull request this flow opened, so it is classified.',
     );
   }
-  if (request === null && !bare) return decision;
+  if (request === null && !bare) {
+    const noWork = !requested && !unreadableBare && !decision.command &&
+      !['review', 'implement', 'test', 'help'].some((one) => decision[one]);
+    core.setOutput('no_work', noWork ? 'true' : 'false');
+    return decision;
+  }
 
   if (String(env.LEGACY_ALLOWED_COMMANDS ?? '').trim() !== '') {
     core.info('The `allowed_commands` input was replaced and still carries a value; classifying nothing.');
@@ -487,6 +499,7 @@ async function testerRuns({ github, context, core, env }) {
 }
 
 async function settle({ github = null, context = null, core, env, readFile = (at) => fs.readFileSync(at, 'utf8') }) {
+  core.setOutput('no_work', 'false');
   const onIssue = env.ON_ISSUE === 'true';
   const onOwnPull = env.ON_OWN_PULL === 'true';
   const surface = surfaceForComment({ onOwnPull, onIssue, threadRootId: env.THREAD_ROOT_ID });
@@ -546,6 +559,9 @@ async function settle({ github = null, context = null, core, env, readFile = (at
         ? 'The comment asks this flow for nothing, so nothing is published and nothing runs.'
         : 'The comment reads as no other flow\'s work, so the command it already resolved to decides.',
     );
+    const noWork = onOwnPull && out.noWork === true && out.spend.stopReason === 'success' &&
+      !Object.values(fallback).some(Boolean);
+    core.setOutput('no_work', noWork ? 'true' : 'false');
     return publish(fallback);
   }
   if (verdict === NUDGE_VERDICT) {

@@ -381,7 +381,7 @@ function verdictFromExecution(raw, surface = null) {
   if (text.trim() === '') {
     return { available: false, reason: `the classifier answered nothing (${spend.stopReason})`, spend };
   }
-  return { available: true, verdict: verdictOf(text, null, surface), spend };
+  return { available: true, verdict: verdictOf(text, null, surface), noWork: text.trim().toLowerCase() === NO_VERDICT, spend };
 }
 
 module.exports = {
