@@ -27,6 +27,14 @@ const utf8 = new TextDecoder('utf-8', { fatal: true });
 
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
+export function checkpointBaseOf(env, head) {
+  if (Object.hasOwn(env, 'CHECKPOINT_BASE_SHA')) return String(env.CHECKPOINT_BASE_SHA ?? '').trim();
+  const base = String(env.BASE_SHA ?? '').trim();
+  if (base) return base;
+  const pull = String(env.CHECKPOINT_PR_NUMBER ?? env.PR_NUMBER ?? '').trim();
+  return pull && pull !== '0' ? '' : head;
+}
+
 function headOf(git) {
   const head = git(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
   const sha = String(head.stdout ?? '').trim();
@@ -62,6 +70,7 @@ export function applied(git, patchFile, saved) {
 export function checkpointUpload({ exported, patch, head, base, parent, promptVersion, link, job, flow, secrets = [], conversation = null }) {
   if (!VERSION.test(promptVersion)) throw new Error('the engine named no prompt version to save the checkpoint under');
   if (!COMMIT.test(base)) throw new Error('the run names no base commit to save the checkpoint against');
+  if (!COMMIT.test(head)) throw new Error('the work names no head commit to save the checkpoint against');
   if (parent && !CHECKPOINT.test(parent)) throw new Error('the engine named a previous checkpoint that is not one');
   let session;
   try {
@@ -141,8 +150,9 @@ function fellBack(reason, parent) {
   ];
 }
 
-export async function restoredFrom({ endpoint, fetch, token, link, job, flow, promptVersion, apply, keep }) {
+export async function restoredFrom({ endpoint, fetch, token, link, job, flow, promptVersion, base, apply, keep }) {
   if (!VERSION.test(promptVersion)) return fellBack('the engine named no prompt version to restore under');
+  if (!COMMIT.test(base)) return fellBack('the run names no base commit to restore its checkpoint against');
   let said;
   try {
     const bearer = typeof token === 'function' ? await token() : token;
@@ -169,6 +179,7 @@ export async function restoredFrom({ endpoint, fetch, token, link, job, flow, pr
     if (!offered || !COMMIT.test(String(saved.head_sha)) || !SESSION.test(String(saved.model_session_id))) {
       throw new Error('the control plane offered a checkpoint that does not name itself');
     }
+    if (!COMMIT.test(String(saved.base_sha)) || saved.base_sha !== base) throw new Error('the checkpoint names another or unknown base commit');
     if (sha256(exported) !== saved.export_sha256 || exported.length !== saved.export_bytes) throw new Error('the offered export is not the one the checkpoint names');
     if (sha256(patch) !== saved.patch_sha256 || patch.length !== saved.patch_bytes) throw new Error('the offered patch is not the one the checkpoint names');
     let session;

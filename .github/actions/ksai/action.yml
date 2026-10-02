@@ -5022,6 +5022,27 @@ runs:
         WORKFLOW_VERSION: ${{ steps.workflow_stage.outputs.workflow_version }}
       run: node "${SCRIPTS}/kreview/link-publish.mjs"
 
+    - name: Capture the checkpoint base before model work
+      id: checkpoint_base
+      if: ${{ steps.mint.outcome == 'success' && steps.engine.outputs.opencode_major == '2' }}
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+        REPO: ${{ github.repository }}
+        FLOW: ${{ inputs.flow }}
+        RECORD_READ: ${{ steps.dispatch_record.outputs.read }}
+        RECORD_PR: ${{ steps.dispatch_record.outputs.pr }}
+        THREAD_NUM: ${{ steps.context.outputs.issue_number }}
+        EXISTING_PR: ${{ steps.phase.outputs.pr_number }}
+        REVIEW_BASE_SHA: ${{ steps.diff.outputs.base_sha }}
+        TEST_BASE_SHA: ${{ steps.test_base.outputs.sha }}
+        SOURCE_BASE_SHA: ${{ steps.checkout_source.outputs.commit }}
+      with:
+        github-token: ${{ inputs.source_org_github_token }}
+        script: |
+          const { captureCheckpointBase } = await import(`file://${process.env.SCRIPTS}/ksai/checkpoint-base.mjs`);
+          await captureCheckpointBase({ env: process.env, github, core });
+
     - name: Run the tester on opencode
       id: opencode_test
       if: >-
@@ -5062,6 +5083,8 @@ runs:
         KSAI_STAGE_INPUTS: ${{ steps.workflow_stage.outputs.inputs }}
         OPENCODE_PTY: ${{ inputs.opencode_pty }}
         OPENCODE_PHASE: test
+        CHECKPOINT_BASE_SHA: ${{ steps.checkpoint_base.outputs.sha }}
+        CHECKPOINT_PR_NUMBER: ${{ steps.checkpoint_base.outputs.pr }}
         OPENCODE_SKILLS: ""
         OPENCODE_RESUME_SESSION: ${{ steps.plan_session.outputs.session_id }}
         SUBPROCESS_ENV_SCRUB: "1"
@@ -5521,6 +5544,8 @@ runs:
         BASE_SHA: ${{ steps.checkout_source.outputs.commit }}
         PR_NUMBER: ${{ steps.phase.outputs.pr_number || steps.open_draft.outputs.pr_number }}
         CHANGE_SCOPE_FILE: ${{ steps.build_implement.outputs.change_scope_file }}
+        CHECKPOINT_BASE_SHA: ${{ steps.checkpoint_base.outputs.sha }}
+        CHECKPOINT_PR_NUMBER: ${{ steps.checkpoint_base.outputs.pr }}
         DENIED_PATHS: ${{ steps.bare_gate.outputs.denied_paths || inputs.denied_paths }}
         PLAN_DIR: ${{ inputs.plan_file_path }}
         PLAN_FILE: ${{ steps.phase.outputs.plan_file }}

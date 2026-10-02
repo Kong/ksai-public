@@ -44,7 +44,7 @@ import { usageFileOf } from './usage-source.mjs';
 import { observationsIn } from './provider-observations.mjs';
 import { monitorProcess, runtimeSummary, sandboxArgs, since } from './opencode-run.mjs';
 import { mcpServerCount, traceObserver } from './opencode-runtime.mjs';
-import { RESTORED_EXPORT, Unapplied, checkpointSaved, checkpointUpload, restoredFrom } from './link-checkpoint.mjs';
+import { RESTORED_EXPORT, Unapplied, checkpointBaseOf, checkpointSaved, checkpointUpload, restoredFrom } from './link-checkpoint.mjs';
 import { outcomeExpected } from './link-expect.mjs';
 import { transcriptOf, transcriptSent } from './link-transcript.mjs';
 import { published } from './link-publish.mjs';
@@ -74,7 +74,7 @@ const TOOL_SHAPE = /^[A-Za-z0-9_.:-]{1,64}$/;
 const RECEIPTS_MOST = 64;
 const OBSERVED_PART_BYTES = 2359296;
 const OBSERVED_MOST = 32 * 1024 * 1024;
-export const HOST_INPUTS = Object.freeze(['DIFF_PATCH', 'DIFF_FILES', 'REPO', 'PR_NUMBER', 'BRANCH', 'BASE_SHA', 'DENIED_PATHS', 'GOVERNED_PLUGIN']);
+export const HOST_INPUTS = Object.freeze(['DIFF_PATCH', 'DIFF_FILES', 'REPO', 'PR_NUMBER', 'BRANCH', 'BASE_SHA', 'CHECKPOINT_BASE_SHA', 'CHECKPOINT_PR_NUMBER', 'DENIED_PATHS', 'GOVERNED_PLUGIN']);
 export const MODEL_SPAN = 'http.client POST';
 export const SPANS = Object.freeze([MODEL_SPAN, 'ServerProcess.start', 'PluginSupervisor.activate', 'SessionRunner.drain', 'SessionRunner.runStep', 'SessionStep.attempt', 'Tool.execute']);
 
@@ -651,6 +651,7 @@ export async function main(env = process.env, {
     console.log(`::error::${error.message}`);
     return 1;
   }
+  const checkpointBase = checkpointBaseOf(env, JSON.parse(checkout).head_sha);
   writeFileSync(events, '');
   writeOutputs(env.GITHUB_OUTPUT, { execution_file: execution });
   if (String(env.OPENCODE_RESUME_SESSION ?? '').trim()) console.log(`::warning::${UNCONTINUED}.`);
@@ -1067,7 +1068,7 @@ export async function main(env = process.env, {
       const { exit, said } = await childSaid(checkpointScript(env), { CHECKPOINT_MODE: 'snapshot' }, 'checkpoint.json');
       if (exit !== 0 || !said || said.error) throw new Error(`the work could not be read: ${said?.error ?? `the checkpoint task exited ${exit}`}`);
       const upload = checkpointUpload({
-        exported, patch: Buffer.from(said.patch, 'base64'), head: said.head, base: String(env.BASE_SHA ?? '').trim() || said.head, parent: arg('parent'),
+        exported, patch: Buffer.from(said.patch, 'base64'), head: said.head, base: checkpointBase, parent: arg('parent'),
         promptVersion: arg('prompt_version'), link: client.link, job, flow: run.flow, secrets: collectSecrets(env),
         conversation: conversationOf(sessions.get(session), sessions.get(session)?.conclusion),
       });
@@ -1079,7 +1080,7 @@ export async function main(env = process.env, {
     }
     if (kind === 'task' && body.name === 'restore') {
       const outputs = await restoredFrom({
-        endpoint, fetch, token: () => mint('ksai-cp'), link: client.link, job, flow: run.flow, promptVersion: arg('prompt_version'),
+        endpoint, fetch, token: () => mint('ksai-cp'), link: client.link, job, flow: run.flow, promptVersion: arg('prompt_version'), base: checkpointBase,
         apply: async (patch, head) => {
           const patchFile = join(scratch, 'restore.patch');
           writeFileSync(patchFile, patch, { mode: 0o600 });
