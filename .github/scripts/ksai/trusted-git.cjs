@@ -1053,9 +1053,11 @@ function gitVia(run, cwd) {
       env: index ? { ...gitEnv(policy), GIT_INDEX_FILE: index } : gitEnv(policy),
       maxBuffer: GIT_MAX_BUFFER,
     });
-    return syncRepositoryState(policy)
-      ? result
-      : { ok: false, stdout: '', status: null, reason: 'trusted Git state could not be written back safely' };
+    if (index ? syncWorktreeState(policy.gitDir, policy.viewGitDir) : syncRepositoryState(policy)) return result;
+    const reason = index
+      ? 'trusted Git state could not be refreshed from the checkout safely'
+      : 'trusted Git state could not be written back safely';
+    return { ok: false, stdout: '', status: null, reason };
   };
   return Object.assign(invoke, { policy });
 }
