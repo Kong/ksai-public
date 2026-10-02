@@ -145,21 +145,6 @@
       "base_prompt",
       "knowledge"
     ],
-    "runtime.work-session-continue": [
-      "base_prompt",
-      "followup",
-      "handoff",
-      "knowledge"
-    ],
-    "runtime.work-session-followup": [
-      "comment",
-      "requests",
-      "sessions"
-    ],
-    "runtime.work-session-start": [
-      "base_prompt",
-      "knowledge"
-    ],
     "runtime.workflow-stage": [
       "instructions",
       "known_findings",
