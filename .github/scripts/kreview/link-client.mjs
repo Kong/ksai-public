@@ -1,7 +1,7 @@
 import { generateKeyPairSync, randomInt } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 
-import { Cursor, GapError, LinkRefused, SUBPROTOCOL, VERSION, keyId, linkId, open, rawPublicKey, sign } from '../lib/link-protocol.mjs';
+import { Cursor, GapError, LinkRefused, SUBPROTOCOL, VERSION, keyId, linkId, open, publicKeyOf, rawPublicKey, sign } from '../lib/link-protocol.mjs';
 
 export const CLOSED = Object.freeze({ normal: 1000, restart: 1012, refused: 4001, protocol: 4002, key: 4003, gap: 4008, superseded: 4009, ended: 4010 });
 
@@ -12,6 +12,7 @@ const WEBSOCKET_TRIES = 2;
 const WATCH_MS = 1000;
 const TOKEN_MARGIN_MS = 60_000;
 const HANDSHAKE_MS = 30_000;
+const CLOSE_GRACE_MS = 1000;
 
 export class LinkEnded extends Error {
   constructor(code, reason) {
@@ -145,52 +146,113 @@ export function pollTransport(endpoint, job, { fetch = globalThis.fetch, holdMs 
   return {
     name: 'poll',
     async open({ token, hello, cursors, fresh, signal = new AbortController().signal }) {
+      const claimed = payloadOf(hello);
+      const hostRaw = Buffer.from(String(claimed.body?.key), 'base64');
+      const signers = { [keyId(hostRaw)]: { party: 'host', key: publicKeyOf(hostRaw) } };
+      const greeting = open(hello, { link: claimed.link, job, epoch: 1, to: 'engine', signers });
+      if (greeting.kind !== 'hello' || greeting.body.transport !== 'poll') throw new LinkRefused('link: a polling connection needs a signed polling hello');
       const opened = await post('/open', token, hello, AbortSignal.any([signal, AbortSignal.timeout(holdMs)]));
       if (!opened.ok) throw new Closed(closeOf(opened), (await opened.text()).trim());
+      if (signal.aborted) throw reasonOf(signal);
       const frames = inbox();
-      for (const frame of await framesOf(opened)) frames.push({ frame: JSON.stringify(frame) });
+      for (const frame of await within(framesOf(opened), signal)) frames.push({ frame: JSON.stringify(frame) });
       const stopped = new AbortController();
+      const stop = (code, reason) => {
+        signal.removeEventListener('abort', upstream);
+        stopped.abort(new Closed(code, reason));
+        frames.end(code, reason);
+      };
+      const upstream = () => {
+        const error = reasonOf(signal);
+        stop(error.code ?? 1006, error.reason ?? error.message);
+      };
+      if (signal.aborted) upstream();
+      else signal.addEventListener('abort', upstream, { once: true });
       let epoch = 0;
       const query = (extra) => `?${new URLSearchParams({ job, epoch: String(epoch), ...extra })}`;
       const receiving = async (proof) => {
         while (!stopped.signal.aborted) {
           try {
             const { after, plugin_after: pluginAfter } = cursors();
-            const answered = await post(`/receive${query({ after: String(after), plugin_after: String(pluginAfter) })}`, await fresh(), proof, AbortSignal.any([stopped.signal, AbortSignal.timeout(holdMs)]));
+            const bearer = await within(fresh(), stopped.signal);
+            if (stopped.signal.aborted) return;
+            const answered = await post(`/receive${query({ after: String(after), plugin_after: String(pluginAfter) })}`, bearer, proof, AbortSignal.any([stopped.signal, AbortSignal.timeout(holdMs)]));
             if (!answered.ok) {
-              frames.end(closeOf(answered), (await answered.text()).trim());
+              stop(closeOf(answered), (await answered.text()).trim());
               return;
             }
             for (const frame of await framesOf(answered)) frames.push({ frame: JSON.stringify(frame) });
           } catch (error) {
-            if (!stopped.signal.aborted) frames.end(1006, String(error?.message ?? error));
+            if (!stopped.signal.aborted) stop(1006, String(error?.message ?? error));
             return;
           }
         }
       };
       const sendOne = async (frame) => {
-        const answered = await post(`/send${query({})}`, await fresh(), frame, AbortSignal.any([stopped.signal, AbortSignal.timeout(holdMs)]));
-        if (!answered.ok) {
-          frames.end(closeOf(answered), (await answered.text()).trim());
-          throw new Closed(closeOf(answered), 'the engine refused a message');
+        if (stopped.signal.aborted) throw reasonOf(stopped.signal);
+        try {
+          const bearer = await within(fresh(), stopped.signal);
+          if (stopped.signal.aborted) throw reasonOf(stopped.signal);
+          const answered = await post(`/send${query({})}`, bearer, frame, AbortSignal.any([stopped.signal, AbortSignal.timeout(holdMs)]));
+          if (!answered.ok) {
+            const code = closeOf(answered);
+            const reason = (await answered.text()).trim();
+            stop(code, reason);
+            throw new Closed(code, reason);
+          }
+          for (const reply of await framesOf(answered)) frames.push({ frame: JSON.stringify(reply) });
+        } catch (error) {
+          if (!stopped.signal.aborted) {
+            const ended = error instanceof Closed ? error : new Closed(1006, String(error?.message ?? error));
+            stop(ended.code, ended.reason);
+          }
+          throw error;
         }
-        for (const reply of await framesOf(answered)) frames.push({ frame: JSON.stringify(reply) });
       };
       let sending = Promise.resolve();
+      let heartbeating = null;
+      let queuedPing = null;
+      const sendHeartbeat = (frame) => {
+        queuedPing = frame;
+        if (heartbeating) return heartbeating;
+        const active = (async () => {
+          try {
+            while (queuedPing !== null && !stopped.signal.aborted) {
+              const next = queuedPing;
+              queuedPing = null;
+              await sendOne(next);
+            }
+          } finally {
+            heartbeating = null;
+            queuedPing = null;
+          }
+        })();
+        heartbeating = active;
+        return active;
+      };
       return {
         next: () => frames.next(),
-        send(frame) {
+        async send(frame) {
+          if (stopped.signal.aborted) throw reasonOf(stopped.signal);
+          let message;
+          try {
+            message = payloadOf(frame);
+          } catch {}
+          if (message?.kind === 'ping') {
+            open(frame, { link: greeting.link, job, epoch, to: 'engine', signers });
+            return sendHeartbeat(frame);
+          }
           const sent = sending.then(() => sendOne(frame));
           sending = sent.catch(() => {});
           return sent;
         },
         async prove(frame, at) {
+          if (stopped.signal.aborted) throw reasonOf(stopped.signal);
           epoch = at;
           receiving(frame);
         },
         close(code = CLOSED.normal, reason = '') {
-          stopped.abort();
-          frames.end(code, reason);
+          stop(code, reason);
         },
       };
     },
@@ -453,8 +515,14 @@ export function linkClient({
       stopped = true;
       const held = conn;
       if (held) {
-        await held.send(signed({ epoch, seq: 0, kind: 'bye', body: { reason } })).catch(() => {});
-        held.close(CLOSED.normal, reason);
+        const bye = Promise.resolve().then(() => held.send(signed({ epoch, seq: 0, kind: 'bye', body: { reason } }))).catch(() => {});
+        let timeout;
+        try {
+          await Promise.race([bye, new Promise((resolve) => { timeout = setTimeout(resolve, CLOSE_GRACE_MS); })]);
+        } finally {
+          clearTimeout(timeout);
+          held.close(CLOSED.normal, reason);
+        }
       }
       dialing?.abort(new Closed(CLOSED.normal, reason));
     },
