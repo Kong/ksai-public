@@ -651,7 +651,8 @@ export async function main(env = process.env, {
     console.log(`::error::${error.message}`);
     return 1;
   }
-  const checkpointBase = checkpointBaseOf(env, JSON.parse(checkout).head_sha);
+  const startedAt = JSON.parse(checkout).head_sha;
+  const checkpointBase = checkpointBaseOf(env, startedAt);
   writeFileSync(events, '');
   writeOutputs(env.GITHUB_OUTPUT, { execution_file: execution });
   if (String(env.OPENCODE_RESUME_SESSION ?? '').trim()) console.log(`::warning::${UNCONTINUED}.`);
@@ -1065,7 +1066,7 @@ export async function main(env = process.env, {
     if (kind === 'task' && body.name === 'checkpoint') {
       const session = arg('session');
       const exported = readFileSync(join(linkDirOf(governedDir, session), EXPORT_FILE));
-      const { exit, said } = await childSaid(checkpointScript(env), { CHECKPOINT_MODE: 'snapshot' }, 'checkpoint.json');
+      const { exit, said } = await childSaid(checkpointScript(env), { CHECKPOINT_MODE: 'snapshot', CHECKPOINT_HEAD: startedAt }, 'checkpoint.json');
       if (exit !== 0 || !said || said.error) throw new Error(`the work could not be read: ${said?.error ?? `the checkpoint task exited ${exit}`}`);
       const upload = checkpointUpload({
         exported, patch: Buffer.from(said.patch, 'base64'), head: said.head, base: checkpointBase, parent: arg('parent'),

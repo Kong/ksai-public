@@ -17,10 +17,10 @@ const MAX_SELECTION_CHARS = 80;
 function cutSelection(said) {
   const text = String(said ?? '');
   if (text.length <= MAX_SELECTION_CHARS) return text;
-  let end = MAX_SELECTION_CHARS - 1;
+  let end = MAX_SELECTION_CHARS - 3;
   const at = text.codePointAt(end);
   if (at >= 0xdc00 && at <= 0xdfff) end -= 1;
-  return `${text.slice(0, end).trimEnd()}…`;
+  return `${text.slice(0, end).trimEnd()}...`;
 }
 const { neutralize } = require('../lib/prompt-text.cjs');
 const {

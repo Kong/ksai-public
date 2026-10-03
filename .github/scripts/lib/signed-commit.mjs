@@ -21,12 +21,16 @@ export function wrapped(line) {
   const room = MAX_COMMIT_LINE - lead.length;
   const out = [];
   let current = '';
-  for (const word of line.slice(lead.length).split(/\s+/).filter(Boolean).flatMap((one) => pieces(one, room))) {
-    if (current && `${current} ${word}`.length > room) {
-      out.push(current);
-      current = word;
-    } else {
-      current = current ? `${current} ${word}` : word;
+  for (const [, gap, word] of line.slice(lead.length).trimStart().matchAll(/(\s*)(\S+)/g)) {
+    let joint = gap;
+    for (const piece of pieces(word, room)) {
+      if (current && `${current}${joint}${piece}`.length > room) {
+        out.push(current);
+        current = piece;
+      } else {
+        current = `${current}${joint}${piece}`;
+      }
+      joint = '';
     }
   }
   out.push(current);

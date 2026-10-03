@@ -10,17 +10,18 @@ import trustedGit from './trusted-git.cjs';
 
 const require = createRequire(import.meta.url);
 const { adversarialRequest, manifestIfAny, MANIFEST } = require('./implement-passes.cjs');
-const { GIT_CONFIG_OVERRIDES } = trustedGit;
 const { toolPolicy } = require('../lib/claude-args.cjs');
 import { writeRenderRequest } from '../lib/render-request.cjs';
 import { runMain } from '../lib/main.mjs';
 
 const GIT_TIMEOUT_MS = 120_000;
 
-function recorded(env, args, at, run = spawnSync) {
+function recorded(env, git, args, at, run = spawnSync) {
   const out = openSync(at, 'w', 0o600);
   try {
-    const done = run('git', ['-C', String(env.GITHUB_WORKSPACE ?? ''), ...args], { stdio: ['ignore', out, 'inherit'], timeout: GIT_TIMEOUT_MS });
+    const done = run('git', trustedGit.gitArgs(String(env.GITHUB_WORKSPACE ?? ''), args, git.policy?.overrides), {
+      stdio: ['ignore', out, 'inherit'], env: trustedGit.gitEnv(git.policy), timeout: GIT_TIMEOUT_MS,
+    });
     if (done.status !== 0) throw new Error(`git ${args.join(' ')} answered ${done.status ?? done.signal}`);
   } finally {
     closeSync(out);
@@ -29,7 +30,9 @@ function recorded(env, args, at, run = spawnSync) {
 }
 
 function resolution(git, temp) {
-  if (!git(['rev-parse', '-q', '--verify', 'MERGE_HEAD']).ok) return null;
+  const merging = git(['rev-parse', '-q', '--verify', 'MERGE_HEAD']);
+  if (!merging.ok && merging.status === 1) return null;
+  if (!merging.ok) throw new Error(merging.reason || 'git could not say whether a merge is in progress');
   const scratch = mkdtempSync(join(temp, 'ksai-adversarial-'));
   try {
     const written = stage.workTree(git, 'HEAD', join(scratch, 'index'), [MANIFEST]);
@@ -54,14 +57,14 @@ export function adversarial(env = process.env, run = spawnSync, git = trustedGit
   mkdirSync(readable, { recursive: true });
   const resolved = resolution(git, temp);
   const diff = (format) => {
-    if (resolved === null) return ['diff', format, range];
+    if (resolved === null) return ['diff', '--no-ext-diff', format, range];
     const { tree, paths } = resolved;
-    return [...GIT_CONFIG_OVERRIDES, 'diff', '--no-ext-diff', format, ...(paths.length ? ['MERGE_HEAD', tree, '--', ...paths] : [tree, tree])];
+    return ['diff', '--no-ext-diff', format, ...(paths.length ? ['MERGE_HEAD', tree, '--', ...paths] : [tree, tree])];
   };
   const asked = {
     ...env,
-    DIFF_FILE: recorded(env, diff('--patch'), join(readable, 'diff.patch'), run),
-    CHANGED_FILES_FILE: recorded(env, diff('--name-status'), join(readable, 'changed-files.txt'), run),
+    DIFF_FILE: recorded(env, git, diff('--patch'), join(readable, 'diff.patch'), run),
+    CHANGED_FILES_FILE: recorded(env, git, diff('--name-status'), join(readable, 'changed-files.txt'), run),
   };
   const at = join(temp, 'ksai-implement-adversarial.request.json');
   writeRenderRequest(at, adversarialRequest(asked));

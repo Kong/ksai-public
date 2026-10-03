@@ -224,7 +224,6 @@ export function verificationOf({
     return result({ status: 'unverified', target, command, reason: 'exit-unavailable' });
   }
 
-  const callAt = shells.lastIndexOf(call);
   const commitAt = shells.findIndex((one) => isCommit(one));
   if (exit !== 0) {
     return result({ status: 'failed', target, command, exit_status: exit, reason: 'target-failed' });
@@ -232,7 +231,7 @@ export function verificationOf({
   if (commitAt === -1) {
     return result({ status: 'unverified', target, command, exit_status: exit, reason: 'commit-not-seen' });
   }
-  if (isCommit(call) || (commitAt !== -1 && callAt > commitAt)) {
+  if (calls.findLast((one) => shells.indexOf(one) < commitAt)?.exit !== 0) {
     return result({ status: 'failed', target, command, exit_status: exit, reason: 'command-after-commit' });
   }
   return result({ status: 'unverified', target, command, exit_status: 0, reason: 'target-command-unbound' });

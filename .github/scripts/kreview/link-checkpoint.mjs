@@ -50,15 +50,17 @@ function mergingOf(git) {
   return merging.ok && COMMIT.test(sha) ? sha : '';
 }
 
-export function snapshot(git, scratch) {
+export function snapshot(git, scratch, started = '') {
   const head = headOf(git);
+  const from = started || head;
+  if (!COMMIT.test(from)) throw new Error('the run names no commit it started from to save the checkpoint against');
   const written = stage.workTree(git, head, join(scratch, 'index'));
   if (!written.ok) throw new Error(written.reason);
-  const diff = git(['diff', '--binary', '--full-index', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', head, written.tree], { base64: true });
+  const diff = git(['diff', '--binary', '--full-index', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', from, written.tree], { base64: true });
   if (!diff.ok) throw new Error('the work could not be written as a patch');
   const work = Buffer.from(diff.stdout, 'base64');
   const merging = mergingOf(git);
-  return { head, patch: merging ? Buffer.concat([Buffer.from(`ksai-merge-head ${merging}\n`), work]) : work };
+  return { head: from, patch: merging ? Buffer.concat([Buffer.from(`ksai-merge-head ${merging}\n`), work]) : work };
 }
 
 export class Unapplied extends Error {}
@@ -236,7 +238,7 @@ export function main(env = process.env, { git = trustedGit.directGit(String(env.
   const scratch = mkdtempSync(join(tmpdir(), 'ksai-checkpoint-'));
   try {
     if (env.CHECKPOINT_MODE === 'snapshot') {
-      const { head, patch } = snapshot(git, scratch);
+      const { head, patch } = snapshot(git, scratch, String(env.CHECKPOINT_HEAD ?? ''));
       write(JSON.stringify({ head, patch: patch.toString('base64') }));
     } else if (env.CHECKPOINT_MODE === 'apply') {
       applied(git, String(env.CHECKPOINT_PATCH ?? ''), String(env.CHECKPOINT_HEAD ?? ''), scratch);
