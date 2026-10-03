@@ -6018,12 +6018,14 @@ runs:
           steps.opencode.outputs.execution_file || steps.opencode_test.outputs.execution_file ||
           steps.run_once.outputs.execution_file }}
         STOPPED: ${{ steps.opencode.outputs.stopped || steps.opencode_test.outputs.stopped }}
+        MODEL_NEVER_ASKED: ${{ steps.opencode.outputs.model_never_asked || steps.opencode_test.outputs.model_never_asked }}
       run: |
         set -euo pipefail
         echo "conclusion=${CONCLUSION}" >> "$GITHUB_OUTPUT"
         echo "outcome=${OUTCOME}" >> "$GITHUB_OUTPUT"
         echo "execution_file=${EXECUTION}" >> "$GITHUB_OUTPUT"
         echo "stopped=${STOPPED}" >> "$GITHUB_OUTPUT"
+        echo "model_never_asked=${MODEL_NEVER_ASKED}" >> "$GITHUB_OUTPUT"
 
     - name: Hold a governed run to having been governed
       id: governed_held
@@ -6040,6 +6042,8 @@ runs:
       shell: bash
       env:
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
+        STOPPED: ${{ steps.model_run.outputs.stopped }}
+        MODEL_NEVER_ASKED: ${{ steps.model_run.outputs.model_never_asked }}
       run: node "${SCRIPTS}/kreview/governed-check.mjs" governed
 
     - name: Say how the model run ended, governance included

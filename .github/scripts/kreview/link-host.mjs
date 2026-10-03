@@ -1167,6 +1167,7 @@ export async function main(env = process.env, {
   writeOutputs(env.GITHUB_OUTPUT, {
     conclusion: code === 0 ? 'success' : 'failure', answer_file: '', children_file: '', pipeline_file: env.REVIEW_PIPELINE_FILE || '', hypotheses_file: env.REVIEW_HYPOTHESES_FILE || '',
     stopped: done.conclusion === 'stopped' ? 'true' : '',
+    model_never_asked: provider?.asked?.() === false ? 'true' : '',
     preserved: String(outputs.preserved ?? ''),
     preserve_reason: String(outputs.preserve_reason ?? ''),
     preserve_tree: String(outputs.preserve_tree ?? ''),

@@ -164,6 +164,7 @@ export async function relayProviderRequest(request, env, fetchImpl = fetch, toke
   if (originProblem(origin)) throw new Error(`provider relay received an invalid origin: ${originProblem(origin)}`);
   const target = new URL(request.url ?? '/', 'http://127.0.0.1');
   if (request.method !== 'POST' || target.pathname !== '/v1/messages' || !queries.includes(target.search)) return null;
+  if (state) state.asked = true;
   if (state?.completion) {
     const failure = await state.completion;
     if (failure) throw failure;
@@ -213,7 +214,7 @@ export async function relayProviderRequest(request, env, fetchImpl = fetch, toke
 
 /** startProviderRelay keeps the bearer and provider origin outside the model process. */
 export async function startProviderRelay({ env = process.env, fetchImpl = fetch, token = bearer, record = env.KSAI_PROVIDER_OBSERVATIONS === 'true' ? recordProviderRequest : null, socket = '', stallMs = 0, queries = [''], counted = null, admit = null } = {}) {
-  const state = { completion: null, held: null, governing: '', session: '', counted, admit, carryRefused: new Map() };
+  const state = { completion: null, held: null, governing: '', session: '', counted, admit, carryRefused: new Map(), asked: false };
   const server = createServer(async (request, response) => {
     const gone = new AbortController();
     response.once('close', () => {
@@ -276,6 +277,7 @@ export async function startProviderRelay({ env = process.env, fetchImpl = fetch,
       state.governing = dir;
     },
     settled: () => state.held?.talk.settled() ?? null,
+    asked: () => state.asked,
     drained: () => state.completion,
     carryRefused: (dir) => state.carryRefused.get(dir) ?? '',
     restart: () => {
