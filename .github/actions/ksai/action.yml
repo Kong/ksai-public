@@ -4764,27 +4764,6 @@ runs:
           done
         done
 
-        # failIfUnavailable proves bwrap is installed, not that the kernel will grant it a
-        # namespace. Kong's dedicated fleet denied one until August 2026: `docker-default` AppArmor
-        # carries no `userns create` rule and Ubuntu 24.04 ships the restriction sysctl on, while
-        # moby's default seccomp profile masks `CLONE_NEWUSER` out of `clone` without CAP_SYS_ADMIN.
-        # Both layers answer the same EPERM, so every sandboxed command died with "bwrap: No
-        # permissions to create new namespace" while the CLI kept taking turns. On run 31789519444
-        # that produced a review which had read no diff, and the job still reported success - the
-        # empty review that reports a pass is the failure this pipeline must never produce.
-        #
-        # kong-konnect/tf-konnect-gh-runners#149 lifts both layers on the host, which is the only
-        # place they can be lifted: `/proc/sys` is read-only inside the job's container, so the
-        # `sysctl -w` calls in this step print the new value, warn, and exit 0 having changed
-        # nothing. A job cannot correct either layer itself, and the denial reaches it unexplained.
-        #
-        # Which label reaches which fleet is measured rather than assumed, because this note had it
-        # backwards once. `ubuntu-latest-kong` answers from `self-hosted-runner-*` and
-        # `kong-inc-dedicated,size-md,amd64` from `kong-inc-amd-md-ip-*`, on five distinct hosts
-        # across two repositories.
-        #
-        # The probe stays either way. A fleet's kernel is not ours to promise, and this is what makes
-        # a change in one loud rather than silent.
         probe_userns() {
           local private_net=()
           if [[ "${OPENCODE_MAJOR:-}" == 2 ]]; then
