@@ -183,7 +183,7 @@ export function publishPlan({
   recordPushed(published.sha);
 
   if (throughControlPlane) {
-    const blob = git(['rev-parse', `${published.sha}:${planPath}`]);
+    const blob = git(['rev-parse', `${verified.sha}:${planPath}`]);
     const blobSha = blob.ok ? String(blob.stdout).trim() : '';
     if (!/^[0-9a-f]{40}$/.test(blobSha)) {
       return block(`I could not name the content of \`${planPath}\` that was pushed, so the plan was not offered for approval.`);
