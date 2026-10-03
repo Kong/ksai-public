@@ -6038,11 +6038,13 @@ runs:
           ${{ steps.governed_combine.outputs.execution_file || steps.governed_passes.outputs.execution_file ||
           steps.opencode.outputs.execution_file || steps.opencode_test.outputs.execution_file ||
           steps.run_once.outputs.execution_file }}
+        STOPPED: ${{ steps.opencode.outputs.stopped || steps.opencode_test.outputs.stopped }}
       run: |
         set -euo pipefail
         echo "conclusion=${CONCLUSION}" >> "$GITHUB_OUTPUT"
         echo "outcome=${OUTCOME}" >> "$GITHUB_OUTPUT"
         echo "execution_file=${EXECUTION}" >> "$GITHUB_OUTPUT"
+        echo "stopped=${STOPPED}" >> "$GITHUB_OUTPUT"
 
     - name: Hold a governed run to having been governed
       id: governed_held
@@ -7279,7 +7281,7 @@ runs:
         RUN_ID: ${{ github.run_id }}
         COMMAND: ${{ steps.select_arm.outputs.command }}
         TRIGGER: ${{ inputs.trigger_phrase }}
-        CANCELLED: ${{ steps.cancellation.outputs.cancelled }}
+        CANCELLED: ${{ steps.cancellation.outputs.cancelled || steps.model_run.outputs.stopped }}
         SELECT_ERROR: ${{ steps.select_arm.outputs.error }}
         SELECT_ERROR_NOTICE: ${{ steps.select_arm.outputs.rejection }}
         BUILD_ERROR: ${{ steps.build_review.outputs.error }}
