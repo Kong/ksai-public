@@ -163,4 +163,14 @@ function stageAllowed(git, exclusionPathspecs = []) {
   return staged ? { ok: true, reason: '' } : deny('git could not stage the recoverable tree safely');
 }
 
-module.exports = { checkStagePaths, stageAll, stageAllowed, stageMerge, stagePaths };
+function workTree(git, base, index, excludedPaths = []) {
+  const indexed = Object.assign((args, options = {}) => git(args, { ...options, index }), { policy: git.policy });
+  if (!indexed(['read-tree', base])?.ok) return deny('the checkout could not be read into an index of its own');
+  const staged = stageAll(indexed, excludedPaths);
+  if (!staged.ok) return staged;
+  const written = indexed(['write-tree']);
+  const tree = String(written?.stdout ?? '').trim();
+  return written?.ok && /^[0-9a-f]{40}$/.test(tree) ? { ok: true, reason: '', tree } : deny('the working tree could not be written as a tree');
+}
+
+module.exports = { checkStagePaths, stageAll, stageAllowed, stageMerge, stagePaths, workTree };

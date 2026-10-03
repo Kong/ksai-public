@@ -8,6 +8,7 @@ import { retryAfterMs } from '../kreview/federated-token.mjs';
 const require = createRequire(import.meta.url);
 const { answered, reachedFor, OUTCOME_HEADER } = require('../lib/control-plane.cjs');
 const { ceilingMinutes, wholeNumber } = require('../lib/watchdog.cjs');
+const { counted } = require('../lib/text.cjs');
 
 export const COMMIT_TIMEOUT = 90_000;
 export const SIGN_IN_WAIT = 15 * 60_000;
@@ -19,6 +20,7 @@ const SHORTEST_BACKOFF = 1_000;
 
 const AWAITING_SIGN_IN = 'awaiting_sign_in';
 const SIGN_IN_REQUIRED = 'sign_in_required';
+const CONTROL_PLANE_ONLY_HEADER = 'X-Ksai-Control-Plane-Only';
 
 const OID = /^[0-9a-f]{40}$/;
 
@@ -27,6 +29,9 @@ const text = (value) => (typeof value === 'string' ? value : '');
 const maskOnStderr = (token) => process.stderr.write(`::add-mask::${token}\n`);
 
 const noteOnStderr = (line) => process.stderr.write(`${line}\n`);
+
+export const fallsBack = (input) =>
+  !input.merge && !input.controlPlaneOnly && (input.fileChanges?.additions ?? []).every((one) => one.mode === undefined);
 
 export function signInDeadline(env, now) {
   const started = wholeNumber(env.KSAI_JOB_STARTED_MS);
@@ -40,12 +45,14 @@ async function askOnce({ input, env, fetch, timeout, secret, until, now, awaited
   const reached = await reachedFor({ env, fetch, timeout, secret });
   if (reached.why) return { why: reached.why };
 
-  const asked = { ...input, job: text(env.GITHUB_JOB) };
+  const { controlPlaneOnly, ...commit } = input;
+  const asked = { ...commit, job: text(env.GITHUB_JOB) };
   const wait = until === null ? 0 : until - now();
   if (wait > 0) asked.awaitSignIn = Math.ceil(wait / 1000);
   if (awaited) asked.awaitedSignIn = true;
   return answered(fetch, `${reached.base}/run/commit`, {
     token: reached.token,
+    headers: controlPlaneOnly ? { [CONTROL_PLANE_ONLY_HEADER]: 'true' } : {},
     body: JSON.stringify(asked),
     timeout,
     signal: reached.signal,
@@ -81,7 +88,8 @@ export async function askToCommit({
     if (outcome !== AWAITING_SIGN_IN) break;
     if (!awaited) {
       const minutes = Math.max(1, Math.ceil(left / 60_000));
-      note(`note: ${said.why}. The run waits up to ${minutes} minute${minutes === 1 ? '' : 's'}, then this App commits`);
+      const then = fallsBack(input) ? 'KSAI commits as itself' : 'the run stops without committing';
+      note(`note: ${said.why}. The run waits up to ${counted(minutes, 'minute')}, then ${then}`);
     }
     offered = true;
     awaited = true;

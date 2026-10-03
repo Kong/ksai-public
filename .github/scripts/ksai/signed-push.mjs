@@ -4,8 +4,8 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
-import { CREATE_COMMIT, PLAIN_FILE, splitMessage } from '../lib/signed-commit.mjs';
-import { COMMIT_WAIT_LIMIT } from './cp-commit.mjs';
+import { CREATE_COMMIT, MAX_COMMIT_LINE, PLAIN_FILE, splitMessage, wrapped } from '../lib/signed-commit.mjs';
+import { COMMIT_WAIT_LIMIT, fallsBack } from './cp-commit.mjs';
 
 export { splitMessage };
 
@@ -71,26 +71,19 @@ export function fileChangesFor({ from, to, git, modes = false, paths = null }) {
   return { additions, deletions };
 }
 
-function namesChanged(git, from, to) {
-  const listed = git(['diff', '--name-only', '-z', '--no-renames', '--no-ext-diff', '--ignore-submodules=none', from, to]);
-  return listed?.ok ? String(listed.stdout).split('\0').filter(Boolean) : null;
-}
-
-function conflictsOf(git, ours, theirs) {
-  const replayed = git(['merge-tree', '--write-tree', '--name-only', '-z', ours, theirs], { keepStdout: true });
+export function conflictedPaths({ git, head, parent, tip }) {
+  const replayed = git(['merge-tree', '--write-tree', '--name-only', '-z', head, parent], { keepStdout: true });
   const [tree, ...listed] = String(replayed?.stdout ?? '').split('\0');
   if (!SHA_SHAPE.test(tree.trim()) || (replayed?.status !== 0 && replayed?.status !== 1)) return null;
   const end = listed.indexOf('');
-  return end === -1 ? listed : listed.slice(0, end);
+  const decided = git(['diff', '--name-only', '-z', '--no-renames', '--no-ext-diff', '--ignore-submodules=none', tree.trim(), tip]);
+  if (!decided?.ok) return null;
+  return [...new Set([...(end === -1 ? listed : listed.slice(0, end)), ...String(decided.stdout).split('\0').filter(Boolean)])];
 }
 
 export function mergeChanges({ git, tip, parent }) {
-  const ours = namesChanged(git, `${tip}^1`, tip);
-  const theirs = namesChanged(git, parent, tip);
-  const clashed = conflictsOf(git, `${tip}^1`, parent);
-  if (!ours || !theirs || !clashed) return { unreadable: 'git could not list what the merge changed' };
-  const merged = new Set(theirs);
-  const conflicted = [...new Set([...clashed, ...ours.filter((one) => merged.has(one))])];
+  const conflicted = conflictedPaths({ git, head: `${tip}^1`, parent, tip });
+  if (!conflicted) return { unreadable: 'git could not list what the merge changed' };
   if (!conflicted.length) return { additions: [], deletions: [], conflicted };
   return { ...fileChangesFor({ from: parent, to: tip, git, modes: true, paths: conflicted }), conflicted };
 }
@@ -108,9 +101,21 @@ const claimsTheCommit = (line) => {
 
 const CO_AUTHOR = /^[^\n<>]+ <[^\s<>@]+@[^\s<>@]+>$/;
 
+function within(text, room) {
+  let kept = '';
+  for (const char of text) {
+    if (kept.length + char.length > room) break;
+    kept += char;
+  }
+  return kept.trimEnd();
+}
+
 export function coAuthorTrailer(said) {
   const one = String(said ?? '').trim();
-  return CO_AUTHOR.test(one) ? `Co-authored-by: ${one}` : null;
+  if (!CO_AUTHOR.test(one)) return null;
+  const at = one.indexOf(' <');
+  const name = within(one.slice(0, at), MAX_COMMIT_LINE - 'Co-authored-by: '.length - (one.length - at));
+  return `Co-authored-by: ${name || one.slice(0, at)}${one.slice(at)}`;
 }
 
 export function jiraTrailer(said) {
@@ -128,6 +133,14 @@ export function withTrailers(message, { coAuthor = null, jiraKey = null } = {}) 
   return body ? `${body}\n\n${block}` : block;
 }
 
+function shortened(subject) {
+  return subject.length <= MAX_COMMIT_LINE ? subject : `${within(subject, MAX_COMMIT_LINE - 1)}…`;
+}
+
+function fitted(lines) {
+  return [shortened(lines[0]), ...lines.slice(1).flatMap((line) => wrapped(line))];
+}
+
 export function normaliseMessage(raw) {
   const kept = String(raw ?? '')
     .split('\n')
@@ -135,8 +148,8 @@ export function normaliseMessage(raw) {
     .join('\n')
     .replace(/\n{3,}/g, '\n\n')
     .replace(/\s+$/, '');
-  const lines = kept.split('\n');
-  if (lines.length < 2 || lines[1].trim() === '') return kept;
+  const lines = fitted(kept.split('\n'));
+  if (lines.length < 2 || lines[1].trim() === '') return lines.join('\n');
   return [lines[0], '', ...lines.slice(1)].join('\n');
 }
 
@@ -328,28 +341,23 @@ export function pushSigned({
     message: splitMessage(message.stdout),
     fileChanges: { additions: changes.additions, deletions: changes.deletions },
   };
-  const plain = parent === '' && changes.additions.every((one) => one.mode === undefined);
+  const asked = {
+    ...input,
+    message: splitMessage(withTrailers(normaliseMessage(message.stdout), { coAuthor: appAuthor, jiraKey })),
+    ...(parent !== '' ? { merge: { parent, conflicted: changes.conflicted } } : {}),
+    ...(controlPlaneOnly ? { controlPlaneOnly: true } : {}),
+  };
+  const plain = fallsBack(asked);
   if (plain && !writeBody(bodyFile, input)) {
     return asking
       ? { error: `the mutation could not be written to ${bodyFile}, so nothing was published` }
       : { signed: false, reason: `the mutation could not be written to ${bodyFile}, so it is pushed as it is` };
   }
 
-  const person = asking
-    ? asThePerson({
-        run,
-        bodyFile,
-        log,
-        input: {
-          ...input,
-          message: splitMessage(withTrailers(normaliseMessage(message.stdout), { coAuthor: appAuthor, jiraKey })),
-          ...(parent !== '' ? { merge: { parent, conflicted: changes.conflicted } } : {}),
-        },
-      })
-    : null;
+  const person = asking ? asThePerson({ run, bodyFile, log, input: asked }) : null;
 
   let answer = person?.commit;
-  if (!answer && person?.lost && (controlPlaneOnly || !plain)) {
+  if (!answer && person?.lost && !plain) {
     const landed = readBack({ run, repo, branch, remoteSha, parent, localTree });
     if (landed) return landed;
   }
@@ -361,7 +369,7 @@ export function pushSigned({
         `and nothing else can sign it: ${person?.why ?? 'it was not asked'}`,
     };
   }
-  if (!answer && person?.why) log(`note: the control plane did not commit as whoever asked, so this App does: ${person.why}`);
+  if (!answer && person?.why) log(`note: KSAI commits as itself, because the control plane couldn't commit as the person who asked: ${person.why}`);
   if (!answer) {
     const created = run('gh', ['api', 'graphql', '--input', bodyFile]);
     if (!created.ok) {

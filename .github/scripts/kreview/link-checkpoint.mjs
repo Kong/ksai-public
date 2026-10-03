@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -42,27 +42,56 @@ function headOf(git) {
   return sha;
 }
 
+const MERGE_LINE = /^ksai-merge-head ([0-9a-f]{40})\n/;
+
+function mergingOf(git) {
+  const merging = git(['rev-parse', '--verify', '--quiet', 'MERGE_HEAD^{commit}']);
+  const sha = String(merging.stdout ?? '').trim();
+  return merging.ok && COMMIT.test(sha) ? sha : '';
+}
+
 export function snapshot(git, scratch) {
   const head = headOf(git);
-  const index = join(scratch, 'index');
-  const indexed = Object.assign((args, options = {}) => git(args, { ...options, index }), { policy: git.policy });
-  if (!indexed(['read-tree', head]).ok) throw new Error('the checkout could not be read into an index of its own');
-  const staged = stage.stageAll(indexed);
-  if (!staged.ok) throw new Error(staged.reason);
-  const tree = indexed(['write-tree']);
-  const written = String(tree.stdout ?? '').trim();
-  if (!tree.ok || !COMMIT.test(written)) throw new Error('the working tree could not be written as a tree');
-  const diff = git(['diff', '--binary', '--full-index', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', head, written], { base64: true });
+  const written = stage.workTree(git, head, join(scratch, 'index'));
+  if (!written.ok) throw new Error(written.reason);
+  const diff = git(['diff', '--binary', '--full-index', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', head, written.tree], { base64: true });
   if (!diff.ok) throw new Error('the work could not be written as a patch');
-  return { head, patch: Buffer.from(diff.stdout, 'base64') };
+  const work = Buffer.from(diff.stdout, 'base64');
+  const merging = mergingOf(git);
+  return { head, patch: merging ? Buffer.concat([Buffer.from(`ksai-merge-head ${merging}\n`), work]) : work };
 }
 
 export class Unapplied extends Error {}
 
-export function applied(git, patchFile, saved) {
+function patchedTree(git, patchFile, head, scratch) {
+  const index = join(scratch, 'restore.index');
+  const indexed = (args, options = {}) => git(args, { ...options, index });
+  if (!indexed(['read-tree', head]).ok) throw new Error('the checkpoint\'s commit could not be read into an index of its own');
+  if (!indexed(['apply', '--cached', '--binary', patchFile]).ok) throw new Unapplied('the checkpoint does not apply to the commit it was saved against');
+  const tree = indexed(['write-tree']);
+  const written = String(tree.stdout ?? '').trim();
+  if (!tree.ok || !COMMIT.test(written)) throw new Error('the checkpoint could not be written as a tree');
+  return written;
+}
+
+export function applied(git, patchFile, saved, scratch) {
   const head = headOf(git);
   if (head !== saved) throw new Unapplied(`the checkout is at ${head}, and the checkpoint was saved against ${saved}`);
-  if (statSync(patchFile).size === 0) return;
+  const patch = readFileSync(patchFile);
+  const line = MERGE_LINE.exec(patch.subarray(0, 64).toString('utf8'));
+  const marked = line?.[1] ?? '';
+  const merging = mergingOf(git);
+  if (marked !== merging) {
+    const then = marked ? `while merging ${marked}` : 'outside a merge';
+    throw new Unapplied(`the checkout is ${merging ? `merging ${merging}` : 'not merging'}, and the checkpoint was saved ${then}`);
+  }
+  const worked = patch.length > (line?.[0].length ?? 0);
+  if (merging) {
+    const tree = worked ? patchedTree(git, patchFile, head, scratch) : head;
+    if (!git(['read-tree', '--reset', '-u', tree]).ok) throw new Error('the checkpoint could not be laid over the merge in progress');
+    return;
+  }
+  if (!worked) return;
   if (!git(['apply', '--check', '--binary', patchFile]).ok) throw new Unapplied('the checkpoint does not apply to the checkout');
   if (!git(['apply', '--binary', patchFile]).ok) throw new Error('the checkpoint could not be applied');
 }
@@ -210,7 +239,7 @@ export function main(env = process.env, { git = trustedGit.directGit(String(env.
       const { head, patch } = snapshot(git, scratch);
       write(JSON.stringify({ head, patch: patch.toString('base64') }));
     } else if (env.CHECKPOINT_MODE === 'apply') {
-      applied(git, String(env.CHECKPOINT_PATCH ?? ''), String(env.CHECKPOINT_HEAD ?? ''));
+      applied(git, String(env.CHECKPOINT_PATCH ?? ''), String(env.CHECKPOINT_HEAD ?? ''), scratch);
       write(JSON.stringify({ applied: true }));
     } else {
       throw new Error(`there is no checkpoint mode ${JSON.stringify(env.CHECKPOINT_MODE)}`);

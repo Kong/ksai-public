@@ -101,4 +101,4 @@ function repairRequest(env = process.env, said = findingsOf(env)) {
   };
 }
 
-module.exports = { adversarialRequest, defects, manifestIfAny, repairRequest };
+module.exports = { adversarialRequest, defects, manifestIfAny, MANIFEST, repairRequest };
