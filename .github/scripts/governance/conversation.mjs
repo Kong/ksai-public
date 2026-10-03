@@ -51,12 +51,18 @@ function identifier(value, name) {
   return result;
 }
 
-function indexOf(event, expected) {
-  if (event.index !== expected) throw new Error('a content block event names a block other than the open one');
+function openBlock(open, event) {
+  const block = Number.isSafeInteger(event.index) ? open.get(event.index) : undefined;
+  if (block) return block;
+  const named = Number.isSafeInteger(event.index) ? `block ${event.index}` : 'no block';
+  const held = open.size ? `the open ${open.size === 1 ? 'block is' : 'blocks are'} ${[...open.keys()].join(', ')}` : 'no block is open';
+  throw new Error(`a content block event names ${named}, and ${held}`);
 }
 
 function nextIndex(event, after) {
-  if (!Number.isSafeInteger(event.index) || event.index <= after) throw new Error("the response's content block indices do not increase");
+  if (!Number.isSafeInteger(event.index) || event.index <= after) {
+    throw new Error(`a content block starts at index ${JSON.stringify(event.index)} after block ${after}, and content block indices do not increase`);
+  }
   return event.index;
 }
 
@@ -128,22 +134,21 @@ function startBlock(event, tools) {
     shape(block, ['type', 'id', 'name', 'input'], ['caller', 'toolset_name'], 'the tool_use block');
     const name = identifier(block.name, 'the tool_use name');
     const caller = block.caller === undefined ? undefined : shape(block.caller, ['type'], [], 'the tool_use caller');
-    if (
-      Object.keys(record(block.input, 'the tool_use input')).length !== 0 ||
-      !tools.includes(name) ||
-      (caller !== undefined && caller.type !== 'direct') ||
-      (block.toolset_name ?? null) !== null
-    ) {
-      throw new Error('the tool_use block is outside the governed tools');
+    const input = record(block.input, 'the tool_use input');
+    const at = JSON.stringify(event.index);
+    if (!tools.includes(name)) throw new Error(`the tool_use block ${at} names ${JSON.stringify(name)}, outside the governed tools`);
+    if ((caller !== undefined && caller.type !== 'direct') || (block.toolset_name ?? null) !== null) {
+      throw new Error(`the tool_use block ${at} calls ${JSON.stringify(name)} through a caller or toolset no governed tool has`);
     }
-    return { type: 'tool_use', id: identifier(block.id, 'the tool_use id'), name, partial: '', ...(caller === undefined ? {} : { caller: { type: 'direct' } }) };
+    const named = Object.keys(input).length ? input : null;
+    return { type: 'tool_use', id: identifier(block.id, 'the tool_use id'), name, partial: '', named, ...(caller === undefined ? {} : { caller: { type: 'direct' } }) };
   }
   throw new Error(`content block ${String(block.type)} is unsupported`);
 }
 
-function appendDelta(event, block, expected) {
+function appendDelta(event, open) {
   shape(event, ['type', 'index', 'delta'], [], 'content_block_delta');
-  indexOf(event, expected);
+  const block = openBlock(open, event);
   const delta = record(event.delta, 'the content block delta');
   if (block.type === 'text') {
     shape(delta, ['type', 'text'], [], 'the text delta');
@@ -166,7 +171,9 @@ function appendDelta(event, block, expected) {
   }
   shape(delta, ['type', 'partial_json'], [], 'the tool input delta');
   if (delta.type !== 'input_json_delta') throw new Error('the tool_use block received another delta');
-  block.partial += text(delta.partial_json, 'the tool input delta');
+  const more = text(delta.partial_json, 'the tool input delta');
+  if (block.named !== null && more !== '') throw new Error(`the tool_use block ${event.index} names its input at its start and again in a delta`);
+  block.partial += more;
 }
 
 function finishBlock(block) {
@@ -175,7 +182,7 @@ function finishBlock(block) {
     if (!block.signed || !block.signature) throw new Error('the thinking block has no complete signature');
     return { type: 'thinking', thinking: block.thinking, signature: block.signature };
   }
-  const input = JSON.parse(block.partial || '{}');
+  const input = block.named ?? JSON.parse(block.partial || '{}');
   if (input === null || typeof input !== 'object' || Array.isArray(input)) throw new Error('the tool input is not an object');
   return { type: 'tool_use', id: block.id, name: block.name, input, ...(block.caller === undefined ? {} : { caller: block.caller }) };
 }
@@ -199,9 +206,10 @@ export class IncompleteAnswer extends Error {}
 export class GivenUp extends Error {}
 
 function parseResponse(bytes, model, tools) {
-  const blocks = [];
-  let open = null;
-  let openIndex = -1;
+  const started = [];
+  const open = new Map();
+  const finished = new Map();
+  let lastIndex = -1;
   let stop = '';
   let state = 'initial';
   for (const event of frames(bytes)) {
@@ -215,24 +223,28 @@ function parseResponse(bytes, model, tools) {
         messageStart(event, model);
         state = 'content';
         break;
-      case 'content_block_start':
-        if (state !== 'content' || open || blocks.length >= MAX_BLOCKS) throw new Error('content_block_start is out of sequence');
-        open = startBlock(event, tools);
-        openIndex = nextIndex(event, openIndex);
+      case 'content_block_start': {
+        if (state !== 'content' || started.length >= MAX_BLOCKS) throw new Error('content_block_start is out of sequence');
+        const block = startBlock(event, tools);
+        lastIndex = nextIndex(event, lastIndex);
+        started.push(block);
+        open.set(lastIndex, block);
         break;
+      }
       case 'content_block_delta':
-        if (state !== 'content' || !open) throw new Error('content_block_delta is out of sequence');
-        appendDelta(event, open, openIndex);
+        if (state !== 'content') throw new Error('content_block_delta is out of sequence');
+        appendDelta(event, open);
         break;
-      case 'content_block_stop':
+      case 'content_block_stop': {
         shape(event, ['type', 'index'], [], 'content_block_stop');
-        if (state !== 'content' || !open) throw new Error('content_block_stop is out of sequence');
-        indexOf(event, openIndex);
-        blocks.push(finishBlock(open));
-        open = null;
+        if (state !== 'content') throw new Error('content_block_stop is out of sequence');
+        const block = openBlock(open, event);
+        finished.set(block, finishBlock(block));
+        open.delete(event.index);
         break;
+      }
       case 'message_delta':
-        if (state !== 'content' || open || stop) throw new Error('message_delta is out of sequence');
+        if (state !== 'content' || open.size || stop) throw new Error('message_delta is out of sequence');
         stop = messageDelta(event);
         state = 'delta';
         break;
@@ -249,7 +261,8 @@ function parseResponse(bytes, model, tools) {
         throw new Error(`response event ${String(event.type)} is unsupported`);
     }
   }
-  if (state !== 'stopped' || open || !stop || !blocks.length) throw new IncompleteAnswer('the response did not complete one message');
+  if (state !== 'stopped' || open.size || !stop || !started.length) throw new IncompleteAnswer('the response did not complete one message');
+  const blocks = started.map((block) => finished.get(block));
   const toolUseIDs = blocks.flatMap((block) => ('id' in block ? [block.id] : []));
   if (toolUseIDs.length > MAX_TOOL_USES || new Set(toolUseIDs).size !== toolUseIDs.length || (stop === 'tool_use') !== (toolUseIDs.length > 0)) {
     throw new Error('the response has an invalid tool_use completion');

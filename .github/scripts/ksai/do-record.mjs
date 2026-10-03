@@ -9,7 +9,7 @@ const { cap, MAX_PR_TITLE_CHARS, planDirOf, scrub, retargetPermalinks } = requir
 const { safeEcho, verifyChunk, verifyMerge, gitVia, noChangeLeftBehind } = require('./verify-chunk.cjs');
 const { readScope, writeScopeResult } = require('./change-scope.cjs');
 const { renderDoMarker, unaskedRun, MAX_REPORT_CHARS } = require('./do.cjs');
-import { blockerFor, field, readManifest, reasonOf, runCommand, shown } from './run.mjs';
+import { blockerFileOf, blockerFor, field, modelBlocker, readManifest, reasonOf, runCommand, shown } from './run.mjs';
 import { publishCommit } from './signed-push.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
 import { commandSecrets, verificationOf, writeVerification } from './fix-verification.mjs';
@@ -94,7 +94,7 @@ export function recordDo({
   run = runCommand,
 } = {}) {
   const block = blockerFor(manifestPath);
-  const blocked = (message) => ({ ...block(message), pushed: false, commitSha: null, pushedSha: '' });
+  const blocked = (message, options) => ({ ...block(message, options), pushed: false, commitSha: null, pushedSha: '' });
   const merging = String(mergedSha ?? '').trim() !== '';
   const boundScope = readScope(changeScopePath, {
     repo,
@@ -114,7 +114,7 @@ export function recordDo({
   if (read.message) return blocked(read.message);
 
   if (status === 'blocked') {
-    return blocked(`Stopped without doing anything: ${scrub(reasonOf(manifest), { triggerPhrase }).trim()}`);
+    return blocked(`Stopped without doing anything: ${scrub(reasonOf(manifest), { triggerPhrase }).trim()}`, { blocker: modelBlocker(manifest) });
   }
   if (status !== 'done' && status !== 'answered') {
     return blocked(`The run reported an unrecognized status: ${safeEcho(shown(manifest?.status))}`);
@@ -351,6 +351,7 @@ export function main(env = process.env, { run = runCommand } = {}) {
     message_file: messageFile,
     verification_file: verificationFile,
     commit_sha: result.commitSha ?? '',
+    blocker_file: blockerFileOf(result, messageFile),
   });
   process.stdout.write(`${result.message}\n`);
   return 0;

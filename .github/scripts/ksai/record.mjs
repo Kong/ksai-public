@@ -12,7 +12,7 @@ const { readCount } = require('./continue.cjs');
 const { counted, plural } = require('../lib/text.cjs');
 const { safeEcho, verifyChunk, gitVia, noChangeLeftBehind } = require('./verify-chunk.cjs');
 const { expectationWarning, readExpectationEdits, renderExpectationNote } = require('./expectation-edits.cjs');
-import { blockerFor, editPullBody, field, readManifest, readPullBody, reasonOf, runCommand, shown } from './run.mjs';
+import { blockerFileOf, blockerFor, editPullBody, field, modelBlocker, readManifest, readPullBody, reasonOf, runCommand, shown } from './run.mjs';
 import { publishCommit } from './signed-push.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
 
@@ -60,7 +60,7 @@ export function recordStep({
   let expectationEdits = null;
 
   if (status === 'blocked') {
-    return block(`Stopped on "${quoted}": ${scrub(reasonOf(manifest), { triggerPhrase }).trim()}`);
+    return block(`Stopped on "${quoted}": ${scrub(reasonOf(manifest), { triggerPhrase }).trim()}`, { blocker: modelBlocker(manifest) });
   }
 
   rmSync(manifestPath, { force: true });
@@ -241,6 +241,7 @@ function writeResult(env, messageFile, result) {
     remaining: result.remaining,
     message_file: speaks ? messageFile : '',
     result_facts_file: factsFile,
+    blocker_file: blockerFileOf(result, messageFile),
   });
   process.stdout.write(`${result.message}\n`);
   return 0;

@@ -17,6 +17,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
 
 const require = createRequire(import.meta.url);
 const {
@@ -97,11 +98,10 @@ export const field = (value) => (typeof value === 'string' ? value : '');
 export const shown = (value) =>
   value === undefined || value === null ? '' : typeof value === 'string' ? value : JSON.stringify(value);
 
+export const modelBlocker = (manifest) => field(manifest?.reason).trim();
+
 /** The reason a manifest gives for stopping, as prose. */
-export const reasonOf = (manifest) => {
-  const reason = field(manifest?.reason).trim();
-  return reason ? reason : 'no reason given';
-};
+export const reasonOf = (manifest) => modelBlocker(manifest) || 'no reason given';
 
 export const TITLE_KEY_POSITIONS = Object.freeze(['none', 'prefix', 'suffix']);
 
@@ -155,10 +155,17 @@ export function subjectFrom(manifest, { noun = 'The run', triggerPhrase = null, 
  * than sharing it.
  */
 export function blockerFor(manifestPath) {
-  return (message) => {
+  return (message, { blocker = '' } = {}) => {
     rmSync(manifestPath, { force: true });
-    return { status: 'blocked', message };
+    return blocker ? { status: 'blocked', message, blocker } : { status: 'blocked', message };
   };
+}
+
+export function blockerFileOf(result, messageFile) {
+  if (!result.blocker) return '';
+  const at = join(dirname(messageFile), 'ksai-blocker.txt');
+  writeFileSync(at, result.blocker);
+  return at;
 }
 
 /**

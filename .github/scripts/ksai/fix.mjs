@@ -16,7 +16,7 @@ const { readScope, writeScopeResult } = require('./change-scope.cjs');
 const { MAX_ANSWERABLE: MAX_REPLIES } = require('./threads.cjs');
 const { MAX_REPLY_CHARS, replyBody } = require('./reply-limit.cjs');
 const { counted } = require('../lib/text.cjs');
-import { blockerFor, field, offerPlanDoc, readManifest, reasonOf, runCommand, shown } from './run.mjs';
+import { blockerFileOf, blockerFor, field, modelBlocker, offerPlanDoc, readManifest, reasonOf, runCommand, shown } from './run.mjs';
 import { publishCommit } from './signed-push.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
 
@@ -138,7 +138,7 @@ export function recordFix({
 
   const status = field(manifest?.status);
   if (status === 'blocked') {
-    return block(`Stopped without answering anything: ${scrub(reasonOf(manifest), { triggerPhrase }).trim()}`);
+    return block(`Stopped without answering anything: ${scrub(reasonOf(manifest), { triggerPhrase }).trim()}`, { blocker: modelBlocker(manifest) });
   }
   if (status !== 'done' && status !== 'answered') {
     return block(`${pass.noun} reported an unrecognized status: ${safeEcho(shown(manifest?.status))}`);
@@ -447,6 +447,7 @@ export async function main(env = process.env, { run = runCommand, publish = publ
     status: result.status,
     remaining: result.remaining,
     message_file: messageFile,
+    blocker_file: blockerFileOf(result, messageFile),
   });
   process.stdout.write(`${result.message}\n`);
   return 0;

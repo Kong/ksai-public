@@ -21,10 +21,12 @@ const { NUMBER_SHAPE } = require('./context.cjs');
 const { gitVia, safeEcho, verifyChunk } = require('./verify-chunk.cjs');
 const { stagePaths } = require('./stage.cjs');
 import {
+  blockerFileOf,
   blockerFor,
   editPullBody,
   field,
   filesLinked,
+  modelBlocker,
   offerPlanDoc,
   readManifest,
   readPullBody,
@@ -79,7 +81,7 @@ export function publishPlan({
     return block(`${noun} produced an unrecognized status: ${safeEcho(raw)}`);
   }
   if (status === 'blocked') {
-    return block(`${noun} stopped without writing a plan: ${oneLine(reasonOf(manifest), { triggerPhrase })}`);
+    return block(`${noun} stopped without writing a plan: ${oneLine(reasonOf(manifest), { triggerPhrase })}`, { blocker: modelBlocker(manifest) });
   }
   if (status !== 'ready') return block(`${noun} produced an unrecognized status: ${safeEcho(status)}`);
 
@@ -285,6 +287,7 @@ export async function main(env = process.env, { run = runCommand,
     status: result.status,
     ...('prUrl' in result ? { pr_url: result.prUrl } : {}),
     message_file: messageFile,
+    blocker_file: blockerFileOf(result, messageFile),
   });
   process.stdout.write(`${result.message}\n`);
   return 0;

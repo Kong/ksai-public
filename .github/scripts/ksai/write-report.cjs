@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const { blockerOf } = require('./blocker.cjs');
 const { finalResult } = require('./classify.cjs');
 const { readWorkRef } = require('./context.cjs');
 const { doRequestOf, renderDoMarker } = require('./do.cjs');
@@ -1231,6 +1232,11 @@ async function updateWriteProgressUnlocked({
   return { outputs: blank, failure: 'the durable write report kept changing and could not publish live progress safely' };
 }
 
+function resultEvent(env, attempt, at, { read = (file) => fs.readFileSync(file, 'utf8') } = {}) {
+  const blocker = attempt.outcome === 'blocked' ? blockerOf(env, { read }) : '';
+  return { kind: 'result', at, step_title: env.STEP_TITLE ?? '', ...(blocker ? { blocker } : {}) };
+}
+
 async function mutateWriteReportUnlocked({
   github,
   actionsGithub = null,
@@ -1260,6 +1266,7 @@ async function mutateWriteReportUnlocked({
   const store = writing(chosen.store);
   const renderLeft = renderBudget(now);
   const cp = usingControlPlane(env);
+  const result = cp ? resultEvent(env, attempted.attempt, 0) : null;
 
   for (let pass = 0; pass < MAX_PASSES; pass += 1) {
     const read = await store.load();
@@ -1302,7 +1309,7 @@ async function mutateWriteReportUnlocked({
       state: { ...merged.state, history: cp ? historyOf(merged.state) :
         noted(merged.state, currentText(current, env.TRIGGER), noteAt, env.TRIGGER) },
       current,
-      ...(cp ? { event: { kind: 'result', at: noteAt, step_title: env.STEP_TITLE ?? '' } } : {}),
+      ...(result ? { event: { ...result, at: noteAt } } : {}),
       issue: env.ISSUE_NUM,
       run: env.RUN_ID,
       triggerPhrase: env.TRIGGER,
@@ -1503,6 +1510,7 @@ module.exports = {
   planHolder,
   renderWriteReport,
   renderedReport,
+  resultEvent,
   spendFromExecution,
   spendFromFields,
   spendFromStatus,

@@ -6,9 +6,11 @@ import controlPlane from '../lib/control-plane.cjs';
 import jsonSchema from '../lib/json-schema.cjs';
 import { jobOf, linkId } from '../lib/link-protocol.mjs';
 import OUTCOME_SCHEMA from '../lib/work-session-schemas/outcome-v1.json' with { type: 'json' };
+import blockerModule from './blocker.cjs';
 import planModule from './plan.cjs';
 import trustedGit from './trusted-git.cjs';
 
+const { blockerOf } = blockerModule;
 const { planFilePathFor } = planModule;
 
 export const FLOWS = Object.freeze(['implement', 'review', 'test', 'run']);
@@ -120,7 +122,7 @@ export function outcomeEntries(env, { git = () => ({ ok: false }), read = (at) =
   return entries.slice(0, ENTRIES_MOST);
 }
 
-export function outcomeBody(env, entries) {
+export function outcomeBody(env, entries, { read = (at) => readFileSync(at, 'utf8') } = {}) {
   const flow = String(env.FLOW ?? '').trim();
   const phase = String(env.PHASE ?? '').trim();
   if (!FLOWS.includes(flow)) throw new Error(`the run names flow ${JSON.stringify(flow)}, which reports no outcome`);
@@ -128,7 +130,8 @@ export function outcomeBody(env, entries) {
   const job = jobOf(env);
   const link = linkId({ repository: env.GITHUB_REPOSITORY, runId: env.GITHUB_RUN_ID, attempt: env.GITHUB_RUN_ATTEMPT, job });
   const status = env.PUBLISH_FAILED === 'true' ? 'failed' : entries.length ? 'published' : env.BLOCKED === 'true' ? 'blocked' : 'nothing';
-  const body = { job, link, flow, phase, status, published: entries };
+  const blocker = status === 'blocked' ? blockerOf(env, { read }) : '';
+  const body = { job, link, flow, phase, status, ...(blocker ? { blocker } : {}), published: entries };
   const problems = jsonSchema.validateSchema(OUTCOME_SCHEMA, body, 'outcome');
   if (problems.length) throw new Error(`this run's outcome breaks its schema: ${problems.slice(0, 3).join('; ')}`);
   return body;

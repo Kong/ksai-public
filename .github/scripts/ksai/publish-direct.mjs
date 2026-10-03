@@ -17,7 +17,7 @@ const {
 } = require('./plan.cjs');
 const { MAX_DIRECT_COMMITS, gitVia, safeEcho, verifyChunk } = require('./verify-chunk.cjs');
 const { expectationWarning, readExpectationEdits } = require('./expectation-edits.cjs');
-import { blockerFor, createPull, field, readManifest, reasonOf, runCommand, shown, subjectFrom } from './run.mjs';
+import { blockerFileOf, blockerFor, createPull, field, modelBlocker, readManifest, reasonOf, runCommand, shown, subjectFrom } from './run.mjs';
 import { publishCommit } from './signed-push.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
 
@@ -58,7 +58,7 @@ export function publishDirect({
     return block(`The run produced an unrecognized status: ${safeEcho(raw)}`);
   }
   if (status === 'blocked') {
-    return block(`The work was not finished: ${oneLine(reasonOf(manifest), { triggerPhrase })}`);
+    return block(`The work was not finished: ${oneLine(reasonOf(manifest), { triggerPhrase })}`, { blocker: modelBlocker(manifest) });
   }
   if (status !== 'done') return block(`The run produced an unrecognized status: ${safeEcho(status)}`);
 
@@ -201,6 +201,7 @@ export function main(env = process.env, { run = runCommand,
       status: resolved.status,
       pr_url: resolved.prUrl ?? '',
       message_file: messageFile,
+      blocker_file: blockerFileOf(resolved, messageFile),
     });
     process.stdout.write(`${resolved.message}\n`);
     return 0;

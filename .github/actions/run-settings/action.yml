@@ -125,6 +125,11 @@ outputs:
       `true` where this repository asks the review team from the sidebar, so the
       withdrawal has something to withdraw, and empty otherwise
     value: ${{ steps.run_settings.outputs.clear_request }}
+  blocker:
+    description: >-
+      `true` where the control plane asks a blocked write run for the reason its
+      model gave for stopping, and empty otherwise
+    value: ${{ steps.run_settings.outputs.blocker }}
   disabled_commands:
     description: >-
       the model-backed commands this repository turns off, or empty where the

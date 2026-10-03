@@ -543,6 +543,15 @@ inputs:
       The control plane serves this setting; a caller does not pin it, and anything else reads as `local`.
     required: false
     default: ""
+  blocker:
+    description: >-
+      `true` where the control plane asks a write run that its model stopped as blocked for the reason the model
+      gave, on the write report's result event and on the task outcome. Anything else sends no reason, which a
+      control plane that refuses the field needs.
+
+      The control plane serves this setting; a caller does not pin it.
+    required: false
+    default: ""
   github_calls:
     description: >-
       where this run's GitHub calls are made. `cp` sends them to the control plane over this job's own
@@ -6786,6 +6795,11 @@ runs:
           steps.record_fix.outputs.status || steps.record_do.outputs.status ||
           steps.release_plan.outputs.status || 'failed' }}
         STEP_TITLE: ${{ steps.read_plan.outputs.step_title }}
+        BLOCKER_ASKED: ${{ inputs.blocker }}
+        BLOCKER_FILE: >-
+          ${{ steps.publish.outputs.blocker_file || steps.publish_direct.outputs.blocker_file ||
+          steps.record.outputs.blocker_file || steps.record_fix.outputs.blocker_file ||
+          steps.record_do.outputs.blocker_file }}
         REASON: >-
           ${{ steps.disarm_watchdog.outputs.cause || steps.approval.outputs.reason ||
           (steps.checkpoint.outputs.waiting == 'true' && steps.checkpoint.outputs.reason) || '' }}
@@ -7462,6 +7476,11 @@ runs:
         PHASE: ${{ steps.size.outputs.phase || inputs.flow }}
         KSAI_JOB_INDEX: ${{ strategy.job-index || 0 }}
         GITHUB_WORKSPACE: ${{ github.workspace }}
+        BLOCKER_ASKED: ${{ inputs.blocker }}
+        BLOCKER_FILE: >-
+          ${{ steps.publish.outputs.blocker_file || steps.publish_direct.outputs.blocker_file ||
+          steps.record.outputs.blocker_file || steps.record_fix.outputs.blocker_file ||
+          steps.record_do.outputs.blocker_file }}
         PR_NUMBER: >-
           ${{ steps.phase.outputs.pr_number || steps.open_draft.outputs.pr_number ||
           steps.publish_direct.outputs.pr_number }}

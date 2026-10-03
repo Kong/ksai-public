@@ -92,6 +92,7 @@ const NO_SETTINGS = {
   bare_comments: '',
   stop_mode: '',
   require_plan_approval: '',
+  blocker: '',
 };
 
 const DENIED_PATH = String.raw`(?!\.\.?(?:/|[\n,]|$))[A-Za-z0-9._@+-]+(?:/(?!\.\.?(?:/|[\n,]|$))[A-Za-z0-9._@+-]+)*/?`;
@@ -132,6 +133,7 @@ function settingsOf(served = Object.create(null)) {
   if (typeof workflow === 'string' && WORKFLOW_FILE.test(workflow)) settings.continuation_workflow = workflow;
 
   if (served.clear_request === true) settings.clear_request = 'true';
+  if (served.blocker === true) settings.blocker = 'true';
 
   const labels = served.runs_on;
   if (typeof labels === 'string' && labels !== '') {
