@@ -77,7 +77,7 @@ function namesChanged(git, from, to) {
 }
 
 function conflictsOf(git, ours, theirs) {
-  const replayed = git(['merge-tree', '--write-tree', '--name-only', '-z', ours, theirs]);
+  const replayed = git(['merge-tree', '--write-tree', '--name-only', '-z', ours, theirs], { keepStdout: true });
   const [tree, ...listed] = String(replayed?.stdout ?? '').split('\0');
   if (!SHA_SHAPE.test(tree.trim()) || (replayed?.status !== 0 && replayed?.status !== 1)) return null;
   const end = listed.indexOf('');

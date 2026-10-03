@@ -65,7 +65,7 @@ export function runCommand(
   args,
   {
     cwd = null, env = null, stderr = 'inherit', input = null, base64 = false, maxBuffer = COMMAND_MAX_BUFFER,
-    timeout = COMMAND_TIMEOUT_MS,
+    timeout = COMMAND_TIMEOUT_MS, keepStdout = false,
   } = {},
 ) {
   try {
@@ -80,7 +80,8 @@ export function runCommand(
     });
     return { ok: true, stdout: base64 ? Buffer.from(stdout ?? []).toString('base64') : String(stdout ?? ''), status: 0 };
   } catch (err) {
-    return { ok: false, stdout: '', status: typeof err?.status === 'number' ? err.status : null };
+    const written = base64 ? Buffer.from(err?.stdout ?? []).toString('base64') : String(err?.stdout ?? '');
+    return { ok: false, stdout: keepStdout ? written : '', status: typeof err?.status === 'number' ? err.status : null };
   }
 }
 
