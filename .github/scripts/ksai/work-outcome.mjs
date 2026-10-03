@@ -122,7 +122,7 @@ export function outcomeEntries(env, { git = () => ({ ok: false }), read = (at) =
   return entries.slice(0, ENTRIES_MOST);
 }
 
-export function outcomeBody(env, entries, { read = (at) => readFileSync(at, 'utf8') } = {}) {
+export function outcomeBody(env, entries, options) {
   const flow = String(env.FLOW ?? '').trim();
   const phase = String(env.PHASE ?? '').trim();
   if (!FLOWS.includes(flow)) throw new Error(`the run names flow ${JSON.stringify(flow)}, which reports no outcome`);
@@ -130,7 +130,7 @@ export function outcomeBody(env, entries, { read = (at) => readFileSync(at, 'utf
   const job = jobOf(env);
   const link = linkId({ repository: env.GITHUB_REPOSITORY, runId: env.GITHUB_RUN_ID, attempt: env.GITHUB_RUN_ATTEMPT, job });
   const status = env.PUBLISH_FAILED === 'true' ? 'failed' : entries.length ? 'published' : env.BLOCKED === 'true' ? 'blocked' : 'nothing';
-  const blocker = status === 'blocked' ? blockerOf(env, { read }) : '';
+  const blocker = status === 'blocked' ? blockerOf(env, options) : '';
   const body = { job, link, flow, phase, status, ...(blocker ? { blocker } : {}), published: entries };
   const problems = jsonSchema.validateSchema(OUTCOME_SCHEMA, body, 'outcome');
   if (problems.length) throw new Error(`this run's outcome breaks its schema: ${problems.slice(0, 3).join('; ')}`);

@@ -123,24 +123,26 @@ export function recordStep({
     return block(`The step reported an unrecognized status: ${safeEcho(shown(manifest?.status))}`);
   }
 
-  const body = readPullBody({ repo, number: prNumber, run });
-  if (body === null) {
-    return { fatal: 'could not read the pull request body, so no box was ticked.', pushed, pushedSha };
-  }
+  if (!throughControlPlane) {
+    const body = readPullBody({ repo, number: prNumber, run });
+    if (body === null) {
+      return { fatal: 'could not read the pull request body, so no box was ticked.', pushed, pushedSha };
+    }
 
-  const flipped = checkStep(body, stepTitle, { triggerPhrase });
-  if (flipped.error) {
-    return block(
-      `I pushed "${quoted}" but could not tick its box: ${flipped.error}. The commit is on the branch; a later run would try this step again.`,
-    );
-  }
-  if (flipped.changed === false) {
-    process.stderr.write(
-      `Note: "${quoted}" was already ticked, so this step reported done twice. Carrying on to the next box.\n`,
-    );
-  }
-  if (!throughControlPlane && !editPullBody({ repo, number: prNumber, bodyFile, body: flipped.body, run })) {
-    return block(`I pushed "${quoted}" but could not update the plan. The commit is on the branch.`);
+    const flipped = checkStep(body, stepTitle, { triggerPhrase });
+    if (flipped.error) {
+      return block(
+        `I pushed "${quoted}" but could not tick its box: ${flipped.error}. The commit is on the branch; a later run would try this step again.`,
+      );
+    }
+    if (flipped.changed === false) {
+      process.stderr.write(
+        `Note: "${quoted}" was already ticked, so this step reported done twice. Carrying on to the next box.\n`,
+      );
+    }
+    if (!editPullBody({ repo, number: prNumber, bodyFile, body: flipped.body, run })) {
+      return block(`I pushed "${quoted}" but could not update the plan. The commit is on the branch.`);
+    }
   }
 
   const before = readCount(remaining);
