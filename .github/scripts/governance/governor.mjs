@@ -2,7 +2,7 @@ import { appendFileSync, writeFileSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 
 import { DIGEST, digest, readArtifacts, regularFile } from './artifacts.mjs';
-import { CarryRefused, GivenUp, IncompleteAnswer, MAX_RESPONSE_BYTES, UpstreamFailure, boundedSteps, carriedOf, conversation } from './conversation.mjs';
+import { CarryRefused, GivenUp, IncompleteAnswer, MAX_RESPONSE_BYTES, UpstreamFailure, boundedSteps, carriedOf, coalesced, conversation } from './conversation.mjs';
 import { Errand, governRequest } from './provider.mjs';
 import { linkNotes } from './notes.mjs';
 import { TOOL_PREFIX, governedNotes, governedReminder, governedTool, rendered, verifyRelease, versionParts } from './release.mjs';
@@ -393,7 +393,7 @@ function governing(state, given, report, provider, log) {
               delivered = true;
               report(said('delivered'));
             }
-            controller.enqueue(new Uint8Array(bytes));
+            controller.enqueue(coalesced(bytes));
             controller.close();
           } catch (error) {
             controller.error(error);

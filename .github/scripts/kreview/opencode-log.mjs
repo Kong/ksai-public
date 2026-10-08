@@ -3,6 +3,7 @@ import { createRequire } from 'node:module';
 
 import { answer, collectSecrets, endedOn, everything, executionLog, parsed, scrub, spending } from '../lib/opencode.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
+import { counted } from '../lib/text.cjs';
 import { sessionEvents } from './opencode-children.mjs';
 import { lspToolMetrics } from './opencode-lsp.mjs';
 import { gatewayDiagnostics, streamFailure } from './opencode-review.mjs';
@@ -131,9 +132,9 @@ if (streamFailure(events)?.kind === 'empty-turn') {
   );
 }
 if (answer(events) === null) {
-  console.log(`::warning::${events.length} opencode events carried no text, so this run posts no review`);
+  console.log(`::warning::${counted(events.length, 'opencode event')} carried no text, so this run posts no review`);
 }
 console.log(
-  `opencode: ${events.length} events, ${result.num_turns} steps, ` +
-    `${result.usage.output_tokens} output tokens -> ${executionFile}`,
+  `opencode: ${counted(events.length, 'event')}, ${counted(result.num_turns, 'step')}, ` +
+    `${counted(result.usage.output_tokens, 'output token')} -> ${executionFile}`,
 );

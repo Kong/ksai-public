@@ -145,10 +145,8 @@ export function timeline(source, { trim = '', maxRows = MAX_ROWS } = {}) {
       const seen = fingerprint === null ? `\u0000unfingerprintable ${total}` : `${name}\u0000${fingerprint}`;
       repeat = seen === signature ? repeat + 1 : 1;
       signature = seen;
-      if (repeat > repeated) {
-        repeated = repeat;
-        repeating = detail ? `${name} (${detail})` : name;
-      }
+      if (repeat === 1) repeating = detail ? `${name} (${detail})` : name;
+      repeated = Math.max(repeated, repeat);
       if (rows.length >= maxRows) continue;
       const row = {
         at: Number.isFinite(at) && started !== null ? elapsed(at - started) : '',
@@ -371,11 +369,11 @@ export function breaker(view, { failures = 0, repeats = 0 } = {}) {
     return {
       tripped: true,
       cause: 'failures',
-      reason: `${view.streak} tool calls in a row failed, which reaches the configured limit of ${failureLimit}`,
+      reason: `${view.streak === 1 ? '1 tool call failed' : `${view.streak} tool calls in a row failed`}, which reaches the configured limit of ${failureLimit}`,
     };
   }
   if (repeatLimit > 1 && view.repeat >= repeatLimit) {
-    const what = view.repeating ? ` - ${view.repeating} -` : '';
+    const what = view.repeating ? ` - ${view.repeating} -` : ',';
     return {
       tripped: true,
       cause: 'repeats',

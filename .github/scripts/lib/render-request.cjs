@@ -22,6 +22,7 @@ const SCHEMAS = Object.assign(Object.create(null), {
   'review-discovery': require('./prompt-schemas/review-discovery.schema.json'),
   'review-findings-audit': require('./prompt-schemas/review-findings-audit.schema.json'),
   'review-resolution': require('./prompt-schemas/review-resolution.schema.json'),
+  'review-stage-correction': require('./prompt-schemas/review-stage-correction.schema.json'),
   'task-continue': require('./prompt-schemas/task-continue.schema.json'),
   'task-followup': require('./prompt-schemas/task-followup.schema.json'),
   'task-start': require('./prompt-schemas/task-start.schema.json'),
@@ -46,7 +47,7 @@ function schemaNameFor(promptId) {
 
 const schemaFor = (promptId) => SCHEMAS[schemaNameFor(promptId)] ?? null;
 
-function checkRenderRequest(request) {
+function checkRenderRequest(request, { schemaDigest = '' } = {}) {
   const promptId = String(request?.prompt_id ?? '');
   const sent = (request?.inputs ?? []).map((one) => one.name);
   const seen = new Set();
@@ -60,6 +61,7 @@ function checkRenderRequest(request) {
     for (const name of [...seen].sort()) if (!declared.includes(name)) out.push(`${promptId} does not declare ${name}, and the request sends it`);
   }
   const schema = schemaFor(promptId);
+  if (schemaDigest && schemaDigest !== schemaDigestFor(promptId)) out.push(`${promptId} names a schema digest this release does not carry: ${schemaDigest}`);
   if (!declared) out.push(`${promptId} names no contract this release carries`);
   if (!schema) return out;
   const inputs = Object.fromEntries((request.inputs ?? []).map((one) => [one.name, one.value]));
@@ -93,6 +95,7 @@ function renderRequest({ promptId, sink, model, inputs, metadata = null }) {
   const request = {
     contract_version: CONTRACT_VERSION,
     prompt_id: named,
+    schema_digest: schemaDigestFor(named),
     sink,
     model: String(model ?? ''),
     ...(metadata && { metadata }),
@@ -117,4 +120,9 @@ const schemaDigestFor = (promptId) => {
   return file ? (DIGESTS[`prompts/schemas/${file}.schema.json`] ?? '') : '';
 };
 
-module.exports = { CONTRACT_VERSION, schemaDigestFor, SINKS, checkRenderRequest, renderRequest, schemaFor, schemaNames, writeRenderRequest };
+const schemaFileDigestFor = (promptId) => {
+  const file = schemaNameFor(promptId);
+  return file ? (DIGESTS[`prompts/schemas/${file}.schema.json`] ?? '') : '';
+};
+
+module.exports = { CONTRACT_VERSION, schemaDigestFor, schemaFileDigestFor, SINKS, checkRenderRequest, renderRequest, schemaFor, schemaNames, writeRenderRequest };

@@ -25,6 +25,7 @@ const {
 } = require('./plan.cjs');
 const { NUMBER_SHAPE } = require('./context.cjs');
 const { safeEcho } = require('./verify-chunk.cjs');
+const { inertInline } = require('../lib/inert-markdown.cjs');
 const { FOREIGN, ownState, planRecords, withLastEdits } = require('./approval.cjs');
 import { editPullBody, filesLinked, readPullBody, runCommand } from './run.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
@@ -158,7 +159,7 @@ export async function releasePlan({
   const document = Buffer.from(encoded, 'base64').toString('utf8');
 
   const parsed = parsePlanDocument(document);
-  if (parsed.error) return block(`\`${planFile}\` is not a plan this flow can run: ${parsed.error}.`,
+  if (parsed.error) return block(`\`${planFile}\` is not a plan this flow can run: ${inertInline(parsed.error)}.`,
     { code: 'document_invalid', path: planFile, error: parsed.error });
 
   const offered = String(blob ?? '').trim().toLowerCase();

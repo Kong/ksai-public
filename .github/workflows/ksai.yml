@@ -1,817 +1,44 @@
-name: KSAI
+# Generated from the core workflow by .github/scripts/cp-entrypoint.mjs.
+# Edit ksai-v5.yml and run `mise run cp:entrypoint`; edits here are overwritten.
+name: KSAI control plane
 
 on:
   workflow_call:
-    inputs:
-      trigger_phrase:
-        description: "an additional phrase a comment may name to invoke a flow; `/ksai` invokes one either way"
-        required: false
-        type: string
-        default: ""
-      runs_on:
-        description: >-
-          one runner label, or several as a JSON array. `workflow_call` inputs are only ever
-          boolean, number or string, so a pool needing more than one label is written
-          '["self-hosted", "linux"]' and read back with fromJSON.
-        required: false
-        type: string
-        default: ubuntu-latest
-      job_environment:
-        description: >-
-          the GitHub environment every job that mints an OIDC token declares. Empty is no environment
-          and is what almost every caller wants. A repository that has customized its OIDC subject
-          claim to include `environment` refuses to mint a token for a job declaring none, and the
-          job then fails at setup with no step of its own having run, so such a caller names one
-          here. The environment must carry no protection rule: a required reviewer or a wait timer
-          holds the gate before it can answer whoever asked.
-        required: false
-        type: string
-        default: ""
-      client_id:
-        description: >-
-          the client ID of the GitHub App this call mints its tokens with. Empty (the default) reads
-          the `KSAI_CLIENT_ID` repository variable, which is what a repository holding the shared
-          KSAI App wants. A repository with an App of its own passes its own variable here rather
-          than copying that App's client ID into a second variable under a name this workflow chose.
-        required: false
-        type: string
-        default: ""
-      federation_rule_id:
-        description: >-
-          the team's Anthropic federation identifiers, from federations/<team>.yaml in the ksai source repository.
-          Optional: a run does not need them. Only `anthropic_auth: federation` mints on them, and
-          that mint refuses a blank one by name; otherwise they are read for cost attribution alone.
-        required: false
-        type: string
-        default: ""
-      organization_id:
-        description: Anthropic organization UUID from the team's federation entry
-        required: false
-        type: string
-        default: ""
-      service_account_id:
-        description: Anthropic service account ID from the team's federation entry
-        required: false
-        type: string
-        default: ""
-      workspace_id:
-        description: Anthropic workspace ID and per-team billing boundary
-        required: false
-        type: string
-        default: ""
-      anthropic_base_url:
-        description: >-
-          every model call goes to this origin, whichever engine runs it. With `anthropic_auth: federation`,
-          the origin also serves `/v1/oauth/token`; with the default `oidc-bearer`, the gateway validates
-          the GitHub OIDC token directly and no exchange occurs. Kong's own callers default to Kong AI
-          Gateway, where KSAI spend is attributed; the published mirror carries no default, so a caller there
-          passes the `model_gateway_url` **secret** instead, which GitHub masks in a log a public
-          repository publishes. This input is read first where a call sets both, for a repository
-          whose origin needs no hiding. Empty after both is refused rather than falling back to
-          api.anthropic.com. The value must start with https:// and name an origin rather than an
-          endpoint; a value ending in /v1 is refused.
-        required: false
-        type: string
-        default: ""
-      anthropic_auth:
-        description: >-
-          how every model call authenticates to anthropic_base_url. "oidc-bearer" hands the gateway a
-          GitHub OIDC token for a gateway that validates the JWT itself. "federation" trades that token
-          at the origin's /v1/oauth/token for an Anthropic access token, which needs the origin to serve
-          that exchange. Kong AI Gateway does not, so that value is only for a team whose own route
-          proxies it. Either bearer is renewed for the life of the run.
-        required: false
-        type: string
-        default: "oidc-bearer"
-      harden_runner_allowed_endpoints:
-        description: >-
-          explicit host:port allowlist enforced across the autofix job. Keep the telemetry, package
-          registries, GitHub APIs, and runner bootstrap endpoints this repository needs. The model
-          provider is not one of them: the job reads the host out of anthropic_base_url and appends
-          it, so a team on its own gateway route names it in one place rather than two.
-
-          Space-separated, and folded rather than literal for that reason: the monitor splits this
-          value on spaces alone, so a newline between two entries leaves one unparseable entry rather
-          than two allowed ones - the first host loses its port and every host after it is dropped
-          without a word. A caller writing its own list writes it the same way, and the job refuses a
-          list with a newline in it rather than blocking the registries it was handed.
-        required: false
-        type: string
-        default: >-
-          api.github.com:443
-          github.com:443
-          *.githubusercontent.com:443
-          *.actions.githubusercontent.com:443
-          *.blob.core.windows.net:443
-          *.datadoghq.com:443
-          archive.ubuntu.com:80
-          azure.archive.ubuntu.com:80
-          security.ubuntu.com:80
-          registry.npmjs.org:443
-          proxy.golang.org:443
-          sum.golang.org:443
-          storage.googleapis.com:443
-          pypi.org:443
-          files.pythonhosted.org:443
-          crates.io:443
-          index.crates.io:443
-          static.crates.io:443
-      go_module_owners:
-        description: >-
-          space-separated GitHub owners whose PRIVATE Go modules this repository imports, at most two.
-          Leave it out: on a private repository the default is its own owner and `Kong`, which is every
-          private module a Kong repository has ever needed. A public repository defaults to no owner,
-          because the warm step would refuse the credential.
-
-          A minted token reaches one command, `go mod download`, through `GIT_CONFIG_*` on that child
-          alone. It is spent for every owner minted rather than only the ones the tree's own `go.mod`
-          and `go.sum` spell: those two files do not describe the whole graph the go command resolves,
-          and a rewrite matching nothing costs nothing while a missing one is a download that fails.
-
-          The implement flow reads the tree it is about to work on, and a repository tracking a `go.mod`
-          gets the Go that file pins plus a module cache filled before the sandbox closes the network.
-          A private module is the one thing that needs a credential, so this names the owners a read
-          token is minted for. Two, because one installation token covers one owner and the mint is a
-          step rather than a loop; a third owner is refused loudly rather than dropped, since a module
-          silently unreachable reads as a repository whose build is simply broken.
-
-          Set it only for a repository whose private modules sit under some third owner, which the
-          default cannot guess. The value is checked before either mint, so a typo and a third owner are
-          refused there. The mint itself is carried rather than refused: an owner the KSAI App is not
-          installed on answers an error this run cannot fix, and losing every plan run to it is worse
-          than losing the modules, which the phase then reports as missing.
-        required: false
-        type: string
-        default: ""
-      disabled_commands:
-        description: >-
-          model-backed commands this repository turns off, comma- or space-separated. Empty (the default)
-          answers every flow command, including `test`, and one shipped later is answered the day it ships.
-          `help`, `stop`, and `pause` remain available because they start no flow.
-        required: false
-        type: string
-        default: ""
-      write_access_commands:
-        description: >-
-          commands anyone holding write access on the repository may run, comma- or space-separated. Every
-          other command needs the commenter to own a path in `CODEOWNERS` as well. `all` is the default and
-          names every command a repository can open, one shipped later included: holding them to ownership
-          kept contributors working across team lines out of the review, and the fix, that they would
-          otherwise have had before asking a human for either, and anyone holding write can already push
-          whatever those commands would write. What the stricter bar protects is the team's Anthropic
-          budget rather than the code, so an organization that grants write broadly is the one to narrow
-          this - to a list of names, or to the empty value that holds every command to ownership.
-          `stop` and `pause` are refused here by name: they reach a run already going and are answered by
-          whoever wrote the comment. `.ksai/ksai.json` may take names out of this list and may never add
-          one, so widening it is a change to this file while closing one again is a change to the
-          repository's own.
-        required: false
-        type: string
-        default: "all"
-      bare_comments:
-        description: >-
-          `auto` reads a comment that names no command when it sits on a pull request this flow
-          opened, so a code owner can steer a run by talking to it. Every other comment still needs
-          the trigger phrase, and the author still goes through the same CODEOWNERS check that starts
-          a run. `off` requires the phrase everywhere. `.ksai/ksai.json` may narrow this to `off` and
-          may never widen it.
-        required: false
-        type: string
-        default: "auto"
-      stop_mode:
-        description: >-
-          how a `stop` or `pause` ends a run. `soft` tells the run and gives it `stop_grace_seconds` to finish
-          what it has already started and write its manifest, then refuses every later tool call; `hard`
-          refuses the very next one. `.ksai/ksai.json` may narrow this to `hard` and may never widen it.
-        required: false
-        type: string
-        default: "soft"
-      stop_grace_seconds:
-        description: >-
-          how long a soft stop gives a run before its tools are refused and the watchdog ends it. A repository
-          may lower this and may not raise it; `stop_mode: hard` and `--now` both take it to zero.
-        required: false
-        type: string
-        default: "120"
-      stop_warn_seconds:
-        description: >-
-          how long before the deadline a stopped run is told again. Clamped into `stop_grace_seconds`, so it
-          can never fall due after the deadline it warns about.
-        required: false
-        type: string
-        default: "60"
-      stop_preserve:
-        description: >-
-          `auto` pushes whatever a stopped run committed, turns any remaining working tree into one `chore(stop):`
-          commit through the same verification every other commit gets, and uploads that tree as an artifact.
-          `off` keeps only what was already committed.
-        required: false
-        type: string
-        default: "auto"
-      allowed_commands:
-        description: >-
-          replaced by `disabled_commands`, which names the commands this repository turns off rather
-          than the ones it answers. Still declared so a value left behind reaches the action and stops
-          the run naming its replacement, rather than failing at startup against an input this
-          workflow no longer declares.
-        required: false
-        type: string
-        default: ""
-      model:
-        description: model ID or catalog alias used when no comment or triage selection overrides it
-        required: false
-        type: string
-        default: "flagship"
-      run_settings_override:
-        description: >-
-          let this dispatch's model and effort inputs win over the control plane's run settings, for
-          benchmark arms that name their model per run; the repo's own dispatch surface carries the
-          same trust its pinned workflow file already does. An overridden axis is pinned for the
-          whole run - review triage, write triage and the control plane's write arm all leave it
-          alone, and every record says the arm was pinned rather than triaged. It bounds no comment:
-          `allowed_models`, `max_effort` and `min_effort` still answer what a `/ksai` comment may ask
-          for, and a comment that names one still wins that axis.
-        required: false
-        type: boolean
-        default: false
-      dials_override:
-        description: >-
-          Former name of `run_settings_override`, retained for callers pinned before the run settings
-          migration. When either input is true, the dispatch model and effort remain pinned.
-        required: false
-        type: boolean
-        default: false
-      effort:
-        description: "reasoning effort for the run: low, medium, high, xhigh, or max. Empty uses the model's default: max for GLM-5.3-Flash, high otherwise"
-        required: false
-        type: string
-        default: ""
-      control_plane_endpoint:
-        description: >-
-          base URL of the control plane that serves this repository's run settings and dispatch
-          records, with no trailing path. Empty keeps the pinned settings and makes no call unless a
-          dispatch names a record, which cannot be read without its control plane.
-        required: false
-        type: string
-        default: ""
-      fleet_dials_endpoint:
-        description: >-
-          former name of `control_plane_endpoint`, retained for callers pinned before the run
-          settings migration
-        required: false
-        type: string
-        default: ""
-      clear_request:
-        description: >-
-          true when this repository asks the review team for a review, from the sidebar or on open.
-          The withdrawal job then clears that request once the review has answered. Left off, nothing
-          requested the team and the withdrawal would spend a token mint and a DELETE per review
-          against a slug this repository may not have.
-        required: false
-        type: boolean
-        default: false
-      recover_lost_runs:
-        description: >-
-          true when a run whose job ended without publishing should say so on the surface it was
-          writing to, and start one replacement run for it. A job whose runner stops answering
-          GitHub executes no step of its own, `always()` ones included, so without this the comment
-          or report region it was updating keeps showing it working for good. Turning it off leaves
-          that surface untouched and starts nothing.
-        required: false
-        type: boolean
-        default: true
-      artifact_retention_days:
-        description: >-
-          how long the execution log, the event stream, the suppression record and the eval record
-          are kept. Lower it to your organization's cap: a repository that allows fewer days clamps
-          the request and annotates every upload with a warning, keeping the artifact for the
-          shorter period either way. Raising it lengthens how long a downloadable copy of the
-          review text exists.
-        required: false
-        type: number
-        default: 14
-      job_timeout_minutes:
-        description: >-
-          this job's timeout and the basis for a watchdog that stops the model one minute earlier
-        required: false
-        type: number
-        default: 35
-      max_consecutive_tool_failures:
-        description: >-
-          how many tool calls may fail in a row before the watchdog stops the run. High because
-          `is_error` means a non-zero shell exit rather than a failed call: 2.4 percent of real
-          sessions reach ten in a row, 20 percent of those that delegate do, and the longest healthy
-          run measured was 43. A stuck run fails without bound and reaches any limit anyway.
-        required: false
-        type: number
-        default: 50
-      max_repeated_tool_calls:
-        description: >-
-          how many times the same tool may run with identical input, one call after another, before
-          the watchdog stops the run. This is the loop the failure count cannot see, because every
-          call succeeds. Any other tool call in between resets it. Raise it for a repository whose
-          work legitimately repeats one call, and set it to 0 to turn the check off.
-        required: false
-        type: number
-        default: 8
-      push_as_app:
-        description: >-
-          true to act as the App, which is the ordinary case and needs `ksai_private_key`. Reviews and
-          every other comment are posted under the App, and the implement flow pushes its commits
-          under it. Set it false to use GITHUB_TOKEN instead, which posts as `github-actions[bot]` and
-          costs the draft pull request its CI: a branch pushed with GITHUB_TOKEN starts no `push`
-          workflow at all, and the `pull_request` runs it would start are created in an
-          approval-required state, so those checks wait on somebody clicking rather than on the run.
-          The login each flow reads its own comments back under is derived from whichever of the two
-          it used, and cannot be set to anything else. False with no `ksai_private_key` runs with no
-          App at all: every read goes through GITHUB_TOKEN too, so a CODEOWNERS team entry authorizes
-          nobody, because that token cannot read team membership, and neither a team review request
-          nor a private Go module can be reached.
-        required: false
-        type: boolean
-        default: true
-      continuation_workflow:
-        description: >-
-          caller workflow filename dispatched between planned implementation steps; empty disables continuation
-        required: false
-        type: string
-        default: "ksai.yml"
-      require_plan_approval:
-        description: >-
-          whether planned implementation waits for the approval that released its pull request plan
-        required: false
-        type: boolean
-        default: false
-      denied_paths:
-        description: >-
-          newline- or comma-separated paths any implementation write may not commit, added to the action's protected floor
-        required: false
-        type: string
-        default: |
-          CLAUDE.md
-          AGENTS.md
-          CONTRIBUTING.md
-          .claude
-          .mcp.json
-      plan_file_path:
-        description: repository-relative directory where the reviewed plan document is committed
-        required: false
-        type: string
-        default: "docs/plans"
-      keep_plan_file:
-        description: >-
-          "true" keeps the plan after the pull request becomes ready; "false" removes it in a final commit
-        required: false
-        type: string
-        default: "true"
-      plan_mode:
-        description: >-
-          whether an issue is planned before it is built. `auto` asks the write triager to size the work
-          and skips the plan for the small end of it; `always` plans every change; `never` plans none.
-          `.ksai/ksai.json` may narrow this to `always` and may never widen it, and a comment may name
-          `--plan` or `--no-plan` for one run.
-        required: false
-        type: string
-        default: "auto"
-      allowed_models:
-        description: >-
-          model IDs a comment or automatic selector may choose, comma- or space-separated
-        required: false
-        type: string
-        default: "zai-org/GLM-5.3-Flash,zai-org/GLM-5.3,claude-opus-5,claude-opus-5-5,claude-sonnet-5,claude-haiku-4-5"
-      max_effort:
-        description: >-
-          highest effort a comment or automatic selector may choose; empty uses the configured effort
-        required: false
-        type: string
-        default: ""
-      min_effort:
-        description: >-
-          lowest effort a comment or automatic selector may choose; empty means medium
-        required: false
-        type: string
-        default: ""
-      classifier_model:
-        description: model ID or alias for classifying authorized prose comments that name no command
-        required: false
-        type: string
-        default: "balanced"
-      write_triage_model:
-        description: >-
-          model ID or alias for the no-tools write-risk classifier and `plan_mode: auto` size decision
-        required: false
-        type: string
-        default: "balanced"
-      status_updates:
-        description: >-
-          `auto` to keep the comment a run opens with up to date while it works - what it is doing and how
-          long it has left. `off` leaves that comment as it was posted. The reading
-          comes from the CLI's own transcript, so nothing is asked of the run and nothing enters its context.
-        required: false
-        type: string
-        default: "auto"
-      status_history:
-        description: >-
-          `auto` to keep up to 24 distinct updates in the comment. `off` shows only the latest timestamped
-          update. Both modes keep the current stage heading, counters and run link.
-        required: false
-        type: string
-        default: "auto"
-      status_model:
-        description: >-
-          model that writes the one sentence a status carries, as an id or an alias. Empty publishes the
-          counters and no sentence. Bounded by nothing a commenter can set, like `classifier_model`.
-        required: false
-        type: string
-        default: "balanced"
-      triage:
-        description: >-
-          `auto` selects a bounded review or write arm from run context; `off` keeps the configured arm
-        required: false
-        type: string
-        default: "auto"
-      test_hypotheses:
-        description: 'Optional exact-head candidate packet for the tester; never acceptance criteria'
-        required: false
-        type: string
-        default: ''
-      review_strategy:
-        description: "baseline, evidence or dual; evidence and dual require OpenCode"
-        required: false
-        type: string
-        default: "baseline"
-      review_experiment:
-        description: "JSON exact-head replay controls; see review inputs"
-        required: false
-        type: string
-        default: ""
-      shadow_model:
-        description: "Explicit model override for the shadow; empty keeps the live model"
-        required: false
-        type: string
-        default: ""
-      shadow_strategy:
-        description: "Explicit review strategy override for the shadow; empty keeps the live strategy"
-        required: false
-        type: string
-        default: ""
-      shadow_engine:
-        description: >-
-          run a second, silent review on this engine for a sampled share of reviews. It writes
-          nothing to the pull request - no reaction, no report, no review - and produces the eval
-          record, the artifacts and the stage timings exactly as a published run does.
-
-          **`claude`, the declared default, shadows nothing.** That engine no longer runs here, and
-          the default is kept only because changing one breaks every pinned consumer. So a review is
-          shadowed only when `shadow_model` or `shadow_strategy` names a setting to compare, which runs
-          the second review on the live engine, or when this input names an engine the live arm is
-          not already running. `shadow_percent` still bounds the share, and `0` turns it off
-          outright.
-        required: false
-        type: string
-        default: "claude"
-      shadow_percent:
-        description: >-
-          the share of reviews that also run the shadow arm, 0 to 100, **10 by default**. A shadow
-          review costs what a review costs and it bills the workspace of whoever calls this
-          workflow, so the default sits where the whole fleet's second opinion is a few tens of
-          dollars a month rather than where one repository fills the corpus quickly. Set it to `0`
-          to opt out.
-
-          The repository or organization variable `KSAI_SHADOW_PERCENT` overrides it where set,
-          which is what makes this switchable without every consumer repinning - and turn-off-able
-          in one place, for a whole org, if a shadow ever misbehaves.
-
-          Sampled by hashing the head sha, so the subset moves with every push rather than shadowing
-          the same pull requests for ever, and one run's decision survives a retry.
-        required: false
-        type: string
-        default: "10"
-      review_triage_mode:
-        description: >-
-          Review-triage authority: local, shadow, or cp. V3 defaults local; the entrypoint the control
-          plane generates defaults shadow. The project run setting changes only that entrypoint; this
-          workflow runs the caller's input.
-        required: false
-        type: string
-        default: "local"
-      engine:
-        description: >-
-          which reviewer reads the diff. `opencode` is the only one, and empty resolves to it on
-          every flow that starts a model. It runs the open-source CLI against the same origin on the
-          same credential, so nothing about billing or the identifiers changes and no key is added.
-          It uses the prepared diff, review prompt, kreview agents and skills, triage routing,
-          repository rules and read-only tool policy.
-
-          **`claude` is refused, not ignored.** That engine no longer runs here, and a value the
-          action read and discarded would leave a caller believing it had chosen something. The name
-          stays declared because removing an input breaks every pinned consumer.
-        required: false
-        type: string
-        default: ""
-      opencode_version:
-        description: "npm version of opencode-ai the opencode engine installs, with no `v` prefix"
-        required: false
-        type: string
-        # renovate: datasource=npm depName=opencode-ai
-        default: "1.18.34"
-      opencode_pty:
-        description: "opt-in audited background PTY pilot for test and active implementation phases"
-        required: false
-        type: boolean
-        default: false
-      repo_rules:
-        description: >-
-          `auto` applies the reviewed repository's own rules under `.ksai/`, read from its default branch;
-          `off` reviews as if they were not there. Those two words only - any other value stops the run
-          rather than guessing which side of the switch it meant. See https://ksai.kongcloud.io/review/rules
-        required: false
-        type: string
-        default: "auto"
-      repo_rules_max_bytes:
-        description: >-
-          bytes of matched rules one review may stage. Empty is 98304; a number raises it, up to
-          262144. Scope with `paths` first, since a model handed more rules applies less of them.
-          See https://ksai.kongcloud.io/review/rules
-        required: false
-        type: string
-        default: ""
-      repo_rules_max_rules:
-        description: >-
-          packs a directory may hold, and rules a manifest may name. Empty is 16; a number raises it,
-          up to 64, and carries the source-file budget with it.
-          See https://ksai.kongcloud.io/review/rules
-        required: false
-        type: string
-        default: ""
-      repo_rules_max_file_bytes:
-        description: >-
-          bytes any one rules file may hold. Empty is 16384; a number raises it, up to the bytes
-          `repo_rules_max_bytes` allows a whole review. A `source` list splits a file that grew,
-          which costs nothing. See https://ksai.kongcloud.io/review/rules
-        required: false
-        type: string
-        default: ""
-      additional_prompt:
-        description: additional text appended to the model's trusted prompt context
-        required: false
-        type: string
-        default: ""
-      suppressions_app_id:
-        description: GitHub App ID used to read the suppression store; empty skips suppression loading
-        required: false
-        type: string
-        default: ""
-      suppressions_store:
-        description: owner/repository containing committed review suppression lists
-        required: false
-        type: string
-        default: ""
-      suppressions_ref:
-        description: ref in the suppression store from which lists are read
-        required: false
-        type: string
-        default: "main"
-      reviewer_id:
-        description: stable logical reviewer name used to derive suppression match IDs
-        required: false
-        type: string
-        default: "kreview-full"
-      team:
-        description: team label sent in cost-attribution headers and telemetry
-        required: false
-        type: string
-        default: ""
-      otel_endpoint:
-        description: OTLP HTTP endpoint for cost and token metrics
-        required: false
-        type: string
-        default: "https://otlp.datadoghq.com"
-      pr:
-        description: pull request number for a dispatched review whose event carries none
-        required: false
-        type: string
-        default: ""
-      actor:
-        description: GitHub login authorized for a dispatched review; ignored by the implement flow
-        required: false
-        type: string
-        default: ""
-      issue_number:
-        description: issue or pull request number for a dispatched implementation whose event carries none
-        required: false
-        type: string
-        default: ""
-      work_ref:
-        description: threadless implementation target in jira/<KEY> form
-        required: false
-        type: string
-        default: ""
-      jira_site:
-        description: Jira site hostname used to render ticket links
-        required: false
-        type: string
-        default: ""
-      jira_projects:
-        description: Jira project keys this repository may read, comma- or space-separated
-        required: false
-        type: string
-        default: ""
-      jira_allow_public_repo:
-        description: 'literal "true" permits Jira ticket text to enter artifacts in a public repository'
-        required: false
-        type: string
-        default: "false"
-      jira_title_key:
-        description: 'placement of the Jira key in pull request titles: prefix, suffix, or none'
-        required: false
-        type: string
-        default: "none"
-      environments:
-        description: >-
-          comma-separated pull request test environments to start. Empty selects `.ksai/pr-test.json`'s
-          default set in test or dry-run mode, and every declared environment in sweep mode.
-        required: false
-        type: string
-        default: ""
-      test_mode:
-        description: >-
-          pull request test mode: `test` runs the adversarial tester, `dry-run` checks the selected
-          environments without a model, and `sweep` checks each selected or declared environment in a
-          separate provisioning cycle.
-        required: false
-        type: string
-        default: test
-      run_dir:
-        description: >-
-          workspace-relative directory for pull request test evidence and the verdict artifact; `.git`,
-          `.ksai`, and `_ksai` are reserved at the top level
-        required: false
-        type: string
-        default: .ksai-run
-      run_id:
-        description: >-
-          Actions run whose pull request test artifacts the publisher retrieves. The recorded pull request
-          must match pr. Supply run_attempt with it. Empty retrieves artifacts from the current run.
-        required: false
-        type: string
-        default: ""
-      run_attempt:
-        description: >-
-          Attempt within run_id whose pull request test artifacts the publisher retrieves. Required with an
-          external run_id. The workflow carries its own test job's attempt when run_id is empty.
-        required: false
-        type: string
-        default: ""
-      attempt:
-        description: number of prior runs in the continuation chain
-        required: false
-        type: string
-        default: ""
-      stall:
-        description: consecutive continuation runs that completed no plan step
-        required: false
-        type: string
-        default: ""
-      prev_remaining:
-        description: unchecked plan boxes the predecessor saw; empty is distinct from zero
-        required: false
-        type: string
-        default: ""
-      comment_id:
-        description: >-
-          the comment a dispatched request answers. A control plane that routes deliveries dispatches this
-          workflow instead of the comment reaching it as an event, so naming the comment here, beside
-          `comment_kind`, is what lets a command and the words after it decide the run. The comment is read
-          back from GitHub, never carried in the dispatch: an input is free text whoever holds
-          `actions: write` chooses.
-        required: false
-        type: string
-        default: ""
-      comment_kind:
-        description: >-
-          which comment space `comment_id` came from, `issue`, `review` or `submitted_review`. The endpoints answer 404 for
-          each other's ids, so it is named rather than guessed. This is the input that asks for the comment
-          to be read back, and every job here reads it rather than the id to decide whether a dispatch is a
-          request: an id without it names the identity a run records itself against and nothing more.
-        required: false
-        type: string
-        default: ""
-      record_id:
-        description: >-
-          the record the control plane wrote before it dispatched this run, read back over the run's own
-          OIDC token from the control-plane endpoint. Empty, which is every standalone dispatch, makes no call
-          and the run goes ahead on its other inputs. Only the v4 caller forwards it.
-        required: false
-        type: string
-        default: ""
-    secrets:
-      ksai_private_key:
-        description: >-
-          private key for the KSAI GitHub App used to authorize, publish, and push. Required unless
-          `push_as_app` is false, where a call passing none runs on GITHUB_TOKEN alone.
-        required: false
-      suppressions_private_key:
-        description: >-
-          private key for the App named by suppressions_app_id; empty skips suppression loading
-        required: false
-      datadog_key:
-        description: Datadog API key for OTLP metrics; empty disables telemetry export
-        required: false
-      model_gateway_url:
-        description: >-
-          the same origin the `anthropic_base_url` input names, passed as a secret so GitHub masks it
-          in the log. A public repository publishes every `with:` and `env:` value it is handed, and
-          the gateway is infrastructure this organization runs, so a consumer of the published mirror
-          passes it here rather than as an input or an organization variable. The input still wins
-          where a call sets both; empty after both is refused. Named for what it is rather than for
-          one vendor, because the input it stands behind cannot be renamed without breaking every
-          caller already pinned and this secret has no callers yet.
-        required: false
-
 permissions: {}
 
 jobs:
-  legacy-request:
-    if: >-
-      ${{ github.event_name == 'pull_request' && github.event.action == 'review_requested' &&
-      github.event.requested_team.slug == (vars.KSAI_REVIEW_TEAM || 'ksai') &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.sender.type != 'Bot' }}
-    uses: $/.github/workflows/ksai-request.yml
-    permissions:
-      actions: write
-      contents: read
-    with:
-      client_id: ${{ inputs.client_id }}
-      runs_on: ${{ inputs.runs_on }}
-      push_as_app: ${{ inputs.push_as_app }}
-    secrets:
-      ksai_private_key: ${{ secrets.ksai_private_key }}
-
-  endpoints:
-    runs-on: ${{ startsWith(inputs.runs_on, '[') && fromJSON(inputs.runs_on) || inputs.runs_on }}
-    timeout-minutes: 5
-    permissions: {}
-    outputs:
-      endpoint: ${{ steps.endpoints.outputs.endpoint }}
-      gateway: ${{ steps.endpoints.outputs.gateway }}
-    steps:
-      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
-        with:
-          egress-policy: audit
-
-      - name: Say the hosts a job that blocks its egress has to reach
-        id: endpoints
-        env:
-          ENDPOINT: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
-          BASE_URL: ${{ inputs.anthropic_base_url || secrets.model_gateway_url }}
-        run: |
-          set -euo pipefail
-
-          host() {
-            local origin="${1#*://}"
-            origin="${origin%%/*}"
-            origin="${origin//[[:space:]]/}"
-            case "${origin}" in ''|*:[0-9]*) ;; *) origin="${origin}:443" ;; esac
-            printf '%s' "${origin}"
-          }
-
-          {
-            echo "endpoint=$(host "${ENDPOINT}")"
-            echo "gateway=$(host "${BASE_URL}")"
-          } >>"${GITHUB_OUTPUT}"
-
   gate:
     if: >-
-      !(github.event_name == 'pull_request' && github.event.action == 'review_requested') &&
-      (github.event_name != 'workflow_dispatch' || inputs.pr != '' || inputs.comment_kind != '' ||
-       inputs.record_id != '' || inputs.work_ref != '')
-    runs-on: ${{ startsWith(inputs.runs_on, '[') && fromJSON(inputs.runs_on) || inputs.runs_on }}
+      github.event_name == 'workflow_dispatch' && (
+      !(github.event_name == 'pull_request' && github.event.action == 'review_requested')
+      )
+    runs-on: ubuntu-latest
     timeout-minutes: 5
-    environment: ${{ inputs.job_environment }}
+    environment: ${{ vars.KSAI_JOB_ENVIRONMENT }}
     permissions:
       contents: read
       id-token: write
-      issues: write
-      pull-requests: read
-    env:
-      KSAI_NO_APP: ${{ !inputs.push_as_app && secrets.ksai_private_key == '' }}
     outputs:
-      authorized: ${{ steps.gate.outputs.authorized }}
+      runs_on: ${{ steps.settings.outputs.runs_on || 'ubuntu-latest' }}
+      trigger_phrase: ${{ steps.settings.outputs.trigger_phrase }}
+      continuation_workflow: ${{ steps.settings.outputs.continuation_workflow || 'ksai.yml' }}
+      blocker: ${{ steps.settings.outputs.blocker }}
+      said: ${{ steps.settings.outputs.said }}
+      federation_rule_id: ${{ steps.settings.outputs.federation_rule_id }}
+      organization_id: ${{ steps.settings.outputs.organization_id }}
+      service_account_id: ${{ steps.settings.outputs.service_account_id }}
+      workspace_id: ${{ steps.settings.outputs.workspace_id }}
+      model_gateway_url: ${{ steps.credentials.outputs.model_origin || steps.credentials.outputs.model_gateway_url }}
+      model_auth_mode: ${{ steps.credentials.outputs.model_auth_mode }}
+      model_audience: ${{ steps.credentials.outputs.model_audience }}
+      model_catalog: ${{ steps.run_settings.outputs.catalog }}
+      credentials_read: ${{ steps.credentials.outputs.read }}
+      endpoint: ${{ steps.endpoints.outputs.endpoint }}
+      gateway: ${{ steps.endpoints.outputs.gateway }}
       codeowner: ${{ steps.gate.outputs.codeowner }}
       write_access: ${{ steps.gate.outputs.write_access }}
       write_access_commands: ${{ steps.gate.outputs.write_access_commands }}
-      disabled_commands: ${{ steps.gate.outputs.disabled_commands || inputs.disabled_commands }}
-      denied_paths: ${{ steps.gate.outputs.denied_paths || inputs.denied_paths }}
-      bare_comments: ${{ steps.gate.outputs.bare_comments || inputs.bare_comments }}
-      stop_mode: ${{ steps.gate.outputs.stop_mode || inputs.stop_mode }}
-      require_plan_approval: ${{ steps.gate.outputs.require_plan_approval || inputs.require_plan_approval }}
       owners: ${{ steps.gate.outputs.owners }}
-      review: ${{ steps.gate.outputs.review }}
-      implement: ${{ steps.gate.outputs.implement }}
-      test: ${{ steps.gate.outputs.test }}
-      help: ${{ steps.gate.outputs.help }}
       thread_root_id: ${{ steps.gate.outputs.thread_root_id }}
       on_issue: ${{ steps.gate.outputs.on_issue }}
       issue_number: ${{ steps.gate.outputs.issue_number }}
@@ -822,35 +49,70 @@ jobs:
       classifier_output_tokens: ${{ steps.gate.outputs.classifier_output_tokens }}
       classifier_turns: ${{ steps.gate.outputs.classifier_turns }}
       classifier_duration: ${{ steps.gate.outputs.classifier_duration }}
-      model: ${{ ((inputs.run_settings_override || inputs.dials_override) && inputs.model != 'flagship') && inputs.model || steps.record.outputs.model || steps.run_settings.outputs.model }}
-      effort: ${{ ((inputs.run_settings_override || inputs.dials_override) && inputs.effort != '') && inputs.effort || steps.record.outputs.effort || steps.run_settings.outputs.effort }}
+      model: ${{ steps.record.outputs.model || steps.run_settings.outputs.model }}
+      effort: ${{ steps.record.outputs.effort || steps.run_settings.outputs.effort }}
       shadow_percent: ${{ steps.run_settings.outputs.shadow_percent }}
       review_triage_mode: ${{ steps.run_settings.outputs.review_triage_mode }}
       allowed_models: ${{ steps.run_settings.outputs.allowed_models }}
-      model_catalog: ${{ steps.run_settings.outputs.catalog }}
       max_effort: ${{ steps.run_settings.outputs.max_effort }}
+      disabled_commands: ${{ steps.gate.outputs.disabled_commands || steps.run_settings.outputs.disabled_commands || '' }}
+      denied_paths: ${{ steps.gate.outputs.denied_paths || steps.run_settings.outputs.denied_paths || 'CLAUDE.md,AGENTS.md,CONTRIBUTING.md,.claude,.mcp.json' }}
+      bare_comments: ${{ steps.gate.outputs.bare_comments || steps.run_settings.outputs.bare_comments || 'auto' }}
+      stop_mode: ${{ steps.gate.outputs.stop_mode || steps.run_settings.outputs.stop_mode || 'soft' }}
+      require_plan_approval: ${{ steps.gate.outputs.require_plan_approval || steps.run_settings.outputs.require_plan_approval || false }}
+      fix_review_bots: ${{ steps.run_settings.outputs.fix_review_bots || '' }}
       min_effort: ${{ steps.run_settings.outputs.min_effort }}
       job_timeout_minutes: ${{ steps.run_settings.outputs.job_timeout_minutes }}
+      test_minutes: ${{ steps.minutes.outputs.test }}
       max_consecutive_tool_failures: ${{ steps.run_settings.outputs.max_consecutive_tool_failures }}
       max_repeated_tool_calls: ${{ steps.run_settings.outputs.max_repeated_tool_calls }}
+      review_strategy: ${{ steps.run_settings.outputs.review_strategy }}
+      review_diff_mib: ${{ steps.run_settings.outputs.review_diff_mib }}
       triage_write: ${{ steps.run_settings.outputs.triage_write }}
-      report_rendering: ${{ steps.run_settings.outputs.report_rendering }}
-      prompt_rendering: ${{ steps.run_settings.outputs.prompt_rendering }}
-      run_settings_arm: ${{ !((inputs.run_settings_override || inputs.dials_override) && inputs.model != 'flagship') && (steps.record.outputs.model == '' && steps.run_settings.outputs.arm || '') || '' }}
-      record_command: ${{ steps.record.outputs.command }}
-      record_comment_id: ${{ steps.record.outputs.comment_id }}
-      record_comment_kind: ${{ steps.record.outputs.comment_kind }}
+      report_rendering: cp
+      opencode_version: 2.0.25
+      run_settings_arm: ${{ (steps.record.outputs.bound_command == '' && steps.record.outputs.model == '' || steps.record.outputs.bound_command != '' && steps.record.outputs.model == steps.run_settings.outputs.model && steps.record.outputs.effort == steps.run_settings.outputs.effort) && steps.run_settings.outputs.arm || '' }}
       record_requester: ${{ steps.record.outputs.requester }}
-      record_guidance: ${{ (inputs.work_ref == '' || steps.jira_readable.outputs.allowed == 'true') && steps.record.outputs.guidance_html || '' }}
+      record_guidance: ${{ (steps.record.outputs.work_ref == '' || steps.jira_readable.outputs.allowed == 'true') && steps.record.outputs.guidance_html || '' }}
       record_work_item: ${{ steps.jira_readable.outputs.allowed == 'true' && steps.record.outputs.work_item || '' }}
       record_ask: ${{ steps.record.outputs.ask }}
-      number: ${{ github.event.issue.number || github.event.pull_request.number }}
+      record_id: ${{ steps.record.outputs.record_id }}
+      asked_pr: ${{ steps.record.outputs.pr }}
+      asked_actor: ${{ steps.record.outputs.actor }}
+      asked_issue_number: ${{ steps.record.outputs.issue_number }}
+      asked_work_ref: ${{ steps.record.outputs.work_ref }}
+      asked_attempt: ${{ steps.record.outputs.attempt }}
+      asked_stall: ${{ steps.record.outputs.stall }}
+      asked_prev_remaining: ${{ steps.record.outputs.prev_remaining }}
+      asked_comment_id: ${{ steps.record.outputs.read == 'true' && steps.record.outputs.comment_id || '' }}
+      asked_comment_kind: ${{ steps.record.outputs.read == 'true' && steps.record.outputs.comment_kind || '' }}
+      number: ${{ github.event.issue.number || github.event.pull_request.number || steps.record.outputs.pr }}
       on_pull_request: ${{ (github.event.issue.pull_request || github.event.pull_request) && 'true' || '' }}
       head_sha: ${{ github.event.pull_request.head.sha }}
+      source_revision: ${{ steps.record.outputs.source_revision }}
+      stage_minutes: ${{ steps.record.outputs.stage_minutes }}
+      stage_job_minutes: ${{ steps.record.outputs.stage_job_minutes }}
+      flow: >-
+        ${{ steps.record.outputs.workflow_job != '' && 'stage' ||
+        ((steps.gate.outputs.authorized == 'true' && steps.gate.outputs.implement == 'true' && steps.gate.outputs.review != 'true') ||
+        (steps.record.outputs.read == 'true' && steps.record.outputs.comment_kind == '' &&
+        (steps.record.outputs.issue_number != '' || steps.record.outputs.work_ref != '') &&
+        contains(fromJSON('["", "implement", "fix", "approve"]'), steps.record.outputs.command))) && 'implement' ||
+        steps.gate.outputs.authorized == 'true' && steps.gate.outputs.help == 'true' && 'help' ||
+        steps.gate.outputs.authorized == 'true' && steps.gate.outputs.review == 'true' && 'review' ||
+        steps.gate.outputs.authorized == 'true' && steps.gate.outputs.test == 'true' && 'test' || '' }}
     steps:
-      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+      - uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
         with:
           egress-policy: audit
+
+      - name: Ask which runner this repository's work is carried out on
+        id: settings
+        uses: $/.github/actions/run-settings
+        with:
+          endpoint: https://ksai.kongcloud.io
+          model: flagship
+          effort:
 
       - name: Refuse a review request from the reviewer sidebar
         env:
@@ -867,37 +129,94 @@ jobs:
               exit 1 ;;
           esac
 
+      - name: Refuse an OpenCode build v5 does not run
+        env:
+          OPENCODE_VERSION: 2.0.25
+        run: |
+          set -euo pipefail
+          case "${OPENCODE_VERSION}" in
+            2.*) ;;
+            *)
+              echo "::error::opencode_version: ${OPENCODE_VERSION} is not an OpenCode 2 build, and v5 runs only OpenCode 2"
+              exit 1 ;;
+          esac
+
+      - name: Read this run's credentials
+        id: credentials
+        uses: $/.github/actions/run-credentials
+        with:
+          endpoint: https://ksai.kongcloud.io
+
+      - name: Say the hosts a job that blocks its egress has to reach
+        id: endpoints
+        env:
+          ENDPOINT: https://ksai.kongcloud.io
+          BASE_URL: ${{ steps.credentials.outputs.model_origin || steps.credentials.outputs.model_gateway_url }}
+          MODEL_AUTH_MODE: ${{ steps.credentials.outputs.model_auth_mode }}
+          ANTHROPIC_AUTH: oidc-bearer
+        run: |
+          set -euo pipefail
+
+          if [[ "${MODEL_AUTH_MODE}" == cp_exchange && "${ANTHROPIC_AUTH}" != oidc-bearer ]]; then
+            echo "::error::CP model exchange requires anthropic_auth: oidc-bearer"
+            exit 1
+          fi
+
+          host() {
+            local origin="${1#*://}"
+            origin="${origin%%/*}"
+            origin="${origin//[[:space:]]/}"
+            case "${origin}" in ''|*:[0-9]*) ;; *) origin="${origin}:443" ;; esac
+            printf '%s' "${origin}"
+          }
+
+          {
+            echo "endpoint=$(host "${ENDPOINT}")"
+            echo "gateway=$(host "${BASE_URL}")"
+          } >>"${GITHUB_OUTPUT}"
+
       - name: Read the run settings
         id: run_settings
         uses: $/.github/actions/run-settings
         with:
-          endpoint: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
-          model: ${{ inputs.model }}
-          effort: ${{ inputs.effort }}
-          shadow_percent: ${{ inputs.shadow_percent }}
-          review_triage_mode: ${{ inputs.review_triage_mode }}
-          allowed_models: ${{ inputs.allowed_models }}
-          max_effort: ${{ inputs.max_effort }}
-          min_effort: ${{ inputs.min_effort }}
-          job_timeout_minutes: ${{ inputs.job_timeout_minutes }}
-          max_consecutive_tool_failures: ${{ inputs.max_consecutive_tool_failures }}
-          max_repeated_tool_calls: ${{ inputs.max_repeated_tool_calls }}
-          key_held: ${{ secrets.ksai_private_key != '' }}
+          endpoint: https://ksai.kongcloud.io
+          model: flagship
+          effort:
+          shadow_percent: 10
+          review_triage_mode: shadow
+          allowed_models: zai-org/GLM-5.3-Flash,zai-org/GLM-5.3,claude-opus-5,claude-opus-5-5,claude-sonnet-5,claude-haiku-4-5
+          max_effort:
+          min_effort:
+          job_timeout_minutes: 35
+          max_consecutive_tool_failures: 50
+          max_repeated_tool_calls: 8
+          review_strategy: baseline
+          key_held: false
+
+      - name: Give a test run's publisher time past the tester's ceiling
+        id: minutes
+        env:
+          CEILING: ${{ steps.run_settings.outputs.job_timeout_minutes || 35 }}
+        run: |
+          set -euo pipefail
+          case "${CEILING}" in
+            ''|*[!0-9]*) echo "test=" >> "${GITHUB_OUTPUT}" ;;
+            *) echo "test=$(( CEILING + 10 ))" >> "${GITHUB_OUTPUT}" ;;
+          esac
 
       - name: Read the dispatch record
         id: record
         uses: $/.github/actions/dispatch-record
         with:
-          endpoint: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
-          record_id: ${{ inputs.record_id }}
+          endpoint: https://ksai.kongcloud.io
 
       - name: Say whether this repository may be handed the work item
         id: jira_readable
-        if: ${{ inputs.work_ref != '' }}
+        if: ${{ steps.record.outputs.work_ref != '' }}
         env:
-          WORK_REF: ${{ inputs.work_ref }}
-          JIRA_PROJECTS: ${{ inputs.jira_projects }}
-          JIRA_ALLOW_PUBLIC: ${{ inputs.jira_allow_public_repo }}
+          WORK_REF: ${{ steps.record.outputs.work_ref }}
+          JIRA_PROJECTS:
+          JIRA_ALLOW_PUBLIC: false
           PRIVATE: ${{ github.event.repository.private }}
         working-directory: ${{ runner.temp }}
         run: |
@@ -915,14 +234,15 @@ jobs:
           '
 
       - name: Validate anthropic_base_url
+        if: ${{ steps.record.outputs.workflow_job == '' }}
         env:
-          ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url || secrets.model_gateway_url }}
-          ANTHROPIC_AUTH: ${{ inputs.anthropic_auth }}
+          ANTHROPIC_BASE_URL: ${{ steps.credentials.outputs.model_origin || steps.credentials.outputs.model_gateway_url }}
+          ANTHROPIC_AUTH: oidc-bearer
         run: |
           set -euo pipefail
 
           if [[ -z "${ANTHROPIC_BASE_URL}" ]]; then
-            why="This call names no origin, as neither the anthropic_base_url input nor the model_gateway_url secret carried one, so every model call it would make has nowhere to go. Empty is refused rather than falling back to Anthropic, because that would take the spend off the gateway that attributes it. The published snapshot ships this default empty, so a caller of it passes the origin in its secrets block - as a secret rather than an input, because a public repository publishes every input it is handed. See https://ksai.kongcloud.io/start/repo"
+            why="The control plane handed this run no model origin, or could not be read, so every model call it would make has nowhere to go. Empty is refused rather than falling back to Anthropic, because that would take the spend off the gateway that attributes it. The step that read this run's credentials notes what the control plane answered. See https://ksai.kongcloud.io/start/repo"
             echo "::error title=anthropic_base_url is not set::${why}"
             echo "${why}" >> "${GITHUB_STEP_SUMMARY}"
             exit 1
@@ -945,747 +265,133 @@ jobs:
 
       - name: Mint this repository's read token
         id: authz-token
-        if: ${{ env.KSAI_NO_APP != 'true' }}
+        if: ${{ steps.record.outputs.workflow_job == '' }}
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: $/.github/actions/run-token
         with:
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          client-id: ${{ inputs.client_id || vars.KSAI_CLIENT_ID }}
-          private-key: ${{ secrets.ksai_private_key }}
-          permission-contents: read
-          permission-members: read
-          permission-issues: read
-          permission-pull-requests: read
+          grant: read
+          mode: cp
+          endpoint: https://ksai.kongcloud.io
 
       - name: Refuse a call whose credentials cannot read this repository
         if: ${{ steps.authz-token.outcome == 'failure' }}
         run: |
           set -euo pipefail
-          echo "::error::the App minted no read token for this repository, so nothing below can read its CODEOWNERS, its comments, its pull requests or its members. It must be installed here and must grant contents: read, members: read, issues: read and pull requests: read, which is what this mint asked for - GitHub refuses the whole mint when one of them is missing and never says which. Check those grants, then the client_id input or the KSAI_CLIENT_ID variable and the ksai_private_key secret, see https://ksai.kongcloud.io/start/repo"
+          echo "::error::the control plane minted no read token for this repository, so nothing below can read its CODEOWNERS, its comments or its pull requests. The step above fails with what the control plane answered, which names the permissions it asked for when GitHub refused the mint - GitHub refuses the whole mint when one of them is missing and never says which. Check that the App is installed here and grants them, and that the control plane has read the KSAI pin of this repository, see https://ksai.kongcloud.io/start/repo"
           exit 1
 
       - name: Resolve who asked and what they asked for
         id: gate
+        if: ${{ steps.record.outputs.workflow_job == '' }}
         uses: $/.github/actions/ksai-gate
+        env:
+          KSAI_MODEL_AUTH_MODE: ${{ steps.credentials.outputs.model_auth_mode }}
         with:
           kong_org_github_token: ${{ github.token }}
-          authorization_github_token: ${{ env.KSAI_NO_APP == 'true' && github.token || steps.authz-token.outputs.token }}
+          authorization_github_token: ${{ steps.authz-token.outputs.token }}
           post_github_token: ${{ github.token }}
-          federation_rule_id: ${{ inputs.federation_rule_id }}
-          organization_id: ${{ inputs.organization_id }}
-          service_account_id: ${{ inputs.service_account_id }}
-          workspace_id: ${{ inputs.workspace_id }}
-          anthropic_base_url: ${{ inputs.anthropic_base_url || secrets.model_gateway_url }}
-          anthropic_auth: ${{ inputs.anthropic_auth }}
-          trigger_phrase: ${{ inputs.trigger_phrase }}
-          bot_login: ${{ inputs.push_as_app && format('{0}[bot]', steps.authz-token.outputs.app-slug) || 'github-actions[bot]' }}
-          app_slug: ${{ env.KSAI_NO_APP == 'true' && 'github-actions' || steps.authz-token.outputs.app-slug }}
-          team: ${{ inputs.team }}
-          actor: ${{ inputs.actor }}
-          pr_number: ${{ inputs.pr }}
-          comment_id: ${{ inputs.record_id == '' && inputs.comment_id || steps.record.outputs.comment_id }}
-          comment_kind: ${{ inputs.record_id == '' && inputs.comment_kind || steps.record.outputs.comment_kind }}
+          github_calls: cp
+          federation_rule_id: ${{ steps.settings.outputs.federation_rule_id }}
+          organization_id: ${{ steps.settings.outputs.organization_id }}
+          service_account_id: ${{ steps.settings.outputs.service_account_id }}
+          workspace_id: ${{ steps.settings.outputs.workspace_id }}
+          anthropic_base_url: ${{ steps.credentials.outputs.model_origin || steps.credentials.outputs.model_gateway_url }}
+          anthropic_auth: oidc-bearer
+          trigger_phrase: ${{ steps.settings.outputs.trigger_phrase }}
+          bot_login: ${{ format('{0}[bot]', steps.authz-token.outputs.app-slug) }}
+          app_slug: ${{ steps.authz-token.outputs.app-slug }}
+          team:
+          actor: ${{ steps.record.outputs.actor }}
+          pr_number: ${{ steps.record.outputs.pr }}
+          comment_id: ${{ steps.record.outputs.read == 'true' && steps.record.outputs.comment_id || '' }}
+          comment_kind: ${{ steps.record.outputs.read == 'true' && steps.record.outputs.comment_kind || '' }}
           record_command: ${{ steps.record.outputs.command }}
           record_bound_command: ${{ steps.record.outputs.bound_command }}
-          record_session_action: ${{ steps.record.outputs.session_action }}
+          record_task_action: ${{ steps.record.outputs.task_action }}
           record_requester: ${{ steps.record.outputs.requester }}
           record_label: ${{ steps.record.outputs.label }}
           record_pr: ${{ steps.record.outputs.pr }}
           record_head_sha: ${{ steps.record.outputs.head_sha }}
           record_autofix_capability: ${{ steps.record.outputs.autofix_capability }}
-          record_endpoint: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
-          record_id: ${{ inputs.record_id }}
+          record_endpoint: https://ksai.kongcloud.io
+          record_id: ${{ steps.record.outputs.record_id }}
           requester: >-
-            ${{ inputs.actor || github.event.comment.user.login ||
+            ${{ steps.record.outputs.actor || github.event.comment.user.login ||
             github.event.review.user.login || github.actor }}
-          sidebar_withdrawal: ${{ inputs.actor != '' && inputs.clear_request }}
-          continuation: ${{ inputs.comment_kind == '' && (inputs.issue_number != '' || inputs.work_ref != '') }}
-          disabled_commands: ${{ inputs.disabled_commands }}
-          write_access_commands: ${{ inputs.write_access_commands }}
-          allowed_commands: ${{ inputs.allowed_commands }}
-          classifier_model: ${{ inputs.classifier_model }}
-          prompt_rendering: ${{ steps.run_settings.outputs.prompt_rendering }}
-          prompt_endpoint: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
-          bare_comments: ${{ inputs.bare_comments }}
-          denied_paths: ${{ inputs.denied_paths }}
-          stop_mode: ${{ inputs.stop_mode }}
-          require_plan_approval: ${{ inputs.require_plan_approval }}
-          otel_endpoint: ${{ inputs.otel_endpoint }}
-          datadog_key: ${{ secrets.datadog_key }}
+          sidebar_withdrawal: ${{ steps.record.outputs.trigger == 'review_requested' && steps.settings.outputs.clear_request == 'true' }}
+          continuation: ${{ (steps.record.outputs.read == 'true' && steps.record.outputs.comment_kind || '') == '' && (steps.record.outputs.issue_number != '' || steps.record.outputs.work_ref != '') }}
+          disabled_commands: ${{ steps.run_settings.outputs.disabled_commands || '' }}
+          write_access_commands: ${{ steps.run_settings.outputs.write_access_commands || 'all' }}
+          allowed_commands:
+          classifier_model: balanced
+          prompt_endpoint: https://ksai.kongcloud.io
+          opencode_version: 2.0.25
+          bare_comments: ${{ steps.run_settings.outputs.bare_comments || 'auto' }}
+          denied_paths: ${{ steps.run_settings.outputs.denied_paths || 'CLAUDE.md,AGENTS.md,CONTRIBUTING.md,.claude,.mcp.json' }}
+          stop_mode: ${{ steps.run_settings.outputs.stop_mode || 'soft' }}
+          require_plan_approval: ${{ steps.run_settings.outputs.require_plan_approval || false }}
+          otel_endpoint: https://otlp.datadoghq.com
+          datadog_key: ${{ steps.credentials.outputs.datadog_key }}
 
-  help:
-    needs: gate
-    if: >-
-      ${{ !cancelled() && needs.gate.result == 'success' && needs.gate.outputs.help == 'true' }}
-    runs-on: ${{ startsWith(inputs.runs_on, '[') && fromJSON(inputs.runs_on) || inputs.runs_on }}
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      issues: write
-      pull-requests: write
-    steps:
-      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+      - name: Tell the control plane what this run decided
+        if: ${{ steps.record.outputs.read == 'true' && steps.gate.outcome != 'skipped' }}
+        uses: $/.github/actions/run-authorization
         with:
-          egress-policy: audit
+          authorized: ${{ steps.gate.outputs.authorized }}
+          implement: ${{ steps.gate.outputs.implement == 'true' && steps.gate.outputs.review != 'true' }}
+          review: ${{ steps.gate.outputs.review }}
+          help: ${{ steps.gate.outputs.help }}
+          test: ${{ steps.gate.outputs.test }}
+          continuation: ${{ (steps.record.outputs.read == 'true' && steps.record.outputs.comment_kind || '') == '' && (steps.record.outputs.issue_number != '' || steps.record.outputs.work_ref != '') }}
+          record_command: ${{ steps.record.outputs.command }}
+          record_bound_command: ${{ steps.record.outputs.bound_command }}
+          comment_kind: ${{ steps.record.outputs.comment_kind }}
+          no_work: ${{ steps.gate.outputs.no_work }}
+          native_pending: ${{ steps.gate.outputs.native_pending }}
+          gate_outcome: ${{ steps.gate.outcome }}
+          endpoint: https://ksai.kongcloud.io
+          mode: cp
 
-      - name: Mint the token this flow posts with
-        id: post-token
-        if: ${{ inputs.push_as_app && needs.gate.outputs.authorized == 'true' }}
-        continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          client-id: ${{ inputs.client_id || vars.KSAI_CLIENT_ID }}
-          private-key: ${{ secrets.ksai_private_key }}
-          permission-contents: read
-          permission-issues: write
-          permission-pull-requests: write
-
-      - name: Check out trusted ksai scripts
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          token: ${{ github.token }}
-          path: _ksai-help
-          repository: Kong/ksai-public
-          ref: v3.135.6
-          sparse-checkout: .github/scripts
-          persist-credentials: false
-
-      - name: Render command help
-        id: render-help
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
-        env:
-          ISSUE_NUMBER: >-
-            ${{ needs.gate.outputs.issue_number || needs.gate.outputs.number }}
-          ON_ISSUE: ${{ needs.gate.outputs.on_issue }}
-          THREAD_ROOT_ID: ${{ needs.gate.outputs.thread_root_id }}
-          TRIGGER: ${{ inputs.trigger_phrase }}
-          DISABLED_COMMANDS: ${{ needs.gate.outputs.disabled_commands || inputs.disabled_commands }}
-          REPO: ${{ github.repository }}
-          AUTHORIZED: ${{ needs.gate.outputs.codeowner }}
-          OWNERS: ${{ needs.gate.outputs.owners }}
-          WRITE_ACCESS: ${{ needs.gate.outputs.write_access }}
-          WRITE_ACCESS_COMMANDS: ${{ needs.gate.outputs.write_access_commands }}
-          SCRIPTS: ${{ github.workspace }}/_ksai-help/.github/scripts
-        with:
-          script: |
-            const { renderHelp, writeAccessNames } = require(`${process.env.SCRIPTS}/lib/select-arm.cjs`);
-            const issue_number = Number(process.env.ISSUE_NUMBER);
-            if (!Number.isInteger(issue_number) || issue_number <= 0) {
-              core.setFailed(`the help command resolved no issue or pull request number, got: ${process.env.ISSUE_NUMBER}`);
-              return;
-            }
-            const body = renderHelp({
-              onIssue: process.env.ON_ISSUE,
-              threadRootId: process.env.THREAD_ROOT_ID,
-              triggerPhrase: process.env.TRIGGER,
-              disabledCommands: process.env.DISABLED_COMMANDS,
-              repo: process.env.REPO,
-              authorized: process.env.AUTHORIZED,
-              owners: process.env.OWNERS,
-              write: process.env.WRITE_ACCESS,
-              writeAccessCommands: writeAccessNames(process.env.WRITE_ACCESS_COMMANDS),
-            });
-            core.setOutput('issue_number', String(issue_number));
-            core.setOutput('body', body);
-
-      - name: Comment with command help as the App
-        id: help-app
-        if: >-
-          ${{ inputs.push_as_app && steps.post-token.outcome == 'success' &&
-          steps.render-help.outcome == 'success' }}
-        continue-on-error: true
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
-        env:
-          ISSUE_NUMBER: ${{ steps.render-help.outputs.issue_number }}
-          BODY: ${{ steps.render-help.outputs.body }}
-        with:
-          github-token: ${{ steps.post-token.outputs.token }}
-          retries: 3
-          script: |
-            await github.rest.issues.createComment({
-              ...context.repo,
-              issue_number: Number(process.env.ISSUE_NUMBER),
-              body: process.env.BODY,
-            });
-
-      - name: Comment with command help using the workflow token
-        if: >-
-          ${{ always() && steps.render-help.outcome == 'success' &&
-          (!inputs.push_as_app || steps.post-token.outcome != 'success' ||
-          steps.help-app.outcome == 'failure') }}
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
-        env:
-          ISSUE_NUMBER: ${{ steps.render-help.outputs.issue_number }}
-          BODY: ${{ steps.render-help.outputs.body }}
-        with:
-          github-token: ${{ github.token }}
-          retries: 3
-          script: |
-            await github.rest.issues.createComment({
-              ...context.repo,
-              issue_number: Number(process.env.ISSUE_NUMBER),
-              body: process.env.BODY,
-            });
-
-  review:
-    needs: gate
-    if: ${{ needs.gate.outputs.authorized == 'true' && needs.gate.outputs.review == 'true' }}
+  run:
+    needs: [gate]
+    if: ${{ github.event_name == 'workflow_dispatch' && (!cancelled() && needs.gate.result == 'success' && needs.gate.outputs.flow != '') }}
     outputs:
-      bot_login: ${{ inputs.push_as_app && format('{0}[bot]', steps.post-token.outputs.app-slug) || 'github-actions[bot]' }}
-    runs-on: ${{ startsWith(inputs.runs_on, '[') && fromJSON(inputs.runs_on) || inputs.runs_on }}
-    timeout-minutes: ${{ fromJSON(needs.gate.outputs.job_timeout_minutes || format('{0}', inputs.job_timeout_minutes)) }}
-    environment: ${{ inputs.job_environment }}
+      bot_login: ${{ format('{0}[bot]', steps.post-token.outputs.app-slug) }}
+    runs-on: ${{ startsWith(needs.gate.outputs.runs_on, '[') && fromJSON(needs.gate.outputs.runs_on) || needs.gate.outputs.runs_on }}
+    timeout-minutes: >-
+      ${{ fromJSON(needs.gate.outputs.flow == 'test' && needs.gate.outputs.test_minutes ||
+      needs.gate.outputs.flow == 'stage' && needs.gate.outputs.stage_job_minutes ||
+      needs.gate.outputs.job_timeout_minutes || 35) }}
+    environment: ${{ vars.KSAI_JOB_ENVIRONMENT }}
+    env:
+      KSAI_MODEL_AUTH_MODE: ${{ needs.gate.outputs.model_auth_mode }}
+      KSAI_MODEL_CATALOG_JSON: ${{ needs.gate.outputs.model_catalog }}
     permissions:
       contents: read
-      pull-requests: write
-      issues: write
       id-token: write
-    env:
-      KSAI_NO_APP: ${{ !inputs.push_as_app && secrets.ksai_private_key == '' }}
-      KSAI_MODEL_CATALOG_JSON: ${{ needs.gate.outputs.model_catalog }}
-    # A review in flight finishes and publishes against the commit it read. A newer request queues
-    # behind it, and GitHub keeps only the newest pending run per group, so requests never pile up.
     concurrency:
       group: >-
-        ksai-${{ inputs.pr || needs.gate.outputs.number || github.run_id }}
-      cancel-in-progress: false
-    steps:
-      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
-        with:
-          egress-policy: audit
-
-      - name: Mint this repository's read token
-        id: authz-token
-        if: ${{ env.KSAI_NO_APP != 'true' }}
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          client-id: ${{ inputs.client_id || vars.KSAI_CLIENT_ID }}
-          private-key: ${{ secrets.ksai_private_key }}
-          permission-contents: read
-          permission-members: read
-          permission-issues: read
-          permission-pull-requests: read
-
-      - name: Mint the token this flow posts with
-        id: post-token
-        if: ${{ inputs.push_as_app }}
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          client-id: ${{ inputs.client_id || vars.KSAI_CLIENT_ID }}
-          private-key: ${{ secrets.ksai_private_key }}
-          permission-contents: read
-          permission-issues: write
-          permission-pull-requests: write
-
-      - uses: $/.github/actions/ksai
-        with:
-          flow: review
-          review_strategy: ${{ inputs.review_strategy }}
-          review_experiment: ${{ inputs.review_experiment }}
-          trigger_phrase: ${{ inputs.trigger_phrase }}
-          disabled_commands: ${{ needs.gate.outputs.disabled_commands || inputs.disabled_commands }}
-          write_access_commands: ${{ inputs.write_access_commands }}
-          allowed_commands: ${{ inputs.allowed_commands }}
-          issue_number: ${{ inputs.pr }}
-          actor: ${{ inputs.actor }}
-          comment_body: >-
-            ${{ (github.event_name == 'workflow_dispatch' && inputs.comment_kind == '')
-            && '/ksai review this pull request' || '' }}
-          comment_id: ${{ inputs.record_id == '' && inputs.comment_id || needs.gate.outputs.record_comment_id }}
-          comment_kind: ${{ inputs.record_id == '' && inputs.comment_kind || needs.gate.outputs.record_comment_kind }}
-          app_slug: ${{ env.KSAI_NO_APP == 'true' && 'github-actions' || steps.authz-token.outputs.app-slug }}
-          source_org_github_token: ${{ inputs.push_as_app && steps.post-token.outputs.token || github.token }}
-          authorization_github_token: ${{ env.KSAI_NO_APP == 'true' && github.token || steps.authz-token.outputs.token }}
-          kong_org_github_token: ${{ github.token }}
-          federation_rule_id: ${{ inputs.federation_rule_id }}
-          organization_id: ${{ inputs.organization_id }}
-          service_account_id: ${{ inputs.service_account_id }}
-          workspace_id: ${{ inputs.workspace_id }}
-          artifact_retention_days: ${{ inputs.artifact_retention_days }}
-          job_timeout_minutes: ${{ needs.gate.outputs.job_timeout_minutes || inputs.job_timeout_minutes }}
-          max_consecutive_tool_failures: ${{ needs.gate.outputs.max_consecutive_tool_failures || inputs.max_consecutive_tool_failures }}
-          max_repeated_tool_calls: ${{ needs.gate.outputs.max_repeated_tool_calls || inputs.max_repeated_tool_calls }}
-          classifier_model_used: ${{ needs.gate.outputs.classifier_model }}
-          verdict: ${{ needs.gate.outputs.verdict }}
-          classifier_cost: ${{ needs.gate.outputs.classifier_cost }}
-          classifier_input_tokens: ${{ needs.gate.outputs.classifier_input_tokens }}
-          classifier_output_tokens: ${{ needs.gate.outputs.classifier_output_tokens }}
-          classifier_turns: ${{ needs.gate.outputs.classifier_turns }}
-          classifier_duration: ${{ needs.gate.outputs.classifier_duration }}
-          otel_endpoint: ${{ inputs.otel_endpoint }}
-          model: ${{ needs.gate.outputs.model || inputs.model }}
-          model_pinned: ${{ ((inputs.run_settings_override || inputs.dials_override) && inputs.model != 'flagship') && 'true' || '' }}
-          effort_pinned: ${{ ((inputs.run_settings_override || inputs.dials_override) && inputs.effort != '') && 'true' || '' }}
-          run_settings_arm: ${{ needs.gate.outputs.run_settings_arm }}
-          control_plane_endpoint: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
-          record_id: ${{ inputs.record_id }}
-          review_triage_mode: ${{ inputs.review_triage_mode }}
-          effort: ${{ needs.gate.outputs.effort || inputs.effort }}
-          allowed_models: ${{ needs.gate.outputs.allowed_models || inputs.allowed_models }}
-          max_effort: ${{ needs.gate.outputs.max_effort || inputs.max_effort }}
-          min_effort: ${{ needs.gate.outputs.min_effort || inputs.min_effort }}
-          classifier_model: ${{ inputs.classifier_model }}
-          write_triage_model: ${{ inputs.write_triage_model }}
-          status_updates: ${{ inputs.status_updates }}
-          status_history: ${{ inputs.status_history }}
-          status_model: ${{ inputs.status_model }}
-          triage: ${{ inputs.triage }}
-          triage_write: ${{ needs.gate.outputs.triage_write }}
-          report_rendering: ${{ needs.gate.outputs.report_rendering }}
-          prompt_rendering: ${{ needs.gate.outputs.prompt_rendering }}
-          engine: ${{ inputs.engine }}
-          opencode_version: ${{ inputs.opencode_version }}
-          repo_rules: ${{ inputs.repo_rules }}
-          repo_rules_max_bytes: ${{ inputs.repo_rules_max_bytes }}
-          repo_rules_max_rules: ${{ inputs.repo_rules_max_rules }}
-          repo_rules_max_file_bytes: ${{ inputs.repo_rules_max_file_bytes }}
-          additional_prompt: ${{ inputs.additional_prompt }}
-          bot_login: ${{ inputs.push_as_app && format('{0}[bot]', steps.post-token.outputs.app-slug) || 'github-actions[bot]' }}
-          team: ${{ inputs.team }}
-          anthropic_base_url: ${{ inputs.anthropic_base_url || secrets.model_gateway_url }}
-          anthropic_auth: ${{ inputs.anthropic_auth }}
-          otel_headers: ${{ secrets.datadog_key != '' && format('dd-api-key={0}', secrets.datadog_key) || '' }}
-          suppressions_app_id: ${{ inputs.suppressions_app_id }}
-          suppressions_store: ${{ inputs.suppressions_store }}
-          suppressions_ref: ${{ inputs.suppressions_ref }}
-          reviewer_id: ${{ inputs.reviewer_id }}
-          suppressions_private_key: ${{ secrets.suppressions_private_key }}
-
-  test:
-    needs: gate
-    if: ${{ needs.gate.outputs.authorized == 'true' && needs.gate.outputs.test == 'true' }}
-    runs-on: ${{ startsWith(inputs.runs_on, '[') && fromJSON(inputs.runs_on) || inputs.runs_on }}
-    timeout-minutes: ${{ fromJSON(needs.gate.outputs.job_timeout_minutes || format('{0}', inputs.job_timeout_minutes)) }}
-    outputs:
-      artifact_attempt: ${{ steps.artifact_attempt.outputs.attempt }}
-    environment: ${{ inputs.job_environment }}
-    permissions:
-      contents: read
-      pull-requests: read
-      issues: read
-      id-token: write
-    env:
-      KSAI_NO_APP: ${{ !inputs.push_as_app && secrets.ksai_private_key == '' }}
-      KSAI_MODEL_CATALOG_JSON: ${{ needs.gate.outputs.model_catalog }}
-    concurrency:
-      group: >-
-        ksai-test-${{ inputs.pr || needs.gate.outputs.number || github.run_id }}
-      cancel-in-progress: false
-    steps:
-      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
-        with:
-          egress-policy: audit
-
-      - name: Record the test artifact attempt
-        id: artifact_attempt
-        shell: bash
-        run: echo "attempt=${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
-
-      - name: Mint this repository's read token
-        id: authz-token
-        if: ${{ env.KSAI_NO_APP != 'true' }}
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          client-id: ${{ inputs.client_id || vars.KSAI_CLIENT_ID }}
-          private-key: ${{ secrets.ksai_private_key }}
-          permission-contents: read
-          permission-members: read
-          permission-issues: read
-          permission-pull-requests: read
-
-      - name: Read the owners of this repository's private Go modules
-        id: go-owners
-        env:
-          OWNERS: ${{ inputs.go_module_owners }}
-          HOME_OWNER: ${{ github.repository_owner }}
-          PRIVATE: ${{ github.event.repository.private }}
-        run: |
-          set -euo pipefail
-          if [ -z "${OWNERS}" ]; then
-            if [ "${PRIVATE}" = "false" ]; then
-              printf 'one=\ntwo=\n' >> "${GITHUB_OUTPUT}"
-              exit 0
-            fi
-            if [ "$(printf '%s' "${HOME_OWNER}" | tr '[:upper:]' '[:lower:]')" = "kong" ]; then
-              OWNERS="${HOME_OWNER}"
-            else
-              OWNERS="${HOME_OWNER} Kong"
-            fi
-          fi
-          read -r -a named <<< "${OWNERS//[$'\n\r\t']/ }"
-          if [ "${#named[@]}" -eq 0 ]; then
-            echo "::error::go_module_owners holds only whitespace; leave it out rather than blank, or name the owners whose private Go modules this repository imports"
-            exit 1
-          fi
-          if [ "${#named[@]}" -gt 2 ]; then
-            echo "::error::go_module_owners names ${#named[@]} owners and this workflow mints at most two; the rest would be silently unreachable, which reads as a repository whose build is broken"
-            exit 1
-          fi
-          for one in "${named[@]}"; do
-            case "${one}" in
-              -*|*[!A-Za-z0-9-]*)
-                echo "::error::'${one}' is not a GitHub owner login, so no read token can be minted for its private Go modules"
-                exit 1 ;;
-            esac
-            if [ "${#one}" -gt 39 ]; then
-              echo "::error::'${one}' is ${#one} characters and no GitHub owner is over 39, so no read token can be minted for its private Go modules"
-              exit 1
-            fi
-          done
-          if [ "${#named[@]}" -eq 2 ] && [ "$(printf '%s' "${named[0]}" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "${named[1]}" | tr '[:upper:]' '[:lower:]')" ]; then
-            echo "::error::go_module_owners names ${named[0]} twice, which would mint two tokens for one owner and leave the second reaching nothing"
-            exit 1
-          fi
-          {
-            echo "one=${named[0]}"
-            echo "two=${named[1]:-}"
-          } >> "${GITHUB_OUTPUT}"
-
-      - name: Mint a read token for the first Go module owner
-        id: go-token-one
-        if: ${{ env.KSAI_NO_APP != 'true' && steps.go-owners.outputs.one != '' }}
-        continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          owner: ${{ steps.go-owners.outputs.one }}
-          client-id: ${{ inputs.client_id || vars.KSAI_CLIENT_ID }}
-          private-key: ${{ secrets.ksai_private_key }}
-          permission-contents: read
-
-      - name: Mint a read token for the second Go module owner
-        id: go-token-two
-        if: ${{ env.KSAI_NO_APP != 'true' && steps.go-owners.outputs.two != '' }}
-        continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          owner: ${{ steps.go-owners.outputs.two }}
-          client-id: ${{ inputs.client_id || vars.KSAI_CLIENT_ID }}
-          private-key: ${{ secrets.ksai_private_key }}
-          permission-contents: read
-
-      - uses: $/.github/actions/ksai
-        with:
-          flow: test
-          test_hypotheses: ${{ inputs.test_hypotheses }}
-          engine: ${{ inputs.engine }}
-          opencode_version: ${{ inputs.opencode_version }}
-          opencode_pty: ${{ inputs.opencode_pty }}
-          trigger_phrase: ${{ inputs.trigger_phrase }}
-          disabled_commands: ${{ needs.gate.outputs.disabled_commands || inputs.disabled_commands }}
-          write_access_commands: ${{ inputs.write_access_commands }}
-          allowed_commands: ${{ inputs.allowed_commands }}
-          issue_number: ${{ inputs.pr || needs.gate.outputs.number }}
-          actor: ${{ inputs.actor }}
-          comment_id: ${{ inputs.record_id == '' && inputs.comment_id || needs.gate.outputs.record_comment_id }}
-          comment_kind: ${{ inputs.record_id == '' && inputs.comment_kind || needs.gate.outputs.record_comment_kind }}
-          app_slug: ${{ env.KSAI_NO_APP == 'true' && 'github-actions' || steps.authz-token.outputs.app-slug }}
-          source_org_github_token: ${{ github.token }}
-          authorization_github_token: ${{ env.KSAI_NO_APP == 'true' && github.token || steps.authz-token.outputs.token }}
-          kong_org_github_token: ${{ github.token }}
-          bot_login: github-actions[bot]
-          federation_rule_id: ${{ inputs.federation_rule_id }}
-          organization_id: ${{ inputs.organization_id }}
-          service_account_id: ${{ inputs.service_account_id }}
-          workspace_id: ${{ inputs.workspace_id }}
-          artifact_retention_days: ${{ inputs.artifact_retention_days }}
-          job_timeout_minutes: ${{ needs.gate.outputs.job_timeout_minutes || inputs.job_timeout_minutes }}
-          classifier_model_used: ${{ needs.gate.outputs.classifier_model }}
-          verdict: ${{ needs.gate.outputs.verdict }}
-          classifier_cost: ${{ needs.gate.outputs.classifier_cost }}
-          classifier_input_tokens: ${{ needs.gate.outputs.classifier_input_tokens }}
-          classifier_output_tokens: ${{ needs.gate.outputs.classifier_output_tokens }}
-          classifier_turns: ${{ needs.gate.outputs.classifier_turns }}
-          classifier_duration: ${{ needs.gate.outputs.classifier_duration }}
-          otel_endpoint: ${{ inputs.otel_endpoint }}
-          model: ${{ needs.gate.outputs.model || inputs.model }}
-          model_pinned: ${{ ((inputs.run_settings_override || inputs.dials_override) && inputs.model != 'flagship') && 'true' || '' }}
-          effort_pinned: ${{ ((inputs.run_settings_override || inputs.dials_override) && inputs.effort != '') && 'true' || '' }}
-          run_settings_arm: ${{ needs.gate.outputs.run_settings_arm }}
-          control_plane_endpoint: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
-          report_rendering: ${{ needs.gate.outputs.report_rendering }}
-          prompt_rendering: ${{ needs.gate.outputs.prompt_rendering }}
-          effort: ${{ needs.gate.outputs.effort || inputs.effort }}
-          allowed_models: ${{ needs.gate.outputs.allowed_models || inputs.allowed_models }}
-          max_effort: ${{ needs.gate.outputs.max_effort || inputs.max_effort }}
-          min_effort: ${{ needs.gate.outputs.min_effort || inputs.min_effort }}
-          team: ${{ inputs.team }}
-          anthropic_base_url: ${{ inputs.anthropic_base_url || secrets.model_gateway_url }}
-          anthropic_auth: ${{ inputs.anthropic_auth }}
-          otel_headers: ${{ secrets.datadog_key != '' && format('dd-api-key={0}', secrets.datadog_key) || '' }}
-          environments: ${{ inputs.environments }}
-          test_mode: ${{ inputs.test_mode }}
-          run_dir: ${{ inputs.run_dir }}
-          go_module_tokens: |
-            ${{ steps.go-token-one.outputs.token != '' && format('{0}={1}', steps.go-owners.outputs.one, steps.go-token-one.outputs.token) || '' }}
-            ${{ steps.go-token-two.outputs.token != '' && format('{0}={1}', steps.go-owners.outputs.two, steps.go-token-two.outputs.token) || '' }}
-
-  test-publish:
-    needs: [gate, test]
-    if: always() && needs.test.result != 'skipped'
-    runs-on: ${{ startsWith(inputs.runs_on, '[') && fromJSON(inputs.runs_on) || inputs.runs_on }}
-    timeout-minutes: 10
-    permissions:
-      actions: read
-      contents: read
-      pull-requests: write
-    env:
-      KSAI_MODEL_CATALOG_JSON: ${{ needs.gate.outputs.model_catalog }}
-    steps:
-      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
-        with:
-          egress-policy: audit
-
-      - name: Mint the token this flow posts with
-        id: post-token
-        if: ${{ inputs.push_as_app }}
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          client-id: ${{ inputs.client_id || vars.KSAI_CLIENT_ID }}
-          private-key: ${{ secrets.ksai_private_key }}
-          permission-contents: read
-          permission-pull-requests: write
-
-      - uses: $/.github/actions/ksai
-        with:
-          flow: test-publish
-          trigger_phrase: ${{ inputs.trigger_phrase }}
-          issue_number: ${{ inputs.pr || needs.gate.outputs.number }}
-          source_org_github_token: ${{ inputs.push_as_app && steps.post-token.outputs.token || github.token }}
-          kong_org_github_token: ${{ github.token }}
-          bot_login: ${{ inputs.push_as_app && format('{0}[bot]', steps.post-token.outputs.app-slug) || 'github-actions[bot]' }}
-          classifier_model_used: ${{ needs.gate.outputs.classifier_model }}
-          verdict: ${{ needs.gate.outputs.verdict }}
-          classifier_cost: ${{ needs.gate.outputs.classifier_cost }}
-          classifier_input_tokens: ${{ needs.gate.outputs.classifier_input_tokens }}
-          classifier_output_tokens: ${{ needs.gate.outputs.classifier_output_tokens }}
-          classifier_turns: ${{ needs.gate.outputs.classifier_turns }}
-          classifier_duration: ${{ needs.gate.outputs.classifier_duration }}
-          control_plane_endpoint: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
-          run_id: ${{ inputs.run_id }}
-          run_attempt: >-
-            ${{ inputs.run_id == '' && (needs.test.outputs.artifact_attempt || github.run_attempt) || inputs.run_attempt }}
-
-  # The paired half of a comparison. It reviews the same diff as the job above on a second arm and
-  # publishes nothing, so the corpus fills with matched rows while the pull request sees one review.
-  #
-  # Only a setting comparison reaches it now. `shadow_engine: claude` names an engine this repository
-  # no longer runs, and it is the declared default, so the condition below skips the job outright
-  # rather than starting a runner to mint a token, check this repository out and decide no.
-  #
-  # It is a separate job rather than a second step because it needs a lane of its own: the review
-  # job's group is keyed on the pull request, so a shadow sharing it would queue behind the review
-  # it exists to be compared against, or cancel it with its own `cancel-in-progress`.
-  shadow:
-    needs: [gate, review]
-    continue-on-error: true
-    if: >-
-      ${{ !cancelled() &&
-      (inputs.shadow_model != '' || inputs.shadow_strategy != '' ||
-      (inputs.shadow_engine != '' && inputs.shadow_engine != 'claude')) &&
-      (vars.KSAI_SHADOW_PERCENT || needs.gate.outputs.shadow_percent || inputs.shadow_percent) != '0' &&
-      needs.gate.outputs.authorized == 'true' && needs.gate.outputs.review == 'true' }}
-    runs-on: ${{ startsWith(inputs.runs_on, '[') && fromJSON(inputs.runs_on) || inputs.runs_on }}
-    timeout-minutes: ${{ fromJSON(needs.gate.outputs.job_timeout_minutes || format('{0}', inputs.job_timeout_minutes)) }}
-    environment: ${{ inputs.job_environment }}
-    permissions:
-      contents: read
-      pull-requests: read
-      id-token: write
-    env:
-      KSAI_NO_APP: ${{ !inputs.push_as_app && secrets.ksai_private_key == '' }}
-      KSAI_MODEL_CATALOG_JSON: ${{ needs.gate.outputs.model_catalog }}
-    concurrency:
-      group: >-
-        ksai-shadow-${{ inputs.pr || needs.gate.outputs.number || github.run_id }}
-      cancel-in-progress: true
-    steps:
-      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
-        with:
-          egress-policy: audit
-
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          token: ${{ github.token }}
-          repository: Kong/ksai-public
-          ref: v3.135.6
-          sparse-checkout: .github/scripts
-          persist-credentials: false
-
-      - name: Resolve the reviewed head sha
-        id: head
-        if: ${{ needs.gate.outputs.head_sha == '' }}
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
-        env:
-          PR_NUMBER: ${{ inputs.pr || needs.gate.outputs.number }}
-        with:
-          github-token: ${{ github.token }}
-          result-encoding: string
-          script: |
-            const pull_number = Number(process.env.PR_NUMBER);
-            if (!Number.isInteger(pull_number) || pull_number <= 0) return '';
-            try {
-              const { data } = await github.rest.pulls.get({ ...context.repo, pull_number });
-              return data.head.sha;
-            } catch (error) {
-              core.warning(`the reviewed head sha could not be read (${error.status ?? '?'}): ${error.message}`);
-              return '';
-            }
-
-      - name: Decide whether this review is sampled
-        id: sample
-        shell: bash
-        working-directory: ${{ runner.temp }}
-        env:
-          SHADOW_ENGINE: ${{ inputs.shadow_engine }}
-          LIVE_MODEL: ${{ needs.gate.outputs.model || inputs.model }}
-          SHADOW_MODEL: ${{ inputs.shadow_model }}
-          LIVE_STRATEGY: ${{ inputs.review_strategy }}
-          SHADOW_STRATEGY: ${{ inputs.shadow_strategy }}
-          LIVE_ENGINE: ${{ inputs.engine }}
-          SHADOW_PERCENT: ${{ vars.KSAI_SHADOW_PERCENT || needs.gate.outputs.shadow_percent || inputs.shadow_percent }}
-          REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ inputs.pr || needs.gate.outputs.number }}
-          HEAD_SHA: ${{ needs.gate.outputs.head_sha || steps.head.outputs.result }}
-        run: node "${GITHUB_WORKSPACE}/.github/scripts/kreview/shadow.mjs"
-
-      - name: Mint this repository's read token
-        id: authz-token
-        if: ${{ env.KSAI_NO_APP != 'true' && steps.sample.outputs.shadow == 'true' }}
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          client-id: ${{ inputs.client_id || vars.KSAI_CLIENT_ID }}
-          private-key: ${{ secrets.ksai_private_key }}
-          permission-contents: read
-          permission-members: read
-          permission-issues: read
-          permission-pull-requests: read
-
-      - uses: $/.github/actions/ksai
-        if: ${{ steps.sample.outputs.shadow == 'true' }}
-        with:
-          flow: review
-          review_strategy: ${{ inputs.shadow_strategy || inputs.review_strategy }}
-          review_experiment: ${{ inputs.review_experiment }}
-          publish: "false"
-          engine: ${{ steps.sample.outputs.engine }}
-          trigger_phrase: ${{ inputs.trigger_phrase }}
-          disabled_commands: ${{ needs.gate.outputs.disabled_commands || inputs.disabled_commands }}
-          write_access_commands: ${{ inputs.write_access_commands }}
-          issue_number: ${{ inputs.pr || needs.gate.outputs.number }}
-          actor: ${{ inputs.actor }}
-          comment_body: >-
-            ${{ (github.event_name == 'workflow_dispatch' && inputs.comment_kind == '')
-            && '/ksai review this pull request' || '' }}
-          comment_id: ${{ inputs.record_id == '' && inputs.comment_id || needs.gate.outputs.record_comment_id }}
-          comment_kind: ${{ inputs.record_id == '' && inputs.comment_kind || needs.gate.outputs.record_comment_kind }}
-          app_slug: ${{ env.KSAI_NO_APP == 'true' && 'github-actions' || steps.authz-token.outputs.app-slug }}
-          source_org_github_token: ${{ env.KSAI_NO_APP == 'true' && github.token || steps.authz-token.outputs.token }}
-          authorization_github_token: ${{ env.KSAI_NO_APP == 'true' && github.token || steps.authz-token.outputs.token }}
-          kong_org_github_token: ${{ github.token }}
-          federation_rule_id: ${{ inputs.federation_rule_id }}
-          organization_id: ${{ inputs.organization_id }}
-          service_account_id: ${{ inputs.service_account_id }}
-          workspace_id: ${{ inputs.workspace_id }}
-          artifact_retention_days: ${{ inputs.artifact_retention_days }}
-          job_timeout_minutes: ${{ needs.gate.outputs.job_timeout_minutes || inputs.job_timeout_minutes }}
-          max_consecutive_tool_failures: ${{ needs.gate.outputs.max_consecutive_tool_failures || inputs.max_consecutive_tool_failures }}
-          max_repeated_tool_calls: ${{ needs.gate.outputs.max_repeated_tool_calls || inputs.max_repeated_tool_calls }}
-          verdict: ${{ needs.gate.outputs.verdict }}
-          otel_endpoint: ${{ inputs.otel_endpoint }}
-          model: ${{ needs.gate.outputs.model || inputs.model }}
-          model_pinned: ${{ ((inputs.run_settings_override || inputs.dials_override) && inputs.model != 'flagship') && 'true' || '' }}
-          effort_pinned: ${{ ((inputs.run_settings_override || inputs.dials_override) && inputs.effort != '') && 'true' || '' }}
-          run_settings_arm: ${{ needs.gate.outputs.run_settings_arm }}
-          control_plane_endpoint: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
-          record_id: ${{ inputs.record_id }}
-          review_triage_mode: ${{ inputs.review_triage_mode }}
-          shadow_model: ${{ inputs.shadow_model }}
-          effort: ${{ needs.gate.outputs.effort || inputs.effort }}
-          allowed_models: ${{ needs.gate.outputs.allowed_models || inputs.allowed_models }}
-          max_effort: ${{ needs.gate.outputs.max_effort || inputs.max_effort }}
-          min_effort: ${{ needs.gate.outputs.min_effort || inputs.min_effort }}
-          classifier_model: ${{ inputs.classifier_model }}
-          write_triage_model: ${{ inputs.write_triage_model }}
-          status_updates: ${{ inputs.status_updates }}
-          status_history: ${{ inputs.status_history }}
-          status_model: ${{ inputs.status_model }}
-          triage: ${{ inputs.triage }}
-          triage_write: ${{ needs.gate.outputs.triage_write }}
-          report_rendering: ${{ needs.gate.outputs.report_rendering }}
-          prompt_rendering: ${{ needs.gate.outputs.prompt_rendering }}
-          opencode_version: ${{ inputs.opencode_version }}
-          repo_rules: ${{ inputs.repo_rules }}
-          repo_rules_max_bytes: ${{ inputs.repo_rules_max_bytes }}
-          repo_rules_max_rules: ${{ inputs.repo_rules_max_rules }}
-          repo_rules_max_file_bytes: ${{ inputs.repo_rules_max_file_bytes }}
-          additional_prompt: ${{ inputs.additional_prompt }}
-          bot_login: ${{ needs.review.outputs.bot_login }}
-          team: ${{ inputs.team }}
-          anthropic_base_url: ${{ inputs.anthropic_base_url || secrets.model_gateway_url }}
-          anthropic_auth: ${{ inputs.anthropic_auth }}
-          otel_headers: ${{ secrets.datadog_key != '' && format('dd-api-key={0}', secrets.datadog_key) || '' }}
-          suppressions_app_id: ${{ inputs.suppressions_app_id }}
-          suppressions_store: ${{ inputs.suppressions_store }}
-          suppressions_ref: ${{ inputs.suppressions_ref }}
-          reviewer_id: ${{ inputs.reviewer_id }}
-          suppressions_private_key: ${{ secrets.suppressions_private_key }}
-
-  implement:
-    needs: [gate, endpoints]
-    if: >-
-      !cancelled() && !(github.event_name == 'pull_request' && github.event.action == 'review_requested') &&
-      ((github.event_name == 'workflow_dispatch' && inputs.comment_kind == '' &&
-        (inputs.issue_number != '' || inputs.work_ref != '') &&
-        (inputs.record_id == '' || needs.gate.result == 'success')) ||
-       (needs.gate.result == 'success' &&
-        needs.gate.outputs.authorized == 'true' &&
-        needs.gate.outputs.implement == 'true'))
-    runs-on: ${{ startsWith(inputs.runs_on, '[') && fromJSON(inputs.runs_on) || inputs.runs_on }}
-    timeout-minutes: ${{ fromJSON(needs.gate.outputs.job_timeout_minutes || format('{0}', inputs.job_timeout_minutes)) }}
-    environment: ${{ inputs.job_environment }}
-    permissions:
-      contents: write
-      issues: write
-      pull-requests: write
-      id-token: write
-      checks: read
-      statuses: read
-      actions: write
-    env:
-      KSAI_NO_APP: ${{ !inputs.push_as_app && secrets.ksai_private_key == '' }}
-      KSAI_MODEL_CATALOG_JSON: ${{ needs.gate.outputs.model_catalog }}
-    concurrency:
-      group: >-
-        ksai-implement-${{ vars.KSAI_IMPLEMENT_LANE ||
+        ${{ needs.gate.outputs.flow == 'implement' && format('ksai-implement-{0}', vars.KSAI_IMPLEMENT_LANE ||
         format('{0}-{1}',
-        (needs.gate.outputs.on_pull_request || inputs.pr) && 'pr' || 'issue',
-        needs.gate.outputs.number || inputs.issue_number ||
-        inputs.work_ref || inputs.pr || inputs.comment_id) }}
+        (needs.gate.outputs.on_pull_request || needs.gate.outputs.asked_pr) && 'pr' || 'issue',
+        needs.gate.outputs.number || needs.gate.outputs.asked_issue_number ||
+        needs.gate.outputs.asked_work_ref || needs.gate.outputs.asked_pr || needs.gate.outputs.asked_comment_id)) ||
+        needs.gate.outputs.flow == 'test' && format('ksai-test-{0}', needs.gate.outputs.asked_pr || needs.gate.outputs.number || github.run_id) ||
+        needs.gate.outputs.flow == 'review' && format('ksai-{0}', needs.gate.outputs.asked_pr || needs.gate.outputs.number || github.run_id) ||
+        format('ksai-{0}-{1}', needs.gate.outputs.flow, github.run_id) }}
       cancel-in-progress: false
     steps:
-      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+      - uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
         with:
-          egress-policy: block
+          egress-policy: ${{ needs.gate.outputs.flow == 'implement' && 'block' || 'audit' }}
           allowed-endpoints: >-
-            ${{ inputs.harden_runner_allowed_endpoints }}
-            ${{ needs.endpoints.outputs.gateway }}
-            ${{ needs.endpoints.outputs.endpoint }}
-          disable-telemetry: true
+            api.github.com:443 github.com:443 *.githubusercontent.com:443 *.actions.githubusercontent.com:443 *.blob.core.windows.net:443 *.datadoghq.com:443 archive.ubuntu.com:80 azure.archive.ubuntu.com:80 security.ubuntu.com:80 registry.npmjs.org:443 proxy.golang.org:443 sum.golang.org:443 storage.googleapis.com:443 pypi.org:443 files.pythonhosted.org:443 crates.io:443 index.crates.io:443 static.crates.io:443
+            ${{ needs.gate.outputs.gateway }}
+            ${{ needs.gate.outputs.endpoint }}
+          disable-telemetry: ${{ needs.gate.outputs.flow == 'implement' }}
 
       - name: Refuse a review request from the reviewer sidebar
+        if: ${{ needs.gate.outputs.flow == 'implement' }}
         env:
           SIDEBAR: ${{ github.event_name == 'pull_request' && github.event.action == 'review_requested' }}
         run: |
@@ -1701,11 +407,12 @@ jobs:
           esac
 
       - name: Refuse a call that blocks every destination and names none
+        if: ${{ needs.gate.outputs.flow == 'implement' }}
         env:
-          ALLOWED: ${{ inputs.harden_runner_allowed_endpoints }}
-          ENDPOINT: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
-          DESTINATION: ${{ needs.endpoints.outputs.endpoint }}
-          GATEWAY: ${{ needs.endpoints.outputs.gateway }}
+          ALLOWED: api.github.com:443 github.com:443 *.githubusercontent.com:443 *.actions.githubusercontent.com:443 *.blob.core.windows.net:443 *.datadoghq.com:443 archive.ubuntu.com:80 azure.archive.ubuntu.com:80 security.ubuntu.com:80 registry.npmjs.org:443 proxy.golang.org:443 sum.golang.org:443 storage.googleapis.com:443 pypi.org:443 files.pythonhosted.org:443 crates.io:443 index.crates.io:443 static.crates.io:443
+          ENDPOINT: https://ksai.kongcloud.io
+          DESTINATION: ${{ needs.gate.outputs.endpoint }}
+          GATEWAY: ${{ needs.gate.outputs.gateway }}
         run: |
           set -euo pipefail
 
@@ -1722,52 +429,36 @@ jobs:
           fi
 
           if [ -n "${ENDPOINT}" ] && [ -z "${DESTINATION}" ]; then
-            echo "::error::this call names a control plane and the job that reads it handed back no host, so the monitor is blocking the record this run was sent to read. Read the endpoints job"
+            echo "::error::this call names a control plane and the job that reads it handed back no host, so the monitor is blocking the record this run was sent to read. Read the gate job"
             exit 1
           fi
 
           if [ -z "${GATEWAY}" ]; then
-            echo "::error::the job that reads anthropic_base_url handed back no host, so the monitor is blocking every model call this job would make. Read the endpoints job"
+            echo "::error::the job that reads anthropic_base_url handed back no host, so the monitor is blocking every model call this job would make. Read the gate job"
             exit 1
           fi
 
       - name: Mint this repository's read token
         id: authz-token
-        if: ${{ env.KSAI_NO_APP != 'true' }}
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        if: ${{ needs.gate.outputs.flow != 'help' }}
+        uses: $/.github/actions/run-token
         with:
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          client-id: ${{ inputs.client_id || vars.KSAI_CLIENT_ID }}
-          private-key: ${{ secrets.ksai_private_key }}
-          permission-contents: read
-          permission-members: read
-          permission-issues: read
-          permission-pull-requests: read
-
-      - name: Mint the token this flow pushes with
-        id: push-token
-        if: ${{ inputs.push_as_app }}
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          client-id: ${{ inputs.client_id || vars.KSAI_CLIENT_ID }}
-          private-key: ${{ secrets.ksai_private_key }}
-          permission-contents: write
-          permission-issues: write
-          permission-pull-requests: write
+          grant: read
+          mode: cp
+          endpoint: https://ksai.kongcloud.io
 
       - name: Read the owners of this repository's private Go modules
         id: go-owners
+        if: ${{ needs.gate.outputs.flow == 'test' || needs.gate.outputs.flow == 'implement' }}
         env:
-          OWNERS: ${{ inputs.go_module_owners }}
+          OWNERS:
           HOME_OWNER: ${{ github.repository_owner }}
           PRIVATE: ${{ github.event.repository.private }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           if [ -z "${OWNERS}" ]; then
-            if [ "${PRIVATE}" = "false" ]; then
+            if [ "${PRIVATE}" = "false" ] || [ "$(printf '%s' "${REPOSITORY}" | tr '[:upper:]' '[:lower:]')" = "" ]; then
               printf 'one=\ntwo=\n' >> "${GITHUB_OUTPUT}"
               exit 0
             fi
@@ -1808,56 +499,86 @@ jobs:
 
       - name: Mint a read token for the first Go module owner
         id: go-token-one
-        if: ${{ env.KSAI_NO_APP != 'true' && steps.go-owners.outputs.one != '' }}
+        if: ${{ steps.go-owners.outputs.one != '' }}
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: $/.github/actions/run-token
         with:
+          grant: modules
           owner: ${{ steps.go-owners.outputs.one }}
-          client-id: ${{ inputs.client_id || vars.KSAI_CLIENT_ID }}
-          private-key: ${{ secrets.ksai_private_key }}
-          permission-contents: read
+          mode: cp
+          endpoint: https://ksai.kongcloud.io
 
       - name: Mint a read token for the second Go module owner
         id: go-token-two
-        if: ${{ env.KSAI_NO_APP != 'true' && steps.go-owners.outputs.two != '' }}
+        if: ${{ steps.go-owners.outputs.two != '' }}
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: $/.github/actions/run-token
         with:
+          grant: modules
           owner: ${{ steps.go-owners.outputs.two }}
-          client-id: ${{ inputs.client_id || vars.KSAI_CLIENT_ID }}
-          private-key: ${{ secrets.ksai_private_key }}
-          permission-contents: read
+          mode: cp
+          endpoint: https://ksai.kongcloud.io
+
+      - name: Read this run's credentials
+        id: credentials
+        if: ${{ needs.gate.outputs.flow != 'help' }}
+        uses: $/.github/actions/run-credentials
+        with:
+          endpoint: https://ksai.kongcloud.io
+
+      - name: Require run credentials before help
+        if: ${{ needs.gate.outputs.flow == 'help' && needs.gate.outputs.record_id != '' && needs.gate.outputs.credentials_read != 'true' }}
+        run: |
+          echo "::error::Could not confirm this run's model authorization before help"
+          exit 1
+
+      - name: Require a dispatched record before token exchange
+        if: ${{ needs.gate.outputs.flow == 'help' && needs.gate.outputs.model_auth_mode == 'cp_exchange' && needs.gate.outputs.record_id == '' }}
+        run: |
+          echo "::error::The control plane selected model token exchange without a dispatched run record"
+          exit 1
+
+      - name: Probe CP model token exchange
+        if: ${{ needs.gate.outputs.flow == 'help' && needs.gate.outputs.model_auth_mode == 'cp_exchange' && needs.gate.outputs.record_id != '' }}
+        uses: $/.github/actions/model-token-probe
+        with:
+          endpoint: https://ksai.kongcloud.io
+          audience: ${{ needs.gate.outputs.model_audience }}
+          record_id: ${{ needs.gate.outputs.record_id }}
 
       - uses: $/.github/actions/ksai
+        env:
+          KSAI_PROVIDER_OBSERVATIONS: 'true'
+          KSAI_USAGE_COUNTERS: ${{ vars.KSAI_USAGE_COUNTERS }}
+        if: ${{ needs.gate.outputs.flow == 'test' }}
         with:
-          flow: implement
-          engine: ${{ inputs.engine }}
-          opencode_version: ${{ inputs.opencode_version }}
-          opencode_pty: ${{ inputs.opencode_pty }}
-          trigger_phrase: ${{ inputs.trigger_phrase }}
-          disabled_commands: ${{ needs.gate.outputs.disabled_commands || inputs.disabled_commands }}
-          write_access_commands: ${{ inputs.write_access_commands }}
-          bare_comments: ${{ needs.gate.outputs.bare_comments || inputs.bare_comments }}
-          stop_mode: ${{ needs.gate.outputs.stop_mode || inputs.stop_mode }}
-          stop_grace_seconds: ${{ inputs.stop_grace_seconds }}
-          stop_warn_seconds: ${{ inputs.stop_warn_seconds }}
-          stop_preserve: ${{ inputs.stop_preserve }}
-          allowed_commands: ${{ inputs.allowed_commands }}
-          federation_rule_id: ${{ inputs.federation_rule_id }}
-          organization_id: ${{ inputs.organization_id }}
-          service_account_id: ${{ inputs.service_account_id }}
-          workspace_id: ${{ inputs.workspace_id }}
-          source_org_github_token: ${{ inputs.push_as_app && steps.push-token.outputs.token || github.token }}
-          ci_evidence_github_token: ${{ inputs.push_as_app && github.token || '' }}
-          authorization_github_token: ${{ env.KSAI_NO_APP == 'true' && github.token || steps.authz-token.outputs.token }}
+          flow: test
+          test_hypotheses:
+          engine:
+          opencode_version: ${{ needs.gate.outputs.opencode_version }}
+          trigger_phrase: ${{ needs.gate.outputs.trigger_phrase }}
+          disabled_commands: ${{ needs.gate.outputs.disabled_commands }}
+          write_access_commands: ${{ needs.gate.outputs.write_access_commands }}
+          allowed_commands:
+          issue_number: ${{ needs.gate.outputs.asked_pr || needs.gate.outputs.number }}
+          actor: ${{ needs.gate.outputs.asked_actor }}
+          comment_body: >-
+            ${{ (github.event_name == 'workflow_dispatch' && needs.gate.outputs.asked_comment_kind == '')
+            && '/ksai test' || '' }}
+          comment_id: ${{ needs.gate.outputs.asked_comment_id }}
+          comment_kind: ${{ needs.gate.outputs.asked_comment_kind }}
+          record_id: ${{ needs.gate.outputs.record_id }}
+          app_slug: ${{ steps.authz-token.outputs.app-slug }}
+          source_org_github_token: ${{ steps.authz-token.outputs.token }}
+          authorization_github_token: ${{ steps.authz-token.outputs.token }}
           kong_org_github_token: ${{ github.token }}
-          go_module_tokens: |
-            ${{ steps.go-token-one.outputs.token != '' && format('{0}={1}', steps.go-owners.outputs.one, steps.go-token-one.outputs.token) || '' }}
-            ${{ steps.go-token-two.outputs.token != '' && format('{0}={1}', steps.go-owners.outputs.two, steps.go-token-two.outputs.token) || '' }}
-          artifact_retention_days: ${{ inputs.artifact_retention_days }}
-          job_timeout_minutes: ${{ needs.gate.outputs.job_timeout_minutes || inputs.job_timeout_minutes }}
-          max_consecutive_tool_failures: ${{ needs.gate.outputs.max_consecutive_tool_failures || inputs.max_consecutive_tool_failures }}
-          max_repeated_tool_calls: ${{ needs.gate.outputs.max_repeated_tool_calls || inputs.max_repeated_tool_calls }}
+          bot_login: ${{ format('{0}[bot]', steps.authz-token.outputs.app-slug) }}
+          federation_rule_id: ${{ needs.gate.outputs.federation_rule_id }}
+          organization_id: ${{ needs.gate.outputs.organization_id }}
+          service_account_id: ${{ needs.gate.outputs.service_account_id }}
+          workspace_id: ${{ needs.gate.outputs.workspace_id }}
+          artifact_retention_days: 14
+          job_timeout_minutes: ${{ needs.gate.outputs.job_timeout_minutes || 35 }}
           classifier_model_used: ${{ needs.gate.outputs.classifier_model }}
           verdict: ${{ needs.gate.outputs.verdict }}
           classifier_cost: ${{ needs.gate.outputs.classifier_cost }}
@@ -1865,187 +586,328 @@ jobs:
           classifier_output_tokens: ${{ needs.gate.outputs.classifier_output_tokens }}
           classifier_turns: ${{ needs.gate.outputs.classifier_turns }}
           classifier_duration: ${{ needs.gate.outputs.classifier_duration }}
-          otel_endpoint: ${{ inputs.otel_endpoint }}
-          require_plan_approval: ${{ needs.gate.outputs.require_plan_approval || inputs.require_plan_approval }}
-          denied_paths: ${{ needs.gate.outputs.denied_paths || inputs.denied_paths }}
-          plan_file_path: ${{ inputs.plan_file_path }}
-          keep_plan_file: ${{ inputs.keep_plan_file }}
-          plan_mode: ${{ inputs.plan_mode }}
-          model: ${{ needs.gate.outputs.model || inputs.model }}
-          model_pinned: ${{ ((inputs.run_settings_override || inputs.dials_override) && inputs.model != 'flagship') && 'true' || '' }}
-          effort_pinned: ${{ ((inputs.run_settings_override || inputs.dials_override) && inputs.effort != '') && 'true' || '' }}
+          otel_endpoint: https://otlp.datadoghq.com
+          model: ${{ needs.gate.outputs.model || 'flagship' }}
+          model_pinned:
+          effort_pinned:
           run_settings_arm: ${{ needs.gate.outputs.run_settings_arm }}
-          control_plane_endpoint: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
-          effort: ${{ needs.gate.outputs.effort || inputs.effort }}
-          allowed_models: ${{ needs.gate.outputs.allowed_models || inputs.allowed_models }}
-          max_effort: ${{ needs.gate.outputs.max_effort || inputs.max_effort }}
-          min_effort: ${{ needs.gate.outputs.min_effort || inputs.min_effort }}
-          classifier_model: ${{ inputs.classifier_model }}
-          write_triage_model: ${{ inputs.write_triage_model }}
-          triage: ${{ inputs.triage }}
-          triage_write: ${{ needs.gate.outputs.triage_write }}
-          report_rendering: ${{ needs.gate.outputs.report_rendering }}
-          prompt_rendering: ${{ needs.gate.outputs.prompt_rendering }}
-          status_updates: ${{ inputs.status_updates }}
-          status_history: ${{ inputs.status_history }}
-          status_model: ${{ inputs.status_model }}
-          continuation_workflow: ${{ inputs.continuation_workflow }}
-          issue_number: ${{ needs.gate.outputs.issue_number || inputs.issue_number }}
-          work_ref: ${{ inputs.work_ref }}
-          work_guidance: ${{ needs.gate.outputs.record_guidance }}
-          work_item: ${{ needs.gate.outputs.record_work_item }}
-          ask: ${{ needs.gate.outputs.record_ask }}
-          comment_id: ${{ inputs.record_id == '' && inputs.comment_id || needs.gate.outputs.record_comment_id }}
-          comment_kind: ${{ inputs.record_id == '' && inputs.comment_kind || needs.gate.outputs.record_comment_kind }}
-          record_id: ${{ inputs.record_id }}
-          app_slug: ${{ env.KSAI_NO_APP == 'true' && 'github-actions' || steps.authz-token.outputs.app-slug }}
-          work_actor: ${{ needs.gate.outputs.record_requester }}
-          jira_site: ${{ inputs.jira_site }}
-          jira_projects: ${{ inputs.jira_projects }}
-          jira_allow_public_repo: ${{ inputs.jira_allow_public_repo }}
-          jira_title_key: ${{ inputs.jira_title_key }}
-          continuation_attempt: ${{ inputs.attempt }}
-          continuation_stall: ${{ inputs.stall }}
-          continuation_prev_remaining: ${{ inputs.prev_remaining }}
-          bot_login: ${{ inputs.push_as_app && format('{0}[bot]', steps.push-token.outputs.app-slug) || 'github-actions[bot]' }}
-          team: ${{ inputs.team }}
-          anthropic_base_url: ${{ inputs.anthropic_base_url || secrets.model_gateway_url }}
-          anthropic_auth: ${{ inputs.anthropic_auth }}
-          otel_headers: ${{ secrets.datadog_key != '' && format('dd-api-key={0}', secrets.datadog_key) || '' }}
+          control_plane_endpoint: https://ksai.kongcloud.io
+          report_rendering: cp
+          github_calls: cp
+          effort: ${{ needs.gate.outputs.effort || '' }}
+          allowed_models: ${{ needs.gate.outputs.allowed_models || 'zai-org/GLM-5.3-Flash,zai-org/GLM-5.3,claude-opus-5,claude-opus-5-5,claude-sonnet-5,claude-haiku-4-5' }}
+          max_effort: ${{ needs.gate.outputs.max_effort || '' }}
+          min_effort: ${{ needs.gate.outputs.min_effort || '' }}
+          team:
+          anthropic_base_url: ${{ needs.gate.outputs.model_gateway_url }}
+          anthropic_auth: oidc-bearer
+          otel_headers: ${{ steps.credentials.outputs.otel_headers }}
+          environments:
+          test_mode: test
+          run_dir: .ksai-run
+          go_module_tokens: |
+            ${{ steps.go-token-one.outputs.token != '' && format('{0}={1}', steps.go-owners.outputs.one, steps.go-token-one.outputs.token) || '' }}
+            ${{ steps.go-token-two.outputs.token != '' && format('{0}={1}', steps.go-owners.outputs.two, steps.go-token-two.outputs.token) || '' }}
 
-  clear-request:
-    needs: [gate, review, recover]
-    # A dispatch that names a record is the control plane sending a run, and every command arrives
-    # that way - so `pr` with no `comment_kind` no longer says a review was asked for, and the record
-    # is what says it. Without that the refusals below answered every fix with a comment saying the
-    # review command was turned off, on a pull request where nobody had asked for a review.
-    if: >-
-      always() && inputs.clear_request &&
-      ((needs.gate.result == 'success' &&
-        (needs.review.result == 'success' ||
-         (needs.review.result == 'failure' && needs.recover.outputs.retried != 'true') ||
-         (github.event_name == 'workflow_dispatch' && inputs.pr != '' && inputs.comment_kind == '' &&
-          (inputs.record_id == '' || needs.gate.outputs.record_command == 'review') &&
-          (needs.gate.outputs.authorized != 'true' || needs.gate.outputs.review != 'true')))) ||
-       (needs.gate.result == 'failure' && github.event_name == 'workflow_dispatch' &&
-        inputs.pr != '' && inputs.comment_kind == '' && inputs.record_id == ''))
-    runs-on: ${{ startsWith(inputs.runs_on, '[') && fromJSON(inputs.runs_on) || inputs.runs_on }}
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      pull-requests: write
-    env:
-      KSAI_NO_APP: ${{ !inputs.push_as_app && secrets.ksai_private_key == '' }}
-    steps:
-      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+      - name: Clear what the tested tree could leave where the publisher reads or runs
+        if: ${{ always() && needs.gate.outputs.flow == 'test' }}
+        shell: /bin/bash --noprofile --norc -e {0}
+        run: /bin/rm -rf -- "${GITHUB_WORKSPACE}/_ksai" "${RUNNER_TEMP}/pr-test-download" "${RUNNER_TEMP}/ksai-opencode"
+
+      - name: Mint the token this flow posts with
+        id: post-token
+        if: ${{ always() && needs.gate.outputs.flow == 'test' || success() && needs.gate.outputs.flow != 'test' && needs.gate.outputs.flow != 'stage' }}
+        uses: $/.github/actions/run-token
         with:
-          egress-policy: audit
+          grant: write
+          mode: cp
+          endpoint: https://ksai.kongcloud.io
 
-      - name: Mint the token that withdraws the request
-        id: clear-token
-        if: ${{ needs.gate.result == 'success' && inputs.push_as_app }}
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          client-id: ${{ inputs.client_id || vars.KSAI_CLIENT_ID }}
-          private-key: ${{ secrets.ksai_private_key }}
-          permission-members: read
-          permission-pull-requests: write
-
-      - uses: $/.github/actions/clear-review-request
-        if: ${{ needs.gate.result == 'success' && env.KSAI_NO_APP != 'true' }}
-        with:
-          pr_number: ${{ inputs.pr || needs.gate.outputs.number }}
-          team_slug: ${{ vars.KSAI_REVIEW_TEAM || 'ksai' }}
-          token: ${{ steps.clear-token.outputs.token }}
-          client-id: ${{ inputs.client_id || vars.KSAI_CLIENT_ID }}
-          private-key: ${{ secrets.ksai_private_key }}
-          refused-actor: ${{ needs.gate.outputs.authorized != 'true' && inputs.actor || '' }}
-          refused-command-off: >-
-            ${{ github.event_name == 'workflow_dispatch' && inputs.comment_kind == '' &&
-            (inputs.record_id == '' || needs.gate.outputs.record_command == 'review') &&
-            needs.gate.outputs.authorized == 'true' && needs.gate.outputs.review != 'true' }}
-
-      - name: Say the authorization check could not be completed
-        if: ${{ needs.gate.result == 'failure' }}
+      - uses: $/.github/actions/ksai
         env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          PR: ${{ inputs.pr }}
-          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          gh pr comment "${PR}" --repo "${REPO}" --body \
-            "ksai could not check who asked for this review, so the request is still open - the run that failed is at ${RUN}"
-
-  recover:
-    needs: [review, implement]
-    outputs:
-      retried: ${{ steps.recovered.outputs.retried }}
-    if: >-
-      always() && inputs.recover_lost_runs &&
-      (contains(fromJSON('["failure", "cancelled"]'), needs.review.result) ||
-      contains(fromJSON('["failure", "cancelled"]'), needs.implement.result))
-    runs-on: ${{ startsWith(inputs.runs_on, '[') && fromJSON(inputs.runs_on) || inputs.runs_on }}
-    continue-on-error: true
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      issues: write
-      pull-requests: write
-      actions: write
-    steps:
-      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+          KSAI_PROVIDER_OBSERVATIONS: 'true'
+          KSAI_USAGE_COUNTERS: ${{ vars.KSAI_USAGE_COUNTERS }}
+        if: ${{ always() && needs.gate.outputs.flow == 'test' }}
         with:
-          egress-policy: audit
+          flow: test-publish
+          control_plane_endpoint: https://ksai.kongcloud.io
+          github_calls: cp
+          trigger_phrase: ${{ needs.gate.outputs.trigger_phrase }}
+          issue_number: ${{ needs.gate.outputs.asked_pr || needs.gate.outputs.number }}
+          source_org_github_token: ${{ steps.post-token.outputs.token }}
+          kong_org_github_token: ${{ github.token }}
+          bot_login: ${{ format('{0}[bot]', steps.post-token.outputs.app-slug) }}
+          classifier_model_used: ${{ needs.gate.outputs.classifier_model }}
+          verdict: ${{ needs.gate.outputs.verdict }}
+          classifier_cost: ${{ needs.gate.outputs.classifier_cost }}
+          classifier_input_tokens: ${{ needs.gate.outputs.classifier_input_tokens }}
+          classifier_output_tokens: ${{ needs.gate.outputs.classifier_output_tokens }}
+          classifier_turns: ${{ needs.gate.outputs.classifier_turns }}
+          classifier_duration: ${{ needs.gate.outputs.classifier_duration }}
+          run_attempt: ${{ github.run_attempt }}
 
-      - name: Check out trusted ksai code for the recovery
+      - name: Check out trusted ksai scripts
+        if: ${{ needs.gate.outputs.flow == 'help' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           token: ${{ github.token }}
-          path: _ksai-recover
+          path: _ksai-help
           repository: Kong/ksai-public
-          ref: v3.135.6
-          sparse-checkout: |
-            .github/scripts
+          ref: rc/v5.0.0-rc.72
+          sparse-checkout: .github/scripts
           persist-credentials: false
 
-      - name: Read what the lost run said it was writing to
-        id: record
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        continue-on-error: true
-        with:
-          pattern: ksai-recover-*
-          path: ${{ runner.temp }}/ksai-recover
-
-      - name: Say the run ended without a report
-        id: recovered
-        if: ${{ steps.record.outcome == 'success' }}
+      - name: Ask the control plane to explain the commands
+        id: render-help
+        if: ${{ needs.gate.outputs.flow == 'help' }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
-          RESULT_REVIEW: ${{ needs.review.result }}
-          RESULT_IMPLEMENT: ${{ needs.implement.result }}
-          RUN_ID: ${{ github.run_id }}
-          SERVER_URL: ${{ github.server_url }}
-          REPOSITORY: ${{ github.repository }}
-          TRIGGER: ${{ inputs.trigger_phrase }}
-          RETRY: "true"
-          CONTINUATION_WORKFLOW: ${{ inputs.continuation_workflow }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          ACTOR: ${{ inputs.actor || github.event.comment.user.login || github.event.pull_request.user.login }}
-          RECOVER_DIR: ${{ runner.temp }}/ksai-recover
-          SCRIPTS: ${{ github.workspace }}/_ksai-recover/.github/scripts
+          ISSUE_NUMBER: >-
+            ${{ needs.gate.outputs.issue_number || needs.gate.outputs.number }}
+          ON_ISSUE: ${{ needs.gate.outputs.on_issue }}
+          THREAD_ROOT_ID: ${{ needs.gate.outputs.thread_root_id }}
+          TRIGGER: ${{ needs.gate.outputs.trigger_phrase }}
+          DISABLED_COMMANDS: ${{ needs.gate.outputs.disabled_commands }}
+          REPO: ${{ github.repository }}
+          AUTHORIZED: ${{ needs.gate.outputs.codeowner }}
+          OWNERS: ${{ needs.gate.outputs.owners }}
+          WRITE_ACCESS: ${{ needs.gate.outputs.write_access }}
+          WRITE_ACCESS_COMMANDS: ${{ needs.gate.outputs.write_access_commands }}
+          KSAI_CP_ENDPOINT: https://ksai.kongcloud.io
+          SCRIPTS: ${{ github.workspace }}/_ksai-help/.github/scripts
         with:
-          github-token: ${{ github.token }}
           script: |
-            const { recoverRun } = require(`${process.env.SCRIPTS}/ksai/recover.cjs`);
-            const { outputs, notices } = await recoverRun({
-              github,
-              core,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              env: process.env,
-              dir: process.env.RECOVER_DIR,
+            const { sayReport } = require(`${process.env.SCRIPTS}/ksai/cp-report.cjs`);
+            const issue_number = Number(process.env.ISSUE_NUMBER);
+            if (!Number.isInteger(issue_number) || issue_number <= 0) {
+              core.setFailed(`the help command resolved no issue or pull request number, got: ${process.env.ISSUE_NUMBER}`);
+              return;
+            }
+            const said = await sayReport({
+              kind: 'help',
+              number: issue_number,
+              request: {
+                on_issue: process.env.ON_ISSUE,
+                thread_root_id: process.env.THREAD_ROOT_ID,
+                trigger_phrase: process.env.TRIGGER,
+                disabled_commands: process.env.DISABLED_COMMANDS,
+                authorized: process.env.AUTHORIZED,
+                owners: process.env.OWNERS,
+                write: process.env.WRITE_ACCESS,
+                write_access_commands: process.env.WRITE_ACCESS_COMMANDS,
+              },
             });
-            for (const [name, value] of Object.entries(outputs)) core.setOutput(name, value);
-            for (const line of notices) core.info(line);
+            if (said.why) core.setFailed(said.why);
+
+      - name: Check out the revision the package stage reads
+        if: ${{ needs.gate.outputs.flow == 'stage' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.gate.outputs.source_revision }}
+          token: ${{ steps.authz-token.outputs.token }}
+          persist-credentials: false
+
+      - uses: $/.github/actions/ksai
+        env:
+          KSAI_PROVIDER_OBSERVATIONS: 'true'
+          KSAI_USAGE_COUNTERS: ${{ vars.KSAI_USAGE_COUNTERS }}
+        if: ${{ needs.gate.outputs.flow == 'stage' }}
+        with:
+          flow: run
+          app_slug: ${{ steps.authz-token.outputs.app-slug }}
+          source_org_github_token: ${{ steps.authz-token.outputs.token }}
+          authorization_github_token: ${{ steps.authz-token.outputs.token }}
+          kong_org_github_token: ${{ github.token }}
+          federation_rule_id: ${{ needs.gate.outputs.federation_rule_id }}
+          organization_id: ${{ needs.gate.outputs.organization_id }}
+          service_account_id: ${{ needs.gate.outputs.service_account_id }}
+          workspace_id: ${{ needs.gate.outputs.workspace_id }}
+          artifact_retention_days: 14
+          job_timeout_minutes: ${{ needs.gate.outputs.stage_minutes || needs.gate.outputs.job_timeout_minutes || 35 }}
+          max_consecutive_tool_failures: ${{ needs.gate.outputs.max_consecutive_tool_failures || 50 }}
+          max_repeated_tool_calls: ${{ needs.gate.outputs.max_repeated_tool_calls || 8 }}
+          otel_endpoint: https://otlp.datadoghq.com
+          otel_headers: ${{ steps.credentials.outputs.otel_headers }}
+          model: ${{ needs.gate.outputs.model || 'flagship' }}
+          model_pinned:
+          effort: ${{ needs.gate.outputs.effort || '' }}
+          effort_pinned:
+          allowed_models: ${{ needs.gate.outputs.allowed_models || 'zai-org/GLM-5.3-Flash,zai-org/GLM-5.3,claude-opus-5,claude-opus-5-5,claude-sonnet-5,claude-haiku-4-5' }}
+          max_effort: ${{ needs.gate.outputs.max_effort || '' }}
+          min_effort: ${{ needs.gate.outputs.min_effort || '' }}
+          run_settings_arm: ${{ needs.gate.outputs.run_settings_arm }}
+          control_plane_endpoint: https://ksai.kongcloud.io
+          record_id: ${{ needs.gate.outputs.record_id }}
+          report_rendering: cp
+          github_calls: cp
+          engine:
+          opencode_version: 2.0.25
+          team:
+          anthropic_base_url: ${{ needs.gate.outputs.model_gateway_url }}
+          anthropic_auth: oidc-bearer
+
+      - uses: $/.github/actions/ksai
+        env:
+          KSAI_PROVIDER_OBSERVATIONS: 'true'
+          KSAI_USAGE_COUNTERS: ${{ vars.KSAI_USAGE_COUNTERS }}
+        if: ${{ needs.gate.outputs.flow == 'review' }}
+        with:
+          flow: review
+          review_strategy: ${{ needs.gate.outputs.review_strategy || 'baseline' }}
+          review_diff_mib: ${{ needs.gate.outputs.review_diff_mib }}
+          review_experiment:
+          trigger_phrase: ${{ needs.gate.outputs.trigger_phrase }}
+          disabled_commands: ${{ needs.gate.outputs.disabled_commands }}
+          write_access_commands: ${{ needs.gate.outputs.write_access_commands }}
+          allowed_commands:
+          issue_number: ${{ needs.gate.outputs.asked_pr }}
+          actor: ${{ needs.gate.outputs.asked_actor }}
+          comment_body: >-
+            ${{ (github.event_name == 'workflow_dispatch' && needs.gate.outputs.asked_comment_kind == '')
+            && '/ksai review this pull request' || '' }}
+          comment_id: ${{ needs.gate.outputs.asked_comment_id }}
+          comment_kind: ${{ needs.gate.outputs.asked_comment_kind }}
+          app_slug: ${{ steps.authz-token.outputs.app-slug }}
+          source_org_github_token: ${{ steps.post-token.outputs.token }}
+          authorization_github_token: ${{ steps.authz-token.outputs.token }}
+          kong_org_github_token: ${{ github.token }}
+          federation_rule_id: ${{ needs.gate.outputs.federation_rule_id }}
+          organization_id: ${{ needs.gate.outputs.organization_id }}
+          service_account_id: ${{ needs.gate.outputs.service_account_id }}
+          workspace_id: ${{ needs.gate.outputs.workspace_id }}
+          artifact_retention_days: 14
+          job_timeout_minutes: ${{ needs.gate.outputs.job_timeout_minutes || 35 }}
+          max_consecutive_tool_failures: ${{ needs.gate.outputs.max_consecutive_tool_failures || 50 }}
+          max_repeated_tool_calls: ${{ needs.gate.outputs.max_repeated_tool_calls || 8 }}
+          classifier_model_used: ${{ needs.gate.outputs.classifier_model }}
+          verdict: ${{ needs.gate.outputs.verdict }}
+          classifier_cost: ${{ needs.gate.outputs.classifier_cost }}
+          classifier_input_tokens: ${{ needs.gate.outputs.classifier_input_tokens }}
+          classifier_output_tokens: ${{ needs.gate.outputs.classifier_output_tokens }}
+          classifier_turns: ${{ needs.gate.outputs.classifier_turns }}
+          classifier_duration: ${{ needs.gate.outputs.classifier_duration }}
+          otel_endpoint: https://otlp.datadoghq.com
+          model: ${{ needs.gate.outputs.model || 'flagship' }}
+          model_pinned:
+          effort_pinned:
+          run_settings_arm: ${{ needs.gate.outputs.run_settings_arm }}
+          control_plane_endpoint: https://ksai.kongcloud.io
+          record_id: ${{ needs.gate.outputs.record_id }}
+          review_triage_mode: ${{ needs.gate.outputs.review_triage_mode || 'shadow' }}
+          effort: ${{ needs.gate.outputs.effort || '' }}
+          allowed_models: ${{ needs.gate.outputs.allowed_models || 'zai-org/GLM-5.3-Flash,zai-org/GLM-5.3,claude-opus-5,claude-opus-5-5,claude-sonnet-5,claude-haiku-4-5' }}
+          max_effort: ${{ needs.gate.outputs.max_effort || '' }}
+          min_effort: ${{ needs.gate.outputs.min_effort || '' }}
+          classifier_model: balanced
+          write_triage_model: balanced
+          status_updates: auto
+          status_history: auto
+          status_model: balanced
+          triage: auto
+          triage_write: ${{ needs.gate.outputs.triage_write }}
+          report_rendering: cp
+          github_calls: cp
+          engine:
+          opencode_version: ${{ needs.gate.outputs.opencode_version }}
+          repo_rules: auto
+          repo_rules_max_bytes:
+          repo_rules_max_rules:
+          repo_rules_max_file_bytes:
+          additional_prompt:
+          bot_login: ${{ format('{0}[bot]', steps.post-token.outputs.app-slug) }}
+          team:
+          anthropic_base_url: ${{ needs.gate.outputs.model_gateway_url }}
+          anthropic_auth: oidc-bearer
+          otel_headers: ${{ steps.credentials.outputs.otel_headers }}
+          reviewer_id: kreview-full
+
+      - uses: $/.github/actions/ksai
+        env:
+          KSAI_PROVIDER_OBSERVATIONS: 'true'
+          KSAI_USAGE_COUNTERS: ${{ vars.KSAI_USAGE_COUNTERS }}
+        if: ${{ needs.gate.outputs.flow == 'implement' }}
+        with:
+          flow: implement
+          engine:
+          opencode_version: ${{ needs.gate.outputs.opencode_version }}
+          trigger_phrase: ${{ needs.gate.outputs.trigger_phrase }}
+          blocker: ${{ needs.gate.outputs.blocker }}
+          said: ${{ needs.gate.outputs.said }}
+          disabled_commands: ${{ needs.gate.outputs.disabled_commands }}
+          write_access_commands: ${{ needs.gate.outputs.write_access_commands }}
+          bare_comments: ${{ needs.gate.outputs.bare_comments }}
+          stop_mode: ${{ needs.gate.outputs.stop_mode }}
+          stop_grace_seconds: 120
+          stop_warn_seconds: 60
+          stop_preserve: auto
+          allowed_commands:
+          federation_rule_id: ${{ needs.gate.outputs.federation_rule_id }}
+          organization_id: ${{ needs.gate.outputs.organization_id }}
+          service_account_id: ${{ needs.gate.outputs.service_account_id }}
+          workspace_id: ${{ needs.gate.outputs.workspace_id }}
+          source_org_github_token: ${{ steps.post-token.outputs.token }}
+          ci_evidence_github_token: ${{ steps.post-token.outputs.token }}
+          authorization_github_token: ${{ steps.authz-token.outputs.token }}
+          kong_org_github_token: ${{ github.token }}
+          go_module_tokens: |
+            ${{ steps.go-token-one.outputs.token != '' && format('{0}={1}', steps.go-owners.outputs.one, steps.go-token-one.outputs.token) || '' }}
+            ${{ steps.go-token-two.outputs.token != '' && format('{0}={1}', steps.go-owners.outputs.two, steps.go-token-two.outputs.token) || '' }}
+          artifact_retention_days: 14
+          job_timeout_minutes: ${{ needs.gate.outputs.job_timeout_minutes || 35 }}
+          max_consecutive_tool_failures: ${{ needs.gate.outputs.max_consecutive_tool_failures || 50 }}
+          max_repeated_tool_calls: ${{ needs.gate.outputs.max_repeated_tool_calls || 8 }}
+          classifier_model_used: ${{ needs.gate.outputs.classifier_model }}
+          verdict: ${{ needs.gate.outputs.verdict }}
+          classifier_cost: ${{ needs.gate.outputs.classifier_cost }}
+          classifier_input_tokens: ${{ needs.gate.outputs.classifier_input_tokens }}
+          classifier_output_tokens: ${{ needs.gate.outputs.classifier_output_tokens }}
+          classifier_turns: ${{ needs.gate.outputs.classifier_turns }}
+          classifier_duration: ${{ needs.gate.outputs.classifier_duration }}
+          otel_endpoint: https://otlp.datadoghq.com
+          require_plan_approval: ${{ needs.gate.outputs.require_plan_approval }}
+          fix_review_bots: ${{ needs.gate.outputs.fix_review_bots }}
+          denied_paths: ${{ needs.gate.outputs.denied_paths }}
+          plan_file_path: docs/plans
+          keep_plan_file: true
+          plan_mode: auto
+          model: ${{ needs.gate.outputs.model || 'flagship' }}
+          model_pinned:
+          effort_pinned:
+          run_settings_arm: ${{ needs.gate.outputs.run_settings_arm }}
+          control_plane_endpoint: https://ksai.kongcloud.io
+          effort: ${{ needs.gate.outputs.effort || '' }}
+          allowed_models: ${{ needs.gate.outputs.allowed_models || 'zai-org/GLM-5.3-Flash,zai-org/GLM-5.3,claude-opus-5,claude-opus-5-5,claude-sonnet-5,claude-haiku-4-5' }}
+          max_effort: ${{ needs.gate.outputs.max_effort || '' }}
+          min_effort: ${{ needs.gate.outputs.min_effort || '' }}
+          classifier_model: balanced
+          write_triage_model: balanced
+          triage: auto
+          triage_write: ${{ needs.gate.outputs.triage_write }}
+          report_rendering: cp
+          github_calls: cp
+          status_updates: auto
+          status_history: auto
+          status_model: balanced
+          continuation_workflow: ${{ needs.gate.outputs.continuation_workflow }}
+          issue_number: ${{ needs.gate.outputs.issue_number || needs.gate.outputs.asked_issue_number }}
+          work_ref: ${{ needs.gate.outputs.asked_work_ref }}
+          work_guidance: ${{ needs.gate.outputs.record_guidance }}
+          work_item: ${{ needs.gate.outputs.record_work_item }}
+          ask: ${{ needs.gate.outputs.record_ask }}
+          comment_id: ${{ needs.gate.outputs.asked_comment_id }}
+          comment_kind: ${{ needs.gate.outputs.asked_comment_kind }}
+          record_id: ${{ needs.gate.outputs.record_id }}
+          app_slug: ${{ steps.authz-token.outputs.app-slug }}
+          work_actor: ${{ needs.gate.outputs.record_requester }}
+          jira_site:
+          jira_projects:
+          jira_allow_public_repo: false
+          jira_title_key: none
+          continuation_attempt: ${{ needs.gate.outputs.asked_attempt }}
+          continuation_stall: ${{ needs.gate.outputs.asked_stall }}
+          continuation_prev_remaining: ${{ needs.gate.outputs.asked_prev_remaining }}
+          bot_login: ${{ format('{0}[bot]', steps.post-token.outputs.app-slug) }}
+          team:
+          anthropic_base_url: ${{ needs.gate.outputs.model_gateway_url }}
+          anthropic_auth: oidc-bearer
+          otel_headers: ${{ steps.credentials.outputs.otel_headers }}

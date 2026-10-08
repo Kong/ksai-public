@@ -7,7 +7,7 @@
 // kreview/suppress.cjs before anything is anchored. That is the only reason a finding the model
 // produced does not reach the PR, and it happens in trusted code with no model in the loop.
 
-const { parseHunks } = require('../lib/hunks.cjs');
+const { parseHunks } = require('./hunks.cjs');
 const { writerFor } = require('../lib/cp-effects.cjs');
 const { usingControlPlane } = require('../lib/control-plane.cjs');
 const { readReviewOutput, REPAIRED } = require('../lib/review-output.cjs');
@@ -15,6 +15,8 @@ const { applySuppression } = require('./suppress.cjs');
 const { DIGEST_CHARS, MATCH_VERSION } = require('./match-id.cjs');
 const { RESERVED_COMMENT } = require('../ksai/plan.cjs');
 const { rendered, unrendered } = require('../lib/cp-render.cjs');
+const { plural } = require('../lib/text.cjs');
+const { foldedBody, inertBlock, inertInline } = require('../lib/inert-markdown.cjs');
 
 const SUCCESS = 'success';
 
@@ -145,82 +147,15 @@ const ANY_FOLDED_HEADING = /#{1,6}\s*Additional findings \(not anchored to the d
 const reserved = (comment) =>
   PUBLISHER_COMMENT.test(comment) || RESERVED_COMMENT.test(comment) || KSAI_COMMENT.test(comment);
 
-const fromModel = (text) =>
+const modelText = (text) =>
   String(text ?? '')
     .replace(HTML_COMMENT, (comment) => (reserved(comment) ? '' : comment))
     .replace(ANY_FOLDED_HEADING, '')
     .replace(HTML_COMMENT, (comment) => (reserved(comment) ? comment.replaceAll('<!--', '&lt;!--') : comment));
 
-const FENCE_LINE = /^( {0,3})(`{3,}|~{3,})[ \t]*(.*)$/;
+const modelMarkdown = (text) => inertBlock(modelText(text).trim());
 
-function scanFences(lines) {
-  const blocks = [];
-  let open = null;
-  for (let i = 0; i < lines.length; i += 1) {
-    const m = FENCE_LINE.exec(lines[i]);
-    if (!m) continue;
-    const [, indent, marker, rest] = m;
-    const info = rest.trim();
-    if (!open) {
-      if (marker[0] === '`' && info.includes('`')) continue;
-      open = { start: i, indent, char: marker[0], len: marker.length, info };
-      continue;
-    }
-    if (marker[0] === open.char && marker.length >= open.len && info === '') {
-      blocks.push({ ...open, end: i });
-      open = null;
-    }
-  }
-  return { blocks, open };
-}
-
-const longestRun = (text, char) => {
-  const runs = text.match(char === '`' ? /`+/g : /~+/g);
-  return runs ? Math.max(...runs.map((run) => run.length)) : 0;
-};
-
-function trimStrayClosers(payload) {
-  let kept = payload;
-  while (kept.length) {
-    const m = FENCE_LINE.exec(kept.at(-1));
-    if (!m || m[3].trim() !== '') return kept;
-    const inner = kept.slice(0, -1);
-    if (scanFences(inner).open) return kept;
-    kept = inner;
-  }
-  return kept;
-}
-
-function balanceFences(body) {
-  const lines = body.split('\n');
-  const { blocks, open } = scanFences(lines);
-  if (!open) return body;
-  const outer = blocks.at(-1);
-  const nested =
-    open.info === '' &&
-    open.start === lines.length - 1 &&
-    outer !== undefined &&
-    outer.char === open.char &&
-    outer.end === open.start - 1;
-  const opener = nested ? outer : open;
-  const payload = trimStrayClosers(lines.slice(opener.start + 1, nested ? open.start : lines.length));
-  const fence = opener.char.repeat(
-    Math.max(opener.len, longestRun(payload.join('\n'), opener.char) + 1),
-  );
-  return [
-    ...lines.slice(0, opener.start),
-    `${opener.indent}${fence}${opener.info}`,
-    ...payload,
-    `${opener.indent}${fence}`,
-  ].join('\n');
-}
-
-const modelMarkdown = (text) => balanceFences(fromModel(text).trim());
-
-const oneLine = (text) =>
-  fromModel(String(text ?? '').replace(/[`*]/g, ''))
-    .replace(/\s+/g, ' ')
-    .trim();
+const oneLine = (text) => inertInline(modelText(String(text ?? '').replace(/[`*]/g, '')));
 
 function renderBody(f) {
   return `${sevLabel(f)}${tagLabel(f)}\n\n${modelMarkdown(f.body)}\n\n${FEEDBACK_FOOTER}\n\n${MARKER}${idMarker(f)}`;
@@ -233,7 +168,7 @@ function renderSummary(summary, folded, note = '') {
   if (folded.length) {
     out += `\n\n${FOLDED_HEADING}\n`;
     for (const f of folded) {
-      const body = modelMarkdown(f.body);
+      const body = foldedBody(modelMarkdown(f.body));
       out += `\n- ${sevLabel(f)}${tagLabel(f)} \`${oneLine(f.path) || '?'}:${lineLabel(f)}\` — ${body}${idMarker(f)}\n${BULLET_END}`;
     }
   }
@@ -251,13 +186,7 @@ function movedNote(reviewed, head) {
   );
 }
 
-// Raw model text can end inside a construct that would swallow the note: a fence renders it as code,
-// an unterminated HTML comment hides it.
-const withNote = (text, note) => {
-  if (!note) return text;
-  const closed = text.lastIndexOf('<!--') > text.lastIndexOf('-->') ? `${text}\n-->` : text;
-  return `${closed}\n\n${note}`;
-};
+const withNote = (text, note) => (note ? `${text}\n\n${note}` : text);
 
 /*
  * The files of the reviewed commit, compared from the merge base the way a pull request diff is, so a
@@ -286,7 +215,7 @@ function planReview({ owner, repo, prNumber, commitId, runResult, read = readRev
     return {
       parse_ok: false,
       parse_reason: parseReason,
-      comment: withNote(ended(conclusion) ? FAILED_NOTICE : balanceFences(fromModel(runResult).trim()) || '_The reviewer produced no output._', note),
+      comment: withNote(ended(conclusion) ? FAILED_NOTICE : modelMarkdown(runResult) || '_The reviewer produced no output._', note),
       ...nothing,
     };
   }
@@ -513,7 +442,7 @@ module.exports = async ({
     // An annotation, not a comment: the point of suppression is a quieter PR, but a maintainer
     // still has to be able to see what was withheld and which entry did it.
     core.notice(
-      `Suppressed ${planned.fires.length} of ${planned.findings_total + planned.suppressed} findings: ` +
+      `Suppressed ${planned.fires.length} of ${planned.findings_total + planned.suppressed} ${plural(planned.findings_total + planned.suppressed, 'finding')}: ` +
         `${planned.fires.map((fire) => fire.rule_id).join(', ')}`,
     );
   }

@@ -10,8 +10,7 @@ const {
   SELECTION_SOURCES,
   canonicalCommand,
 } = require('./select-arm.cjs');
-const { markerJson } = require('./run-record.cjs');
-const { runSettingsArmOf } = require('./run-settings-migration.cjs');
+const { markerJson, runSettingsArmOf } = require('./run-record.cjs');
 const { escapeForRegExp } = require('./text.cjs');
 
 const VERSION = 1;

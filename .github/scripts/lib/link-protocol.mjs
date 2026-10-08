@@ -11,7 +11,6 @@ export const VERSION = 1;
 export const PAYLOAD_TYPE = 'application/vnd.ksai.link.v1+json';
 export const SUBPROTOCOL = 'ksai.link.v1';
 export const MAX_FRAME = 8 << 20;
-export const PARTIES = Object.freeze(['engine', 'host', 'plugin']);
 
 const MAX_DEPTH = 32;
 const SCHEMAS = fileURLToPath(new URL('./link-schemas/v1', import.meta.url));

@@ -66,7 +66,8 @@ export function scrub(text, triggerPhrase = '') {
     .replace(DANGEROUS, (match) => `\`${match}\``);
 }
 
-const DANGEROUS = /https?:\/\/\S+|@[A-Za-z0-9][A-Za-z0-9-]{0,38}|#\d+/g;
+const FOLDING_LETTERS = String.fromCodePoint(0x130, 0x131, 0x17f, 0x212a);
+const DANGEROUS = new RegExp(String.raw`https?:\/\/\S+|@[A-Za-z0-9${FOLDING_LETTERS}][A-Za-z0-9-]{0,38}|#\d+`, 'g');
 
 function redact(text, phrase) {
   if (!phrase) return text;

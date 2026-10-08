@@ -126,5 +126,5 @@ function describe(body) {
       !/^\*\*(Critical|High|Medium|Low|Note)\*\*/i.test(s),
   );
   const fallback = lines.find((s) => !ours(s)) || '';
-  return (prose || fallback).replace(/\s+/g, ' ').slice(0, 300);
+  return [...(prose || fallback).replace(/\s+/g, ' ')].slice(0, 300).join('');
 }

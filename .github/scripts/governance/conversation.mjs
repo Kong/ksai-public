@@ -56,7 +56,7 @@ function openBlock(open, event) {
   if (block) return block;
   const named = Number.isSafeInteger(event.index) ? `block ${event.index}` : 'no block';
   const held = open.size ? `the open ${open.size === 1 ? 'block is' : 'blocks are'} ${[...open.keys()].join(', ')}` : 'no block is open';
-  throw new Error(`a content block event names ${named}, and ${held}`);
+  throw new Error(`a ${event.type} names ${named}, and ${held}`);
 }
 
 function nextIndex(event, after) {
@@ -92,6 +92,37 @@ function frames(bytes) {
   });
 }
 
+const MERGED_DELTAS = Object.freeze({ text_delta: 'text', thinking_delta: 'thinking', input_json_delta: 'partial_json' });
+
+function mergedField(event) {
+  if (event.type !== 'content_block_delta' || Object.keys(event).length !== 3 || typeof event.delta?.type !== 'string' || !Object.hasOwn(MERGED_DELTAS, event.delta.type)) return '';
+  const field = MERGED_DELTAS[event.delta.type];
+  return Object.keys(event.delta).length === 2 && typeof event.delta[field] === 'string' ? field : '';
+}
+
+export function coalesced(bytes) {
+  const kept = [];
+  const held = new Map();
+  const stopped = new Set();
+  for (const event of frames(bytes)) {
+    if (event.type === 'ping') continue;
+    if (event.type === 'content_block_stop') {
+      held.delete(event.index);
+      stopped.add(event.index);
+    }
+    const field = stopped.has(event.index) ? '' : mergedField(event);
+    const run = held.get(event.index);
+    if (field && run?.delta.type === event.delta.type) {
+      run.delta[field] += event.delta[field];
+      continue;
+    }
+    if (field) held.set(event.index, event);
+    else if (event.type === 'content_block_delta') held.delete(event.index);
+    kept.push(event);
+  }
+  return new TextEncoder().encode(kept.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''));
+}
+
 function messageStart(event, model) {
   shape(event, ['type', 'message'], [], 'message_start');
   const message = shape(
@@ -116,7 +147,7 @@ function messageStart(event, model) {
   }
 }
 
-function startBlock(event, tools) {
+function startBlock(event, tools, strays) {
   shape(event, ['type', 'index', 'content_block'], [], 'content_block_start');
   const block = record(event.content_block, 'the content block');
   if (block.type === 'text') {
@@ -136,7 +167,7 @@ function startBlock(event, tools) {
     const caller = block.caller === undefined ? undefined : shape(block.caller, ['type'], [], 'the tool_use caller');
     const input = record(block.input, 'the tool_use input');
     const at = JSON.stringify(event.index);
-    if (!tools.includes(name)) throw new Error(`the tool_use block ${at} names ${JSON.stringify(name)}, outside the governed tools`);
+    if (!tools.includes(name)) strays.push(`the tool_use block ${at} names ${JSON.stringify(name)}, outside the governed tools`);
     if ((caller !== undefined && caller.type !== 'direct') || (block.toolset_name ?? null) !== null) {
       throw new Error(`the tool_use block ${at} calls ${JSON.stringify(name)} through a caller or toolset no governed tool has`);
     }
@@ -146,10 +177,11 @@ function startBlock(event, tools) {
   throw new Error(`content block ${String(block.type)} is unsupported`);
 }
 
-function appendDelta(event, open) {
+function appendDelta(event, open, stopped) {
   shape(event, ['type', 'index', 'delta'], [], 'content_block_delta');
-  const block = openBlock(open, event);
   const delta = record(event.delta, 'the content block delta');
+  if (stopped.has(event.index)) return;
+  const block = openBlock(open, event);
   if (block.type === 'text') {
     shape(delta, ['type', 'text'], [], 'the text delta');
     if (delta.type !== 'text_delta') throw new Error('the text block received another delta');
@@ -203,12 +235,16 @@ export class UpstreamFailure extends Error {}
 
 export class IncompleteAnswer extends Error {}
 
+export class StrayToolCall extends IncompleteAnswer {}
+
 export class GivenUp extends Error {}
 
 function parseResponse(bytes, model, tools) {
   const started = [];
   const open = new Map();
   const finished = new Map();
+  const stopped = new Set();
+  const strays = [];
   let lastIndex = -1;
   let stop = '';
   let state = 'initial';
@@ -225,7 +261,7 @@ function parseResponse(bytes, model, tools) {
         break;
       case 'content_block_start': {
         if (state !== 'content' || started.length >= MAX_BLOCKS) throw new Error('content_block_start is out of sequence');
-        const block = startBlock(event, tools);
+        const block = startBlock(event, tools, strays);
         lastIndex = nextIndex(event, lastIndex);
         started.push(block);
         open.set(lastIndex, block);
@@ -233,14 +269,16 @@ function parseResponse(bytes, model, tools) {
       }
       case 'content_block_delta':
         if (state !== 'content') throw new Error('content_block_delta is out of sequence');
-        appendDelta(event, open);
+        appendDelta(event, open, stopped);
         break;
       case 'content_block_stop': {
         shape(event, ['type', 'index'], [], 'content_block_stop');
         if (state !== 'content') throw new Error('content_block_stop is out of sequence');
+        if (stopped.has(event.index)) break;
         const block = openBlock(open, event);
         finished.set(block, finishBlock(block));
         open.delete(event.index);
+        stopped.add(event.index);
         break;
       }
       case 'message_delta':
@@ -267,6 +305,7 @@ function parseResponse(bytes, model, tools) {
   if (toolUseIDs.length > MAX_TOOL_USES || new Set(toolUseIDs).size !== toolUseIDs.length || (stop === 'tool_use') !== (toolUseIDs.length > 0)) {
     throw new Error('the response has an invalid tool_use completion');
   }
+  if (strays.length) throw new StrayToolCall(strays[0]);
   return {
     assistant: { role: 'assistant', content: blocks },
     terminal: stop !== 'tool_use',

@@ -10,13 +10,13 @@ const { triggerAlternation } = require('../lib/text.cjs');
 const { markerOf, marked } = require('./marker.cjs');
 const { planDocsIn, releasesIn, shapesIn } = require('./plan.cjs');
 
-function requestOf(body, { trigger = null, commandAliases = null } = {}) {
+function requestOf(body, { trigger = null } = {}) {
   const text = String(body ?? '');
 
   const found = text.match(new RegExp(`(^|\\n)[ \\t]*${triggerAlternation(trigger)}(?=\\s|$)`));
   if (!found) return null;
 
-  const parsed = parseOptions(text.slice(found.index + found[0].length).replace(/^[ \t]+/, ''), { commandAliases });
+  const parsed = parseOptions(text.slice(found.index + found[0].length).replace(/^[ \t]+/, ''));
   if (parsed.error) return null;
   return { command: parsed.command ?? DEFAULT_COMMAND, forced: '--force' in (parsed.requested ?? {}) };
 }
@@ -92,13 +92,13 @@ const ownUnedited = (comment, botLogin) => {
 
 const vouchedOwn = (comment, botLogin) => ownState(comment, botLogin) === UNEDITED;
 
-function findApprovals(comments, { trigger = null, commandAliases = null } = {}) {
+function findApprovals(comments, { trigger = null } = {}) {
   const byLogin = new Map();
   for (const comment of comments ?? []) {
     const login = comment?.user?.login;
     if (!login) continue;
     if (wasEdited(comment)) continue;
-    const asked = requestOf(comment.body, { trigger, commandAliases });
+    const asked = requestOf(comment.body, { trigger });
     if (asked?.command !== 'approve') continue;
     const at = Date.parse(String(comment.created_at ?? '')) || 0;
     const held = byLogin.get(login);
@@ -141,12 +141,14 @@ function findAcknowledgment(comments, { botLogin = null, approvalRef = null } = 
 
 const ANSWERED_KIND = 'revise-answered';
 
-function offersPlan(comment) {
-  if (markerOf(comment?.body)?.kind === ANSWERED_KIND) return true;
+const NO_KEPT_KINDS = new Map();
+
+function offersPlan(comment, kept = NO_KEPT_KINDS) {
+  if ((kept.get(Number(comment?.id)) ?? markerOf(comment?.body)?.kind) === ANSWERED_KIND) return true;
   return planDocsIn(comment?.body).length > 0;
 }
 
-function planRecords(comments, { botLogin = null } = {}) {
+function planRecords(comments, { botLogin = null, kept = NO_KEPT_KINDS } = {}) {
   const known = String(botLogin ?? '').trim();
   const seen = {
     offeredAt: null,
@@ -168,7 +170,7 @@ function planRecords(comments, { botLogin = null } = {}) {
       seen.offeredDocs = [];
       seen.offeredAt = comment.created_at;
     }
-    if (offersPlan(comment)) {
+    if (offersPlan(comment, kept)) {
       seen.sealed = null;
       const at = Date.parse(String(comment.created_at ?? ''));
       if (Number.isFinite(at) && (seen.reworkedAt === null || at > seen.reworkedAt)) seen.reworkedAt = at;
@@ -191,8 +193,8 @@ function planRecords(comments, { botLogin = null } = {}) {
   return seen;
 }
 
-function lastRework(comments, { botLogin = null } = {}) {
-  return planRecords(comments, { botLogin }).reworkedAt;
+function lastRework(comments, { botLogin = null, kept = NO_KEPT_KINDS } = {}) {
+  return planRecords(comments, { botLogin, kept }).reworkedAt;
 }
 
 function renderApprovalReceipt({

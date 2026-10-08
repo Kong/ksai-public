@@ -3,8 +3,9 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 
 import { collectSecrets, parsed, scrub } from '../lib/opencode.mjs';
-import { answer, endedOn, everything, executionLog, retries, spending } from '../lib/opencode-v2.mjs';
+import { answer, endedOn, everything, executionLog, retries, sessionOf, spending } from '../lib/opencode-v2.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
+import { annotation, counted } from '../lib/text.cjs';
 import { childrenMeasured, gatewayDiagnostics, streamFailure } from './opencode-v2-review.mjs';
 import { reviewProtocol } from './review-protocol.mjs';
 
@@ -18,6 +19,13 @@ const objectOf = (text) => {
   } catch {
     return null;
   }
+};
+
+const relayRefusal = (events, session) => {
+  const failed = (event) => (event?.type === 'session.execution.failed' || event?.type === 'session.step.failed') && sessionOf(event) === session;
+  const body = events.findLast((event) => failed(event))?.data?.error?.response?.body;
+  const error = objectOf(typeof body === 'string' ? body : '')?.error;
+  return error?.type === 'relay_error' ? String(error.message ?? '') : null;
 };
 
 export function reduce(env, raw, read = readFileSync) {
@@ -45,7 +53,7 @@ export function reduce(env, raw, read = readFileSync) {
       const metrics = JSON.parse(read(env.KSAI_PTY_METRICS_FILE, 'utf8'));
       Object.assign(log[0], { opencode_pty: { ...metrics, tokens: log[0].usage, duration_ms: log[0].duration_ms } });
     } catch (why) {
-      notes.push(`::warning::no readable PTY pilot metrics: ${why.message}`);
+      notes.push(annotation(`no readable PTY pilot metrics: ${why.message}`, 'warning'));
     }
   }
   if (env.FLOW === 'review') {
@@ -65,10 +73,15 @@ export function reduce(env, raw, read = readFileSync) {
       lsp: null,
     }) });
   }
+  const level = env.OPENCODE_STOPPED === 'true' ? 'notice' : 'warning';
   const failure = endedOn(events);
-  if (failure) notes.push(`::warning::the opencode stream recorded ${scrub(failure, secrets)}`);
-  const kind = streamFailure(events)?.kind;
-  if (kind === 'gateway-unavailable') {
+  if (failure) notes.push(annotation(`the opencode stream recorded ${scrub(failure, secrets)}`, level));
+  const stream = streamFailure(events);
+  const kind = stream?.kind;
+  const relayed = kind === 'gateway-unavailable' ? relayRefusal(events, stream.session_id) : null;
+  if (relayed !== null) {
+    notes.push(annotation(`the runner's provider relay answered the last server error with its own reason: ${scrub(relayed, secrets)}`, 'warning'));
+  } else if (kind === 'gateway-unavailable') {
     notes.push(
       "::warning::the endpoint answered a server error before anything was sent, which is the gateway or what it proxies to rather than the model: no tokens were spent, and the reason is in the gateway's own logs",
     );
@@ -76,8 +89,8 @@ export function reduce(env, raw, read = readFileSync) {
   if (kind === 'empty-turn') {
     notes.push('::warning::the last model turn spent output tokens and delivered no text and no tool call, which is the response lost between the model and opencode rather than the model finishing');
   }
-  if (said === null) notes.push(`::warning::${events.length} opencode events carried no text, so this run posts no review`);
-  notes.push(`opencode: ${events.length} events, ${log[0].num_turns} steps, ${log[0].usage.output_tokens} output tokens -> ${env.OPENCODE_EXECUTION_FILE}`);
+  if (said === null) notes.push(`::${level}::${counted(events.length, 'opencode event')} carried no text, so this run posts no review`);
+  notes.push(`opencode: ${counted(events.length, 'event')}, ${counted(log[0].num_turns, 'step')}, ${counted(log[0].usage.output_tokens, 'output token')} -> ${env.OPENCODE_EXECUTION_FILE}`);
   return { log, notes };
 }
 
@@ -90,7 +103,7 @@ export function main(env = process.env) {
   try {
     raw = readFileSync(env.OPENCODE_EVENTS_FILE, 'utf8');
   } catch (why) {
-    console.log(`::warning::no readable opencode event stream at ${env.OPENCODE_EVENTS_FILE || '(unset)'}: ${why.message}`);
+    console.log(annotation(`no readable opencode event stream at ${env.OPENCODE_EVENTS_FILE || '(unset)'}: ${why.message}`, 'warning'));
   }
   if (env.OPENCODE_EVENTS_FILE) {
     writeFileSync(env.OPENCODE_EVENTS_FILE, scrub(raw, collectSecrets(env)));

@@ -438,6 +438,9 @@
         "writes_plan": {
           "type": "boolean"
         },
+        "phase_step_lists": {
+          "type": "boolean"
+        },
         "major_bump": {
           "$ref": "#/$defs/majorBump"
         },
@@ -541,6 +544,13 @@
         "conclusion": {
           "type": "string",
           "maxLength": 128
+        },
+        "failedCommand": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1024
         },
         "log": {
           "type": [

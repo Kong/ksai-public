@@ -12,6 +12,27 @@ import { originProblem } from './federated-token.mjs';
 
 export { MAX_RESPONSE_BYTES };
 
+export function latchGuard(state, why) {
+  state.latched ||= `the guard stopped this run: ${why}`;
+  return new Error(state.latched);
+}
+
+export const rendersOf = (governed) => (governed
+  ? { current: digest(governed.prompt), carried: governed.carried ? [governed.carried.original, ...(governed.carried.earlier ?? [])] : [] }
+  : null);
+
+export async function guardedBody(body, state, governed) {
+  if (!governed) {
+    if (state.gate.required) throw latchGuard(state, 'the guard checks only a governed provider request');
+    return body;
+  }
+  try {
+    return await state.gate.checked(body, rendersOf(state.held?.governed));
+  } catch (error) {
+    throw latchGuard(state, error.message);
+  }
+}
+
 const REQUEST_BYTES = 32 * 1024 * 1024;
 const OBSERVATION_BYTES = 256 * 1024 * 1024;
 const retainedBytes = new Map();
@@ -165,6 +186,7 @@ export async function relayProviderRequest(request, env, fetchImpl = fetch, toke
   const target = new URL(request.url ?? '/', 'http://127.0.0.1');
   if (request.method !== 'POST' || target.pathname !== '/v1/messages' || !queries.includes(target.search)) return null;
   if (state) state.asked = true;
+  if (state?.latched) throw new Error(state.latched);
   if (state?.completion) {
     const failure = await state.completion;
     if (failure) throw failure;
@@ -188,6 +210,7 @@ export async function relayProviderRequest(request, env, fetchImpl = fetch, toke
     if (env.KSAI_PROVIDER_OBSERVATIONS === 'true' && promptRendering(env) === 'cp') {
       ({ body, talk } = enforceGovernedRequest(body, env, state));
     }
+    if (state?.gate) body = await guardedBody(body, state, Boolean(talk));
     const pinned = { session: state?.session ?? '', model: state?.held?.governed.model };
     const unadmitted = talk ? (state?.admit?.(pinned.session, pinned.model) ?? '') : '';
     if (unadmitted) throw new Error(`the provider call was not made, because its usage could not be counted: ${unadmitted}`);
@@ -214,7 +237,7 @@ export async function relayProviderRequest(request, env, fetchImpl = fetch, toke
 
 /** startProviderRelay keeps the bearer and provider origin outside the model process. */
 export async function startProviderRelay({ env = process.env, fetchImpl = fetch, token = bearer, record = env.KSAI_PROVIDER_OBSERVATIONS === 'true' ? recordProviderRequest : null, socket = '', stallMs = 0, queries = [''], counted = null, admit = null } = {}) {
-  const state = { completion: null, held: null, governing: '', session: '', counted, admit, carryRefused: new Map(), asked: false };
+  const state = { completion: null, held: null, governing: '', session: '', counted, admit, carryRefused: new Map(), asked: false, gate: null, latched: '' };
   const server = createServer(async (request, response) => {
     const gone = new AbortController();
     response.once('close', () => {
@@ -276,6 +299,13 @@ export async function startProviderRelay({ env = process.env, fetchImpl = fetch,
       state.completion = null;
       state.governing = dir;
     },
+    guard: (gate) => {
+      state.gate = gate;
+    },
+    gated: () => state.gate !== null,
+    required: () => state.gate?.required === true,
+    latch: (why) => latchGuard(state, why),
+    latched: () => state.latched,
     settled: () => state.held?.talk.settled() ?? null,
     asked: () => state.asked,
     drained: () => state.completion,

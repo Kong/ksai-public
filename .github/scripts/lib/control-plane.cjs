@@ -29,9 +29,15 @@ function expiryOf(token) {
   }
 }
 
-const MINT_TRIES = 3;
+const MINT_TRIES = 7;
 
 const MINT_PAUSE_MS = 500;
+
+const MINT_PAUSE_CAP_MS = 4_000;
+
+const MINT_ANSWER_MS = 3_000;
+
+const mintPause = (attempt) => Math.min(MINT_PAUSE_MS * 2 ** (attempt - 1), MINT_PAUSE_CAP_MS);
 
 const OIDC = 'GitHub\'s OIDC token endpoint';
 
@@ -48,6 +54,10 @@ const unminted = (error) => {
 };
 
 const GAVE_UP = `the caller gave up before ${OIDC} minted a token`;
+
+const STALLED = `${OIDC} did not answer within ${MINT_ANSWER_MS / 1000}s`;
+
+const gaveUp = (seen) => (seen === '' ? GAVE_UP : `${seen}, and the caller gave up before it answered again`);
 
 const pausing = (ms, signal) => new Promise((resolve) => {
   if (signal?.aborted === true) {
@@ -69,35 +79,41 @@ const minter = ({ env, fetch, signal, now = Date.now, held = tokens, holds, paus
   const stated = Number.isFinite(holds) && holds >= 0;
   if (was !== undefined && stated && now() + holds + EARLY < was.exp) return was.token;
 
+  let seen = '';
   for (let attempt = 1; ; attempt += 1) {
-    if (signal?.aborted === true) throw new MintFailed(GAVE_UP);
+    if (signal?.aborted === true) throw new MintFailed(gaveUp(seen));
     const last = attempt >= MINT_TRIES;
+    const stalled = new AbortController();
+    const timer = setTimeout(() => stalled.abort(), MINT_ANSWER_MS);
     let response;
+    let body;
     try {
       response = await fetch(`${env.ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${encodeURIComponent(audience)}`, {
         headers: { authorization: `Bearer ${env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}` },
-        signal,
+        signal: signal ? AbortSignal.any([signal, stalled.signal]) : stalled.signal,
       });
+      if (response.ok) body = await response.json();
+      else await released(response);
     } catch (error) {
-      if (signal?.aborted === true) throw new MintFailed(GAVE_UP, { cause: error });
-      if (last) throw new MintFailed(unminted(error), { cause: error });
-      await pause(MINT_PAUSE_MS * attempt, signal);
+      if (signal?.aborted === true) throw new MintFailed(gaveUp(seen), { cause: error });
+      if (response?.ok === true && !stalled.signal.aborted) {
+        throw new MintFailed(`${OIDC} answered ${response.status} with a body that is not JSON`, { cause: error });
+      }
+      const why = stalled.signal.aborted ? STALLED : unminted(error);
+      if (last) throw new MintFailed(why, { cause: error });
+      seen = why;
+      await pause(mintPause(attempt), signal);
       continue;
+    } finally {
+      clearTimeout(timer);
     }
     if (!response.ok) {
-      await released(response);
       if (passing(response.status) && !last) {
-        await pause(MINT_PAUSE_MS * attempt, signal);
+        seen = `${OIDC} answered ${response.status}`;
+        await pause(mintPause(attempt), signal);
         continue;
       }
       throw new MintFailed(`${OIDC} answered ${response.status}`);
-    }
-    let body;
-    try {
-      body = await response.json();
-    } catch (error) {
-      if (signal?.aborted === true) throw new MintFailed(GAVE_UP, { cause: error });
-      throw new MintFailed(`${OIDC} answered ${response.status} with a body that is not JSON`, { cause: error });
     }
     const token = typeof body?.value === 'string' ? body.value : '';
     if (token === '') throw new MintFailed(`${OIDC} answered ${response.status} with no token`);
@@ -162,12 +178,12 @@ async function gatewayHandover({ env, mint, secret }) {
   return minted.token ? { [HANDOVER_HEADER]: minted.token } : {};
 }
 
-async function reachedFor({ env, fetch, timeout, secret, holds = timeout, audience = 'ksai-cp', endpoint = env.KSAI_CP_ENDPOINT }) {
+async function reachedFor({ env, fetch, timeout, secret, holds = timeout, audience = 'ksai-cp', endpoint = env.KSAI_CP_ENDPOINT, pause = pausing }) {
   const named = String(endpoint ?? '').trim();
   if (named === '') return { why: 'no control plane serves this repository' };
   if (!(timeout > 0)) return { why: 'the control plane did not answer in time' };
   const signal = AbortSignal.timeout(timeout);
-  const mint = minter({ env, fetch, signal, holds });
+  const mint = minter({ env, fetch, signal, holds, pause });
   const reached = await reachControlPlane({ endpoint: named, audience, env, mint, secret });
   return reached.failure ? { why: reached.failure } : { base: reached.base, token: reached.token, signal };
 }
@@ -197,6 +213,25 @@ async function answered(call, url, options) {
   }
 }
 
+async function gotFrom({ env, fetch, route, timeout = DEFAULT_TIMEOUT, secret = mask }) {
+  const reached = await reachedFor({ env, fetch, timeout, secret });
+  if (reached.why) return { why: reached.why };
+  try {
+    const response = await fetch(`${reached.base}${route}`, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${reached.token}`, accept: 'application/json' },
+      signal: AbortSignal.timeout(timeout),
+    });
+    if (!response.ok) {
+      await released(response);
+      return { status: response.status, why: `the control plane answered ${response.status}` };
+    }
+    return { answer: await response.json() };
+  } catch (error) {
+    return { why: error?.name === 'SyntaxError' ? 'the control plane answered with a body that is not JSON' : unanswered(error) };
+  }
+}
+
 const ATTEMPTS = 3;
 
 const backoffFor = (tries) => 2 ** tries * 1000;
@@ -218,6 +253,21 @@ async function answeredRetrying(call, url, options, pause = held) {
 
 function usingControlPlane(env) {
   return String(env?.KSAI_GITHUB_CALLS ?? '').trim() === 'cp';
+}
+
+const CODEOWNERS = '/run/codeowners';
+
+async function codeOwnersFrom({ env, fetch, login, repository, timeout = DEFAULT_TIMEOUT, secret = mask, pause = held }) {
+  const reached = await reachedFor({ env, fetch, timeout, secret, holds: holdsFor(timeout) });
+  if (reached.why) return { why: reached.why };
+  const body = JSON.stringify({ job: String(env.GITHUB_JOB ?? '').trim(), login, repository });
+  const said = await answeredRetrying(fetch, `${reached.base}${CODEOWNERS}`, { token: reached.token, body, timeout, said: true }, pause);
+  const unserved = (said.status === 404 || said.status === 405) && !said.headers?.get(OUTCOME_HEADER);
+  return unserved ? { ...said, unserved } : said;
+}
+
+function codeOwnersOver(env, fetch = globalThis.fetch, asking = {}) {
+  return usingControlPlane(env) ? (login, repository) => codeOwnersFrom({ env, fetch, login, repository, ...asking }) : null;
 }
 
 function postTo(call, url, { token, body, timeout, signal = AbortSignal.timeout(timeout), headers = {} }) {
@@ -242,6 +292,7 @@ function unanswered(error) {
 }
 
 module.exports = {
-  DEFAULT_TIMEOUT, OUTCOME_HEADER, renderingModeOf, usingControlPlane, minter, mask, mintedId, reachControlPlane, reachedFor,
-  gatewayHandover, answered, answeredRetrying, held, holdsFor, postTo, released, unreached, unanswered,
+  DEFAULT_TIMEOUT, OUTCOME_HEADER, renderingModeOf, usingControlPlane, minter, mask, mintedId, pausing, reachControlPlane, reachedFor,
+  gatewayHandover, answered, answeredRetrying, gotFrom, held, holdsFor, postTo, released, unreached, unanswered,
+  codeOwnersFrom, codeOwnersOver,
 };

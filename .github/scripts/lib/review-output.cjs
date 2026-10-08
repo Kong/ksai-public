@@ -8,6 +8,8 @@ const REPAIRED = 'repaired';
 const FENCE_OPENER = /```(?:json)?[^\S\n]*\r?\n/gi;
 const MAX_FENCES = 64;
 const AFTER_STRING = new Set([',', '}', ']', ':']);
+const CLOSER_AHEAD = /\s*[}\]]/y;
+const BEFORE_NO_VALUE = new Set(['', '{', '[', ',']);
 
 function escapeControls(text) {
   let out = '';
@@ -37,7 +39,30 @@ function parsedObject(text) {
   }
 }
 
-const objectOf = (text) => parsedObject(escapeControls(text));
+function dropTrailingCommas(text) {
+  let out = '';
+  let inString = false;
+  let escaped = false;
+  let last = '';
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') inString = false;
+    } else if (char === '"') inString = true;
+    else if (char === ',' && !BEFORE_NO_VALUE.has(last)) {
+      CLOSER_AHEAD.lastIndex = index + 1;
+      if (CLOSER_AHEAD.test(text)) continue;
+    }
+    out += char;
+    if (char > ' ') last = char;
+  }
+  return out;
+}
+
+const objectOf = (text) => parsedObject(dropTrailingCommas(escapeControls(text)));
 
 function topLevelObjects(text, read) {
   const found = [];

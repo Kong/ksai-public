@@ -4,8 +4,10 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { writeOutputs } from '../lib/outputs.mjs';
+import { annotation } from '../lib/text.cjs';
 import { measure, stamps } from '../ksai/phases.mjs';
 import { recorded } from '../ksai/stages.mjs';
+import { servedRules } from './load-suppressions.mjs';
 import { stagesSource } from './opencode-progress.mjs';
 
 const require = createRequire(import.meta.url);
@@ -89,7 +91,9 @@ export function linkedGithub({ env, fetch, diff }) {
   };
 }
 
-const said = (warn) => ({ warning: warn, notice: (line) => console.log(`::notice::${line}`) });
+export const annotated = (level) => (line) => console.log(annotation(line, level));
+
+const said = (warn) => ({ warning: warn, notice: annotated('notice') });
 
 export function reportedEnv(report) {
   return Object.fromEntries(Object.entries(REPORTED).map(([name, output]) => [name, String(report[output] ?? '')]));
@@ -110,6 +114,17 @@ function phasesOf(env, now) {
   } catch {
     return '';
   }
+}
+
+export function handedRules(handed, scope, warn) {
+  let served = null;
+  try {
+    served = JSON.parse(handed);
+  } catch {
+    warn('The suppression rules the engine handed on are not JSON; posting every finding.');
+    return { scope, rules: [] };
+  }
+  return { scope, rules: servedRules(served, scope, warn).rules ?? [] };
 }
 
 async function pullOf(github, owner, repo, number) {
@@ -140,7 +155,7 @@ const reviewedDiff = (env) => () => (String(env.DIFF_PATCH ?? '').trim() ? readF
 
 export async function published(given, {
   execution, events, args, recordDir, fetch = globalThis.fetch, github = linkedGithub({ env: given, fetch, diff: reviewedDiff(given) }), now = new Date(),
-  warn = (line) => console.log(`::warning::${line}`),
+  warn = annotated('warning'),
 }) {
   const env = { ...given, ...recordedOf(given, warn) };
   const report = runSpend(readFileSync(execution, 'utf8'));
@@ -155,7 +170,7 @@ export async function published(given, {
     if (!usingControlPlane(env)) throw new Error('a linked review publishes through the control plane, and this run was not given github_calls: cp');
     mkdirSync(recordDir, { recursive: true });
     const bundle = join(recordDir, 'suppressions.json');
-    if (args.suppressions) writeFileSync(bundle, args.suppressions);
+    if (args.suppressions) writeFileSync(bundle, JSON.stringify(handedRules(args.suppressions, `${owner}/${repo}`, warn)));
     const posted = await postReview({
       github, core: said(warn), owner, repo, prNumber: number, commitId: String(env.COMMIT_ID ?? ''),
       runResult: report.run_result, conclusion: report.conclusion, reviewStrategy: String(env.REVIEW_STRATEGY || 'baseline').trim(),
@@ -201,7 +216,7 @@ export async function published(given, {
   }
   const described = { record, pr: pr === null ? '' : JSON.stringify(pr) };
   const room = STATS_ROOM - Buffer.byteLength(described.record) - Buffer.byteLength(described.pr);
-  return { ...described, suppression: boundedSuppression(fires, findings, room), summary: JSON.stringify(summary), recordDir: kept };
+  return { ...described, suppression: boundedSuppression(fires, findings, room), summary: kept ? JSON.stringify(summary) : '', recordDir: kept };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

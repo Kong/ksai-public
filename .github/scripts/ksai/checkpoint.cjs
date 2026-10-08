@@ -20,6 +20,8 @@ const { isOwnLogin, planRecords, vouchedOwn, EDITED, UNEDITED } = require('./app
 const { readControlPlaneApprovalRef } = require('./control-plane-approval.cjs');
 const { markerOf } = require('./marker.cjs');
 const { counted, plural } = require('../lib/text.cjs');
+const { usingControlPlane } = require('../lib/control-plane.cjs');
+const { readKeptKinds } = require('../lib/cp-report.cjs');
 
 const RELEASE_TOKEN_SHAPE = new RegExp(`^(?:${RELEASE_TOKEN_CORE})$`);
 
@@ -127,8 +129,12 @@ function withoutRelease({
   disabledCommands = null,
   commentEdited = null,
   approvalRef = null,
+  releasedHold = null,
 } = {}) {
   if (String(atCheckpoint) !== 'true') return { release: false, waiting: false, reason: 'no-checkpoint' };
+  if (isResume(command) && String(releasedHold ?? '').trim() === 'false') {
+    return { release: false, waiting: true, reason: 'idle-resume' };
+  }
   if (!commandEnabled('approve', { flow: 'implement', disabledCommands })) {
     return { release: false, waiting: true, reason: 'approve-disabled' };
   }
@@ -190,11 +196,24 @@ const GATE_NOTICE_KINDS = Object.freeze(['plan-waiting', 'plan-blocked']);
 
 const MAX_GATE_PAGES = 5;
 
-async function gateWaiting({ github = null, owner = null, repo = null, prNumber = null, botLogin = null } = {}) {
+async function gateWaiting({
+  github = null,
+  owner = null,
+  repo = null,
+  prNumber = null,
+  botLogin = null,
+  env = process.env,
+  fetch = globalThis.fetch,
+} = {}) {
   const known = String(botLogin ?? '').trim();
   if (!known) return { waiting: false, unreadable: "No bot login was given to tell this flow's own notices apart." };
 
   let noticed = Number.NaN;
+  const seen = (at) => {
+    const when = Date.parse(String(at ?? ''));
+    if (Number.isFinite(when) && (Number.isNaN(noticed) || when > noticed)) noticed = when;
+  };
+  const own = new Map();
   const { unreadable } = await probeComments({
     github,
     owner,
@@ -204,12 +223,18 @@ async function gateWaiting({ github = null, owner = null, repo = null, prNumber 
     cannot: 'cannot tell whether the plan is waiting at its approval gate',
     take: (comment) => {
       if (!vouchedOwn(comment, known)) return;
-      if (!GATE_NOTICE_KINDS.includes(markerOf(comment?.body)?.kind)) return;
-      const at = Date.parse(String(comment?.created_at ?? ''));
-      if (Number.isFinite(at) && (Number.isNaN(noticed) || at > noticed)) noticed = at;
+      own.set(Number(comment?.id), comment?.created_at);
+      if (GATE_NOTICE_KINDS.includes(markerOf(comment?.body)?.kind)) seen(comment?.created_at);
     },
   });
   if (unreadable) return { waiting: false, unreadable };
+  if (usingControlPlane(env)) {
+    const kept = await readKeptKinds({ owner, repo, number: Number(prNumber), env, fetch });
+    if (kept.why) return { waiting: false, unreadable: `cannot tell whether the plan is waiting at its approval gate: ${kept.why}` };
+    for (const [comment, kind] of kept.kinds) {
+      if (GATE_NOTICE_KINDS.includes(kind) && own.has(comment)) seen(own.get(comment));
+    }
+  }
   if (!Number.isFinite(noticed)) return { waiting: false, unreadable: null };
 
   const edited = await pendingSince({ github, owner, repo, prNumber, botLogin: known });
