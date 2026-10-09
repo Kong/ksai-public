@@ -26,7 +26,7 @@ const { ceilingMinutes } = require('../lib/watchdog.cjs');
 const { SKILLS: REVIEWER_SKILLS, skipsAuthor, stackManifests, triage } = require('../triage/policy.cjs');
 const { renderReviewPrompt, renderPipelineContext } = require('./prompt.cjs');
 const { STRATEGIES, experimentOf, promptDigest } = require('./review-pipeline.cjs');
-const { materializeScopes } = require('./review-scopes.cjs');
+const { fitted, materializeScopes } = require('./review-scopes.cjs');
 const { availableReviewers, bodyOf, resolveReviewers, sharedFields } = require('./reviewers.cjs');
 
 const PLUGIN_DIR = '_ksai/plugins/kreview';
@@ -334,7 +334,7 @@ async function runTriage({ github, core, owner, repo, prNumber, env = process.en
   return outputs;
 }
 
-async function selectReviewArm({ github, core, owner, repo, env }) {
+async function selectReviewArm({ github, core, owner, repo, env, fetchImpl = fetch }) {
   const outputs = {
     error: '',
     rejection: '',
@@ -352,13 +352,13 @@ async function selectReviewArm({ github, core, owner, repo, env }) {
     prompt_content_report: '',
   };
 
-  const config = await loadKsaiConfig({ github, core, owner, repo });
+  const config = await loadKsaiConfig({ github, core, owner, repo, env, fetchImpl });
   if (config.error) {
     Object.assign(outputs, {
       error: config.error,
       rejection: renderConfigRejection(config.error, env.TRIGGER),
     });
-    return { ...outputs, rejected: `Rejected the command alias config: ${config.error}`, note: '' };
+    return { ...outputs, rejected: `Rejected the repository config: ${config.error}`, note: '' };
   }
 
   const result = selectArm({
@@ -375,7 +375,6 @@ async function selectReviewArm({ github, core, owner, repo, env }) {
     triage: { tier: env.TRIAGE_TIER, model: env.TRIAGE_MODEL, effort: env.TRIAGE_EFFORT },
     modelPinned: env.MODEL_PINNED,
     effortPinned: env.EFFORT_PINNED,
-    commandAliases: config.aliases,
     onIssue: false,
     threadRootId: env.THREAD_ROOT_ID,
   });
@@ -534,6 +533,17 @@ function reviewOptions(env, experiment) {
   return { options, refusal };
 }
 
+const strategyOf = (env) => env.REVIEW_STRATEGY || 'baseline';
+
+function reviewFits(env) {
+  if (strategyOf(env) === 'baseline') return { too_large: '', scope_plan: '' };
+  const { plan, tooLarge } = fitted(env.DIFF_PATCH ?? '', env.DIFF_STATUS ?? '', env.REVIEW_DIFF_MIB ?? '');
+  if (plan === null) return { too_large: tooLarge, scope_plan: '' };
+  const at = `${env.DIFF_PATCH}.scopes.json`;
+  fs.writeFileSync(at, JSON.stringify(plan));
+  return { too_large: '', scope_plan: at };
+}
+
 function buildReviewPrompt({ env }) {
   const outputs = {
     file: '',
@@ -544,7 +554,7 @@ function buildReviewPrompt({ env }) {
     lsp_measure: '',
     error: '',
   };
-  const strategy = env.REVIEW_STRATEGY || 'baseline';
+  const strategy = strategyOf(env);
   let experiment;
   try {
     if (!STRATEGIES.includes(strategy)) throw new Error('review_strategy must be baseline, evidence or dual');
@@ -568,7 +578,7 @@ function buildReviewPrompt({ env }) {
   if (strategy !== 'baseline') {
     try {
       if (!env.DIFF_PATCH || !env.DIFF_STATUS) throw new Error('scoped review requires the trusted patch and NUL status inventory');
-      scoping = materializeScopes(env.DIFF_PATCH, env.DIFF_STATUS);
+      scoping = env.SCOPE_PLAN ? JSON.parse(fs.readFileSync(env.SCOPE_PLAN, 'utf8')) : materializeScopes(env.DIFF_PATCH, env.DIFF_STATUS, env.REVIEW_DIFF_MIB ?? '');
       scoping.scopes = scoping.scopes.map((scope) => ({ ...scope,
         context: renderPipelineContext({ ...options, diffPath: scope.diffPath, changedFilesPath: scope.changedFilesPath, shortstat: `${scope.files.length} files; ${scope.lines} changed lines in this scope` }),
       }));
@@ -604,6 +614,7 @@ module.exports = {
   reviewCommandStatus,
   selectReviewArm,
   buildReviewPrompt,
+  reviewFits,
   reviewOptions,
   EXTRA_ARGS_REFUSAL,
 };

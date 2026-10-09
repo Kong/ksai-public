@@ -36,8 +36,8 @@ function combinedGuards({ served, config }) {
   };
 }
 
-async function readGuards({ github, core, context, env }) {
-  const config = await loadKsaiConfig({ github, core, owner: context.repo.owner, repo: context.repo.repo });
+async function readGuards({ github, core, context, env, fetchImpl }) {
+  const config = await loadKsaiConfig({ github, core, owner: context.repo.owner, repo: context.repo.repo, env, fetchImpl });
   if (!config.error) return config;
   if (config.unread || env.CONTINUATION === 'true') {
     core.setFailed(`${config.error}, so the guards this repository sets cannot be read and nothing runs.`);
@@ -47,8 +47,8 @@ async function readGuards({ github, core, context, env }) {
   return {};
 }
 
-async function guards({ github, core, context, env }) {
-  const config = await readGuards({ github, core, context, env });
+async function guards({ github, core, context, env, fetchImpl = fetch }) {
+  const config = await readGuards({ github, core, context, env, fetchImpl });
   if (config === null) return;
   const served = {
     disabled_commands: env.DISABLED_COMMANDS,

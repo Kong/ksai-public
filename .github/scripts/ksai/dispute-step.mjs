@@ -131,6 +131,7 @@ export async function lockDisputed({ github, core, owner, repo, env = process.en
   const notices = [];
   let locked = 0;
   let held = false;
+  let unrecorded = false;
   const scoped = Number(env.THREAD_ROOT_ID);
   const replies = new Map();
   const replyFor = (kind) => {
@@ -164,11 +165,12 @@ export async function lockDisputed({ github, core, owner, repo, env = process.en
       }
       if (verdict === DISAGREE) locked += 1;
     } catch (error) {
+      unrecorded ||= verdict === DISAGREE && root === scoped;
       notices.push(`thread ${root} could not have its dispute recorded: ${error?.message ?? error}`);
     }
   }
   core?.info?.(`${locked} of ${counted(roots.length, 'thread')} read as a disagreement and were held.`);
-  return { locked, held, notices, spend };
+  return { locked, held, unrecorded, notices, spend };
 }
 
 export async function releaseThread({ github, core, owner, repo, env = process.env, fetch = globalThis.fetch }) {

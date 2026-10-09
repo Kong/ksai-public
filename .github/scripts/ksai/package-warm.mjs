@@ -62,14 +62,16 @@ export function packageOf(workspace, { trackedFile = tracked, projectFile = pres
   } catch {
     return null;
   }
-  const found = String(manifest?.packageManager ?? '').match(PACKAGE_MANAGER);
-  if (!found) return null;
-  const manager = found[1];
+  const declared = String(manifest?.packageManager ?? '');
+  const found = declared.match(PACKAGE_MANAGER);
+  if (manifest?.packageManager !== undefined && !found) return null;
+  const manager = found?.[1] ?? 'npm';
+  const version = found?.[2] ?? '';
   if (projectFile(workspace, '.npmrc')) return null;
   if (manager === 'yarn' && Number(found[2].split('.')[0]) === 1 && projectFile(workspace, '.yarnrc')) return null;
   if (!ignoredPath(workspace, 'node_modules')) return null;
   const lockfile = trackedFile(workspace, LOCKFILE[manager]);
-  return lockfile ? { manager, version: found[2], lockfile } : null;
+  return lockfile ? { manager, version, lockfile } : null;
 }
 
 export function hasFailingTarget(checksPath) {
@@ -83,7 +85,7 @@ export function hasFailingTarget(checksPath) {
   }
 }
 
-function scrubbedEnv(env, config) {
+function scrubbedEnv(env, userConfig, globalConfig) {
   const child = {};
   for (const [name, value] of Object.entries(env)) {
     if (!SECRET_NAME.test(name) && !PACKAGE_CONFIG_NAME.test(name)) child[name] = value;
@@ -93,10 +95,10 @@ function scrubbedEnv(env, config) {
     COREPACK_ENABLE_PROJECT_SPEC: '0',
     NPM_CONFIG_AUDIT: 'false',
     NPM_CONFIG_FUND: 'false',
-    NPM_CONFIG_GLOBALCONFIG: config,
+    NPM_CONFIG_GLOBALCONFIG: globalConfig,
     NPM_CONFIG_IGNORE_SCRIPTS: 'true',
     NPM_CONFIG_REGISTRY: REGISTRY,
-    NPM_CONFIG_USERCONFIG: config,
+    NPM_CONFIG_USERCONFIG: userConfig,
     YARN_ENABLE_SCRIPTS: 'false',
     YARN_ENABLE_TELEMETRY: '0',
     YARN_IGNORE_PATH: '1',
@@ -114,11 +116,14 @@ function execute(file, args, options) {
 
 export function installOf({ manager, version, toolRoot }) {
   if (manager === 'npm') {
-    return [
-      ['npm', ['install', '--global', '--prefix', toolRoot, `npm@${version}`, '--ignore-scripts', '--no-audit', '--no-fund']],
-      [path.join(toolRoot, 'bin', 'npm'), [
+    const install = [
+      version === '' ? 'npm' : path.join(toolRoot, 'bin', 'npm'), [
         'ci', '--ignore-scripts', '--no-audit', '--no-fund', '--replace-registry-host=always', `--registry=${REGISTRY}`,
-      ]],
+      ],
+    ];
+    return version === '' ? [install] : [
+      ['npm', ['install', '--global', '--prefix', toolRoot, `npm@${version}`, '--ignore-scripts', '--no-audit', '--no-fund']],
+      install,
     ];
   }
   const immutable = manager === 'pnpm'
@@ -167,9 +172,11 @@ export function main(env = process.env, { run = execute, detect = packageOf } = 
 
   const temp = env.RUNNER_TEMP || '/tmp';
   const toolRoot = path.join(temp, 'ksai-package-manager');
-  const config = path.join(temp, 'ksai-empty-npmrc');
-  writeFileSync(config, '', { mode: 0o600 });
-  const child = scrubbedEnv(env, config);
+  const userConfig = path.join(temp, 'ksai-empty-user-npmrc');
+  const globalConfig = path.join(temp, 'ksai-empty-global-npmrc');
+  writeFileSync(userConfig, '', { mode: 0o600 });
+  writeFileSync(globalConfig, '', { mode: 0o600 });
+  const child = scrubbedEnv(env, userConfig, globalConfig);
   let failed = false;
   try {
     for (const [file, args] of installOf({ ...found, toolRoot })) run(file, args, { cwd: workspace, env: child });

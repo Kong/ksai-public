@@ -5,9 +5,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { claimsAnyGlob, toGlobs } = require('../lib/path-pattern.cjs');
+const { AUTOFIX_ROUTE } = require('../lib/served-config.cjs');
 const { directGit } = require('./trusted-git.cjs');
 
 const POLICY_PATH = '.ksai/autofix-paths.json';
+const SERVED_POLICY = 'the autofix policy the control plane serves';
 const VERSION = 1;
 const MAX_RULES = 100;
 const MAX_GLOBS = 200;
@@ -318,21 +320,21 @@ function globsFrom(value, field) {
   return { ok: true, globs: parsed.globs };
 }
 
-function parsePolicy(body) {
+function parsePolicy(body, where = POLICY_PATH) {
   if (body === '') return { ok: true, policy: { version: VERSION, protected: { include: [], exclude: [] }, relations: [] } };
-  if (Buffer.byteLength(body, 'utf8') > MAX_POLICY_BYTES) return fail(`${POLICY_PATH} is larger than ${MAX_POLICY_BYTES} bytes`);
+  if (Buffer.byteLength(body, 'utf8') > MAX_POLICY_BYTES) return fail(`${where} is larger than ${MAX_POLICY_BYTES} bytes`);
   let parsed;
   try {
     parsed = JSON.parse(body);
   } catch {
-    return fail(`${POLICY_PATH} is not valid JSON`);
+    return fail(`${where} is not valid JSON`);
   }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return fail(`${POLICY_PATH} must be an object`);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return fail(`${where} must be an object`);
   const keys = Object.keys(parsed).sort();
-  if (keys.some((key) => !['protected', 'relations', 'version'].includes(key))) return fail(`${POLICY_PATH} has an unknown field`);
-  if (parsed.version !== VERSION) return fail(`${POLICY_PATH} must have version ${VERSION}`);
-  if (!Array.isArray(parsed.relations)) return fail(`${POLICY_PATH} must contain a relations list`);
-  if (parsed.relations.length > MAX_RULES) return fail(`${POLICY_PATH} has more than ${MAX_RULES} relations`);
+  if (keys.some((key) => !['protected', 'relations', 'version'].includes(key))) return fail(`${where} has an unknown field`);
+  if (parsed.version !== VERSION) return fail(`${where} must have version ${VERSION}`);
+  if (!Array.isArray(parsed.relations)) return fail(`${where} must contain a relations list`);
+  if (parsed.relations.length > MAX_RULES) return fail(`${where} has more than ${MAX_RULES} relations`);
 
   let protectedPaths = { include: [], exclude: [] };
   if (Object.hasOwn(parsed, 'protected')) {
@@ -344,14 +346,14 @@ function parsePolicy(body) {
   let totalGlobs = protectedPaths.include.length + protectedPaths.exclude.length;
   for (const [index, relation] of parsed.relations.entries()) {
     if (!relation || typeof relation !== 'object' || Array.isArray(relation)) {
-      return fail(`${POLICY_PATH} relation ${index + 1} must be an object`);
+      return fail(`${where} relation ${index + 1} must be an object`);
     }
     const relationKeys = Object.keys(relation).sort();
     if (relationKeys.some((key) => !['allow', 'allowProtected', 'from'].includes(key))) {
-      return fail(`${POLICY_PATH} relation ${index + 1} has an unknown field`);
+      return fail(`${where} relation ${index + 1} has an unknown field`);
     }
     if (!Object.hasOwn(relation, 'from') || !Object.hasOwn(relation, 'allow')) {
-      return fail(`${POLICY_PATH} relation ${index + 1} must name from and allow globs`);
+      return fail(`${where} relation ${index + 1} must name from and allow globs`);
     }
     const from = globsFrom(relation.from, `relation ${index + 1} from`);
     if (!from.ok) return from;
@@ -370,7 +372,7 @@ function parsePolicy(body) {
       allow.globs.exclude.length +
       allowProtected.include.length +
       allowProtected.exclude.length;
-    if (totalGlobs > MAX_GLOBS) return fail(`${POLICY_PATH} names more than ${MAX_GLOBS} globs`);
+    if (totalGlobs > MAX_GLOBS) return fail(`${where} names more than ${MAX_GLOBS} globs`);
     relations.push({ from: from.globs, allow: allow.globs, allowProtected });
   }
   return { ok: true, policy: { version: VERSION, protected: protectedPaths, relations } };
@@ -483,6 +485,12 @@ function readBasePolicy(git, baseSha) {
   return parsed.ok ? { ...parsed, body: String(shown.stdout ?? '') } : parsed;
 }
 
+function servedPolicy(policy) {
+  const body = policy === null ? '' : JSON.stringify(policy);
+  const parsed = parsePolicy(body, SERVED_POLICY);
+  return parsed.ok ? { ...parsed, body } : parsed;
+}
+
 function checkIdentity(checks) {
   return {
     failing: Array.isArray(checks?.failing)
@@ -501,7 +509,7 @@ function checkIdentity(checks) {
   };
 }
 
-function createScope({ cwd, phase, headSha, baseRef, repo, pr, threads = null, checks = null, merging = false, outFile }) {
+function createScope({ cwd, phase, headSha, baseRef, repo, pr, threads = null, checks = null, merging = false, served = null, outFile }) {
   if (!['fix', 'do'].includes(String(phase ?? ''))) return fail('only fix and do runs have an autofix change scope');
   const git = directGit(String(cwd ?? ''));
   if (!git.policy.ok) return fail(git.policy.reason);
@@ -548,7 +556,7 @@ function createScope({ cwd, phase, headSha, baseRef, repo, pr, threads = null, c
 
   const loaded = namedBase === ''
     ? { ok: true, body: '', policy: { version: VERSION, protected: { include: [], exclude: [] }, relations: [] } }
-    : readBasePolicy(git, base.sha);
+    : served === null ? readBasePolicy(git, base.sha) : servedPolicy(served.policy);
   if (!loaded.ok) return loaded;
   const patterns = { include: [], exclude: [] };
   const protectedPatterns = { include: [], exclude: [] };
@@ -585,7 +593,7 @@ function createScope({ cwd, phase, headSha, baseRef, repo, pr, threads = null, c
     head: head.sha,
     originalTree,
     base: base.sha,
-    policy: { path: POLICY_PATH, sha256: digest(loaded.body) },
+    policy: { path: served === null ? POLICY_PATH : AUTOFIX_ROUTE, sha256: digest(loaded.body) },
     protected: loaded.policy.protected,
     seeds,
     allowed,

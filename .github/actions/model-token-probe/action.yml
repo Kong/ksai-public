@@ -1,0 +1,17 @@
+name: CP model token probe
+description: Verify CP token exchange and one-use admission for a dispatched run without calling a model.
+
+inputs:
+  endpoint:
+    description: HTTPS origin of the control plane.
+    required: true
+  audience:
+    description: Exact engineering gateway audience returned by the control plane for this run.
+    required: true
+  record_id:
+    description: Record ID read by the gate from the control plane for this run.
+    required: true
+
+runs:
+  using: node24
+  main: main.mjs

@@ -52,7 +52,8 @@ function parseFoldedFindings(reviewBody) {
     const separator = location.lastIndexOf(':');
     const path = separator === -1 ? location : location.slice(0, separator);
     const lineNumber = separator === -1 ? null : Number(location.slice(separator + 1));
-    const body = block.slice(sepIndex + 4);
+    const after = block.slice(sepIndex + 4);
+    const body = after.startsWith('\n') ? after.replace(/(\r\n?|\n) {2}/g, '$1') : after;
 
     out.push({
       severity: normalizeSeverity(severityMatch[1]),

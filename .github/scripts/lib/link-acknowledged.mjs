@@ -1,6 +1,8 @@
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { annotation } from './text.cjs';
+
 export const ACKNOWLEDGEMENT_LOG = 'ksai-link-acknowledgements.jsonl';
 
 const tokensOf = (usage) => ['input', 'output', 'cache_read', 'cache_write'].reduce((total, name) => total + (Number(usage?.[name]) || 0), 0);
@@ -19,7 +21,7 @@ export function acknowledging(runnerTemp, warn = (line) => console.log(line)) {
     try {
       appendFileSync(log, lines, { mode: 0o600 });
     } catch (error) {
-      if (!warned) warn(`::warning::the acknowledgement log could not be written: ${error?.message ?? error}`);
+      if (!warned) warn(annotation(`the acknowledgement log could not be written: ${error?.message ?? error}`, 'warning'));
       warned = true;
     }
   };

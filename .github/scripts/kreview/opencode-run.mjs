@@ -797,7 +797,7 @@ export function sandboxArgs(
   const providerRelay = String(env.KSAI_PROVIDER_RELAY ?? '').trim();
   if (sockets) {
     args.push('--ro-bind', sockets, sockets);
-    for (const [name, file] of [['KSAI_PROVIDER_SOCKET', 'provider.sock'], ['KSAI_OTEL_SOCKET', 'otel.sock'], ['KSAI_LINK_SOCKET', 'link.sock']]) {
+    for (const [name, file] of [['KSAI_PROVIDER_SOCKET', 'provider.sock'], ['KSAI_OTEL_SOCKET', 'otel.sock'], ['KSAI_LINK_SOCKET', 'link.sock'], ['KSAI_GUARD_SOCKET', 'guard.sock']]) {
       if (exists(join(sockets, file))) args.push('--setenv', name, join(sockets, file));
     }
   } else if (brokered) {

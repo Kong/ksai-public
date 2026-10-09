@@ -1,12 +1,13 @@
 'use strict';
 
 const fs = require('node:fs');
-const { blockerOf } = require('./blocker.cjs');
+const { blockerOf, saidOf, stoppedOf } = require('./blocker.cjs');
 const { finalResult } = require('./classify.cjs');
 const { readWorkRef } = require('./context.cjs');
 const { doRequestOf, renderDoMarker } = require('./do.cjs');
 const { href, marker, positive } = require('./marker.cjs');
 const { usingControlPlane } = require('../lib/control-plane.cjs');
+const { codeCell, inertBlock, inertInline, quietPlaced, unfence } = require('../lib/inert-markdown.cjs');
 const { STATUS_BEGIN, STATUS_END, URL_SHAPE, locateStatus, oneLine, scrub, spliceStatus } = require('./plan.cjs');
 const { probeComments } = require('./pages.cjs');
 const { LOCK_TIMEOUT_MS, withIssueLock } = require('./write-lock.cjs');
@@ -509,7 +510,7 @@ function attemptOf(env = process.env, now = Date.now()) {
   const attempt = {
     id,
     phase: oneLine(env.PHASE || env.COMMAND || 'write').slice(0, 24),
-    outcome: oneLine(env.OUTCOME || 'running').slice(0, 24),
+    outcome: oneLine((env.STOPPED === 'true' && env.OUTCOME === 'blocked' ? 'cancelled' : env.OUTCOME) || 'running').slice(0, 24),
     model,
     effort,
     model_source: modelSource,
@@ -599,9 +600,9 @@ function attemptCells(attempt, runBase, at, linkRun, running) {
   const runId = attempt.id.split(':', 1)[0];
   return [
     linkRun ? `[${at}](${runBase}/${runId})` : String(at),
-    `\`${attempt.phase}\``,
-    attempt.route_command === '' ? BLANK_CELL : `\`${attempt.route_command}\``,
-    `\`${attempt.outcome}\``,
+    codeCell(`${attempt.phase}`),
+    attempt.route_command === '' ? BLANK_CELL : codeCell(`${attempt.route_command}`),
+    codeCell(`${attempt.outcome}`),
     `\`${armLabel(attempt.model, attempt.effort)}\``,
     attempt.turns === null ? BLANK_CELL : String(attempt.turns),
     costCell(attempt, running),
@@ -699,11 +700,16 @@ function spendLine(state) {
 
 function currentText(value, triggerPhrase) {
   const safe = neutralize(scrub(String(value ?? ''), { triggerPhrase }).trim());
-  const points = [...safe];
-  const current = points.length > MAX_CURRENT_CHARS
-    ? `${points.slice(0, MAX_CURRENT_CHARS - 1).join('')}…`
-    : safe;
-  return current || 'Work is in progress.';
+  if (Array.from(safe).length <= MAX_CURRENT_CHARS) return safe || 'Work is in progress.';
+  const end = safe.search(/\r\n?|\n/);
+  const first = end < 0 ? safe.length : end;
+  const points = [...unfence(safe.slice(0, first)) + safe.slice(first)];
+  for (let limit = MAX_CURRENT_CHARS; ;) {
+    const current = quietPlaced(inertBlock(`${points.slice(0, limit - 1).join('')}…`));
+    const size = Array.from(current).length;
+    if (limit <= 1 || size <= MAX_CURRENT_CHARS) return current;
+    limit = Math.min(limit - 1, Math.floor((limit * MAX_CURRENT_CHARS) / size));
+  }
 }
 
 const REPORT_HEADING = Object.freeze(
@@ -711,8 +717,10 @@ const REPORT_HEADING = Object.freeze(
     initializing: reporting('run-started'),
     running: reporting('write-report'),
     blocked: reporting('plan-blocked'),
+    cancelled: reporting('run-stopped'),
     failed: reporting('run-failed'),
     paused: reporting('run-paused', { next: 'somebody resumes the plan' }),
+    held: reporting('thread-locked', { said: 'Threads held' }),
     ...STATUS_TABLE,
   }),
 );
@@ -743,38 +751,6 @@ function reportHeading({ row, command, said, triggerPhrase, fields, paused = fal
     'WARNING',
     `${heading}\n\nThe targeted check was not reproduced, so this report does not claim the failure is fixed.`,
   );
-}
-
-function commandsBlock(verification) {
-  if (verification === null || verification === undefined) return [];
-  const commands = Array.isArray(verification.commands) ? verification.commands : [];
-  const codeCell = (value) => {
-    const text = String(value).replace(/\r\n?|\n/g, ' ');
-    const longest = Math.max(0, ...[...text.matchAll(/`+/g)].map((run) => run[0].length));
-    const fence = '`'.repeat(longest + 1);
-    const pad = text.startsWith('`') || text.endsWith('`') ? ' ' : '';
-    return `${fence}${pad}${text}${pad}${fence}`;
-  };
-  const rows = commands.map(([command, exit], index) => [
-    String(index + 1),
-    codeCell(command),
-    exit === null ? 'unavailable' : `\`${exit}\``,
-  ]);
-  const notes = [];
-  if (verification.commands_state === 'unavailable') {
-    notes.push('The command event stream was unavailable, so executed commands cannot be listed.');
-  } else if (verification.commands_state === 'incomplete') {
-    notes.push('The command event stream was malformed or incomplete; only its readable prefix is listed.');
-  } else if (verification.commands_state === undefined) {
-    notes.push('The command ledger was not recorded for this attempt.');
-  } else if (commands.length === 0) {
-    rows.push(['—', 'No completed Bash command was recorded', '—']);
-  }
-  if (verification.commands_capped === true) {
-    notes.push('The command ledger reached its display/storage bound; only the bounded prefix is listed.');
-  }
-  const table = rows.length === 0 ? [] : ['', ...reportTable(['#', 'Command', 'Exit status'], rows)];
-  return ['', '### Commands executed', ...table, ...notes.flatMap((note) => ['', note])];
 }
 
 function renderWriteReport({
@@ -847,11 +823,9 @@ function renderWriteReport({
         ? [currentText(current, triggerPhrase)]
         : lines;
     const heading = headingFor(said[0] ?? '');
-    const commands = commandsBlock(held.attempts.at(-1)?.verification);
     return [
       ...(heading ? [heading, ''] : []),
       ...said,
-      ...commands,
       ...(counters === '' ? [] : ['', counters]),
       ...(selection === '' ? [] : ['', `Selection: ${selection}`]),
       '',
@@ -1205,7 +1179,7 @@ async function updateWriteProgressUnlocked({
       : noted(read.state, currentText(note.said, env.TRIGGER), note.at ?? now(), env.TRIGGER);
     const saved = await store.write(read.ref, {
       state: { ...read.state, history: grown },
-      current: cp ? '' : note === null ? current : note.said,
+      current: cp ? '' : note === null ? current : inertInline(note.said),
       ...(cp ? { event: { kind: 'progress', at: note?.at ?? now(), stage: note?.stage ?? '' } } : {}),
       issue: env.ISSUE_NUM,
       run: env.RUN_ID,
@@ -1234,7 +1208,13 @@ async function updateWriteProgressUnlocked({
 
 function resultEvent(env, attempt, options) {
   const blocker = attempt.outcome === 'blocked' ? blockerOf(env, options) : '';
-  return { kind: 'result', step_title: env.STEP_TITLE ?? '', ...(blocker ? { blocker } : {}) };
+  const modelBlocked = String(env.BLOCKER_FILE ?? '').trim() !== '';
+  const stopped = attempt.outcome === 'blocked' && !modelBlocked ? stoppedOf(env, options) : '';
+  const said = attempt.outcome === 'blocked' || attempt.outcome === 'cancelled' ? '' : saidOf(env, options);
+  return {
+    kind: 'result', step_title: env.STEP_TITLE ?? '',
+    ...(blocker ? { blocker } : {}), ...(stopped ? { stopped } : {}), ...(said ? { said } : {}),
+  };
 }
 
 async function mutateWriteReportUnlocked({

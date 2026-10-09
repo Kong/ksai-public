@@ -143,7 +143,7 @@ inputs:
       every model call this action makes goes to this origin, whichever engine runs it. With
       `anthropic_auth: federation`, the origin also serves `/v1/oauth/token`; with the default `oidc-bearer`,
       the gateway validates the GitHub OIDC token directly. Kong's own callers default to Kong AI Gateway, where
-      KSAI spend is attributed; the published mirror carries no default, so a caller there sets its own origin.
+      KSAI spend is attributed; the published mirror carries no default, and its workflow passes the origin the control plane serves.
       Empty is refused rather than falling back to api.anthropic.com. Must start with https:// and
       name an origin rather than an endpoint - the version segment is appended for you, so a value ending in
       /v1 is refused rather than doubled.
@@ -321,6 +321,10 @@ inputs:
     description: 'baseline keeps the existing reviewer; evidence runs independent evidence audits; dual adds an independent contract hunt. OpenCode review only.'
     required: false
     default: "baseline"
+  review_diff_mib:
+    description: 'The largest diff, in whole MiB from 1 to 64, an evidence or dual review reads. A larger pull request is skipped with a notice. Empty keeps 16.'
+    required: false
+    default: ''
   review_experiment:
     description: 'JSON replay controls: immutable revisions, trial, history, result transport and lsp_tool (off or native). Text/structured and native LSP require an unpublished exact-revision replay.'
     required: false
@@ -342,12 +346,12 @@ inputs:
       unpinned reviewer is a different reviewer every run.
     required: false
     # renovate: datasource=npm depName=opencode-ai
-    default: "1.18.34"
+    default: "1.18.35"
   opencode_pty:
     description: >-
       Opt-in pilot for audited background PTY sessions in OpenCode test and active implementation
       phases. `true` loads pinned opencode-pty 0.3.6 through KSAI's bounded adapter. Review,
-      planning and isolated runs never load it.
+      planning and isolated runs never load it, and an OpenCode 2 pin refuses it.
     required: false
     default: "false"
   model:
@@ -400,10 +404,8 @@ inputs:
       `stop`, and `pause` remain available because they start no flow. Unlike `allowed_models`, `max_effort`,
       and `min_effort`, this bounds the action itself rather than only a triggering comment: a command named
       here is refused out loud wherever somebody writes it, and dropped from the classifier's answer set so a
-      comment naming no command is never routed to it. List canonical commands, not this repository's own
-      aliases - an alias here is rejected naming the command to write instead, the same way `allowed_models`
-      rejects a model alias. A list naming every command a flow owns is legal and means every one of them is
-      off.
+      comment naming no command is never routed to it. A list naming every command a flow owns is legal and
+      means every one of them is off.
     required: false
     default: ""
   write_access_commands:
@@ -526,8 +528,9 @@ inputs:
       job's own OIDC token and acts on what it answers. Anything else,
       which is every repository the control plane has not moved, keeps the decision on this runner.
 
-      The control plane serves this setting; a caller does not pin it. Whatever it says, this action still checks
-      the answer against `allowed_models`, `min_effort` and `max_effort` before acting on it, and a control
+      The control plane serves this setting; a caller does not pin it. This action offers the configured model and
+      `allowed_models`, and whatever the control plane says, it still checks the answer against those models,
+      `min_effort` and `max_effort` before acting on it, and a control
       plane that is down, slow, stale or answering something this action will not act on costs the run nothing
       but the profile it would have chosen on its own.
     required: false
@@ -548,6 +551,17 @@ inputs:
       `true` where the control plane asks a write run that its model stopped as blocked for the reason the model
       gave, on the write report's result event and on the task outcome. Anything else sends no reason, which a
       control plane that refuses the field needs.
+
+      The control plane serves this setting; a caller does not pin it.
+    required: false
+    default: ""
+  said:
+    description: >-
+      `true` where the control plane asks a write run that neither blocked nor was stopped for the message it posts
+      without one, on the write report's result event: what a `do` or `fix` run changed or why nothing did, a
+      direct run's pull request link, a plan run's published plan, or a plan step's phase boundary or warning. A
+      routine plan step posts no message, so it sends none. Any value other than `true` sends none, which a control
+      plane that refuses the field needs.
 
       The control plane serves this setting; a caller does not pin it.
     required: false
@@ -637,22 +651,6 @@ inputs:
       the point: change it when what the reviewer checks changes.
     required: false
     default: "kreview-full"
-  suppressions_store:
-    description: "deprecated and ignored: a review reads its suppression rules from the control plane"
-    required: false
-    default: ""
-  suppressions_ref:
-    description: "deprecated and ignored: a review reads its suppression rules from the control plane"
-    required: false
-    default: "main"
-  suppressions_app_id:
-    description: "deprecated and ignored: a review reads its suppression rules from the control plane"
-    required: false
-    default: ""
-  suppressions_private_key:
-    description: "deprecated and ignored: a review reads its suppression rules from the control plane"
-    required: false
-    default: ""
   artifact_retention_days:
     description: >-
       how long the execution log, the event stream, the suppression record and the eval record are kept. The
@@ -837,6 +835,14 @@ inputs:
       rewritten.
     required: false
     default: "false"
+  fix_review_bots:
+    description: >-
+      GitHub App bots whose review threads `fix` and a plan revision answer as a trusted reviewer's, comma- or
+      space-separated logins. Only a comment GitHub names a Bot counts, so a user account named like one does
+      not. Empty (the default) answers Copilot code review (`copilot-pull-request-reviewer`), and `none`
+      answers no bot.
+    required: false
+    default: ""
   continuation_workflow:
     description: >-
       the caller's own workflow filename, e.g. `ksai.yml`. Set it to turn on the continuation chain: one run
@@ -1036,7 +1042,7 @@ runs:
         if [[ "${FLOW}" != "run" ]]; then
           for name in PROFILE PROMPT_FILE EXTRA_ALLOWED_TOOLS EXTRA_DISALLOWED_TOOLS SANDBOX_ALLOW_WRITE SANDBOX_DENY_WRITE SANDBOX_DENY_ENV; do
             if [[ -n "${!name:-}" ]]; then
-              echo "::error::${name,,}: only flow: run reads it, so on flow: ${FLOW} it would bound nothing. Drop it"
+              echo "::error::$(printf '%s' "${name}" | tr '[:upper:]' '[:lower:]'): only flow: run reads it, so on flow: ${FLOW} it would bound nothing. Drop it"
               exit 1
             fi
           done
@@ -1047,7 +1053,8 @@ runs:
       if: >-
         ${{ inputs.report_rendering != '' || inputs.prompt_rendering != '' ||
         inputs.github_calls != '' || env.KSAI_PROVIDER_OBSERVATIONS == 'true' ||
-        startsWith(inputs.opencode_version, '2.') }}
+        startsWith(inputs.opencode_version, '2.') ||
+        inputs.control_plane_endpoint != '' || inputs.fleet_dials_endpoint != '' }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         REPORT: ${{ inputs.report_rendering }}
@@ -1201,8 +1208,12 @@ runs:
               echo "::error::opencode_pty: true is limited to implement and test flows"
               exit 1
             fi
+            if [[ "${OPENCODE_VERSION}" == 2.* ]]; then
+              echo "::error::opencode_pty: true runs only on OpenCode 1 - OpenCode ${OPENCODE_VERSION} loads no PTY"
+              exit 1
+            fi
             audited="$(node -p 'require(process.env.PTY_LOCK).packages["node_modules/@opencode-ai/plugin"].version')"
-            if [[ "${OPENCODE_VERSION}" != 2.* && "${OPENCODE_VERSION}" != "${audited}" ]]; then
+            if [[ "${OPENCODE_VERSION}" != "${audited}" ]]; then
               echo "::error::opencode_pty: true requires the audited opencode_version ${audited}"
               exit 1
             fi
@@ -1264,6 +1275,7 @@ runs:
           .github/agent-workflows
           .github/actions/codeowners-authz
           .github/actions/dispatch-record
+          .github/actions/run-token
           .github/scripts
         persist-credentials: false
 
@@ -1282,6 +1294,7 @@ runs:
         echo "sha=$(git -C "${GITHUB_WORKSPACE}/_ksai" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
         cp -R -- "${GITHUB_WORKSPACE}/_ksai/.github/actions/codeowners-authz" "${DEST}/codeowners-authz"
         cp -R -- "${GITHUB_WORKSPACE}/_ksai/.github/actions/dispatch-record" "${DEST}/dispatch-record"
+        cp -R -- "${GITHUB_WORKSPACE}/_ksai/.github/actions/run-token" "${DEST}/run-token"
         find "$DEST" -name '*.test.mjs' -delete
 
     - name: Keep the trusted checkout out of the caller's commits
@@ -1377,7 +1390,7 @@ runs:
       if: >-
         ${{ steps.checkout_authz.outcome == 'success' && inputs.record_id != '' &&
         inputs.flow != 'test-publish' }}
-      uses: ./_ksai/.github/actions/dispatch-record
+      uses: ./_ksai/.github/actions/dispatch-record  # zizmor: ignore[self-repository]
       with:
         endpoint: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
         record_id: ${{ inputs.record_id }}
@@ -1414,13 +1427,14 @@ runs:
         IN_COMMENT_ID: ${{ inputs.record_id == '' && inputs.comment_id || steps.dispatch_record.outputs.comment_id }}
         IN_COMMENT_KIND: ${{ inputs.record_id == '' && inputs.comment_kind || steps.dispatch_record.outputs.comment_kind }}
         IN_APP_SLUG: ${{ inputs.app_slug }}
-        KSAI_WORK_REQUEST_ENDPOINT: >-
+        KSAI_TASK_REQUEST_ENDPOINT: >-
           ${{ steps.engine.outputs.opencode_major == '2' && (inputs.control_plane_endpoint || inputs.fleet_dials_endpoint) || '' }}
-        KSAI_WORK_SESSION_ACTION: ${{ steps.dispatch_record.outputs.session_action }}
+        KSAI_TASK_ACTION: ${{ steps.dispatch_record.outputs.task_action }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:
         github-token: ${{ inputs.authorization_github_token || inputs.source_org_github_token }}
         script: |
+          require(`${process.env.SCRIPTS}/codeowners-authz/bounded-reads.cjs`).boundReads(github, { core });
           const { resolveRunContext } = require(`${process.env.SCRIPTS}/ksai/prepare.cjs`);
           const { outputs, failure, securityPolicyRefused } =
             await resolveRunContext({ github, context, env: process.env });
@@ -1442,7 +1456,7 @@ runs:
           if (failure) core.setFailed(failure);
 
     - id: check
-      uses: ./_ksai/.github/actions/codeowners-authz
+      uses: ./_ksai/.github/actions/codeowners-authz  # zizmor: ignore[self-repository]
       if: >-
         ${{ inputs.flow != 'test-publish' &&
         ((steps.context.outputs.is_continuation == 'false' && steps.context.outputs.commenter != '') ||
@@ -1455,7 +1469,7 @@ runs:
     - name: Authorize the operator who continued a task
       id: check_operator
       if: ${{ inputs.flow != 'test-publish' && steps.dispatch_record.outputs.bound_command != '' }}
-      uses: ./_ksai/.github/actions/codeowners-authz
+      uses: ./_ksai/.github/actions/codeowners-authz  # zizmor: ignore[self-repository]
       with:
         github-token: ${{ inputs.authorization_github_token || inputs.source_org_github_token }}
         username: ${{ steps.dispatch_record.outputs.requester }}
@@ -1503,6 +1517,7 @@ runs:
         github-token: ${{ inputs.authorization_github_token || inputs.source_org_github_token }}
         retries: 3
         script: |
+          require(`${process.env.SCRIPTS}/codeowners-authz/bounded-reads.cjs`).boundReads(github, { core });
           const { resolveBareGate } = require(`${process.env.SCRIPTS}/ksai/prepare.cjs`);
           const { outputs, notices, failure } = await resolveBareGate({
             github,
@@ -1612,6 +1627,7 @@ runs:
       with:
         github-token: ${{ inputs.authorization_github_token || inputs.source_org_github_token }}
         script: |
+          require(`${process.env.SCRIPTS}/codeowners-authz/bounded-reads.cjs`).boundReads(github, { core });
           const { planClassification } = require(`${process.env.SCRIPTS}/ksai/prepare.cjs`);
           const { outputs, notices, warnings } = await planClassification({
             github,
@@ -1736,6 +1752,7 @@ runs:
         ON_REVIEW: ${{ steps.context.outputs.on_review }}
         REVIEW_STATE: ${{ steps.context.outputs.review_state }}
         ON_OWN_PULL: ${{ steps.bare_gate.outputs.mine }}
+        ON_OWN_DRAFT: ${{ steps.bare_gate.outputs.draft }}
         THREAD_ROOT_ID: ${{ steps.context.outputs.thread_root_id }}
         CLASSIFIED_COMMAND: ${{ steps.verdict.outputs.verdict }}
         BOUND_COMMAND: ${{ steps.dispatch_record.outputs.bound_command }}
@@ -1753,6 +1770,7 @@ runs:
       with:
         github-token: ${{ inputs.authorization_github_token || inputs.source_org_github_token }}
         script: |
+          require(`${process.env.SCRIPTS}/codeowners-authz/bounded-reads.cjs`).boundReads(github, { core });
           const { selectImplementArm } = require(`${process.env.SCRIPTS}/ksai/prepare.cjs`);
           const { outputs, notices, failure } = await selectImplementArm({
             github,
@@ -1805,6 +1823,7 @@ runs:
       with:
         github-token: ${{ inputs.authorization_github_token || github.token }}
         script: |
+          require(`${process.env.SCRIPTS}/codeowners-authz/bounded-reads.cjs`).boundReads(github, { core });
           const { reviewCommandStatus } = require(`${process.env.SCRIPTS}/kreview/prepare.cjs`);
           const out = await reviewCommandStatus({
             github,
@@ -1886,6 +1905,7 @@ runs:
       with:
         github-token: ${{ inputs.authorization_github_token || github.token }}
         script: |
+          require(`${process.env.SCRIPTS}/codeowners-authz/bounded-reads.cjs`).boundReads(github, { core });
           const { selectReviewArm } = require(`${process.env.SCRIPTS}/kreview/prepare.cjs`);
           const out = await selectReviewArm({
             github,
@@ -1929,6 +1949,7 @@ runs:
       with:
         github-token: ${{ inputs.authorization_github_token || inputs.source_org_github_token }}
         script: |
+          require(`${process.env.SCRIPTS}/codeowners-authz/bounded-reads.cjs`).boundReads(github, { core });
           const { selectTesterArm } = require(`${process.env.SCRIPTS}/ksai/prepare.cjs`);
           const { outputs, notices, failure } = await selectTesterArm({
             github,
@@ -2068,23 +2089,26 @@ runs:
       env:
         BASE_SHA: ${{ steps.test_base.outputs.sha }}
         DEST: ${{ runner.temp }}/ksai-scripts/ksai/pr-test/.ksai-trusted
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: |
         set -euo pipefail
         rm -rf -- "${DEST}"
         mkdir -p -- "${DEST}"
-        git show "${BASE_SHA}:.ksai/pr-test.json" > "${DEST}/pr-test.json" || {
+        node "${SCRIPTS}/ksai/pr-test/served-contract.mjs"
+        [ -f "${DEST}/pr-test.json" ] || git show "${BASE_SHA}:.ksai/pr-test.json" > "${DEST}/pr-test.json" || {
           echo "::error::this repository declares no .ksai/pr-test.json at the resolved base commit"
           exit 1
         }
+        rm -rf -- .ksai .npmrc .yarnrc .yarnrc.yml opencode.json opencode.jsonc
+        find . -maxdepth 1 -name '.env*' ! -name '.env.example' -exec rm -rf -- {} +
+        [ ! -d "${DEST}/kept" ] || cp -R -- "${DEST}/kept/." .
+        mkdir -p -- .ksai
+        cp -- "${DEST}/pr-test.json" .ksai/pr-test.json
         find . -path ./.git -prune -o \
           \( -name AGENTS.md -o -name CLAUDE.md -o -name CONTRIBUTING.md \
              -o -name .mcp.json -o -name .claude -o -name .opencode -o -name .agents \
              -o -name bunfig.toml \) \
           -print0 | xargs -0 -r rm -rf --
-        rm -rf -- .ksai .npmrc .yarnrc .yarnrc.yml opencode.json opencode.jsonc
-        find . -maxdepth 1 -name '.env*' ! -name '.env.example' -exec rm -rf -- {} +
-        mkdir -p -- .ksai
-        cp -- "${DEST}/pr-test.json" .ksai/pr-test.json
         printf 'encoded=%s\n' "$(base64 < "${DEST}/pr-test.json" | tr -d '\n')" >> "$GITHUB_OUTPUT"
 
     - name: Take the Go modules the base branch declares
@@ -2253,7 +2277,7 @@ runs:
 
     - name: Upload the acceptance criteria before executing the pull request
       if: ${{ steps.test_criteria_artifact.outcome == 'success' }}
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: pr-test-criteria-${{ github.run_id }}-${{ github.run_attempt }}
         path: ${{ steps.test_criteria_artifact.outputs.dir }}
@@ -2352,7 +2376,7 @@ runs:
 
     - name: Upload the environment record before running the tester
       if: ${{ always() && steps.test_environment_artifact.outcome == 'success' }}
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: pr-test-environments-${{ github.run_id }}-${{ github.run_attempt }}
         path: ${{ steps.test_environment_artifact.outputs.dir }}
@@ -2457,6 +2481,7 @@ runs:
         github-token: ${{ inputs.authorization_github_token || inputs.source_org_github_token }}
         retries: 3
         script: |
+          require(`${process.env.SCRIPTS}/codeowners-authz/bounded-reads.cjs`).boundReads(github, { core });
           const { resolveRunSubject } = require(`${process.env.SCRIPTS}/ksai/prepare.cjs`);
           const { outputs, notices } = await resolveRunSubject({
             github,
@@ -2520,10 +2545,11 @@ runs:
         THREAD_ROOT_ID: ${{ steps.context.outputs.thread_root_id }}
         REVIEW_ID: ${{ steps.context.outputs.review_id }}
         WRITE_ACCESS_COMMANDS: ${{ steps.select.outputs.write_access_commands }}
+        FIX_REVIEW_BOTS: ${{ inputs.fix_review_bots }}
         RECORD_SCOPE: ${{ steps.dispatch_record.outputs.scope }}
         SAW_TRIGGER: ${{ steps.dispatch_record.outputs.trigger }}
-        WORK_SESSION_SUCCESSOR: ${{ steps.dispatch_record.outputs.bound_command }}
-        WORK_REQUEST_RETRY: ${{ steps.context.outputs.work_request_retry }}
+        TASK_SUCCESSOR: ${{ steps.dispatch_record.outputs.bound_command }}
+        TASK_REQUEST_RETRY: ${{ steps.context.outputs.task_request_retry }}
         COMMENT_ID: ${{ steps.context.outputs.comment_id }}
         AUTHZ_WHY: ${{ steps.authz.outputs.why }}
         CHECKS_FILE: ${{ runner.temp }}/ksai-checks.json
@@ -2534,6 +2560,7 @@ runs:
         github-token: ${{ inputs.authorization_github_token || inputs.source_org_github_token }}
         retries: 3
         script: |
+          require(`${process.env.SCRIPTS}/codeowners-authz/bounded-reads.cjs`).boundReads(github, { core });
           const { decidePhase } = require(`${process.env.SCRIPTS}/ksai/prepare.cjs`);
           const authorize = require(`${process.env.SCRIPTS}/codeowners-authz/authorize.cjs`);
           const { outputs, notices } = await decidePhase({
@@ -2606,6 +2633,7 @@ runs:
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         AT_CHECKPOINT: ${{ steps.read_plan.outputs.at_checkpoint }}
+        RELEASED_HOLD: ${{ steps.read_plan.outputs.released_hold }}
         PR_NUMBER: ${{ steps.phase.outputs.pr_number }}
         COMMAND: ${{ steps.select.outputs.command }}
         AUTHORIZED: ${{ steps.check.outputs.authorized }}
@@ -2622,7 +2650,7 @@ runs:
         REVIEW_SUBMITTED_AT: ${{ steps.context.outputs.review_submitted_at }}
         REVIEW_STATE: ${{ steps.context.outputs.review_state }}
         THREAD_NUM: ${{ steps.context.outputs.issue_number }}
-        WORK_REQUEST: ${{ steps.context.outputs.work_request }}
+        TASK_REQUEST: ${{ steps.context.outputs.task_request }}
         CONTROL_PLANE_APPROVER: ${{ steps.context.outputs.threadless == 'true' && steps.dispatch_record.outputs.approver || '' }}
         CONTROL_PLANE_APPROVAL_ID: ${{ steps.context.outputs.threadless == 'true' && steps.dispatch_record.outputs.approval_id || '' }}
         CONTROL_PLANE_HEAD_SHA: ${{ steps.context.outputs.threadless == 'true' && steps.dispatch_record.outputs.head_sha || '' }}
@@ -2632,6 +2660,7 @@ runs:
         github-token: ${{ inputs.authorization_github_token || inputs.source_org_github_token }}
         retries: 3
         script: |
+          require(`${process.env.SCRIPTS}/codeowners-authz/bounded-reads.cjs`).boundReads(github, { core });
           const { resolveCheckpoint } = require(`${process.env.SCRIPTS}/ksai/prepare.cjs`);
           const authorize = require(`${process.env.SCRIPTS}/codeowners-authz/authorize.cjs`);
           const { outputs, notices } = await resolveCheckpoint({
@@ -2733,7 +2762,7 @@ runs:
         REVIEW_URL: ${{ steps.context.outputs.review_url }}
         REVIEW_ASSOCIATION: ${{ steps.context.outputs.review_association }}
         REVIEWER_TYPE: ${{ steps.context.outputs.review_actor_type }}
-        WORK_REQUEST: ${{ steps.context.outputs.work_request }}
+        TASK_REQUEST: ${{ steps.context.outputs.task_request }}
         DISABLED_COMMANDS: ${{ inputs.disabled_commands }}
         WRITE_ACCESS_COMMANDS: ${{ inputs.write_access_commands }}
         RELEASED_REF: ${{ steps.read_plan.outputs.release_ref }}
@@ -2746,6 +2775,7 @@ runs:
         github-token: ${{ inputs.authorization_github_token || inputs.source_org_github_token }}
         retries: 3
         script: |
+          require(`${process.env.SCRIPTS}/codeowners-authz/bounded-reads.cjs`).boundReads(github, { core });
           const { resolveApprovalGate } = require(`${process.env.SCRIPTS}/ksai/prepare.cjs`);
           const authorize = require(`${process.env.SCRIPTS}/codeowners-authz/authorize.cjs`);
           const { outputs, notices } = await resolveApprovalGate({
@@ -2882,7 +2912,9 @@ runs:
         RELEASED_REMAINING: ${{ steps.release_checkpoint.outputs.remaining }}
         RELEASE_REF: ${{ steps.approval.outputs.release_ref }}
         GATE_WAITING: ${{ steps.read_plan.outputs.gate_waiting }}
+        PLAN_UNSETTLED: ${{ steps.read_plan.outputs.unsettled }}
         RELEASED_HOLD: ${{ steps.read_plan.outputs.released_hold }}
+        DRY_RUN: ${{ inputs.dry_run }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:
         script: |
@@ -2890,6 +2922,18 @@ runs:
           const { outputs, notices } = resolveWork({ env: process.env });
           for (const [name, value] of Object.entries(outputs)) core.setOutput(name, value);
           for (const line of notices) core.info(line);
+
+    - name: Tell the control plane the approve or resume released nothing
+      id: idle_reported
+      if: ${{ steps.works.outputs.idle_command != '' && inputs.github_calls == 'cp' }}
+      shell: bash
+      env:
+        IDLE_COMMAND: ${{ steps.works.outputs.idle_command }}
+        JOB: ${{ github.job }}
+        KSAI_GITHUB_CALLS: ${{ inputs.github_calls }}
+        KSAI_CP_ENDPOINT: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      run: node "${SCRIPTS}/ksai/report-idle.mjs"
 
     - name: Mark the checkout phase
       if: ${{ always() }}
@@ -2968,6 +3012,7 @@ runs:
         github-token: ${{ inputs.authorization_github_token || inputs.source_org_github_token }}
         retries: 3
         script: |
+          require(`${process.env.SCRIPTS}/codeowners-authz/bounded-reads.cjs`).boundReads(github, { core });
           const { resolveIdentities } = require(`${process.env.SCRIPTS}/ksai/prepare.cjs`);
           const { outputs, warnings } = await resolveIdentities({ github, core, env: process.env });
           for (const [name, value] of Object.entries(outputs)) core.setOutput(name, value);
@@ -3141,6 +3186,23 @@ runs:
         } >> "$GITHUB_OUTPUT"
         echo "The review reads ${stat# }"
 
+    - name: Check the diff fits one review
+      id: fits
+      if: ${{ inputs.dry_run == 'false' && steps.diff.outcome == 'success' }}
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        REVIEW_STRATEGY: ${{ inputs.review_strategy }}
+        REVIEW_DIFF_MIB: ${{ inputs.review_diff_mib }}
+        DIFF_PATCH: ${{ steps.diff.outputs.patch }}
+        DIFF_STATUS: ${{ steps.diff.outputs.status_file }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      with:
+        script: |
+          const { reviewFits } = require(`${process.env.SCRIPTS}/kreview/prepare.cjs`);
+          const fits = reviewFits(process.env);
+          core.setOutput('too_large', fits.too_large);
+          core.setOutput('scope_plan', fits.scope_plan);
+
     - name: Mark the context phase
       if: ${{ always() }}
       shell: bash
@@ -3298,6 +3360,8 @@ runs:
         KSAI_ASK: ${{ inputs.ask }}
         JIRA_KEY: ${{ steps.subject.outputs.jira_key || steps.context.outputs.jira_key }}
         JIRA_ERROR: ${{ steps.fetch_jira.outputs.error }}
+        IDLE_NOTICE: ${{ inputs.publish == 'true' && steps.works.outputs.idle_notice || '' }}
+        IDLE_FACTS: ${{ inputs.publish == 'true' && steps.works.outputs.idle_facts || '' }}
         HELD_BY: ${{ steps.holder.outputs.held_by }}
         HELD_NOTICE: >-
           ${{ steps.holder.outputs.held_by != '' &&
@@ -3476,6 +3540,7 @@ runs:
         COMMAND: ${{ steps.select.outputs.command }}
         PHASE: ${{ steps.phase.outputs.phase }}
         PLAN_MODE: ${{ steps.select.outputs.plan_mode }}
+        PLAN_ASKED: ${{ steps.select.outputs.plan_asked }}
         REQUIRE_APPROVAL: ${{ steps.bare_gate.outputs.require_plan_approval || inputs.require_plan_approval }}
         KSAI_ASK: ${{ inputs.ask }}
         JIRA_KEY: ${{ steps.subject.outputs.jira_key || steps.fetch_jira.outputs.key }}
@@ -3528,6 +3593,7 @@ runs:
         COMMAND: ${{ steps.select.outputs.command }}
         PHASE: ${{ steps.phase.outputs.phase }}
         PLAN_MODE: ${{ steps.select.outputs.plan_mode }}
+        PLAN_ASKED: ${{ steps.select.outputs.plan_asked }}
         REQUIRE_APPROVAL: ${{ steps.bare_gate.outputs.require_plan_approval || inputs.require_plan_approval }}
         KSAI_ASK: ${{ inputs.ask }}
         JIRA_KEY: ${{ steps.subject.outputs.jira_key || steps.fetch_jira.outputs.key }}
@@ -3673,10 +3739,11 @@ runs:
       with:
         script: |
           const { selectWriteArm } = require(`${process.env.SCRIPTS}/ksai/write-triage.cjs`);
-          const { outputs, error } = selectWriteArm(process.env);
+          const { outputs, error, warning } = selectWriteArm(process.env);
           for (const name of ['model', 'effort', 'model_source', 'effort_source', 'selection']) {
             core.setOutput(name, outputs[name]);
           }
+          if (warning) core.warning(warning);
           if (error) core.setFailed(error);
 
     - name: Decide whether this run plans first or builds directly
@@ -3687,6 +3754,7 @@ runs:
         PHASE: ${{ steps.phase.outputs.phase }}
         PR_NUMBER: ${{ steps.phase.outputs.pr_number }}
         PLAN_MODE: ${{ steps.select.outputs.plan_mode }}
+        PLAN_ASKED: ${{ steps.select.outputs.plan_asked }}
         VERDICT: ${{ steps.write_triage_verdict.outputs.verdict }}
         REQUIRE_APPROVAL: ${{ steps.bare_gate.outputs.require_plan_approval || inputs.require_plan_approval }}
         KSAI_ASK: ${{ inputs.ask }}
@@ -4062,6 +4130,7 @@ runs:
             env: process.env,
           });
           core.setOutput('held', out.held ? 'true' : 'false');
+          core.setOutput('status', out.held && !out.unrecorded ? 'held' : '');
           const spend = out.spend ?? {};
           core.setOutput('cost', String(spend.cost_usd ?? ''));
           core.setOutput('input_tokens', String(spend.input_tokens ?? ''));
@@ -4069,6 +4138,20 @@ runs:
           core.setOutput('turns', String(spend.turns ?? ''));
           core.setOutput('duration', String(spend.duration_s ?? ''));
           for (const notice of out.notices) core.warning(notice);
+          if (out.unrecorded) core.setFailed('The thread this run was asked about reads as a disagreement, but its hold could not be posted');
+
+    - name: Tell the control plane the run held every thread
+      id: held_reported
+      if: >-
+        ${{ always() && steps.lock_threads.outputs.status == 'held' && inputs.github_calls == 'cp' }}
+      shell: bash
+      env:
+        IDLE_COMMAND: held
+        JOB: ${{ github.job }}
+        KSAI_GITHUB_CALLS: ${{ inputs.github_calls }}
+        KSAI_CP_ENDPOINT: ${{ inputs.control_plane_endpoint || inputs.fleet_dials_endpoint }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      run: node "${SCRIPTS}/ksai/report-idle.mjs"
 
     - name: Update write progress
       id: write_progress
@@ -4131,7 +4214,7 @@ runs:
         CURRENT: >-
           ${{ steps.size.outputs.phase == 'plan' && 'Planning the implementation.' ||
           steps.size.outputs.phase == 'direct' && 'Building the change.' ||
-          format('Working on {0}.', steps.read_plan.outputs.step_title || steps.size.outputs.phase) }}
+          format('Working on {0}.', steps.read_plan.outputs.step_shown || steps.size.outputs.phase) }}
         FLOW: ${{ inputs.flow }}
         SERVER_URL: ${{ github.server_url }}
         REPOSITORY: ${{ github.repository }}
@@ -4204,7 +4287,7 @@ runs:
       id: plan_session_download
       if: ${{ steps.plan_session_find.outputs.found == 'true' && steps.plan_session_find.outputs.run_id != '' }}
       continue-on-error: true
-      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
       with:
         name: ${{ steps.plan_session_find.outputs.name }}
         run-id: ${{ steps.plan_session_find.outputs.run_id }}
@@ -4291,7 +4374,7 @@ runs:
         OPENCODE_PTY: ${{ inputs.opencode_pty }}
         OPENCODE_PHASE: ${{ inputs.flow == 'test' && 'test' || steps.size.outputs.phase }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
-      run: |
+      run: |  # zizmor: ignore[adhoc-packages]
         set -euo pipefail
         tool_bin="${RUNNER_TEMP}/ksai-opencode/bin"
         cached="/opt/ksai-tools/opencode/${VERSION}/linux-x64/bin/opencode"
@@ -4410,7 +4493,7 @@ runs:
       with:
         script: |
           const { buildPrompt } = require(`${process.env.SCRIPTS}/ksai/prepare.cjs`);
-          const { outputs, failure } = buildPrompt({ env: process.env });
+          const { outputs, failure } = await buildPrompt({ env: process.env });
           for (const [name, value] of Object.entries(outputs)) core.setOutput(name, value);
           if (failure) core.setFailed(failure);
 
@@ -4552,11 +4635,13 @@ runs:
       id: build_review
       if: >-
         ${{ inputs.flow == 'review' && inputs.dry_run == 'false' &&
-        steps.diff.outcome == 'success' && steps.triage.outputs.skip != 'true' }}
+        steps.diff.outcome == 'success' && steps.triage.outputs.skip != 'true' &&
+        steps.fits.outputs.too_large == '' }}
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         CHANNEL_NONCE: ${{ steps.channel.outputs.nonce }}
         REVIEW_STRATEGY: ${{ inputs.review_strategy }}
+        REVIEW_DIFF_MIB: ${{ inputs.review_diff_mib }}
         REVIEW_EXPERIMENT: ${{ inputs.review_experiment }}
         PUBLISH: ${{ inputs.publish }}
         COMMIT_ID: ${{ steps.checkout_pr.outputs.commit }}
@@ -4574,6 +4659,7 @@ runs:
         DIFF_PATCH: ${{ steps.diff.outputs.patch }}
         DIFF_FILES: ${{ steps.diff.outputs.files_file }}
         DIFF_STATUS: ${{ steps.diff.outputs.status_file }}
+        SCOPE_PLAN: ${{ steps.fits.outputs.scope_plan }}
         DIFF_SHORTSTAT: ${{ steps.diff.outputs.shortstat }}
         REPO_RULES: ${{ steps.repo_rules.outputs.rules }}
         JOB_TIMEOUT_MINUTES: ${{ steps.dispatch_record.outputs.stage_minutes || inputs.job_timeout_minutes }}
@@ -4645,7 +4731,7 @@ runs:
       env:
         VERSION: ${{ inputs.opencode_version }}
         REVIEW_RESULT_TRANSPORT: ${{ steps.build_review.outputs.result_transport }}
-      run: |
+      run: |  # zizmor: ignore[adhoc-packages]
         set -euo pipefail
         npm install --prefix "${RUNNER_TEMP}/ksai-opencode-sdk" --no-package-lock --no-save "@opencode-ai/sdk@${VERSION}"
 
@@ -4701,7 +4787,7 @@ runs:
       if: >-
         ${{ always() && (steps.notice_started.outcome == 'success' ||
         steps.write_progress.outcome != 'skipped') }}
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: ksai-recover-${{ github.job }}
         path: ${{ runner.temp }}/recover.json
@@ -5079,7 +5165,7 @@ runs:
         KSAI_JOB_INDEX: ${{ strategy.job-index || 0 }}
         COMMIT_ID: ${{ steps.checkout_pr.outputs.commit || steps.checkout_test.outputs.commit }}
         KSAI_OUTCOME_EXPECTED: "true"
-        KSAI_WORK_REQUEST: ${{ steps.context.outputs.work_request }}
+        KSAI_TASK_REQUEST: ${{ steps.context.outputs.task_request }}
         OTEL_EXPORTER_OTLP_ENDPOINT: ${{ inputs.otel_endpoint }}
         OTEL_EXPORTER_OTLP_HEADERS: ${{ inputs.otel_headers }}
         OTEL_RESOURCE_ATTRIBUTES: >-
@@ -5230,7 +5316,7 @@ runs:
       if: >-
         ${{ always() && inputs.flow == 'test' &&
         steps.opencode_test.outputs.execution_file != '' }}
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: pr-test-execution-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index || 0 }}
         path: ${{ steps.opencode_test.outputs.execution_file }}
@@ -5243,7 +5329,7 @@ runs:
         ${{ always() && inputs.flow == 'test' &&
         steps.test_artifact.outputs.staged == 'true' &&
         steps.verify_test_artifact.outcome != 'failure' }}
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: pr-test-verdict-${{ github.run_id }}-${{ github.run_attempt }}
         path: ${{ steps.test_artifact.outputs.dir }}
@@ -5255,7 +5341,7 @@ runs:
     - name: Download the verdict
       if: ${{ inputs.flow == 'test-publish' }}
       continue-on-error: true
-      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
       with:
         name: pr-test-verdict-${{ inputs.run_id || github.run_id }}-${{ inputs.run_attempt }}
         path: ${{ runner.temp }}/pr-test-download
@@ -5265,7 +5351,7 @@ runs:
     - name: Download the acceptance criteria captured before execution
       if: ${{ inputs.flow == 'test-publish' }}
       continue-on-error: true
-      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
       with:
         name: pr-test-criteria-${{ inputs.run_id || github.run_id }}-${{ inputs.run_attempt }}
         path: ${{ runner.temp }}/pr-test-download
@@ -5275,7 +5361,7 @@ runs:
     - name: Download the environment record captured before the tester
       if: ${{ inputs.flow == 'test-publish' }}
       continue-on-error: true
-      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
       with:
         name: pr-test-environments-${{ inputs.run_id || github.run_id }}-${{ inputs.run_attempt }}
         path: ${{ runner.temp }}/pr-test-download
@@ -5301,7 +5387,7 @@ runs:
     - name: Upload validated hypothesis results
       if: ${{ always() && inputs.flow == 'test-publish' && steps.render_test.outcome == 'success' }}
       continue-on-error: true
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: pr-test-verification-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index || 0 }}
         path: ${{ runner.temp }}/pr-test-download/verification.json
@@ -5344,6 +5430,7 @@ runs:
         github-token: ${{ inputs.authorization_github_token || inputs.source_org_github_token }}
         retries: 3
         script: |
+          require(`${process.env.SCRIPTS}/codeowners-authz/bounded-reads.cjs`).boundReads(github, { core });
           const { resolveCourierPull } = require(`${process.env.SCRIPTS}/ksai/prepare.cjs`);
           const { outputs } = await resolveCourierPull({
             github,
@@ -5390,6 +5477,7 @@ runs:
         BOT_LOGIN: ${{ inputs.bot_login }}
         OWN_PULL: ${{ steps.courier_pull.outputs.mine }}
         WRITE_ACCESS_COMMANDS: ${{ steps.select.outputs.write_access_commands || steps.select_arm.outputs.write_access_commands }}
+        RUN_COMMAND: ${{ steps.select.outputs.command || steps.select_arm.outputs.command }}
         STOP_MODE: ${{ steps.halt.outputs.mode }}
         STOP_GRACE_SECONDS: ${{ steps.halt.outputs.grace }}
         PID_FILE: ${{ runner.temp }}/ksai-courier.pid
@@ -5470,7 +5558,7 @@ runs:
           steps.governed_review.outputs.prompt_file || steps.build_review.outputs.file ||
           steps.governed_run.outputs.prompt_file || steps.build_run.outputs.file }}
         KSAI_OUTCOME_EXPECTED: "true"
-        KSAI_WORK_REQUEST: ${{ steps.context.outputs.work_request }}
+        KSAI_TASK_REQUEST: ${{ steps.context.outputs.task_request }}
         KSAI_ROUTE_COMMAND: ${{ steps.select.outputs.command || steps.select_arm.outputs.command }}
         KSAI_ROUTE_SOURCE: ${{ steps.select.outputs.route_source || steps.select_arm.outputs.route_source }}
         MODEL: ${{ steps.write_arm.outputs.model || steps.select_test.outputs.model || steps.select_arm.outputs.model || steps.build_run.outputs.model }}
@@ -6018,6 +6106,12 @@ runs:
           steps.opencode.outputs.execution_file || steps.opencode_test.outputs.execution_file ||
           steps.run_once.outputs.execution_file }}
         STOPPED: ${{ steps.opencode.outputs.stopped || steps.opencode_test.outputs.stopped }}
+        STOPPED_BY: ${{ steps.opencode.outputs.stopped_by || steps.opencode_test.outputs.stopped_by }}
+        STOPPED_BECAUSE: ${{ steps.opencode.outputs.stopped_because || steps.opencode_test.outputs.stopped_because }}
+        FAILED_BECAUSE: >-
+          ${{ (steps.opencode.outputs.stopped_by || steps.opencode_test.outputs.stopped_by) == '' &&
+          (steps.opencode.outputs.error || steps.opencode_test.outputs.error) || '' }}
+        CEILING: ${{ steps.opencode.outputs.ceiling || steps.opencode_test.outputs.ceiling }}
         MODEL_NEVER_ASKED: ${{ steps.opencode.outputs.model_never_asked || steps.opencode_test.outputs.model_never_asked }}
       run: |
         set -euo pipefail
@@ -6025,6 +6119,10 @@ runs:
         echo "outcome=${OUTCOME}" >> "$GITHUB_OUTPUT"
         echo "execution_file=${EXECUTION}" >> "$GITHUB_OUTPUT"
         echo "stopped=${STOPPED}" >> "$GITHUB_OUTPUT"
+        echo "stopped_by=${STOPPED_BY}" >> "$GITHUB_OUTPUT"
+        echo "stopped_because=${STOPPED_BECAUSE}" >> "$GITHUB_OUTPUT"
+        echo "failed_because=${FAILED_BECAUSE}" >> "$GITHUB_OUTPUT"
+        echo "ceiling=${CEILING}" >> "$GITHUB_OUTPUT"
         echo "model_never_asked=${MODEL_NEVER_ASKED}" >> "$GITHUB_OUTPUT"
 
     - name: Hold a governed run to having been governed
@@ -6091,7 +6189,7 @@ runs:
       if: >-
         ${{ always() && (steps.opencode.outputs.events_file != '' ||
         (inputs.flow == 'test' && steps.opencode_test.outputs.events_file != '')) }}
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: ksai-opencode-events-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index || 0 }}
         path: |
@@ -6149,7 +6247,7 @@ runs:
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
         OPENCODE_EVENTS_FILE: ${{ steps.opencode.outputs.events_file }}
         STARTED_AT_MS: ${{ steps.plugin_ref.outputs.started_at_ms }}
-        STOPPED_BECAUSE: ${{ steps.disarm_watchdog.outputs.reason }}
+        STOPPED_BECAUSE: ${{ steps.disarm_watchdog.outputs.reason || steps.model_run.outputs.stopped_because }}
         TRANSCRIPT_SINCE: ${{ steps.watchdog.outputs.armed_at_ms }}
         TRIM_PREFIX: ${{ github.workspace }}
       run: |
@@ -6228,7 +6326,7 @@ runs:
         ${{ always() && inputs.flow == 'implement' &&
         (steps.preserve.outputs.tree || steps.opencode.outputs.preserve_tree ||
         steps.opencode_test.outputs.preserve_tree) != '' }}
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: ksai-stopped-${{ steps.phase.outputs.pr_number || steps.open_draft.outputs.pr_number || 'none' }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index || 0 }}
         path: ${{ steps.preserve.outputs.tree || steps.opencode.outputs.preserve_tree || steps.opencode_test.outputs.preserve_tree }}
@@ -6238,7 +6336,7 @@ runs:
     - name: Upload the model execution log
       if: >-
         ${{ always() && inputs.flow != 'test' && steps.model_run.outputs.execution_file != '' }}
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: ksai-execution-log-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index || 0 }}
         path: ${{ steps.model_run.outputs.execution_file }}
@@ -6272,7 +6370,7 @@ runs:
     - name: Upload the planning session
       if: ${{ always() && steps.plan_session_save.outputs.saved == 'true' }}
       continue-on-error: true
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: ${{ steps.plan_session_save.outputs.name }}
         path: ${{ steps.plan_session_save.outputs.file }}
@@ -6592,6 +6690,7 @@ runs:
       id: stop_successor
       if: >-
         ${{ always() && steps.dispatch.outputs.successor == 'asked' &&
+        steps.model_run.outputs.stopped != 'true' &&
         (steps.publish.outputs.status == 'blocked' || steps.publish_direct.outputs.status == 'blocked' ||
         steps.record.outputs.status == 'blocked' || steps.record_fix.outputs.status == 'blocked' ||
         steps.record_do.outputs.status == 'blocked') }}
@@ -6615,7 +6714,7 @@ runs:
 
     - name: Upload the work a push gate refused
       if: ${{ always() && inputs.flow == 'implement' && steps.preserve_refused.outputs.tree != '' }}
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: ksai-refused-${{ steps.phase.outputs.pr_number || steps.open_draft.outputs.pr_number || 'none' }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index || 0 }}
         path: ${{ steps.preserve_refused.outputs.tree }}
@@ -6626,7 +6725,7 @@ runs:
       if: >-
         ${{ always() && inputs.flow == 'implement' &&
         steps.build_implement.outputs.change_scope_file != '' }}
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: ksai-change-scope-${{ steps.phase.outputs.pr_number || steps.open_draft.outputs.pr_number || 'none' }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index || 0 }}
         path: ${{ runner.temp }}/ksai-change-scope
@@ -6767,6 +6866,7 @@ runs:
         REQUEST_HEAD: ${{ steps.context.outputs.label_head }}
         HELD: ${{ steps.hold_plan.outputs.held }}
         PLAN_HELD: ${{ steps.phase.outputs.held }}
+        STOPPED: ${{ steps.model_run.outputs.stopped }}
         BOT_LOGIN: ${{ inputs.bot_login }}
         RUN_ID: ${{ github.run_id }}
         RUN_ATTEMPT: ${{ github.run_attempt }}
@@ -6778,15 +6878,20 @@ runs:
         OUTCOME: >-
           ${{ steps.publish.outputs.status || steps.publish_direct.outputs.status || steps.record.outputs.status ||
           steps.record_fix.outputs.status || steps.record_do.outputs.status ||
-          steps.release_plan.outputs.status || 'failed' }}
+          steps.release_plan.outputs.status || steps.lock_threads.outputs.status || 'failed' }}
         STEP_TITLE: ${{ steps.read_plan.outputs.step_title }}
+        SAID_ASKED: ${{ inputs.said }}
         BLOCKER_ASKED: ${{ inputs.blocker }}
         BLOCKER_FILE: >-
           ${{ steps.publish.outputs.blocker_file || steps.publish_direct.outputs.blocker_file ||
           steps.record.outputs.blocker_file || steps.record_fix.outputs.blocker_file ||
           steps.record_do.outputs.blocker_file }}
+        STOPPED_FILE: >-
+          ${{ steps.publish.outputs.message_file || steps.publish_direct.outputs.message_file ||
+          steps.record.outputs.message_file || steps.record_fix.outputs.message_file ||
+          steps.record_do.outputs.message_file || steps.release_plan.outputs.message_file }}
         REASON: >-
-          ${{ steps.disarm_watchdog.outputs.cause || steps.approval.outputs.reason ||
+          ${{ steps.disarm_watchdog.outputs.cause || steps.model_run.outputs.stopped_by || steps.approval.outputs.reason ||
           (steps.checkpoint.outputs.waiting == 'true' && steps.checkpoint.outputs.reason) || '' }}
         MODEL: ${{ steps.write_arm.outputs.model || steps.select.outputs.model }}
         EFFORT: ${{ steps.write_arm.outputs.effort || steps.select.outputs.effort }}
@@ -6835,7 +6940,9 @@ runs:
         CURRENT: >-
           ${{ (steps.publish.outputs.status || steps.publish_direct.outputs.status || steps.record.outputs.status ||
           steps.record_fix.outputs.status || steps.record_do.outputs.status || steps.release_plan.outputs.status) == '' &&
-          'This write run did not complete. See the linked workflow run for the failure or cancellation details.' || '' }}
+          (steps.lock_threads.outputs.status == 'held' &&
+          'Held the review threads somebody disagreed with. Reply in each with the unlock command and what you want done instead.' ||
+          'This write run did not complete. See the linked workflow run for the failure or cancellation details.') || '' }}
         DO_REQUEST: >-
           ${{ steps.record_do.outcome == 'success' &&
           (steps.record_do.outputs.status == 'changed' || steps.record_do.outputs.status == 'unchanged') &&
@@ -6945,15 +7052,15 @@ runs:
         ISSUE_NUM: ${{ steps.subject.outputs.number }}
         PR_NUMBER: ${{ steps.phase.outputs.pr_number || steps.open_draft.outputs.pr_number }}
         RUN_ID: ${{ github.run_id }}
-        WATCHDOG_FIRED: ${{ steps.disarm_watchdog.outputs.fired }}
-        WATCHDOG_CAUSE: ${{ steps.disarm_watchdog.outputs.cause }}
-        WATCHDOG_REASON: ${{ steps.disarm_watchdog.outputs.reason }}
+        WATCHDOG_FIRED: ${{ steps.disarm_watchdog.outputs.fired || steps.model_run.outputs.stopped_by != '' && 'true' || '' }}
+        WATCHDOG_CAUSE: ${{ steps.disarm_watchdog.outputs.cause || steps.model_run.outputs.stopped_by }}
+        WATCHDOG_REASON: ${{ steps.disarm_watchdog.outputs.reason || steps.model_run.outputs.stopped_because || steps.model_run.outputs.failed_because }}
         PRESERVED: ${{ steps.preserve.outputs.preserved || steps.opencode.outputs.preserved || steps.opencode_test.outputs.preserved }}
         PRESERVE_REASON: >-
           ${{ steps.preserve.outputs.reason || steps.opencode.outputs.preserve_reason ||
           steps.opencode_test.outputs.preserve_reason }}
         HELD: ${{ steps.hold_plan.outputs.held }}
-        CEILING: ${{ steps.watchdog.outputs.ceiling }}
+        CEILING: ${{ steps.watchdog.outputs.ceiling || steps.model_run.outputs.ceiling }}
         KSAI_ASK: ${{ inputs.ask }}
         JIRA_KEY: ${{ steps.subject.outputs.jira_key || steps.context.outputs.jira_key }}
         PHASE: ${{ steps.size.outputs.phase }}
@@ -7072,7 +7179,7 @@ runs:
       if: >-
         ${{ always() && (steps.comment_result.outputs.record_dir != '' ||
         steps.opencode.outputs.record_dir != '' || steps.opencode_test.outputs.record_dir != '') }}
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: kreview-suppression-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index || 0 }}
         path: >-
@@ -7145,7 +7252,7 @@ runs:
         COST: ${{ steps.report.outputs.total_cost }}
         REVIEW_PROTOCOL: ${{ steps.report.outputs.review_protocol }}
         HAS_RESULT: ${{ steps.report.outputs.has_result }}
-        STOPPED_BY: ${{ steps.disarm_watchdog.outputs.cause }}
+        STOPPED_BY: ${{ steps.disarm_watchdog.outputs.cause || steps.model_run.outputs.stopped_by }}
         ENDED_ON: ${{ steps.report.outputs.ended_on }}
         INPUT_TOKENS: ${{ steps.report.outputs.input_tokens }}
         OUTPUT_TOKENS: ${{ steps.report.outputs.output_tokens }}
@@ -7203,7 +7310,7 @@ runs:
 
     - name: Upload eval run record
       if: ${{ always() && steps.eval_record.outcome == 'success' }}
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: eval-run-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index || 0 }}
         path: ${{ steps.eval_record.outputs.dir }}
@@ -7268,6 +7375,7 @@ runs:
         SELECT_ERROR: ${{ steps.select_arm.outputs.error }}
         SELECT_ERROR_NOTICE: ${{ steps.select_arm.outputs.rejection }}
         BUILD_ERROR: ${{ steps.build_review.outputs.error }}
+        TOO_LARGE: ${{ steps.fits.outputs.too_large }}
         STAND_DOWN: ${{ steps.select_arm.outputs.stand_down_notice }}
         DRY_RUN: ${{ inputs.dry_run }}
         VALIDATE_OUTCOME: ${{ steps.validate_args.outcome }}
@@ -7278,10 +7386,10 @@ runs:
         SELECT_OUTCOME: ${{ steps.select_arm.outcome }}
         SELECT_SKIPPED: ${{ steps.select_arm.outputs.skipped }}
         RESULT_OUTCOME: ${{ steps.opencode.outputs.published != '' && 'success' || steps.comment_result.outcome }}
-        WATCHDOG_FIRED: ${{ steps.disarm_watchdog.outputs.fired }}
-        WATCHDOG_CAUSE: ${{ steps.disarm_watchdog.outputs.cause }}
-        WATCHDOG_REASON: ${{ steps.disarm_watchdog.outputs.reason }}
-        CEILING: ${{ steps.watchdog.outputs.ceiling }}
+        WATCHDOG_FIRED: ${{ steps.disarm_watchdog.outputs.fired || steps.model_run.outputs.stopped_by != '' && 'true' || '' }}
+        WATCHDOG_CAUSE: ${{ steps.disarm_watchdog.outputs.cause || steps.model_run.outputs.stopped_by }}
+        WATCHDOG_REASON: ${{ steps.disarm_watchdog.outputs.reason || steps.model_run.outputs.stopped_because || steps.model_run.outputs.failed_because }}
+        CEILING: ${{ steps.watchdog.outputs.ceiling || steps.model_run.outputs.ceiling }}
         STOP_REASON: ${{ steps.report.outputs.stop_reason }}
         ENDED_ON: ${{ steps.report.outputs.ended_on }}
         RULES_NOTICE: ${{ steps.repo_rules.outputs.rejection }}
@@ -7360,6 +7468,7 @@ runs:
         SELECT_ERROR: ${{ steps.select_arm.outputs.error }}
         SELECT_ERROR_NOTICE: ${{ steps.select_arm.outputs.rejection }}
         BUILD_ERROR: ${{ steps.build_review.outputs.error }}
+        TOO_LARGE: ${{ steps.fits.outputs.too_large }}
         STAND_DOWN: ${{ steps.select_arm.outputs.stand_down_notice }}
         DRY_RUN: ${{ inputs.dry_run }}
         VALIDATE_OUTCOME: ${{ steps.validate_args.outcome }}
@@ -7370,11 +7479,11 @@ runs:
         SELECT_OUTCOME: ${{ steps.select_arm.outcome }}
         SELECT_SKIPPED: ${{ steps.select_arm.outputs.skipped }}
         RESULT_OUTCOME: ${{ steps.opencode.outputs.published != '' && 'success' || steps.comment_result.outcome }}
-        WATCHDOG_FIRED: ${{ steps.disarm_watchdog.outputs.fired }}
-        WATCHDOG_CAUSE: ${{ steps.disarm_watchdog.outputs.cause }}
-        WATCHDOG_REASON: ${{ steps.disarm_watchdog.outputs.reason }}
+        WATCHDOG_FIRED: ${{ steps.disarm_watchdog.outputs.fired || steps.model_run.outputs.stopped_by != '' && 'true' || '' }}
+        WATCHDOG_CAUSE: ${{ steps.disarm_watchdog.outputs.cause || steps.model_run.outputs.stopped_by }}
+        WATCHDOG_REASON: ${{ steps.disarm_watchdog.outputs.reason || steps.model_run.outputs.stopped_because || steps.model_run.outputs.failed_because }}
         TRIGGER: ${{ inputs.trigger_phrase }}
-        CEILING: ${{ steps.watchdog.outputs.ceiling }}
+        CEILING: ${{ steps.watchdog.outputs.ceiling || steps.model_run.outputs.ceiling }}
         STOP_REASON: ${{ steps.report.outputs.stop_reason }}
         RULES_NOTICE: ${{ steps.repo_rules.outputs.rejection }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -7382,6 +7491,7 @@ runs:
         COMMAND: ${{ steps.select_arm.outputs.command }}
         ROUTE_SOURCE: ${{ steps.select_arm.outputs.route_source }}
         REPORT_PUBLISHED: ${{ steps.comment_report.outputs.published }}
+        CANCELLED: ${{ steps.cancellation.outputs.cancelled || steps.model_run.outputs.stopped }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       with:
         github-token: ${{ inputs.source_org_github_token }}
@@ -7452,7 +7562,8 @@ runs:
     - name: Report what this run published to the control plane
       id: outcome
       if: >-
-        ${{ always() && steps.engine.outputs.opencode_major == '2' && steps.model_run.outcome != 'skipped' }}
+        ${{ !cancelled() && steps.engine.outputs.opencode_major == '2' &&
+        steps.model_run.outcome != 'skipped' }}
       shell: bash
       working-directory: ${{ runner.temp }}
       env:
@@ -7490,6 +7601,7 @@ runs:
           format('{0}/.pr-test-verdict.json', steps.test_artifact.outputs.dir) || '' }}
         TEST_HEAD_SHA: ${{ steps.checkout_test.outputs.commit || steps.checkout_pr.outputs.commit }}
         TEST_ARTIFACT_SHA256: ${{ steps.test_artifact.outputs.sha256 }}
+        STOPPED: ${{ steps.model_run.outputs.stopped }}
         BLOCKED: >-
           ${{ steps.publish.outputs.status == 'blocked' || steps.publish_direct.outputs.status == 'blocked' ||
           steps.record.outputs.status == 'blocked' || steps.record_fix.outputs.status == 'blocked' ||
@@ -7500,7 +7612,7 @@ runs:
           ${{ steps.publish.outcome == 'failure' || steps.publish_direct.outcome == 'failure' ||
           steps.record.outcome == 'failure' || steps.record_fix.outcome == 'failure' ||
           steps.record_do.outcome == 'failure' || steps.finish.outcome == 'failure' || steps.upload_verdict.outcome == 'failure' }}
-      run: node "${SCRIPTS}/ksai/work-outcome.mjs"
+      run: node "${SCRIPTS}/ksai/task-outcome.mjs"
 
     - name: Report what this run spent as metrics
       if: >-

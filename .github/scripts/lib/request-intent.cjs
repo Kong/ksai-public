@@ -40,8 +40,12 @@ const LABEL_SOURCE = 'label';
 
 const PRESSED_SOURCE = 'pressed';
 
+const MAX_LABEL_CHARS = 256;
+
 const labelNamed = (label) => {
-  const shown = String(label ?? '').replaceAll('`', "'").trim();
+  const named = [...String(label ?? '').replaceAll('`', "'").trim().replace(/\s+/g, ' ')];
+  const shown =
+    named.length > MAX_LABEL_CHARS ? `${named.slice(0, MAX_LABEL_CHARS).join('').replace(/\\+$/, '')}…` : named.join('');
   return shown === '' ? 'a label' : `the \`${shown}\` label`;
 };
 

@@ -16,7 +16,7 @@ import {
   totals,
 } from './opencode.mjs';
 
-export const OPENCODE_V2_VERSION = '2.0.22';
+export const OPENCODE_V2_VERSION = '2.0.26';
 
 export const majorOf = (version) => {
   const major = /^([0-9]{1,4})\./.exec(String(version ?? '').trim())?.[1];
@@ -454,7 +454,7 @@ export function endedOn(events) {
     const named = String(error.type ?? '').replace(/\s+/g, ' ').trim() || 'error';
     const detail = said ? `${named}: ${said}` : named;
     const shown = Number.isFinite(status) && status > 0 ? `${detail} (${status})` : detail;
-    return shown.slice(0, MAX_FAILURE_CHARS);
+    return [...shown].slice(0, MAX_FAILURE_CHARS).join('');
   }
   return null;
 }

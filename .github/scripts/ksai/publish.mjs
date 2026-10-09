@@ -17,6 +17,7 @@ const {
   renderShape,
   requesterOf,
 } = require('./plan.cjs');
+const { inertInline } = require('../lib/inert-markdown.cjs');
 const { NUMBER_SHAPE } = require('./context.cjs');
 const { gitVia, safeEcho, verifyChunk } = require('./verify-chunk.cjs');
 const { stagePaths } = require('./stage.cjs');
@@ -81,7 +82,7 @@ export function publishPlan({
     return block(`${noun} produced an unrecognized status: ${safeEcho(raw)}`);
   }
   if (status === 'blocked') {
-    return block(`${noun} stopped without writing a plan: ${oneLine(reasonOf(manifest), { triggerPhrase })}`, { blocker: modelBlocker(manifest) });
+    return block(`${noun} stopped without writing a plan: ${inertInline(oneLine(reasonOf(manifest), { triggerPhrase }))}`, { blocker: modelBlocker(manifest) });
   }
   if (status !== 'ready') return block(`${noun} produced an unrecognized status: ${safeEcho(status)}`);
 

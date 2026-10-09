@@ -80,12 +80,33 @@ async function readCodeownersUncached({ github, core, owner, repo }) {
     }
     return { content: Buffer.from(data.content, 'base64').toString('utf-8'), source: path };
   }
+  ownersAbsent({ core, owner, repo });
+  return null;
+}
+
+function ownersAbsent({ core, owner, repo }) {
   core.setOutput?.('owners', 'absent');
   core.warning(
     `CODEOWNERS not found in ${owner}/${repo} at ${SEARCH_PATHS.join(', ')}, so it has no code owners and ` +
       'nobody is authorized by ownership. Add one to the default branch',
   );
-  return null;
+}
+
+async function ownedOnControlPlane({ core, owner, repo, rawUsername, askOwners }) {
+  const said = await askOwners(rawUsername, `${owner}/${repo}`);
+  if (said.unserved) {
+    core.info(`The control plane does not answer who owns code yet, so ${owner}/${repo}'s CODEOWNERS is read on this runner`);
+    return null;
+  }
+  if (said.why) {
+    core.setFailed(`The control plane could not say whether ${rawUsername} owns code in ${owner}/${repo}, so they were neither authorized nor cleanly denied: ${said.why}`);
+    return false;
+  }
+  if (said.answer?.owned === false) {
+    ownersAbsent({ core, owner, repo });
+    return false;
+  }
+  return said.answer?.authorized === true;
 }
 
 async function writeAccessLevel({ github, owner, repo, username, cache }) {
@@ -228,14 +249,19 @@ async function teamHasWriteAccessUncached({ github, core, org, slug, owner, repo
 }
 
 /**
- * authorize answers whether `username` is authorized by CODEOWNERS on `owner`/`repo`. `github`
- * needs contents:read and, for team entries, org Members:read. Callers must still surface
+ * authorize answers whether `username` is authorized by CODEOWNERS on `owner`/`repo`. Read on the
+ * runner, `github` needs contents:read and, for team entries, org Members:read; answered by
+ * `askOwners`, it reads nothing, unless the control plane does not serve the route yet. Callers must still surface
  * `core.setFailed` - a `false` from an undecidable check is not the same as a denial.
  */
-module.exports = async function authorize({ github, core, owner, repo, username: rawUsername, cache }) {
+module.exports = async function authorize({ github, core, owner, repo, username: rawUsername, cache, askOwners }) {
   if (!rawUsername) {
     core.setFailed('username input is required and must not be empty');
     return false;
+  }
+  if (askOwners) {
+    const owned = await ownedOnControlPlane({ core, owner, repo, rawUsername, askOwners });
+    if (owned !== null) return owned;
   }
   // GitHub logins are case-insensitive but not stored in a fixed case, so a CODEOWNERS entry
   // and the actor's login can differ only in case and still be the same account.

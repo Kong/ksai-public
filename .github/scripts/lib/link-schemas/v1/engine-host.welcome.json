@@ -25,6 +25,15 @@
         "counters": { "const": "invocation-calls-v1" }
       }
     },
+    "render": {
+      "description": "The render-request extensions this engine and its control plane accept",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_digest"],
+      "properties": {
+        "schema_digest": { "const": true }
+      }
+    },
     "resume": {
       "type": "object",
       "additionalProperties": false,

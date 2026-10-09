@@ -2,6 +2,7 @@ import { appendFileSync, readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 import { writeOutputs } from '../lib/outputs.mjs';
+import { counted } from '../lib/text.cjs';
 import { elapsed, plain } from './progress.mjs';
 
 const MAX_PHASES = 64;
@@ -76,7 +77,7 @@ export function summary(record) {
   if (!record) return '';
   const worst = [...record.phases].sort((left, right) => right.duration_ms - left.duration_ms)[0];
   const headline = worst
-    ? `${brief(record.total_ms)} across ${record.phases.length} phases, longest ${worst.name} at ${brief(worst.duration_ms)}`
+    ? `${brief(record.total_ms)} across ${counted(record.phases.length, 'phase')}, longest ${worst.name} at ${brief(worst.duration_ms)}`
     : `${brief(record.total_ms)} across no phases`;
   return `${[
     '## Where the action spent its time',
