@@ -20,14 +20,14 @@
     "handoff": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["action", "session_id", "source_session_id", "source_prompt_id", "source_render_digest", "source_head_sha", "current_head_sha", "checkpoint"],
+      "required": ["action", "task_id", "source_task_id", "source_prompt_id", "source_render_digest", "source_head_sha", "current_head_sha", "checkpoint"],
       "properties": {
         "followup_actor": {"type": "string", "minLength": 1, "maxLength": 256},
         "followup_actor_id": {"type": "integer", "minimum": 1},
         "followup_source": {"type": "string", "minLength": 1, "maxLength": 4096},
         "action": {"enum": ["continue", "restart"]},
-        "session_id": {"type": "string", "minLength": 1, "maxLength": 128},
-        "source_session_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "task_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "source_task_id": {"type": "string", "minLength": 1, "maxLength": 128},
         "source_prompt_id": {"type": "string", "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$", "maxLength": 160, "not": {"enum": ["runtime.task-continue", "runtime.work-session-continue"]}},
         "source_render_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
         "source_head_sha": {"type": "string", "pattern": "^(?:[0-9a-f]{40})?$"},
@@ -46,10 +46,10 @@
     "knowledge": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["version", "session_id", "built_at", "items"],
+      "required": ["version", "task_id", "built_at", "items"],
       "properties": {
-        "version": {"const": "work-context/v1"},
-        "session_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "version": {"const": "task-context/v1"},
+        "task_id": {"type": "string", "minLength": 1, "maxLength": 128},
         "built_at": {"type": "string", "minLength": 1, "maxLength": 64},
         "head_sha": {"type": "string", "pattern": "^(?:[0-9a-f]{40})?$"},
         "next_review_thread_cursor": {"type": "string", "minLength": 1, "maxLength": 512},

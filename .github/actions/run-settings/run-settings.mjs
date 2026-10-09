@@ -22,12 +22,14 @@ export const ALIASES = ['fast', 'balanced', 'flagship', 'opus', 'sonnet', 'haiku
 
 const WHERE = (/** @type {string} */ value) => ['local', 'shadow', 'cp'].includes(value);
 
+const namedModels = (/** @type {string} */ value) => value.split(/[,\s]+/).filter((one) => one !== '');
+
 export const PINNED = {
   shadow_percent: (/** @type {string} */ value) =>
     SHARE.test(value) && Number(value) >= 0 && Number(value) <= 100,
   review_triage_mode: WHERE,
   allowed_models: (/** @type {string} */ value) => {
-    const named = value.split(/[,\s]+/).filter((one) => one !== '');
+    const named = namedModels(value);
     return named.length > 0
       && named.every((one) => MODEL.test(one) && !ALIASES.includes(one.toLowerCase()));
   },
@@ -42,6 +44,8 @@ export const PINNED = {
   run_tokens: WHERE,
   prompt_rendering: WHERE,
   engine: (/** @type {string} */ value) => ['opencode', 'opencode2'].includes(value),
+  review_strategy: (/** @type {string} */ value) => ['baseline', 'evidence', 'dual'].includes(value),
+  review_diff_mib: between(1, 64),
 };
 
 /**
@@ -92,8 +96,14 @@ const NO_SETTINGS = {
   bare_comments: '',
   stop_mode: '',
   require_plan_approval: '',
+  fix_review_bots: '',
   blocker: '',
+  said: '',
 };
+
+const REVIEW_BOT = String.raw`[A-Za-z0-9][A-Za-z0-9-]{0,38}(?:\[bot\])?`;
+
+const REVIEW_BOTS = new RegExp(`^${REVIEW_BOT}(?:[ ,] ?${REVIEW_BOT})*$`);
 
 const DENIED_PATH = String.raw`(?!\.\.?(?:/|[\n,]|$))[A-Za-z0-9._@+-]+(?:/(?!\.\.?(?:/|[\n,]|$))[A-Za-z0-9._@+-]+)*/?`;
 
@@ -129,11 +139,16 @@ function settingsOf(served = Object.create(null)) {
     if (typeof value === 'string' && shape.test(value)) settings[name] = value;
   }
 
+  const bots = served.fix_review_bots;
+  if (bots === '') settings.fix_review_bots = 'none';
+  else if (typeof bots === 'string' && REVIEW_BOTS.test(bots)) settings.fix_review_bots = bots;
+
   const workflow = served.continuation_workflow;
   if (typeof workflow === 'string' && WORKFLOW_FILE.test(workflow)) settings.continuation_workflow = workflow;
 
   if (served.clear_request === true) settings.clear_request = 'true';
   if (served.blocker === true) settings.blocker = 'true';
+  if (served.said === true) settings.said = 'true';
 
   const labels = served.runs_on;
   if (typeof labels === 'string' && labels !== '') {
@@ -173,15 +188,28 @@ export function catalogOf(value) {
   return Array.isArray(models) && models.length > 0 ? value : null;
 }
 
-export function runs(catalog, wanted) {
+function runnableModel(catalog, wanted) {
   const models = /** @type {{ models: unknown[] }} */ (catalog).models;
-  return models.some((one) => {
+  return /** @type {{ id?: unknown } | undefined} */ (models.find((one) => {
     if (one === null || typeof one !== 'object') return false;
     const model = /** @type {{ id?: unknown, aliases?: unknown, runnable?: unknown }} */ (one);
     if (model.runnable !== true) return false;
     const names = [model.id, ...(Array.isArray(model.aliases) ? model.aliases : [])];
     return names.some((name) => String(name ?? '').toLowerCase() === wanted.toLowerCase());
-  });
+  }));
+}
+
+export function runs(catalog, wanted) {
+  return runnableModel(catalog, wanted) !== undefined;
+}
+
+export function runnableAllowed(catalog, allowed, model) {
+  const named = namedModels(allowed);
+  if (named.length === 0) return '';
+  const runnable = [...new Set(named.filter((name) => runs(catalog, name)))];
+  if (runnable.length > 0) return runnable.join(',');
+  return [runnableModel(catalog, model)?.id, model]
+    .find((one) => typeof one === 'string' && MODEL.test(one) && PINNED.allowed_models(one)) ?? null;
 }
 
 /**
@@ -293,9 +321,14 @@ export async function readRunSettings({
       if (!refused.includes(name)) refused.push(name);
     }
   }
+  if (catalog !== null) {
+    const allowed = runnableAllowed(catalog, runSettings.allowed_models, servedModel);
+    if (allowed === null) return keep('the control plane served a model no allowed list can name');
+    runSettings.allowed_models = allowed;
+  }
 
   const settings = settingsOf(served);
-  for (const name of Object.keys(GUARDS)) {
+  for (const name of [...Object.keys(GUARDS), 'fix_review_bots']) {
     if (served[name] !== undefined && served[name] !== '' && settings[name] === '') refused.push(name);
   }
 

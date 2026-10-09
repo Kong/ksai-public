@@ -1,5 +1,5 @@
 const { AUTHZ_LOGIN_SHAPE } = require('./context.cjs');
-const { sameRepo } = require('../lib/repo.cjs');
+const { sameRepo } = require('./repo.cjs');
 
 const LABEL_COMMANDS = Object.freeze(['fix']);
 

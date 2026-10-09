@@ -2,6 +2,8 @@
 const { createHash } = require('node:crypto');
 const { escapeForRegExp, markerValue, markerValues, stripBom, triggerPhrases, DEFAULT_TRIGGER_PHRASE } = require('../lib/text.cjs');
 const { asAlert, JIRA_KEY_SHAPE } = require('../lib/select-arm.cjs');
+const { inertBlock, inertLine } = require('../lib/inert-markdown.cjs');
+const { linkReference, markdownLinks } = require('../lib/markdown-links.cjs');
 const { SITE, aboutLink } = require('./marker.cjs');
 const { COMMIT_TYPES, BRANCH_SHAPE, FLOW_BRANCH_SHAPE, JIRA_BRANCH_SHAPE, safeEcho } = require('./verify-chunk.cjs');
 
@@ -78,11 +80,10 @@ const NAMED_ENTITY = /&[a-zA-Z][a-zA-Z0-9]*;/g;
 
 const NAMES_PHASE = /^[^\p{L}\p{N}\n]*Phase[^\p{L}\p{N}\n]*[0-9]/iu;
 
-const NAMES_STEPS = /^[^\p{L}\p{N}\n]*Steps[^\p{L}\p{N}\n#]*$/iu;
-
+const NAMES_STEPS = /^[^\p{L}\p{N}\n]*(?:Phase[^\n]*?)?Steps[^\p{L}\p{N}\n#]*$/iu;
 const HTML_BLOCK_AT = /^<(?:\/?[a-zA-Z][a-zA-Z0-9-]*(?:[ \t/>]|$)|\?|!(?:[a-zA-Z]|\[CDATA\[))/;
 
-const STEPS_HEADING = /^ {0,3}###[ \t]+Steps(?:[ \t]+#+)?[ \t]*$/;
+const STEPS_HEADING = /^ {0,3}###[ \t]+(?:Steps|Phase[ \t]+([1-9][0-9]{0,2})[ \t]+steps)(?:[ \t]+#+)?[ \t]*$/;
 
 const DOC_BULLET = /^[-*+][ \t]+(.*?)[ \t]*$/;
 
@@ -205,24 +206,82 @@ function cap(text, limit) {
   return `${chars.slice(0, limit).join('').replace(/\\+$/, '')}${ELLIPSIS}`;
 }
 
+function inertCap(text, most) {
+  let limit = most;
+  let said = inertBlock(cap(text, limit));
+  while (limit > 0 && Array.from(said).length > most + 1) {
+    limit = Math.min(limit - 1, Math.floor((limit * (most + 1)) / Array.from(said).length));
+    said = inertBlock(cap(text, limit));
+  }
+  return said;
+}
+
 const COMMIT_SHA = /^[0-9a-f]{40}$/i;
 
 const REPO_SHAPE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 
-function retargetPermalinks(text, { repo = null, from = null, to = null } = {}) {
+const HEX_RUN = String.raw`([0-9a-f]{7,40})(?![0-9a-z])`;
+
+const URL_OR_SHA = new RegExp(
+  String.raw`https?:\/\/\S+|(?<=^|[\s(<[{"'\`*_~>|])\/[\w.-]+\/[\w.-]+\/(?:blob|commit|tree)\/\S+|` +
+    String.raw`(?<![\w./-])([\w.-]+\/[\w.-]+)@${HEX_RUN}|(?<![0-9a-z/@])${HEX_RUN}`,
+  'gi',
+);
+
+const HEX_RUNS = new RegExp(String.raw`(?<![0-9a-z])${HEX_RUN}`, 'gi');
+
+
+const URL_END = "[.,;:!*_~]*(?:$|[\\s)\\]>`\"'])";
+
+const REF_END = `(?=(\\.(?:patch|diff)(?=[?#]|${URL_END}))|[/?#]|${URL_END})`;
+
+const TARGET_END = '(?=(\\.(?:patch|diff)(?=[?#]|$))|[/?#]|$)';
+
+function retargetLocalSha(text, { repo = null, from = null, to = null } = {}) {
   const said = String(text ?? '');
-  const landed = String(to ?? '');
+  const landed = String(to ?? '').toLowerCase();
   const owner = String(repo ?? '');
   if (!COMMIT_SHA.test(landed) || !REPO_SHAPE.test(owner)) return said;
   const stale = (Array.isArray(from) ? from : [from])
-    .map((one) => String(one ?? ''))
-    .filter((one) => COMMIT_SHA.test(one) && one.toLowerCase() !== landed.toLowerCase());
+    .map((one) => String(one ?? '').toLowerCase())
+    .filter((one) => COMMIT_SHA.test(one) && one !== landed);
   if (stale.length === 0) return said;
-  const at = new RegExp(
-    `(https://github\\.com/${escapeForRegExp(owner)}/blob/)(?:${stale.join('|')})(?=[/?#])`,
-    'gi',
-  );
-  return said.replace(at, (_, head) => `${head}${landed}`);
+  const ownRef = (end) => new RegExp(`^((?:https://github\\.com)?/${escapeForRegExp(owner)}/(blob|commit|tree)/)([0-9a-f]{7,40})${end}`, 'i');
+  const isStale = (sha) => stale.some((one) => one.startsWith(sha.toLowerCase()));
+  const moveWith = (pattern) => (url) =>
+    url.replace(pattern, (found, head, kind, sha, patch) =>
+      isStale(sha) && (patch === undefined || kind.toLowerCase() === 'commit') ? `${head}${landed.slice(0, sha.length)}` : found);
+  const moveLink = moveWith(ownRef(REF_END));
+  const moveTarget = moveWith(ownRef(TARGET_END));
+  const move = (found, named, qualified, sha) => {
+    if (named !== undefined) {
+      return named.toLowerCase() === owner.toLowerCase() && isStale(qualified) ? `${named}@${landed.slice(0, qualified.length)}` : found;
+    }
+    if (sha !== undefined) return isStale(sha) ? landed.slice(0, sha.length) : found;
+    return moveLink(found);
+  };
+  const stays = (target) => moveTarget(target) === target && target.matchAll(HEX_RUNS).some(([sha]) => isStale(sha));
+  const links = Array.from(markdownLinks(said), (link) => ({ ...link, kept: link.target !== undefined && stays(link.target) }));
+  const defined = new Map();
+  for (const { name, kept } of links) {
+    if (name !== undefined && !defined.has(linkReference(name))) defined.set(linkReference(name), kept);
+  }
+  const moveFrom = (start, end) => said.slice(start, end).replace(URL_OR_SHA, move);
+  let moved = '';
+  let last = 0;
+  for (const link of links) {
+    const kept = link.reference === undefined ? link.kept : defined.get(linkReference(link.reference));
+    moved += moveFrom(last, link.start);
+    if (kept) {
+      moved += said.slice(link.start, link.end);
+    } else if (link.target === undefined) {
+      moved += moveFrom(link.start, link.close + 1) + moveFrom(link.close + 1, link.end);
+    } else {
+      moved += moveFrom(link.start, link.targetAt) + moveTarget(link.target) + moveFrom(link.targetAt + link.target.length, link.end);
+    }
+    last = link.end;
+  }
+  return moved + moveFrom(last, said.length);
 }
 
 const HELD_URL = new RegExp(`${escapeForRegExp(SITE)}[^\\s)<>]*`, 'g');
@@ -348,11 +407,12 @@ function normalizeSteps(steps, options) {
       shortened.push({ at, length });
     }
 
-    const first = seen.get(held);
+    const first = seen.get(held) ?? seen.get(inertLine(held));
     if (first !== undefined) {
       return { error: `steps ${first} and ${at} have the same title, so a report naming it could not say which one was done` };
     }
     seen.set(held, at);
+    seen.set(inertLine(held), at);
 
     out.push({ title: held });
   }
@@ -714,6 +774,15 @@ function parsePlanDocument(text) {
     const ruled = uncontained(line, listed);
     const broken = RULED_ITEM.test(String(wasText).split('\n')[0] ?? '') && !CONTAINER_RUN.test(line);
     const underlinesCarried = was === 'prose' && !broken && SETEXT_UNDERLINE.test(ruled);
+    if (underlinesCarried && underlinedNames(NAMES_STEPS, wasText)) {
+      return {
+        error:
+          `line ${wasAt} of the plan document opens a step list and line ${i + 1} underlines it, which ` +
+          'writes a heading this cannot read. It is `### Steps`, three hashes and the bare word, or ' +
+          '`### Phase N steps` - an underlined one reads as prose here, and the bullets a reviewer sees ' +
+          'under it are dropped rather than becoming steps',
+      };
+    }
     if (underlinesCarried && underlinedNames(NAMES_PHASE, wasText)) {
       return {
         error:
@@ -723,15 +792,6 @@ function parsePlanDocument(text) {
           'checkpoint that would have held them. A document already published this way is edited by asking ' +
           'for a rework, which offers the new one - editing it in place moves its blob and the approval ' +
           'names the blob it read',
-      };
-    }
-    if (underlinesCarried && underlinedNames(NAMES_STEPS, wasText)) {
-      return {
-        error:
-          `line ${wasAt} of the plan document opens a step list and line ${i + 1} underlines it, which ` +
-          'writes a heading this cannot read. It is `### Steps`, three hashes and the bare word - an ' +
-          'underlined one reads as prose here, and the bullets a reviewer sees under it are dropped ' +
-          'rather than becoming steps',
       };
     }
     if (region === 'steps' && (underlines || THEMATIC_BREAK.test(line))) {
@@ -761,18 +821,15 @@ function parsePlanDocument(text) {
       stepped = false;
       continue;
     }
-    if (headed !== null && NAMES_PHASE.test(headed)) {
-      return {
-        error:
-          `line ${i + 1} of the plan document names a phase in a shape this cannot read. A phase heading ` +
-          'is `## Phase N - <name>`, two hashes and a plain hyphen or colon, numbered from 1 with no ' +
-          'leading zero - anything else reads as an ordinary heading, and its steps join the phase above ' +
-          'it and lose the checkpoint that would have held them',
-      };
-    }
-    if (STEPS_HEADING.test(line)) {
+    const stepsHeading = STEPS_HEADING.exec(line);
+    if (stepsHeading) {
       if (phases.length === 0) {
         return { error: `line ${i + 1} of the plan document lists steps before it names a phase` };
+      }
+      if (stepsHeading[1] !== undefined && Number(stepsHeading[1]) !== phases.length) {
+        return {
+          error: `line ${i + 1} of the plan document lists the steps of phase ${stepsHeading[1]} inside phase ${phases.length}`,
+        };
       }
       if (stepped) {
         return { error: `line ${i + 1} of the plan document opens a second step list inside one phase` };
@@ -787,8 +844,18 @@ function parsePlanDocument(text) {
       return {
         error:
           `line ${i + 1} of the plan document opens a step list in a shape this cannot read. It is ` +
-          '`### Steps`, three hashes and the bare word - anything else reads as an ordinary heading, ' +
-          'and the bullets a reviewer sees under it are dropped rather than becoming steps',
+          '`### Steps`, three hashes and the bare word, or `### Phase N steps` naming its own phase - ' +
+          'anything else reads as an ordinary heading, and the bullets a reviewer sees under it are ' +
+          'dropped rather than becoming steps',
+      };
+    }
+    if (headed !== null && NAMES_PHASE.test(headed)) {
+      return {
+        error:
+          `line ${i + 1} of the plan document names a phase in a shape this cannot read. A phase heading ` +
+          'is `## Phase N - <name>`, two hashes and a plain hyphen or colon, numbered from 1 with no ' +
+          'leading zero - anything else reads as an ordinary heading, and its steps join the phase above ' +
+          'it and lose the checkpoint that would have held them',
       };
     }
     if (region !== 'steps') {
@@ -892,7 +959,7 @@ function parsePlanDocument(text) {
 function motivationLines(summary, options) {
   const said = String(summary ?? '');
   const summaryLength = Array.from(said).length;
-  const prose = scrub(cap(said, MAX_SUMMARY_CHARS), options).trim();
+  const prose = inertBlock(scrub(cap(said, MAX_SUMMARY_CHARS), options).trim());
   const lines = prose ? ['## Motivation', '', unended(prose), ''] : [];
   return summaryLength > MAX_SUMMARY_CHARS ? { lines, shortened: summaryLength } : { lines };
 }
@@ -1036,7 +1103,7 @@ function renderBody({
     '',
     REGION_BEGIN,
   ];
-  for (const step of plan.steps) out.push(`- [ ] ${step.title}`);
+  for (const step of plan.steps) out.push(`- [ ] ${inertLine(step.title)}`);
   out.push(REGION_END, ...creditBlock({ issueNumber, requestedBy, repository, jira }, options));
 
   return {
@@ -1406,7 +1473,10 @@ function checkStep(body, stepTitle, options = {}) {
   const wanted = isCheckpoint(literal) ? literal : oneLine(stepTitle, options);
   if (!wanted) return { error: 'no step title was given, so no box was ticked' };
   const folded = (title) => collapse(title).trim();
-  if (!parsed.steps.some((step) => folded(step.title) === wanted)) {
+  const shown = isCheckpoint(literal) ? wanted : inertLine(wanted);
+  const exact = parsed.steps.some((step) => folded(step.title) === wanted);
+  const named = (title) => folded(title) === (exact ? wanted : shown);
+  if (!parsed.steps.some((step) => named(step.title))) {
     return { error: 'the plan holds no step with that title, so no box was ticked' };
   }
 
@@ -1420,7 +1490,7 @@ function checkStep(body, stepTitle, options = {}) {
     if (!row) continue;
     const boundary = isCheckpoint(folded(row[2]));
     if (boundary) seen += 1;
-    if (row[1] !== ' ' || folded(row[2]) !== wanted) continue;
+    if (row[1] !== ' ' || !named(row[2])) continue;
     lines[i] = `${line.replace(UNCHECKED_BOX, '- [x]')}${eol}`;
     return {
       body: text.slice(0, region.start) + lines.join('\n') + text.slice(region.end),
@@ -1474,6 +1544,7 @@ function pullUrl({ serverUrl = null, repository = null, prNumber = null } = {}) 
 
 module.exports = {
   LOGIN_SHAPE,
+  inertCap,
   appended,
   criteriaOf,
   markerValue,
@@ -1503,7 +1574,7 @@ module.exports = {
   locateStatus,
   spliceStatus,
   DEFAULT_TRIGGER_PHRASE,
-  retargetPermalinks,
+  retargetLocalSha,
   MAX_TITLE_CHARS,
   MAX_DOC_LINES,
   storedTitle,

@@ -1,7 +1,11 @@
 'use strict';
 
 const { escapeForRegExp } = require('./text.cjs');
-const { runSettingsArmOf } = require('./run-settings-migration.cjs');
+
+function runSettingsArmOf(source) {
+  const current = source?.run_settings_arm;
+  return current === undefined || current === null ? source?.dials_arm ?? null : current;
+}
 
 const PREFIX = '<!-- ksai-run-state:';
 
@@ -85,4 +89,4 @@ function runStateIn(body) {
   return { flow: flowOf(parsed.flow), ...shaped(parsed), detail: runDetail(parsed.detail) };
 }
 
-module.exports = { DETAIL, FIELDS, FLOWS, PREFIX, flowOf, markerJson, runDetail, runStateIn, runStateMarker };
+module.exports = { DETAIL, FIELDS, FLOWS, PREFIX, flowOf, markerJson, runDetail, runSettingsArmOf, runStateIn, runStateMarker };

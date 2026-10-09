@@ -2,6 +2,8 @@
 
 const { markdownTable } = require('./markdown-table.cjs');
 const { scrubTrigger } = require('./select-arm.cjs');
+const { armText, inertInline } = require('./inert-markdown.cjs');
+const { markdownLinks } = require('./markdown-links.cjs');
 
 const MAX_HISTORY = 24;
 
@@ -16,7 +18,8 @@ function statusLine(arm, cells) {
     .slice(0, MAX_CELLS)
     .map((cell) => String(cell ?? '').trim())
     .filter((cell) => CELL_SHAPE.test(cell));
-  return [String(arm ?? '').trim(), ...kept.map((cell) => `\`${cell}\``)].filter(Boolean).join(' · ');
+  const said = armText(String(arm ?? '').trim().replace(/^`+|`+$/g, ''));
+  return [said && `\`${said}\``, ...kept.map((cell) => `\`${cell}\``)].filter(Boolean).join(' · ');
 }
 
 const STAGES = Object.freeze(
@@ -145,6 +148,11 @@ function cutNote(text) {
   if (points.length <= MAX_NOTE_CHARS) return said;
   let held = points.slice(0, MAX_NOTE_CHARS - 1).join('');
   held = held.replace(/\s+\S*$/, '') || held;
+  for (const link of markdownLinks(said)) {
+    if (link.start >= held.length) break;
+    const label = link.close ?? link.start;
+    if (link.end > held.length && label > 0 && label < held.length) held = held.slice(0, label);
+  }
   const opened = held.lastIndexOf('](');
   if (opened > 0 && !held.slice(opened).includes(')')) held = held.slice(0, opened);
   const tick = held.lastIndexOf('`');
@@ -190,7 +198,7 @@ function visibleHistory(history, mode = 'auto') {
 function historyLines(history, mode = 'auto') {
   const lines = visibleHistory(history, mode).flatMap((entry) => {
     const at = shortUtc(entry?.at);
-    const said = String(entry?.said ?? '').trim().replace(/\.+$/, '');
+    const said = inertInline(String(entry?.said ?? '').trim().replace(/\.+$/, ''));
     return at && said ? [{ at, said }] : [];
   });
   return lines.map(({ at, said }, index) => `${index + 1}. **\`${at}\`** ${said}`);

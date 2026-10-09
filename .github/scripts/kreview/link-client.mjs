@@ -47,6 +47,17 @@ async function within(promise, signal) {
   }
 }
 
+function farewellOf(reason) {
+  const farewell = { reason, sent: false, grace: undefined };
+  farewell.settled = new Promise((resolve) => {
+    farewell.settle = () => {
+      clearTimeout(farewell.grace);
+      resolve();
+    };
+  });
+  return farewell;
+}
+
 async function closedIfLate(opening, signal) {
   try {
     const opened = await opening;
@@ -244,6 +255,7 @@ export function pollTransport(endpoint, job, { fetch = globalThis.fetch, holdMs 
           }
           const sent = sending.then(() => sendOne(frame));
           sending = sent.catch(() => {});
+          if (message?.kind === 'bye') sent.then(() => stop(CLOSED.normal, 'bye')).catch(() => {});
           return sent;
         },
         async prove(frame, at) {
@@ -304,6 +316,7 @@ export function linkClient({
   let welcomed = false;
   let token = '';
   let dialing = null;
+  let farewell = null;
 
   const fresh = async () => {
     if (token === '' || expiryOf(token) - TOKEN_MARGIN_MS < wall()) token = await mint();
@@ -314,6 +327,14 @@ export function linkClient({
 
   const transmit = async (message) => conn?.send(signed({ ...message, epoch }));
 
+  const bid = (connection) => {
+    const ending = dialing;
+    farewell.sent = true;
+    clearTimeout(farewell.grace);
+    farewell.grace = setTimeout(() => ending?.abort(new Closed(1006, `the engine did not settle the link in ${CLOSE_GRACE_MS} ms`)), CLOSE_GRACE_MS);
+    Promise.resolve().then(() => connection.send(signed({ epoch, seq: 0, kind: 'bye', body: { reason: farewell.reason } }))).catch(() => {});
+  };
+
   const welcomeOf = (frame) => {
     const peeked = payloadOf(frame);
     if (peeked.kind !== 'welcome') throw new LinkRefused(`link: the engine opened with ${peeked.kind}, not a welcome`);
@@ -322,7 +343,7 @@ export function linkClient({
     return open(frame, { link, job, epoch: peeked.epoch, to: 'host', signers });
   };
 
-  const adopt = async (welcome) => {
+  const adopt = (welcome) => {
     epoch = welcome.epoch;
     const { resume, ping_every_ms: pingMs, lease_ms: leaseMs } = welcome.body;
     pingEvery = pingMs;
@@ -333,9 +354,9 @@ export function linkClient({
       const acked = resume.plugins.find((one) => one.session === session)?.acked ?? 0;
       relayed.set(session, frames.filter((one) => one.seq > acked));
     }
-    for (const message of pending) await transmit(message);
-    for (const frames of relayed.values()) for (const one of frames) await conn.send(one.frame);
+    const replayed = [...pending.map((message) => transmit(message)), ...[...relayed.values()].flat().map((one) => conn.send(one.frame))];
     onWelcome(welcome.body);
+    return Promise.all(replayed);
   };
 
   const received = (frame) => {
@@ -388,6 +409,7 @@ export function linkClient({
     });
     const giving = new AbortController();
     dialing = giving;
+    if (farewell) farewell.sent = false;
     const deadline = setTimeout(() => giving.abort(new Closed(1006, `the ${transport.name} handshake did not finish in ${handshakeMs} ms`)), handshakeMs);
     let connection = null;
     let stop = () => {};
@@ -404,7 +426,9 @@ export function linkClient({
       await within(connection.prove(signed({ epoch: welcome.epoch, seq: 0, kind: 'proof', body: { challenge: welcome.body.challenge } }), welcome.epoch), giving.signal);
       clearTimeout(deadline);
       conn = connection;
-      await adopt(welcome);
+      const replayed = adopt(welcome);
+      if (farewell) bid(connection);
+      await within(replayed, giving.signal);
       reached();
       log(`linked over ${transport.name} on epoch ${epoch}`);
       stop = pinging(connection);
@@ -436,6 +460,7 @@ export function linkClient({
     stopped = true;
     conn?.close(CLOSED.normal, why);
     dialing?.abort(new Closed(CLOSED.normal, why));
+    farewell?.settle();
     onLapse();
   };
 
@@ -465,10 +490,16 @@ export function linkClient({
         } catch (error) {
           code = error instanceof Closed ? error.code : 1006;
           if (stopped) return;
-          log(`the ${transport.name} link dropped: ${error.message}`);
+          if (!farewell?.sent || code !== CLOSED.normal) log(`the ${transport.name} link dropped: ${error.message}`);
           if (error instanceof LinkRefused) code = CLOSED.protocol;
         }
         if (stopped) return;
+        if (farewell && (farewell.sent && code === CLOSED.normal || FINAL.has(code) || lapsed())) {
+          stopped = true;
+          farewell.settle();
+          return;
+        }
+        if (farewell) clearTimeout(farewell.grace);
         if (FINAL.has(code)) {
           stopped = true;
           onEnded(new LinkEnded(code, code === CLOSED.key ? 'another host holds this link' : 'the link has ended'));
@@ -512,19 +543,15 @@ export function linkClient({
       if (conn) conn.send(frame).catch(() => {});
     },
     async close(reason) {
-      stopped = true;
-      const held = conn;
-      if (held) {
-        const bye = Promise.resolve().then(() => held.send(signed({ epoch, seq: 0, kind: 'bye', body: { reason } }))).catch(() => {});
-        let timeout;
-        try {
-          await Promise.race([bye, new Promise((resolve) => { timeout = setTimeout(resolve, CLOSE_GRACE_MS); })]);
-        } finally {
-          clearTimeout(timeout);
-          held.close(CLOSED.normal, reason);
-        }
+      if (!farewell) {
+        farewell = farewellOf(reason);
+        if (stopped || !welcomed) farewell.settle();
+        else if (conn) bid(conn);
       }
-      dialing?.abort(new Closed(CLOSED.normal, reason));
+      await farewell.settled;
+      stopped = true;
+      conn?.close(CLOSED.normal, farewell.reason);
+      dialing?.abort(new Closed(CLOSED.normal, farewell.reason));
     },
   };
 }

@@ -6,9 +6,10 @@ import { pathToFileURL } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const { marked } = require('./marker.cjs');
-const { cap, expectedPlanFile: planFileFor, planDirOf, scrub, retargetPermalinks, POSITIVE_ID_SHAPE } =
+const { inertCap, expectedPlanFile: planFileFor, planDirOf, scrub, retargetLocalSha, POSITIVE_ID_SHAPE } =
   require('./plan.cjs');
 const { writerFor } = require('../lib/cp-effects.cjs');
+const { inertAfter, inertInline } = require('../lib/inert-markdown.cjs');
 const { NOTICE_KEYS, pick } = require('../lib/cp-render.cjs');
 const { usingControlPlane } = require('../lib/control-plane.cjs');
 const { safeEcho, soleWritable, verifyChunk, gitVia, noChangeLeftBehind } = require('./verify-chunk.cjs');
@@ -138,7 +139,7 @@ export function recordFix({
 
   const status = field(manifest?.status);
   if (status === 'blocked') {
-    return block(`Stopped without answering anything: ${scrub(reasonOf(manifest), { triggerPhrase }).trim()}`, { blocker: modelBlocker(manifest) });
+    return block(`Stopped without answering anything: ${inertAfter(scrub(reasonOf(manifest), { triggerPhrase }).trim())}`, { blocker: modelBlocker(manifest) });
   }
   if (status !== 'done' && status !== 'answered') {
     return block(`${pass.noun} reported an unrecognized status: ${safeEcho(shown(manifest?.status))}`);
@@ -278,6 +279,22 @@ export function recordFix({
       const recorded = recordScope(changeScopePath, scoped.scope, { outcome: 'unchanged', tree: treeSha });
       if (!recorded.ok) return block(`I did not record the review result: ${recorded.reason}.`);
     }
+    if (onlyPath === '' && throughControlPlane) {
+      return block(
+        'The plan document this run was handed is not the one the branch names, so nothing was offered for ' +
+          'approval. No thread was answered.',
+      );
+    }
+    if (onlyPath && throughControlPlane) {
+      const blob = gitVia(run, cwd)(['rev-parse', `${remoteSha}:${onlyPath}`]);
+      planOfferSHA = blob.ok ? String(blob.stdout ?? '').trim().toLowerCase() : '';
+      if (!/^[0-9a-f]{40}$/.test(planOfferSHA)) {
+        return block(
+          `I could not name the content of \`${onlyPath}\` on the branch, so it was not offered for approval. No ` +
+            'thread was answered, so a later run retries them.',
+        );
+      }
+    }
   }
 
   const footer = renderFooter({ sha, triggerPhrase });
@@ -285,12 +302,13 @@ export function recordFix({
   const replyFacts = [];
   let failure = null;
   for (const reply of replies) {
+    const said = retargetLocalSha(reply.body, { repo, from: localSha, to: sha });
     if (throughControlPlane) {
-      replyFacts.push({ comment: Number(reply.commentId), content: reply.body, path: reply.path });
+      replyFacts.push({ comment: Number(reply.commentId), content: said, path: reply.path });
       answered.push(reply);
       continue;
     }
-    const answer = marked(`${reply.body}\n\n${footer}${offeredDoc ? `\n\n${offeredDoc}` : ''}`, { ...marker, kind: pass.kind });
+    const answer = marked(`${said}\n\n${footer}${offeredDoc ? `\n\n${offeredDoc}` : ''}`, { ...marker, kind: pass.kind });
     writeFileSync(bodyFile, `${JSON.stringify({ body: answer })}\n`);
     const posted = run('gh', [
       'api',
@@ -312,8 +330,8 @@ export function recordFix({
   const offered = (pending ?? []).length;
   const remaining = Math.max(0, offered - answered.length) + held;
   const pushedNote = pushing ? `Pushed ${sha.slice(0, 12)}.` : 'No code change was needed.';
-  const retargeted = retargetPermalinks(scrub(field(manifest?.summary), { triggerPhrase }), { repo, from: localSha, to: sha });
-  const summary = cap(retargeted.trim(), MAX_PASS_SUMMARY_CHARS);
+  const retargeted = retargetLocalSha(scrub(field(manifest?.summary), { triggerPhrase }), { repo, from: localSha, to: sha });
+  const summary = inertCap(retargeted.trim(), MAX_PASS_SUMMARY_CHARS);
 
   if (failure) {
     return {
@@ -342,7 +360,7 @@ export function recordFix({
     answered: answered.length,
     remaining,
     message: summary ? `${headline}\n\n${summary}` : headline,
-    ...(throughControlPlane ? { replyFacts, planOfferSHA } : {}),
+    ...(throughControlPlane ? { replyFacts, planOfferSHA, planOfferAt: pushing ? sha : remoteSha } : {}),
   };
 }
 
@@ -359,7 +377,7 @@ export async function publishReviewReplies(result, env, writer = writerFor({ env
     if (result.planOfferSHA) {
       await writer.noticeComment({ number, notice: {
         kind: 'revised_plan_offer', review_reply: {
-          phase: 'revise', plan_doc_sha: result.planOfferSHA, commit: result.pushedSha,
+          phase: 'revise', plan_doc_sha: result.planOfferSHA, commit: result.planOfferAt,
           path: expectedPlanFile(env),
         }, env: noticeEnv,
       } });
@@ -379,7 +397,7 @@ export async function publishReviewReplies(result, env, writer = writerFor({ env
       status: 'blocked',
       answered,
       remaining: Number(result.remaining ?? 0) + result.replyFacts.length - answered,
-      message: `The change reached the branch, but ${answered} of ${result.replyFacts.length} review replies were posted. The control plane could not finish publishing them (${error.message}). Re-request to pick up the rest.`,
+      message: `The change reached the branch, but the control plane posted only ${answered} of ${counted(result.replyFacts.length, 'review reply', 'review replies')} and could not finish publishing them (${inertInline(String(error?.message ?? error))}). Re-request to pick up the rest.`,
     };
   }
 }

@@ -103,7 +103,7 @@ const NO_RECORD = Object.freeze({
   workItem: '',
   ask: '',
   boundCommand: '',
-  sessionAction: '',
+  taskAction: '',
 });
 
 const PR_SHAPE = /^[1-9][0-9]{0,9}$/;
@@ -134,6 +134,7 @@ export const TRIGGERS = Object.freeze([
 
 const BOUND_TRIGGERS = Object.freeze([
   'build_failed', 'status_failed', 'labeled', 'review_submitted', 'comment', 'opened', 'review_requested', 'pushed',
+  'check_action',
 ]);
 
 export const TRIGGER_STATES = Object.freeze([
@@ -159,7 +160,7 @@ const WORK_REF_SHAPE = /^jira\/[A-Za-z][A-Za-z0-9_]*-[0-9]{1,10}$/;
 
 const COMMENT_KINDS = Object.freeze(['issue', 'review', 'submitted_review']);
 
-const SESSION_ACTIONS = Object.freeze(['continue', 'restart', 'retry']);
+const TASK_ACTIONS = Object.freeze(['continue', 'restart', 'retry']);
 
 const BOUND_COMMANDS = new Map([['review', ['review']], ['implement', ['implement', SECURED_FIX_COMMAND]]]);
 
@@ -435,10 +436,11 @@ function recordFrom(served, at) {
     autofix_capability: autofixCapability, comment_id: commentId, comment_kind: commentKind,
     trigger, trigger_run: triggerRun, trigger_attempt: triggerAttempt,
     trigger_state: triggerState, trigger_name: triggerName,
-    work_session_id: sessionId, work_session_action: sessionAction,
-    work_session_parent_id: sessionParent, work_session_flow: sessionFlow, classification,
+    classification,
     workflow_job: workflowJob, workflow_stage: workflowStage, workflow_instance: workflowInstance,
+    task_id: taskId, task_action: taskAction, task_parent_id: taskParent, task_flow: taskFlow,
   } = /** @type {Record<string, unknown>} */ (served);
+  if (Object.keys(served).some((name) => name.startsWith('work_session_'))) throw policyStopped('the record carries obsolete task fields');
   if (recordId !== undefined && (typeof recordId !== 'string' || !RECORD_ID.test(recordId))) {
     throw policyStopped('the record names itself as something the control plane could not have minted');
   }
@@ -527,21 +529,21 @@ function recordFrom(served, at) {
       throw policyStopped('the secured autofix record names a review identity for a trigger that is not a submitted review');
     }
   }
-  const bound = [sessionId, sessionAction, sessionParent, sessionFlow].some((one) => one !== undefined);
+  const bound = [taskId, taskAction, taskParent, taskFlow].some((one) => one !== undefined);
   let boundCommand = '';
   if (bound) {
-    if (typeof sessionId !== 'string' || !RECORD_ID.test(sessionId)) {
+    if (typeof taskId !== 'string' || !RECORD_ID.test(taskId)) {
       throw policyStopped('the record binds a task the control plane could not have minted');
     }
-    if (typeof sessionAction !== 'string' || !SESSION_ACTIONS.includes(sessionAction)) {
+    if (typeof taskAction !== 'string' || !TASK_ACTIONS.includes(taskAction)) {
       throw policyStopped('the record binds a task to an action a successor does not take');
     }
-    if (sessionAction === 'restart'
-      ? typeof sessionParent !== 'string' || !RECORD_ID.test(sessionParent) || sessionParent === sessionId
-      : sessionParent !== undefined) {
+    if (taskAction === 'restart'
+      ? typeof taskParent !== 'string' || !RECORD_ID.test(taskParent) || taskParent === taskId
+      : taskParent !== undefined) {
       throw policyStopped('the record binds a task to a parent its action does not name');
     }
-    boundCommand = boundCommandOf(sessionFlow, command, {
+    boundCommand = boundCommandOf(taskFlow, command, {
       job: workflowJob,
       stage: workflowStage,
       instance: workflowInstance,
@@ -559,7 +561,7 @@ function recordFrom(served, at) {
     read: true,
     command: boundCommand || (securedFix ? 'fix' : text(command)),
     boundCommand,
-    sessionAction: text(sessionAction),
+    taskAction: text(taskAction),
     autofixCapability: securedFix ? AUTOFIX_CAPABILITY : '',
     label: text(label),
     pr: text(pr),

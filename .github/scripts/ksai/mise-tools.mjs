@@ -11,6 +11,7 @@ export const MISE_CONFIGS = Object.freeze([
 ]);
 
 const MISE_LOCKS = Object.freeze(['mise.lock', '.mise.lock']);
+const DEPENDENCY_FILES = Object.freeze(['go.mod', 'go.sum']);
 const SYSTEM_PATHS = Object.freeze([
   '/usr', '/bin', '/sbin', '/lib', '/lib64', '/lib32',
   '/etc/ssl', '/etc/ca-certificates', '/etc/pki', '/etc/resolv.conf', '/etc/hosts', '/etc/nsswitch.conf',
@@ -56,6 +57,7 @@ export function fenceArgs({ workspace, files, data, cache, mise }) {
     '--setenv', 'MISE_CACHE_DIR', cache,
     '--setenv', 'MISE_TRUSTED_CONFIG_PATHS', FENCED_TREE,
     '--setenv', 'MISE_YES', '1',
+    '--setenv', 'KSAI_TOOL_PREPARE', '1',
     '--chdir', FENCED_TREE,
     '--cap-drop', 'ALL',
     '--unshare-user',
@@ -123,7 +125,7 @@ export function main(env = process.env, { run = fenced, exists = null, makeDir =
   const data = join(temp, 'ksai-mise', 'data');
   const cache = join(temp, 'ksai-mise', 'cache');
   for (const at of [data, cache]) makeDir(at, { recursive: true });
-  const files = [...configs, ...MISE_LOCKS.filter((name) => inTree(join(workspace, name)))];
+  const files = [...configs, ...[...MISE_LOCKS, ...DEPENDENCY_FILES].filter((name) => inTree(join(workspace, name)))];
   const args = fenceArgs({ workspace, files, data, cache, mise });
 
   try {

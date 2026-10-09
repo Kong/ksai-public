@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { writeOutputs } from '../lib/outputs.mjs';
 
 const require = createRequire(import.meta.url);
-const { annotation } = require('../lib/text.cjs');
+const { annotation, counted } = require('../lib/text.cjs');
 const { warningFor } = require('./warn.cjs');
 const {
   ASSUMED_CEILING_MINUTES,
@@ -148,7 +148,7 @@ export function main(env = process.env, say = console.log, start = spawn) {
   );
   say(
     armed.failures > 0 || armed.repeats > 0
-      ? `Circuit breaker armed, polled every ${armed.poll}s: SIGTERM after ${armed.failures} failures in a row or ${armed.repeats} identical calls in a row (0 means that half is off)`
+      ? `Circuit breaker armed, polled every ${armed.poll}s: SIGTERM after ${counted(armed.failures, 'failure')} in a row or ${counted(armed.repeats, 'identical call')} in a row (0 means that half is off)`
       : 'Circuit breaker disabled (both limits are 0)',
   );
   return 0;

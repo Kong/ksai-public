@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 import controlPlane from '../lib/control-plane.cjs';
 import jsonSchema from '../lib/json-schema.cjs';
 import { jobOf, linkId } from '../lib/link-protocol.mjs';
-import OUTCOME_SCHEMA from '../lib/work-session-schemas/outcome-v1.json' with { type: 'json' };
+import OUTCOME_SCHEMA from '../lib/task-schemas/task-outcome-v1.json' with { type: 'json' };
 import blockerModule from './blocker.cjs';
 import planModule from './plan.cjs';
 import trustedGit from './trusted-git.cjs';
@@ -129,7 +129,8 @@ export function outcomeBody(env, entries, options) {
   if (!/^[a-z][a-z0-9-]{0,99}$/.test(phase)) throw new Error(`the run names phase ${JSON.stringify(phase)}, which reports no outcome`);
   const job = jobOf(env);
   const link = linkId({ repository: env.GITHUB_REPOSITORY, runId: env.GITHUB_RUN_ID, attempt: env.GITHUB_RUN_ATTEMPT, job });
-  const status = env.PUBLISH_FAILED === 'true' ? 'failed' : entries.length ? 'published' : env.BLOCKED === 'true' ? 'blocked' : 'nothing';
+  const blocked = env.BLOCKED === 'true' && env.STOPPED !== 'true';
+  const status = env.PUBLISH_FAILED === 'true' ? 'failed' : entries.length ? 'published' : blocked ? 'blocked' : 'nothing';
   const blocker = status === 'blocked' ? blockerOf(env, options) : '';
   const body = { job, link, flow, phase, status, ...(blocker ? { blocker } : {}), published: entries };
   const problems = jsonSchema.validateSchema(OUTCOME_SCHEMA, body, 'outcome');

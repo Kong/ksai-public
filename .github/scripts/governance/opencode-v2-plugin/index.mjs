@@ -15,7 +15,7 @@ export const statusTool = (defined) => ({
 });
 
 const CONTEXT_ASK_MS = 60_000;
-export const CONTEXT_UNANSWERED = 'the control plane gave no work context in time';
+export const CONTEXT_UNANSWERED = 'the control plane gave no task context in time';
 
 export const contextAnswer = (answer) =>
   answer !== null && typeof answer === 'object' &&

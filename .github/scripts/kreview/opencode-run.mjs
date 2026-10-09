@@ -17,7 +17,7 @@ import {
   writeSync,
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { forgetDeliveries } from '../lib/channel-hook.mjs';
 import { promptRendering } from '../lib/cp-prompts.mjs';
@@ -48,7 +48,7 @@ import { startRelay } from './otel-relay.mjs';
 import { startProviderRelay } from './opencode-provider-relay.mjs';
 import resultProtocol from './review-result.cjs';
 import { isolatedPtyCommand, ptyPilotEnabled } from './opencode-pty-core.mjs';
-import { pinnedToolRoot, TOOL_INJECTION_ENV, toolIsolationProbe } from './opencode-tool-sandbox.mjs';
+import { npmCachePayload, pinnedToolRoot, TOOL_INJECTION_ENV, toolIsolationProbe } from './opencode-tool-sandbox.mjs';
 
 const { structuredSubmission, submitted } = resultProtocol;
 
@@ -797,7 +797,7 @@ export function sandboxArgs(
   const providerRelay = String(env.KSAI_PROVIDER_RELAY ?? '').trim();
   if (sockets) {
     args.push('--ro-bind', sockets, sockets);
-    for (const [name, file] of [['KSAI_PROVIDER_SOCKET', 'provider.sock'], ['KSAI_OTEL_SOCKET', 'otel.sock'], ['KSAI_LINK_SOCKET', 'link.sock']]) {
+    for (const [name, file] of [['KSAI_PROVIDER_SOCKET', 'provider.sock'], ['KSAI_OTEL_SOCKET', 'otel.sock'], ['KSAI_LINK_SOCKET', 'link.sock'], ['KSAI_GUARD_SOCKET', 'guard.sock']]) {
       if (exists(join(sockets, file))) args.push('--setenv', name, join(sockets, file));
     }
   } else if (brokered) {
@@ -813,6 +813,8 @@ export function sandboxArgs(
     );
   }
   const scrubbed = brokered ? [...SCRUBBED, ...BROKERED] : scrubbing(env) ? SCRUBBED : [];
+  const npmCache = npmCachePayload(env);
+  if (npmCache && exists(npmCache)) args.push('--ro-bind', npmCache, npmCache);
   const denied = listed(env.SANDBOX_DENY_ENV);
   if (relay && denied.includes(EXPORTER_ENDPOINT)) {
     console.log(
@@ -852,6 +854,7 @@ export function sandboxArgs(
     '--chdir',
     workspace,
     '--',
+    ...(isolatedTools ? ['/bin/bash', fileURLToPath(new URL('./opencode-proc.sh', import.meta.url))] : []),
   );
   return args;
 }

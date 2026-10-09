@@ -5,10 +5,12 @@ const { readCount } = require('./continue.cjs');
 
 const { pagedProbe } = require('./pages.cjs');
 const { scrub, hasPlanRegion, heldBy, planFileIn } = require('./plan.cjs');
+const { codeCell, plainInline } = require('../lib/inert-markdown.cjs');
 const { asAlert, canonicalCommand, JIRA_KEY_SHAPE, plansWorkHere } = require('../lib/select-arm.cjs');
 const { EXPLICIT_SOURCE } = require('../lib/request-intent.cjs');
-const { headOrigin, sameRepo } = require('../lib/repo.cjs');
+const { headOrigin, sameRepo } = require('./repo.cjs');
 const { usingControlPlane } = require('../lib/control-plane.cjs');
+const { counted } = require('../lib/text.cjs');
 const { readConversation } = require('./cp-report.cjs');
 
 const MAX_PAGES = 10;
@@ -243,6 +245,8 @@ const PHASE_FIELDS = Object.freeze([
   'planFile',
   'conflicting',
   'held',
+  'stop',
+  'leftOut',
 ]);
 
 const COMMAND_STOP = Object.freeze(
@@ -328,6 +332,10 @@ function joined(parts, word) {
   return `${parts.slice(0, -1).join(', ')} ${word} ${parts.at(-1)}`;
 }
 
+function untrustedThreads(count) {
+  return `${counted(count, 'review thread')} it left out, each opened by an author who cannot ask for a fix here or edited since it was written`;
+}
+
 /**
  * narrowedNotice is what a run some label kept work back from says when it found nothing, or null where
  * the run was free to look anywhere and the stock notice is already true.
@@ -359,7 +367,7 @@ const PHASE_NOTICE = Object.freeze(
   }),
 );
 
-function renderPhaseNotice(phase, { pending = null, triggerPhrase = null, scope = null } = {}) {
+function renderPhaseNotice(phase, { pending = null, triggerPhrase = null, scope = null, leftOut = null } = {}) {
   const key = String(phase ?? '')
     .trim()
     .toLowerCase();
@@ -368,7 +376,9 @@ function renderPhaseNotice(phase, { pending = null, triggerPhrase = null, scope 
   if (key !== 'ambiguous' && String(pending ?? '') !== '0') return '';
   const admits = scopeAdmits(scope);
   const narrowed = admits === null ? null : narrowedNotice(key, admits);
-  return asAlert('WARNING', scrub(narrowed ?? body, { triggerPhrase }));
+  const left = key === 'ambiguous' ? 0 : Number(leftOut ?? 0);
+  const said = left > 0 ? `${narrowed ?? body}. This pull request has ${untrustedThreads(left)}` : (narrowed ?? body);
+  return asAlert('WARNING', scrub(said, { triggerPhrase }));
 }
 
 function renderClosed(command, { state = null, triggerPhrase = null, onIssue = null } = {}) {
@@ -379,7 +389,9 @@ function renderClosed(command, { state = null, triggerPhrase = null, onIssue = n
   const shown = String(state ?? '').trim() || 'unknown';
   return asAlert(
     'WARNING',
-    scrub(`${noun} is not open (state: \`${shown}\`), so there is nothing to ${work}`, { triggerPhrase }),
+    scrub(`${noun} is not open (state: ${codeCell(plainInline(scrub(shown, { triggerPhrase })))}), so there is nothing to ${work}`, {
+      triggerPhrase,
+    }),
   );
 }
 
@@ -511,6 +523,8 @@ async function resolvePhase({
     const elsewhere = admits.builds || admits.merges;
     const answersThreads = admits.reviews && (scoped || !asked || !elsewhere);
     let known = null;
+    let untrusted = 0;
+    let leftOut = 0;
 
     if (answersThreads) {
       const out = await resolveFixPhase({
@@ -528,12 +542,16 @@ async function resolvePhase({
         writeAccess,
         writeAccessCommands,
         triggerPhrase,
+        env,
+        fetch,
       });
       if (out.error) return refuse(out.error);
       if (!threadsFile) return refuse('no path was given to write the review threads to');
       if (!threadStateFile) return refuse('no path was given to write the review thread state to');
       const { phase, ref, prNumber, pending, threads, deferred, disputed, baseRef, held, target, total } = out;
       known = target ?? null;
+      leftOut = out.omitted ?? 0;
+      untrusted = total > 0 ? 0 : leftOut;
       const answeredAlready = total > 0 && !(elsewhere && require('./do.cjs').unaskedRun({ trigger: sawTrigger, commentId }));
       if (scoped || pending.length > 0 || answeredAlready) {
         const evidence = admits.builds
@@ -578,18 +596,19 @@ async function resolvePhase({
           threadsFile,
           threadStateFile,
           onBranch,
+          leftOut: leftOut > 0 ? leftOut : '',
         });
       }
       core?.info?.(
         total > 0
           ? `#${String(prNumber ?? number)}: every review thread here is answered, and nobody typed a command for this run, so it looks for other work.`
-          : `#${String(prNumber ?? number)}: this pull request has no review thread at all, so this run looks for other work.`,
+          : `#${String(prNumber ?? number)}: this pull request has ${untrusted > 0 ? untrustedThreads(untrusted) : 'no review thread at all'}, so this run looks for other work.`,
       );
     }
 
     if (!elsewhere) {
       return refuse(
-        'this run was started to answer review comments, and this pull request has no review thread at all, so ' +
+        `this run was started to answer review comments, and this pull request has ${untrusted > 0 ? untrustedThreads(untrusted) : 'no review thread at all'}, so ` +
           'there was nothing to answer and nothing ran',
       );
     }
@@ -635,6 +654,7 @@ async function resolvePhase({
       retryFile: out.retryFile,
       threadsFile: out.threadsFile,
       conflicting: out.conflicting === true ? 'true' : '',
+      leftOut: leftOut > 0 ? leftOut : '',
     });
   }
 
@@ -687,10 +707,12 @@ async function resolvePhase({
       writeAccess,
       writeAccessCommands,
       triggerPhrase,
+      env,
+      fetch,
     });
     if (asked.error) return refuse(asked.error);
     if (asked.pending.length === 0) {
-      return refuse(String(REVISE_STOP.answered));
+      return normalize({ error: String(REVISE_STOP.answered), stop: 'answered' });
     }
     writeFile(threadsFile, JSON.stringify(asked.pending));
     writeFile(threadStateFile, JSON.stringify(asked.threads));
