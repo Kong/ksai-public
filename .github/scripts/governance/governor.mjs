@@ -2,7 +2,7 @@ import { appendFileSync, writeFileSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 
 import { DIGEST, digest, readArtifacts, regularFile } from './artifacts.mjs';
-import { CarryRefused, GivenUp, IncompleteAnswer, MAX_RESPONSE_BYTES, UpstreamFailure, boundedSteps, carriedOf, conversation } from './conversation.mjs';
+import { CarryRefused, GivenUp, IncompleteAnswer, MAX_RESPONSE_BYTES, UpstreamFailure, boundedSteps, carriedOf, coalesced, conversation } from './conversation.mjs';
 import { Errand, governRequest } from './provider.mjs';
 import { linkNotes } from './notes.mjs';
 import { TOOL_PREFIX, governedNotes, governedReminder, governedTool, rendered, verifyRelease, versionParts } from './release.mjs';
@@ -25,6 +25,7 @@ const TRUSTED_ROOT_BYTES = 1024 * 1024;
 const MAX_REASON = 512;
 const MAX_REFUSALS = 16;
 const DELEGATION = new Set(['task', 'subagent']);
+const DATE_UPDATE = /^Today's date is now: (Mon|Tue|Wed|Thu|Fri|Sat|Sun) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{2} \d{4}$/;
 
 function options(raw) {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('governance options are not an object');
@@ -318,7 +319,9 @@ function governing(state, given, report, provider, log) {
       context: async (event) => {
         clearedSystem({ model: { providerID: event?.model?.providerID, modelID: event?.model?.id } }, event?.system);
         return guarded(() => {
-          const [first, ...rest] = Array.isArray(event?.messages) ? event.messages : [];
+          const messages = Array.isArray(event?.messages) ? event.messages : [];
+          messages.splice(0, messages.length, ...messages.filter((entry, at) => at === 0 || entry?.role !== 'system' || !DATE_UPDATE.test(onlyText(entry.content) ?? '')));
+          const [first, ...rest] = messages;
           if (first?.role !== 'user' || onlyText(first.content) !== governed.opens) throw new Error('the conversation lost the governed prompt');
           const asked = rest.filter((entry) => entry?.role === 'user');
           const earlier = governed.carried?.earlier ?? [];
@@ -393,7 +396,7 @@ function governing(state, given, report, provider, log) {
               delivered = true;
               report(said('delivered'));
             }
-            controller.enqueue(new Uint8Array(bytes));
+            controller.enqueue(coalesced(bytes));
             controller.close();
           } catch (error) {
             controller.error(error);

@@ -1,14 +1,14 @@
 'use strict';
 
 const { isDeepStrictEqual } = require('node:util');
-const { DEFAULT_TIMEOUT, renderingModeOf, mask, answered, reachedFor } = require('./control-plane.cjs');
+const { DEFAULT_TIMEOUT, renderingModeOf, mask, answered, pausing, reachedFor } = require('./control-plane.cjs');
 const { annotation } = require('./text.cjs');
 
 const API_VERSION = 'report/v1';
 
 const RUN_REPORT_KEYS = Object.freeze([
   'PR_NUMBER', 'RUN_ID', 'COMMAND', 'TRIGGER', 'CANCELLED', 'SELECT_ERROR', 'SELECT_ERROR_NOTICE', 'BUILD_ERROR',
-  'STAND_DOWN', 'DRY_RUN', 'VALIDATE_OUTCOME', 'PARSE_OUTCOME', 'AUTHORIZED', 'TRIAGE_SKIP', 'TRIAGE_SKIP_REASON',
+  'TOO_LARGE', 'STAND_DOWN', 'DRY_RUN', 'VALIDATE_OUTCOME', 'PARSE_OUTCOME', 'AUTHORIZED', 'TRIAGE_SKIP', 'TRIAGE_SKIP_REASON',
   'SELECT_OUTCOME', 'SELECT_SKIPPED', 'RESULT_OUTCOME', 'WATCHDOG_FIRED', 'WATCHDOG_CAUSE', 'WATCHDOG_REASON',
   'CEILING', 'STOP_REASON', 'ENDED_ON', 'RULES_NOTICE', 'CONCLUSION', 'COMMIT_ID', 'MODEL', 'EFFORT', 'ENGINE',
   'SELECTED_BY', 'RUN_SETTINGS_ARM', 'REQUESTER', 'TRIAGE_MODE', 'TRIAGE_FILES', 'TRIAGE_LINES', 'TRIAGE_RISK',
@@ -72,8 +72,8 @@ async function settled(local) {
 }
 
 
-async function askControlPlane({ kind, request, expect = null, accept, env, fetch, timeout, secret }) {
-  const reached = await reachedFor({ env, fetch, timeout, secret });
+async function askControlPlane({ kind, request, expect = null, accept, env, fetch, timeout, secret, pause }) {
+  const reached = await reachedFor({ env, fetch, timeout, secret, pause });
   if (reached.why) return reached;
   const said = await answered(fetch, `${reached.base}/v1/report/render`, {
     token: reached.token,
@@ -116,18 +116,19 @@ async function rendered({
   timeout = DEFAULT_TIMEOUT,
   warn = warning,
   secret = mask,
+  pause = pausing,
 }) {
   const mode = renderingMode(env);
   if (mode === 'local') return { value: await local(), parity: '' };
   if (mode === 'cp') {
-    const asked = await askControlPlane({ kind, request, accept, env, fetch, timeout, secret });
+    const asked = await askControlPlane({ kind, request, accept, env, fetch, timeout, secret, pause });
     if (asked.answer !== undefined) return { value: asked.answer, parity: '' };
     warn(`the control plane did not render this ${kind}, so a minimal one was posted: ${asked.why}`);
     return { value: fallback(asked.why, await settled(local)), parity: '' };
   }
   const mine = await local();
   const expect = plain(mine);
-  const asked = await askControlPlane({ kind, request, expect, accept, env, fetch, timeout, secret });
+  const asked = await askControlPlane({ kind, request, expect, accept, env, fetch, timeout, secret, pause });
   if (asked.answer === undefined) {
     warn(`the control plane could not shadow this ${kind}: ${asked.why}`);
     return { value: mine, parity: 'unavailable' };

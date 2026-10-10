@@ -203,6 +203,11 @@ const ANSI = new RegExp(
  * rather than kept, because relative ordering is what a log is read for and the lines are already in order.
  */
 const LOG_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z ?/;
+const GROUP = /^(?:\uFEFF)?##\[group\](.*)$/;
+const END_GROUP = /^##\[endgroup\]$/;
+const FAILED_STEP = /^##\[error\]Process completed with exit code ([1-9]\d*)\.?$/;
+const MAX_FAILED_COMMAND_CHARS = 1024;
+const RUNNER_COMMAND = new RegExp(`${ESC}\\[36;1m([\\s\\S]*?)${ESC}\\[0m`);
 
 /** Every value as the API reported it, or the empty string. Nothing here throws on a missing field. */
 const text = (value) => String(value ?? '');
@@ -259,6 +264,73 @@ function tailOf(raw, { maxLines = MAX_LOG_LINES, maxChars = MAX_LOG_CHARS_PER_JO
   if (chars.length <= maxChars) return { text: joined, lines: kept.length, truncated };
   const cutTo = chars.slice(chars.length - maxChars).join('');
   return { text: cutTo, lines: cutTo.split('\n').length, truncated: true };
+}
+
+function runnerStepCommand(group) {
+  if (group.length === 0) return null;
+  const header = cleanLine(group[0]);
+  const started = GROUP.exec(header);
+  if (!started) return null;
+  const body = group.slice(1);
+  const shellAt = body.findIndex((line) => /^shell:\s/.test(cleanLine(line)));
+  if (shellAt < 0) return null;
+  const preamble = body.slice(0, shellAt);
+  const coloredAt = preamble.findIndex((line) => RUNNER_COMMAND.test(line));
+  if (coloredAt < 0) return null;
+  const colorMatch = RUNNER_COMMAND.exec(preamble[coloredAt]);
+  const headerCommand = started[1].startsWith('Run ') &&
+    (!colorMatch || started[1].slice(4) === colorMatch[1])
+    ? started[1].slice(4)
+    : '';
+  const first = headerCommand || colorMatch?.[1] || cleanLine(preamble[coloredAt]);
+  const continuation = preamble.slice(coloredAt + 1).map((line) => cleanLine(line));
+  const script = [first, ...continuation]
+    .map((line) => line.trimEnd())
+    .join('\n')
+    .trimEnd();
+  return script === '' || Array.from(script).length > MAX_FAILED_COMMAND_CHARS ? null : script;
+}
+
+function isRunnerStepGroup(group) {
+  if (group.length === 0) return false;
+  const header = cleanLine(group[0]);
+  if (!GROUP.test(header)) return false;
+  if (/^##\[group\]Run (?:[^/\s]+\/[^@\s]+@\S+|\.{1,2}\/\S+|docker:\/\/\S+)$/.test(header)) return true;
+  if (cleanLine(group[1] ?? '') === 'with:' && /^\s{2}\S/.test(cleanLine(group[2] ?? ''))) return true;
+  const shellAt = group.findIndex((line) => /^shell:\s/.test(cleanLine(line)));
+  return shellAt > 1 && group.slice(1, shellAt).some((line) => RUNNER_COMMAND.test(line));
+}
+
+/**
+ * The command of the step that failed, from the complete runner log.
+ *
+ * The prompt gets only a tail, so a long job can drop the failing step's preamble. Keep the command separately,
+ * but accept it only from a complete runner step group with its coloured command and shell preamble. Pair the
+ * latest such group with the runner's own non-zero process-exit marker; ordinary output cannot forge a header alone.
+ */
+function failedCommand(raw) {
+  let group = [];
+  let latest = null;
+  let failed = null;
+  for (const line of text(raw).split('\n')) {
+    const clean = cleanLine(line);
+    if (GROUP.test(clean)) {
+      if (group.length === 0) group = [line];
+      continue;
+    }
+    if (group.length > 0) group.push(line);
+    if (END_GROUP.test(clean)) {
+      const command = runnerStepCommand(group);
+      if (command !== null) latest = command;
+      else if (isRunnerStepGroup(group)) latest = null;
+      group = [];
+      continue;
+    }
+    if (FAILED_STEP.test(clean)) {
+      failed = runnerStepCommand(group) ?? (isRunnerStepGroup(group) ? null : latest);
+    }
+  }
+  return failed;
 }
 
 /**
@@ -460,7 +532,7 @@ async function readStatuses({ github = null, owner = null, repo = null, sha = nu
  *
  *     {
  *       sha,                  the commit these were read for, echoed so a caller can compare it with its own
- *       failing: [...],       at most MAX_NAMED_CHECKS check runs, each with its conclusion and maybe a log
+ *       failing: [...],       at most MAX_NAMED_CHECKS check runs, each with its conclusion, failed command and log
  *       failingTotal,         how many there really are
  *       running: [...],       at most MAX_NAMED_CHECKS names of checks that have not finished
  *       runningTotal,
@@ -570,6 +642,7 @@ async function readFailingChecks({
        */
       summary: head(run?.output?.summary, MAX_SUMMARY_CHARS),
       log: null,
+      failedCommand: null,
       logLines: 0,
       logTruncated: false,
     });
@@ -658,6 +731,7 @@ async function readFailingChecks({
     entry.log = tail.text;
     entry.logLines = tail.lines;
     entry.logTruncated = tail.truncated;
+    entry.failedCommand = failedCommand(read.log);
     budget -= Array.from(tail.text).length;
     logged += 1;
   }
@@ -763,6 +837,7 @@ module.exports = {
   MAX_LOG_LINES,
   MAX_LOG_CHARS_PER_JOB,
   MAX_LOG_CHARS_TOTAL,
+  MAX_FAILED_COMMAND_CHARS,
   MAX_SUMMARY_CHARS,
   MAX_TITLE_CHARS,
   MAX_REPORTED_CHARS_TOTAL,
@@ -770,6 +845,7 @@ module.exports = {
   FAILING_CONCLUSIONS,
   cleanLine,
   tailOf,
+  failedCommand,
   jobIdOf,
   readCheckRuns,
   readFailingChecks,

@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import { maskValue, mint } from '../kreview/federated-token.mjs';
+import { counted, plural } from './text.cjs';
 
 const runNode = promisify(execFile);
 
@@ -205,7 +206,7 @@ async function renewing(env, now, fetchImpl, clock, sleep) {
       const standing = held === null ? String(env.ANTHROPIC_FEDERATED_TOKEN ?? '') : alive > 0 ? held.token : '';
       if (standing) return standing;
       if (attempt + 1 >= MINTS || failedAt + wait >= deadline) {
-        throw new Error(`the Anthropic token expired and ${attempt + 1} renewals were refused`, { cause: error });
+        throw new Error(`the Anthropic token expired and ${counted(attempt + 1, 'renewal')} ${plural(attempt + 1, 'was', 'were')} refused`, { cause: error });
       }
       await sleep(wait);
     }

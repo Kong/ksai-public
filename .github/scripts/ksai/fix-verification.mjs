@@ -98,15 +98,24 @@ function checksAt(path) {
     const parsed = JSON.parse(readFileSync(path, 'utf8'));
     const unreadable = parsed?.unreadable != null || parsed?.statusesUnreadable != null;
     const failingTotal = Number(parsed?.failingTotal ?? 0) + Number(parsed?.statusesTotal ?? 0);
-    const names = [
-      ...(Array.isArray(parsed?.failing) ? parsed.failing.map((entry) => entry?.name) : []),
-      ...(Array.isArray(parsed?.statuses) ? parsed.statuses.map((entry) => entry?.context) : []),
-    ]
-      .map((name) => exact(name, MAX_TARGET_CHARS))
-      .filter((name) => name !== null && name !== '');
-    return { required: unreadable || (Number.isFinite(failingTotal) && failingTotal > 0), names, unreadable };
+    const names = [];
+    const commands = new Map();
+    const add = (name, command = null) => {
+      const boundedName = exact(name, MAX_TARGET_CHARS);
+      if (boundedName === null || boundedName === '') return;
+      if (!names.includes(boundedName)) names.push(boundedName);
+      const boundedCommand = exact(command, MAX_COMMAND_CHARS);
+      if (boundedCommand !== null && boundedCommand !== '') {
+        if (!(commands.get(boundedName) ?? []).length) commands.set(boundedName, [boundedCommand]);
+      } else if (!commands.has(boundedName)) {
+        commands.set(boundedName, []);
+      }
+    };
+    for (const entry of Array.isArray(parsed?.failing) ? parsed.failing : []) add(entry?.name, entry?.failedCommand);
+    for (const entry of Array.isArray(parsed?.statuses) ? parsed.statuses : []) add(entry?.context);
+    return { required: unreadable || (Number.isFinite(failingTotal) && failingTotal > 0), names, commands, unreadable };
   } catch {
-    return { required: true, names: [], unreadable: true };
+    return { required: true, names: [], commands: new Map(), unreadable: true };
   }
 }
 
@@ -134,7 +143,14 @@ export function shellCalls(events) {
   if (isNativeStream(events)) {
     return toolCalls(events)
       .filter((call) => call.tool === 'shell')
-      .map((call) => ({ command: String(call.input?.command ?? ''), status: call.status, exit: call.metadata?.exit }));
+      .map((call) => ({
+        command: String(call.input?.command ?? ''),
+        status: call.status,
+        exit: call.metadata?.exit,
+        started: call.started,
+        called: call.called,
+        ended: call.ended,
+      }));
   }
   return events
     .filter((event) => event?.type === 'tool_use' && event?.part?.tool === 'bash')
@@ -169,6 +185,24 @@ const withCommands = (fields, collected, secrets) => record({
 });
 
 const isCommit = (call) => /(?:^|[\s;&|()])git(?:\s+-[^\s]+)*\s+commit(?:\s|$)/.test(call.command);
+
+const finite = (value) => value !== null && value !== undefined && Number.isFinite(Number(value));
+
+// Native events can arrive out of order; timestamps preserve execution order.
+const completedBefore = (candidate, commit, candidateIndex, commitIndex) => {
+  if (finite(candidate.ended) && finite(commit.started)) return Number(candidate.ended) <= Number(commit.started);
+  return candidateIndex < commitIndex;
+};
+
+const latest = (calls, native) => {
+  if (!native || calls.length === 0 || !calls.every((one) => finite(one.ended))) return calls.at(-1);
+  return calls.reduce((last, one) => (Number(one.ended) > Number(last.ended) ? one : last));
+};
+
+const firstCommit = (calls, native) => {
+  if (!native || calls.length === 0 || !calls.every((one) => finite(one.started))) return calls[0];
+  return calls.reduce((first, one) => (Number(one.started) < Number(first.started) ? one : first));
+};
 
 export function verificationOf({
   manifest = null,
@@ -218,23 +252,30 @@ export function verificationOf({
     return result({ status: 'unverified', target, command, reason: 'command-not-seen' });
   }
 
-  const call = calls.at(-1);
+  const native = isNativeStream(read.events);
+  const call = latest(calls, native);
   const { exit } = call;
   if (!Number.isSafeInteger(exit) || exit < 0) {
     return result({ status: 'unverified', target, command, reason: 'exit-unavailable' });
   }
 
-  const commitAt = shells.findIndex((one) => isCommit(one));
+  const commit = firstCommit(shells.filter((one) => isCommit(one)), native);
+  const commitAt = commit ? shells.indexOf(commit) : -1;
   if (exit !== 0) {
     return result({ status: 'failed', target, command, exit_status: exit, reason: 'target-failed' });
   }
   if (commitAt === -1) {
     return result({ status: 'unverified', target, command, exit_status: exit, reason: 'commit-not-seen' });
   }
-  if (calls.findLast((one) => shells.indexOf(one) < commitAt)?.exit !== 0) {
+  const beforeCommit = calls.filter((one) => completedBefore(one, commit, shells.indexOf(one), commitAt));
+  const verifiedBeforeCommit = latest(beforeCommit, native);
+  if (!verifiedBeforeCommit || verifiedBeforeCommit.exit !== 0) {
     return result({ status: 'failed', target, command, exit_status: exit, reason: 'command-after-commit' });
   }
-  return result({ status: 'unverified', target, command, exit_status: 0, reason: 'target-command-unbound' });
+  if (!(checks.commands?.get(target) ?? []).includes(command)) {
+    return result({ status: 'unverified', target, command, exit_status: 0, reason: 'target-command-unbound' });
+  }
+  return result({ status: 'verified', target, command, exit_status: 0, reason: 'target-passed' });
 }
 
 export function writeVerification(path, verification) {

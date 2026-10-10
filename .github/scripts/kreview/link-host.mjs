@@ -17,16 +17,19 @@ import { adversarial } from '../ksai/implement-adversarial.mjs';
 import implementPasses from '../ksai/implement-passes.cjs';
 import { forgetDeliveries } from '../lib/channel-hook.mjs';
 import controlPlane from '../lib/control-plane.cjs';
+import modelCatalog from '../lib/model-catalog.cjs';
+import { MODEL_SHAPE } from '../lib/select-arm.cjs';
 import { ARTIFACTS, deliveriesUnder, digestOf, lockedOf } from '../lib/cp-prompts.mjs';
 import { exitedOn } from '../lib/execution-log.mjs';
 import { acknowledging } from '../lib/link-acknowledged.mjs';
 import { jobOf, linkId } from '../lib/link-protocol.mjs';
 import { linkClient, pollTransport, websocketTransport } from './link-client.mjs';
 import { ordered } from '../ksai/progress.mjs';
-import workRequest from '../lib/work-request.cjs';
+import taskRequest from '../lib/task-request.cjs';
 import { isolatedToolPhase, parsed, PROVIDER_TIMEOUTS, totals, UNCONTINUED } from '../lib/opencode.mjs';
-import { answer, everything, executionLog, openCallOf, reportedVersion, rootSessions, SHELL_TIMEOUT_MS, spending, toolCalls, V2_MASKED_HOMES, validateV2Version } from '../lib/opencode-v2.mjs';
+import { answer, everything, executionLog, openCallOf, reportedVersion, rootSessions, SHELL_TIMEOUT_MS, shellTimeoutMs as shellLimitMs, spending, toolCalls, V2_MASKED_HOMES, validateV2Version } from '../lib/opencode-v2.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
+import { annotation } from '../lib/text.cjs';
 import requestIntent from '../lib/request-intent.cjs';
 import selectArm from '../lib/select-arm.cjs';
 import writeRecord from '../lib/write-record.cjs';
@@ -37,6 +40,8 @@ import { governedTools } from './governed-flow.mjs';
 import { auditContext, verifyAudit } from './governed-review.mjs';
 import reviewPipeline from './review-pipeline.cjs';
 import { collectSecrets, scrub } from './secrets.cjs';
+import { serveBounded } from './bounded-ask.mjs';
+import { controlPlaneCheck, GUARD_CHECK, guardHost, guardToken, requestGate } from './guard-check.mjs';
 import { startProviderRelay } from './opencode-provider-relay.mjs';
 import { USAGE_ASK, usageCollector } from './usage-collector.mjs';
 import { COUNTERS, callUsage } from './usage-counter.mjs';
@@ -154,14 +159,20 @@ export async function sandboxProblem(env, sandbox, run = spawned) {
 
 export { jobOf };
 
+export const oneLine = (value) => clipped(String(value ?? '').replace(/\s+/g, ' ').trim(), 500);
+
+function ceilingOf(env) {
+  const asked = String(env.JOB_TIMEOUT_MINUTES ?? '').trim();
+  return asked === '0' ? MAX_CEILING_MINUTES : ceilingMinutes(asked);
+}
+
 function deadlineOf(env, now) {
   const killAt = Number(env.KSAI_CHANNEL_KILL_AT) || 0;
   if (killAt > now) return killAt - now;
   const given = Number(env.KSAI_DEADLINE_MS) || 0;
   if (given > 0) return given;
-  const asked = String(env.JOB_TIMEOUT_MINUTES ?? '').trim();
-  const ceiling = asked === '0' ? MAX_CEILING_MINUTES : ceilingMinutes(asked);
-  if (ceiling === null) throw new Error(`job_timeout_minutes ${asked} names no ceiling this job can run under`);
+  const ceiling = ceilingOf(env);
+  if (ceiling === null) throw new Error(`job_timeout_minutes ${String(env.JOB_TIMEOUT_MINUTES ?? '').trim()} names no ceiling this job can run under`);
   const started = Number(env.KSAI_JOB_STARTED_AT_MS) || now;
   return (ceiling - SALVAGE_MARGIN_MINUTES) * 60_000 - ENGINE_STOP_MS - Math.max(0, now - started);
 }
@@ -175,6 +186,22 @@ function breakersOf(env) {
     throw new Error('max_repeated_tool_calls of 1 would stop every run at its first tool call, since one call is already a run of one. Use 0 to turn the check off, or 2 or more');
   }
   return { failures, repeats };
+}
+
+function catalogModel(env, wanted) {
+  if (!wanted) return wanted;
+  try {
+    const at = String(env.KSAI_MODEL_CATALOG ?? '').trim();
+    const { models } = JSON.parse(at === '' ? String(env.KSAI_MODEL_CATALOG_JSON ?? '') : readFileSync(at, 'utf8'));
+    const found = models.find((one) => one?.runnable === true
+      && [one.id, ...(Array.isArray(one.aliases) ? one.aliases : [])]
+        .some((name) => String(name ?? '').toLowerCase() === wanted.toLowerCase()));
+    const id = typeof found?.id === 'string' ? found.id : '';
+    const aliased = [modelCatalog.aliases, modelCatalog.vendorAliases].some((names) => Object.hasOwn(names ?? {}, id.toLowerCase()));
+    return MODEL_SHAPE.test(id) && !aliased ? id : wanted;
+  } catch {
+    return wanted;
+  }
 }
 
 export function runFact(env, now = Date.now()) {
@@ -192,12 +219,12 @@ export function runFact(env, now = Date.now()) {
     flow,
     title: 'ksai',
     phase: String(env.OPENCODE_PHASE ?? '').trim(),
-    model: String(env.MODEL ?? '').trim(),
+    model: catalogModel(env, String(env.MODEL ?? '').trim()),
     variant: String(env.VARIANT ?? '').trim(),
     steps: Number.isInteger(steps) && steps > 0 ? steps : 0,
     tools: governedTools(env),
     deadline_ms: Math.max(0, Math.floor(deadline)),
-    shell_timeout_ms: Number(env.KSAI_SHELL_TIMEOUT_MS) || SHELL_TIMEOUT_MS,
+    shell_timeout_ms: shellLimitMs(env),
     ...(flow === 'review' ? { strategy: String(env.REVIEW_STRATEGY || 'baseline').trim() } : {}),
     ...(plugin ? { plugin } : {}),
     ...(breakers.failures || breakers.repeats ? { breakers } : {}),
@@ -217,7 +244,7 @@ export function factsAnswer(asked, known, { warn = (said) => console.log(said) }
       if (!Object.hasOwn(known, name)) throw new Error('this host holds no such fact');
       facts.push({ name, value: known[name]() });
     } catch (error) {
-      warn(`::warning::the ${name} fact could not be given: ${error?.message ?? error}`);
+      warn(annotation(`the ${name} fact could not be given: ${error?.message ?? error}`, 'warning'));
       missing.push(name);
     }
   }
@@ -275,7 +302,7 @@ export function freshObservations(env, observed, warn = (line) => console.log(li
       status: one.status, request_bytes: one.request_bytes, ...(one.continuation_digest ? { continuation_digest: one.continuation_digest } : {}),
     };
     if (body.length > OBSERVED_MOST) {
-      warn(`::warning::provider observation ${one.id} is ${body.length} bytes, past the ${OBSERVED_MOST} the control plane takes, so the run cannot succeed`);
+      warn(annotation(`provider observation ${one.id} is ${body.length} bytes, past the ${OBSERVED_MOST} the control plane takes, so the run cannot succeed`, 'warning'));
       said.push({ ...record, body: '', body_bytes: body.length, withheld: true });
       continue;
     }
@@ -298,7 +325,8 @@ const clipped = (value, most) => [...String(value ?? '')].slice(0, most).join(''
 
 const shellTimeout = (input, limit) => {
   const asked = Number(input?.timeout);
-  return asked > 0 ? Math.min(Math.ceil(asked), limit) : limit;
+  if (asked > 0) return Math.min(Math.ceil(asked), limit);
+  return input?.timeout === 0 || input?.background === true ? limit : Math.min(SHELL_TIMEOUT_MS, limit);
 };
 
 export function progressOf(session, segment, reported, secrets = [], shellTimeoutMs = SHELL_TIMEOUT_MS, open = new Map()) {
@@ -341,10 +369,27 @@ const rendering = (request) => {
   return { request, promptId: String(parsedRequest.prompt_id ?? ''), sink: String(parsedRequest.sink ?? '') };
 };
 
+const CAPABILITIES = `;ksai-stage-correction-v1;${GUARD_CHECK.capability};ksai-render-schema-digest-v1`;
+
+export function capableRunner(runner) {
+  return {
+    ...runner,
+    name: `${String(runner.name ?? '').slice(0, 200 - CAPABILITIES.length)}${CAPABILITIES}`,
+  };
+}
+
 export function renderFact(env) {
   const at = String(env.REQUEST_FILE ?? '').trim();
   if (!at) throw new Error('a linked run was started with no render request');
   return rendering(readFileSync(at, 'utf8'));
+}
+
+export function renderForEngine(render, schemaDigest) {
+  if (schemaDigest) return render.request;
+  const request = JSON.parse(render.request);
+  if (!Object.hasOwn(request, 'schema_digest')) return render.request;
+  delete request.schema_digest;
+  return JSON.stringify(request);
 }
 
 export const askedRender = (named, flow) => (named ? { promptId: named.prompt_id, sink: named.sink } : { promptId: flow.promptId, sink: flow.sink });
@@ -448,6 +493,13 @@ export function stoppable(held) {
 }
 
 export const untilKilled = (held, waited) => Promise.race([waited, held.stopped]);
+
+export function answerBounded(text) {
+  const cut = String(text ?? '').slice(0, 1_000_000);
+  return /[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut;
+}
+
+export const endedSaid = (conclusion, said) => annotation(said, conclusion === 'stopped' ? 'notice' : 'error');
 
 export async function closedThenDrained(held, exit, drain) {
   const killed = held.killed === true;
@@ -620,18 +672,19 @@ export async function main(env = process.env, {
   }
   const { collecting, error: uncountable } = usageCountersOf(env);
   if (uncountable) {
-    console.log(`::error::${uncountable}`);
+    console.log(annotation(uncountable));
     return 1;
   }
   let job;
   let render;
   let run;
+  let schemaDigest = false;
   try {
     job = jobOf(env);
     render = renderFact(env);
     run = runFact(env);
   } catch (error) {
-    console.log(`::error::${error.message}`);
+    console.log(annotation(error.message));
     return 1;
   }
   let usage = null;
@@ -640,7 +693,7 @@ export async function main(env = process.env, {
     try {
       usage = usageCollector({ path: usageFileOf(runnerTemp, link), scope: { link, job, flow: run.flow }, send: (kind, id, body) => client.send(kind, id, body) });
     } catch (error) {
-      console.log(`::error::this run's usage counter could not be opened, so it does not link: ${error?.message ?? error}`);
+      console.log(annotation(`this run's usage counter could not be opened, so it does not link: ${error?.message ?? error}`));
       return 1;
     }
   }
@@ -648,7 +701,7 @@ export async function main(env = process.env, {
   try {
     checkout = checkoutFact(env);
   } catch (error) {
-    console.log(`::error::${error.message}`);
+    console.log(annotation(error.message));
     return 1;
   }
   const startedAt = JSON.parse(checkout).head_sha;
@@ -669,7 +722,7 @@ export async function main(env = process.env, {
   try {
     telemetry = await startTelemetry({ env: relayEnv, socket: join(sockets, 'otel.sock'), spans: SPANS, observe: traces.observe });
   } catch (error) {
-    console.log(`::warning::runtime telemetry could not start (${error?.message}), so span timings are unavailable`);
+    console.log(annotation(`runtime telemetry could not start (${error?.message}), so span timings are unavailable`, 'warning'));
   }
   try {
     provider = await startProvider({
@@ -678,11 +731,17 @@ export async function main(env = process.env, {
       admit: collecting ? (session, model) => usage?.admit(session, model) ?? '' : null,
     });
   } catch (error) {
-    console.log(`::error::the trusted provider relay could not start: ${error?.message ?? error}`);
+    console.log(annotation(`the trusted provider relay could not start: ${error?.message ?? error}`));
     await telemetry?.close();
     rmSync(scratch, { recursive: true, force: true });
     return 1;
   }
+  const mint = mintFor({ env, fetch, signal: undefined, holds: undefined });
+  const guardCheck = controlPlaneCheck({ endpoint, fetchImpl: fetch, token: guardToken({ mintFor, env, fetchImpl: fetch }) });
+  const guarding = guardHost({ provider, check: guardCheck });
+  const guardSocket = await serveBounded(join(sockets, 'guard.sock'), guarding.handle, {
+    requestMost: GUARD_CHECK.bytesMost + (1 << 20), answerMost: GUARD_CHECK.answerMost, within: GUARD_CHECK.readWithinMs, refused: guarding.refused,
+  });
   const plugins = await listening(join(sockets, 'link.sock'));
   const out = openSync(events, 'a');
   let settled = null;
@@ -699,18 +758,17 @@ export async function main(env = process.env, {
       settled = { runtime };
     }
     settled.error = error;
-    if (error) appendFileSync(events, `${JSON.stringify({ type: 'ksai.error', created: Date.now(), data: { error: { type: 'ksai.engine', message: error.slice(0, 500) } } })}\n`);
+    if (error) appendFileSync(events, `${JSON.stringify({ type: 'ksai.error', created: Date.now(), data: { error: { type: 'ksai.engine', message: clipped(error, 500) } } })}\n`);
     Object.assign(env, keptAnswer(env, events, conclusion, outputs, sessions.get(String(outputs.worked ?? ''))));
     const code = conclusion === 'success' || conclusion === 'stopped' ? 0 : 1;
     try {
-      reduced = reduceLog({ ...env, OPENCODE_EXIT: String(code), OPENCODE_EVENTS_FILE: events, OPENCODE_EXECUTION_FILE: execution, OPENCODE_RUNTIME_METRICS: JSON.stringify(settled.runtime) });
+      reduced = reduceLog({ ...env, OPENCODE_EXIT: String(code), OPENCODE_STOPPED: String(conclusion === 'stopped'), OPENCODE_EVENTS_FILE: events, OPENCODE_EXECUTION_FILE: execution, OPENCODE_RUNTIME_METRICS: JSON.stringify(settled.runtime) });
     } catch (failure) {
       reduced = 1;
-      console.log(`::warning::the opencode event stream reducer failed (${failure?.message ?? failure})`);
+      console.log(annotation(`the opencode event stream reducer failed (${failure?.message ?? failure})`, 'warning'));
     }
   };
 
-  const mint = mintFor({ env, fetch, signal: undefined, holds: undefined });
   const reach = dial || endpoint;
   const sessions = new Map();
   const audits = new Map();
@@ -741,14 +799,17 @@ export async function main(env = process.env, {
       certificate = cert;
       return verified;
     },
-    runner: { name: String(env.RUNNER_NAME ?? 'unknown'), os: String(env.RUNNER_OS ?? 'unknown'), arch: String(env.RUNNER_ARCH ?? 'unknown') },
+    runner: capableRunner({ name: String(env.RUNNER_NAME ?? 'unknown'), os: String(env.RUNNER_OS ?? 'unknown'), arch: String(env.RUNNER_ARCH ?? 'unknown') }),
     jobStartedAt: Number(env.KSAI_JOB_STARTED_AT_MS) || Date.now(),
     log: (line) => console.log(line),
     onAcked: (message) => {
       acknowledged(message);
       usage?.acked(message);
     },
-    onWelcome: (body) => usage?.welcomed(body),
+    onWelcome: (body) => {
+      schemaDigest = body.render?.schema_digest === true;
+      usage?.welcomed(body);
+    },
     onTick: () => {
       usage?.tick();
       let live = '';
@@ -769,7 +830,7 @@ export async function main(env = process.env, {
         const plan = message.body;
         const unadmitted = usage?.admit(session, plan.model.id) ?? '';
         if (unadmitted) {
-          console.log(`::error::${unadmitted}`);
+          console.log(annotation(unadmitted));
           held.killed = true;
           held.child?.kill('SIGKILL');
           return;
@@ -787,10 +848,10 @@ export async function main(env = process.env, {
           held.continuation = continuedBy(plan, permit);
         } catch (error) {
           if (error instanceof ResumeRefused) {
-            console.log(`::warning::session ${session} will not go on in its carried conversation, so the control plane starts it afresh: ${error.message}`);
+            console.log(annotation(`session ${session} will not go on in its carried conversation, so the control plane starts it afresh: ${error.message}`, 'warning'));
             held.resumeError = resumeError(error);
           } else {
-            console.log(`::error::session ${session} was handed a plan this host will not lay down: ${error.message}`);
+            console.log(annotation(`session ${session} was handed a plan this host will not lay down: ${error.message}`));
           }
           held.killed = true;
           held.child?.kill('SIGKILL');
@@ -798,14 +859,15 @@ export async function main(env = process.env, {
         }
         held.prompt = join(dir, ARTIFACTS.prompt);
         provider.govern(dir, session);
+        if (plan.guard) provider.guard(requestGate({ required: plan.guard.required === true, check: guardCheck }));
       }
       if (held.plugin) held.plugin.socket.write(`${JSON.stringify({ type: 'frame', frame })}\n`);
       else held.waiting.push(frame);
     },
     onMessage: (message) => {
       handle(message).catch((error) => {
-        console.log(`::warning::${message.kind} could not be handled: ${error?.message ?? error}`);
-        if (message.kind === 'task') client.send('task.result', message.id, { ok: false, outputs: [], error: String(error?.message ?? error).slice(0, 4000) });
+        console.log(annotation(`${message.kind} could not be handled: ${error?.message ?? error}`, 'warning'));
+        if (message.kind === 'task') client.send('task.result', message.id, { ok: false, outputs: [], error: clipped(error?.message ?? error, 4000) });
       });
     },
   });
@@ -818,12 +880,12 @@ export async function main(env = process.env, {
     try {
       for (const receipt of freshDeliveries(governedDir, delivered, live)) client.send('receipt', undefined, receipt);
     } catch (error) {
-      if (!live) say(`::warning::the prompts session ${session} was delivered could not be read: ${error?.message ?? error}`);
+      if (!live) say(annotation(`the prompts session ${session} was delivered could not be read: ${error?.message ?? error}`, 'warning'));
     }
     try {
       for (const seen of freshObservations(env, observed, say, live)) client.send('observation', undefined, seen);
     } catch (error) {
-      if (!live) say(`::warning::what session ${session} sent the provider could not be read: ${error?.message ?? error}`);
+      if (!live) say(annotation(`what session ${session} sent the provider could not be read: ${error?.message ?? error}`, 'warning'));
     }
   };
   const reportRecords = (session, held) => {
@@ -847,17 +909,17 @@ export async function main(env = process.env, {
     if (!lines.length) return;
     try {
       const { left, unserved } = await transcriptSent({ endpoint, fetch, token: await mint('ksai-cp'), link: client.link, job, flow: run.flow, session: model, lines });
-      if (unserved) console.log(`::notice::the control plane keeps no transcript of session ${session}`);
-      if (left) console.log(`::notice::session ${session} said ${left} more lines than a transcript keeps, so only its last ones were kept`);
+      if (unserved) console.log(annotation(`the control plane keeps no transcript of session ${session}`, 'notice'));
+      if (left) console.log(annotation(`session ${session} said ${left} more lines than a transcript keeps, so only its last ones were kept`, 'notice'));
     } catch (error) {
-      console.log(`::warning::the transcript of session ${session} was not kept: ${error?.message ?? error}`);
+      console.log(annotation(`the transcript of session ${session} was not kept: ${error?.message ?? error}`, 'warning'));
     }
   };
 
   let expected = null;
   let accepted = null;
   const startSession = async ({ session, phase, render: named, restarts, resumes, env: given = [] }) => {
-    accepted ??= workRequest.heldByLink({ env, endpoint, job, link: client.link, seen: env.KSAI_WORK_REQUEST, fetch }).catch((error) => {
+    accepted ??= taskRequest.heldByLink({ env, endpoint, job, link: client.link, seen: env.KSAI_TASK_REQUEST, fetch }).catch((error) => {
       resolveDone({ conclusion: 'failure', outputs: [{ name: 'error', value: error.message }], reason: 'failed' });
       throw error;
     });
@@ -965,8 +1027,8 @@ export async function main(env = process.env, {
       if (replayed) appendFileSync(events, `${JSON.stringify({ type: 'ksai.error', created: Date.now(), data: { error: { type: 'ksai.resume', message: refused } } })}\n`);
       const unaccounted = usage?.ending().error ?? '';
       if (unaccounted) {
-        console.log(`::error::session ${session} ended with usage the control plane cannot take: ${unaccounted}`);
-        appendFileSync(events, `${JSON.stringify({ type: 'ksai.error', created: Date.now(), data: { error: { type: 'ksai.usage', message: unaccounted.slice(0, 500) } } })}\n`);
+        console.log(annotation(`session ${session} ended with usage the control plane cannot take: ${unaccounted}`));
+        appendFileSync(events, `${JSON.stringify({ type: 'ksai.error', created: Date.now(), data: { error: { type: 'ksai.usage', message: clipped(unaccounted, 500) } } })}\n`);
       }
       const ending = sessionEnd({ exit, killed, refused, unaccounted });
       held.conclusion = ending.conclusion;
@@ -986,7 +1048,7 @@ export async function main(env = process.env, {
       return;
     }
     if (kind === 'need') {
-      const known = { run: () => JSON.stringify(run), render: () => render.request, stages: () => stagesFact(env), command: () => commandFact(env), checkout: () => checkout };
+      const known = { run: () => JSON.stringify(run), render: () => renderForEngine(render, schemaDigest), stages: () => stagesFact(env), command: () => commandFact(env), checkout: () => checkout };
       client.send('facts', id, factsAnswer(body.facts, known));
       return;
     }
@@ -994,7 +1056,7 @@ export async function main(env = process.env, {
       try {
         await startSession(body);
       } catch (error) {
-        console.log(`::error::session ${body.session} could not start: ${error?.message ?? error}`);
+        console.log(annotation(`session ${body.session} could not start: ${error?.message ?? error}`));
         if (!sessions.has(body.session)) sessions.set(body.session, { plugin: null, waiting: [], offset: statSync(events).size, child: null, killed: false });
         client.send('session.ended', `session/${body.session}/ended`, {
           session: body.session, exit: 1, conclusion: 'failed', ...(error instanceof ResumeRefused ? { resume_error: resumeError(error) } : {}),
@@ -1006,7 +1068,7 @@ export async function main(env = process.env, {
     if (kind === 'task' && body.name === 'answer') {
       const held = sessions.get(arg('session'));
       const segment = held ? parsed(since(events, held.offset)) : [];
-      const said = String(answer(segment) ?? '').slice(0, 1_000_000);
+      const said = answerBounded(answer(segment));
       if (held) Object.assign(held, { answer: said, whole: everything(segment) });
       const read = stageRead(segment, said);
       const outputs = [
@@ -1074,7 +1136,7 @@ export async function main(env = process.env, {
         conversation: conversationOf(sessions.get(session), sessions.get(session)?.conclusion),
       });
       const saved = await checkpointSaved({
-        endpoint, fetch, token: () => mint('ksai-cp'), upload, continuation: sessions.get(session)?.continuation ?? '', note: (dropped) => console.log(`::warning::${dropped}`),
+        endpoint, fetch, token: () => mint('ksai-cp'), upload, continuation: sessions.get(session)?.continuation ?? '', note: (dropped) => console.log(annotation(dropped, 'warning')),
       });
       client.send('task.result', id, { ok: true, outputs: [{ name: 'checkpoint', value: saved }] });
       return;
@@ -1155,6 +1217,7 @@ export async function main(env = process.env, {
   await linking.catch(() => {});
   await plugins.close();
   await telemetry?.close();
+  await new Promise((resolve) => { guardSocket.close(() => resolve()); });
   await provider?.close();
 
   const outputs = Object.fromEntries(done.outputs.map((one) => [one.name, one.value]));
@@ -1162,14 +1225,18 @@ export async function main(env = process.env, {
   settle(done.conclusion, outputs);
   closeSync(out);
   rmSync(scratch, { recursive: true, force: true });
-  for (const warned of done.outputs.filter((one) => one.name === 'warning')) console.log(`::warning::${warned.value}`);
-  if (outputs.error) console.log(`::error::${outputs.error}`);
+  for (const warned of done.outputs.filter((one) => one.name === 'warning')) console.log(annotation(warned.value, 'warning'));
+  if (outputs.error) console.log(endedSaid(done.conclusion, outputs.error));
   writeOutputs(env.GITHUB_OUTPUT, {
     conclusion: code === 0 ? 'success' : 'failure', answer_file: '', children_file: '', pipeline_file: env.REVIEW_PIPELINE_FILE || '', hypotheses_file: env.REVIEW_HYPOTHESES_FILE || '',
-    stopped: done.conclusion === 'stopped' ? 'true' : '',
+    stopped: ended.conclusion === 'stopped' ? 'true' : '',
+    stopped_by: oneLine(outputs.stopped_by || (ended.conclusion === 'stopped' ? 'halt' : '')),
+    stopped_because: oneLine(outputs.stopped_because),
+    error: oneLine(outputs.error),
+    ceiling: String(ceilingOf(env) ?? ''),
     model_never_asked: provider?.asked?.() === false ? 'true' : '',
-    preserved: String(outputs.preserved ?? ''),
-    preserve_reason: String(outputs.preserve_reason ?? ''),
+    preserved: oneLine(outputs.preserved),
+    preserve_reason: oneLine(outputs.preserve_reason),
     preserve_tree: String(outputs.preserve_tree ?? ''),
     published: shown.published,
     record_dir: shown.record_dir,

@@ -8,9 +8,9 @@ description: >-
   claim is signed by GitHub and cannot be changed from inside the job, so no credential has to reach
   the repositories being served and none of them can ask for another's run settings.
 
-  Every service failure is a fallback rather than an error. The run settings are a preference; the run is the work.
-  A control plane that is down, slow, unreachable, or serving something this action will not read
-  costs the run nothing but the pinned values it would have used anyway.
+  A jira_context_pending reply permits up to seven retries, with eight attempts in total.
+  A jira_context_unavailable reply fails the action. After a temporary Jira proof failure, any
+  invalid reply fails the action. The other service failures keep the pinned values.
 
   What comes back is matched against the shapes this workflow will pass on. The model shape is the
   one `.github/scripts/lib/select-arm.cjs` accepts, so a value this action passes on is one the
@@ -76,6 +76,10 @@ inputs:
     description: how many times one call may repeat before the watchdog stops the run, pinned in this workflow
     required: false
     default: ""
+  review_strategy:
+    description: baseline, evidence or dual, the review a review run starts, pinned in this workflow
+    required: false
+    default: ""
   key_held:
     description: >-
       `true` where the caller passes the App key. A caller that passes none has nothing to mint
@@ -130,11 +134,16 @@ outputs:
       `true` where the control plane asks a blocked write run for the reason its
       model gave for stopping, and empty otherwise
     value: ${{ steps.run_settings.outputs.blocker }}
+  said:
+    description: >-
+      `true` where the control plane asks a write run that neither blocked nor was
+      stopped for the message it posts without one, and empty otherwise
+    value: ${{ steps.run_settings.outputs.said }}
   disabled_commands:
     description: >-
       the model-backed commands this repository turns off, or empty where the
       control plane names none and the repository's own answer stands. This and
-      the five guards below reach only `ksai-cp.yml`, whose caller has no inputs
+      the five guards below reach only `ksai.yml`, whose caller has no inputs
       to state them. A standalone caller of `ksai.yml` sets them with its own
       inputs and `.ksai/ksai.json`, so a served guard changes nothing there.
     value: ${{ steps.run_settings.outputs.disabled_commands }}
@@ -153,6 +162,12 @@ outputs:
   require_plan_approval:
     description: whether planned implementation waits for an approval, or empty
     value: ${{ steps.run_settings.outputs.require_plan_approval }}
+  fix_review_bots:
+    description: >-
+      the GitHub App bots whose review threads `fix` answers, `none` where the
+      control plane names none, or empty where it names nothing and the
+      workflow's own answer stands
+    value: ${{ steps.run_settings.outputs.fix_review_bots }}
   federation_rule_id:
     description: >-
       the Anthropic federation rule (fdrl_...) the repository is enrolled under,
@@ -172,17 +187,22 @@ outputs:
     value: ${{ steps.run_settings.outputs.workspace_id }}
   shadow_percent:
     description: >-
-      share of runs to compare against the shadow engine. This output and the
-      six below it are the value the control plane served, or the one pinned in
-      this workflow where it served none - which is what the control plane
-      leaving a setting out means, and what it does with one served in a shape this
-      workflow would refuse later.
+      share of runs to compare against the shadow engine. This output and each
+      one below it with an input of the same name are the value the control
+      plane served, or the one pinned in this workflow where it served none -
+      which is what the control plane leaving a setting out means, and what it
+      does with one served in a shape this workflow would refuse later.
     value: ${{ steps.run_settings.outputs.shadow_percent }}
   review_triage_mode:
     description: local, shadow, or cp authority for V4 review triage
     value: ${{ steps.run_settings.outputs.review_triage_mode }}
   allowed_models:
-    description: model ids a comment or an automatic selector may choose
+    description: >-
+      model ids a comment or an automatic selector may choose. Where the
+      control plane serves its catalog, this keeps only the listed models the
+      catalog runs, and the served model by its catalog id when none of the
+      listed ones runs.
+      An empty list stays empty.
     value: ${{ steps.run_settings.outputs.allowed_models }}
   max_effort:
     description: highest effort a comment or an automatic selector may choose
@@ -202,6 +222,18 @@ outputs:
   max_repeated_tool_calls:
     description: how many times one call may repeat before the watchdog stops the run
     value: ${{ steps.run_settings.outputs.max_repeated_tool_calls }}
+  review_strategy:
+    description: >-
+      the review a review run starts: `baseline` is the single reviewer, `evidence` audits each
+      finding's evidence and `dual` adds a contract hunt. It is the value the control plane served,
+      or the one pinned in this workflow where it served none.
+    value: ${{ steps.run_settings.outputs.review_strategy }}
+  review_diff_mib:
+    description: >-
+      the largest diff, in MiB, an evidence or dual review reads before it skips the pull request
+      as too large. It is the value the control plane served, or empty where it served none, which
+      keeps the review's own bound.
+    value: ${{ steps.run_settings.outputs.review_diff_mib }}
   triage_write:
     description: >-
       who decides the model and effort a write run spends: `cp` is the control
@@ -218,7 +250,7 @@ outputs:
     value: ${{ steps.run_settings.outputs.report_rendering }}
   run_tokens:
     description: >-
-      where a `ksai-cp.yml` run gets its GitHub tokens: `local` mints them with the App key the
+      where a `ksai.yml` run gets its GitHub tokens: `local` mints them with the App key the
       caller passes, `shadow` does that and also asks the control plane for each one and revokes
       what it answers at once, and `cp` asks the control plane alone. It is `cp` for a caller that
       passes no key, whatever the control plane serves. Nothing is pinned here, because a
@@ -237,6 +269,12 @@ outputs:
       where the control plane served neither, which a v5 run reads as OpenCode 1. Nothing is pinned here,
       because a repository moves by being served this setting.
     value: ${{ steps.run_settings.outputs.engine }}
+  jira_site:
+    description: The verified Jira site hostname for this run, or empty when the scope is absent or invalid
+    value: ${{ steps.run_settings.outputs.jira_site }}
+  jira_projects:
+    description: The verified Jira project key for this run, with mandatory plan approval
+    value: ${{ steps.run_settings.outputs.jira_projects }}
   catalog_path:
     description: >-
       the file the served model catalog was written to, or empty where the
@@ -274,6 +312,7 @@ runs:
         RUN_SETTINGS_JOB_TIMEOUT_MINUTES: ${{ inputs.job_timeout_minutes }}
         RUN_SETTINGS_MAX_CONSECUTIVE_TOOL_FAILURES: ${{ inputs.max_consecutive_tool_failures }}
         RUN_SETTINGS_MAX_REPEATED_TOOL_CALLS: ${{ inputs.max_repeated_tool_calls }}
+        RUN_SETTINGS_REVIEW_STRATEGY: ${{ inputs.review_strategy }}
         RUN_SETTINGS_KEY_HELD: ${{ inputs.key_held }}
       with:
         script: |
@@ -287,6 +326,7 @@ runs:
             job_timeout_minutes: process.env.RUN_SETTINGS_JOB_TIMEOUT_MINUTES,
             max_consecutive_tool_failures: process.env.RUN_SETTINGS_MAX_CONSECUTIVE_TOOL_FAILURES,
             max_repeated_tool_calls: process.env.RUN_SETTINGS_MAX_REPEATED_TOOL_CALLS,
+            review_strategy: process.env.RUN_SETTINGS_REVIEW_STRATEGY,
           };
           const answer = keyless(await readRunSettings({
             endpoint: process.env.CONTROL_PLANE_ENDPOINT,

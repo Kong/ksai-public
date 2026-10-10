@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 
 import { deliveriesAt, governedRoot } from '../governance/anchors.mjs';
 import { deliveriesUnder, promptRendering } from '../lib/cp-prompts.mjs';
+import { annotation, counted } from '../lib/text.cjs';
 import { report, verifyAudit } from './governed-review.mjs';
 
 function delivered(env) {
@@ -32,7 +33,7 @@ export function governed(env, kept = delivered(env)) {
   if (promptRendering(env) === 'cp' && kept === 0) {
     throw new Error('this run answered without the governor seeing one request, so nothing held it to the prompt the control plane signed');
   }
-  return `the governor saw ${kept} requests this run`;
+  return `the governor saw ${counted(kept, 'request')} this run`;
 }
 
 const CHECKS = {
@@ -47,7 +48,7 @@ const CHECKS = {
     const { reported } = await report(env);
     console.log(`reported ${reported} deliveries to the control plane`);
     for (const reason of refusals(env)) {
-      console.log(`::error::prompt governance refused this run's prompt before a model saw it: ${reason || 'no reason was kept'}`);
+      console.log(annotation(`prompt governance refused this run's prompt before a model saw it: ${reason || 'no reason was kept'}`));
     }
   },
 };
@@ -58,7 +59,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     if (!check) throw new Error(`usage: governed-check.mjs ${Object.keys(CHECKS).join('|')}`);
     await check(process.env);
   } catch (error) {
-    console.log(`::error::${error.message}`);
+    console.log(annotation(error.message));
     process.exitCode = 1;
   }
 }

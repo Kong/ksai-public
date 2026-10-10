@@ -4,6 +4,8 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+import { annotation } from '../lib/text.cjs';
+
 export const REGISTRY = 'https://registry.npmjs.org';
 
 const VERSION_SHAPE = /^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,6}$/;
@@ -80,7 +82,7 @@ export async function installOpencode({
   const tarball = join(distDir, `${unscoped(name)}-${version}.tgz`);
   let fetched = false;
   if (!existsSync(tarball) || !sha512(readFileSync(tarball)).equals(expected)) {
-    if (existsSync(tarball)) log(`::warning::the cached ${name}@${version} tarball does not match the registry integrity, so it was downloaded again`);
+    if (existsSync(tarball)) log(annotation(`the cached ${name}@${version} tarball does not match the registry integrity, so it was downloaded again`, 'warning'));
     const response = await fetchImpl(tarballUrl, { signal: AbortSignal.timeout(TARBALL_TIMEOUT_MS) });
     if (!response.ok) throw new Error(`the registry answered ${response.status} for the ${name}@${version} tarball`);
     const declared = Number(response.headers?.get?.('content-length'));
@@ -123,7 +125,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       process.stdout.write(`${installed.binary}\n`);
     }
   } catch (error) {
-    console.error(`::warning::OpenCode could not be installed from its verified registry package (${error.message}), so it is installed from npm`);
+    console.error(annotation(`OpenCode could not be installed from its verified registry package (${error.message}), so it is installed from npm`, 'warning'));
     process.exitCode = 1;
   }
 }

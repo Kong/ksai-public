@@ -16,7 +16,7 @@ import {
   totals,
 } from './opencode.mjs';
 
-export const OPENCODE_V2_VERSION = '2.0.22';
+export const OPENCODE_V2_VERSION = '2.0.26';
 
 export const majorOf = (version) => {
   const major = /^([0-9]{1,4})\./.exec(String(version ?? '').trim())?.[1];
@@ -213,6 +213,12 @@ export const PROVIDER_BASE_URL = '{env:KSAI_PROVIDER_RELAY}/v1';
 export const KSAI_PLUGIN = fileURLToPath(new URL('../kreview/opencode-v2-plugins/ksai/index.mjs', import.meta.url));
 
 export const SHELL_TIMEOUT_MS = 120_000;
+
+export function shellTimeoutMs(env = {}) {
+  const configured = Number(env.KSAI_SHELL_TIMEOUT_MS);
+  if (Number.isSafeInteger(configured) && configured > 0) return configured;
+  return env.FLOW === 'implement' ? 10 * 60_000 : SHELL_TIMEOUT_MS;
+}
 
 const pluginDirectory = (file) => String(file).replace(/\/index\.mjs$/, '');
 
@@ -454,7 +460,7 @@ export function endedOn(events) {
     const named = String(error.type ?? '').replace(/\s+/g, ' ').trim() || 'error';
     const detail = said ? `${named}: ${said}` : named;
     const shown = Number.isFinite(status) && status > 0 ? `${detail} (${status})` : detail;
-    return shown.slice(0, MAX_FAILURE_CHARS);
+    return [...shown].slice(0, MAX_FAILURE_CHARS).join('');
   }
   return null;
 }

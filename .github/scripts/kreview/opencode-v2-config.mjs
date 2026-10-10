@@ -15,7 +15,7 @@ import {
 } from '../lib/opencode.mjs';
 import {
   KSAI_PLUGIN,
-  SHELL_TIMEOUT_MS,
+  shellTimeoutMs,
   V2_PROVIDER_POLICY_CONFIG,
   governedRules,
   opencodeDataDir,
@@ -28,6 +28,7 @@ import {
 } from '../lib/opencode-v2.mjs';
 import { LINK_TOOLS } from '../governance/release.mjs';
 import { REPLYING_PHASES } from '../ksai/reply-limit.cjs';
+import { annotation } from '../lib/text.cjs';
 import { AUTH_MODES, originProblem } from './federated-token.mjs';
 
 const TOOL_SHELL = fileURLToPath(new URL('./opencode-tool-shell.mjs', import.meta.url));
@@ -86,7 +87,7 @@ export function v2Config(env, { exists = existsSync, real = realpathSync, read =
   const stated = String(env.OPENCODE_ALLOWED ?? '').trim();
   const policy = { allowed: stated, disallowed: env.OPENCODE_DISALLOWED };
   for (const { name, key, granted } of stated ? mergedDenials(policy) : phaseDenials(phase)) {
-    notes.push(`::warning::${name} is denied and ${granted.join(' and ')} granted, and OpenCode gates them all behind one ${key} permission - so the denial is dropped and ${name} is reachable here where the shared policy refuses it`);
+    notes.push(annotation(`${name} is denied and ${granted.join(' and ')} granted, and OpenCode gates them all behind one ${key} permission - so the denial is dropped and ${name} is reachable here where the shared policy refuses it`, 'warning'));
   }
   const scopes = v2SandboxScopes(env, exists, real);
   const reachable = [...scopes.allow, ...scopes.deny];
@@ -102,7 +103,8 @@ export function v2Config(env, { exists = existsSync, real = realpathSync, read =
   const plugins = [[KSAI_PLUGIN, {
     governance: linked ? { from: governance.from } : governance,
     model: served,
-    shell: linked ? join(linked, 'shell.json') : { timeout_ms: SHELL_TIMEOUT_MS },
+    shell: linked ? join(linked, 'shell.json') : { timeout_ms: shellTimeoutMs(env) },
+    ...(linked ? { content: join(linked, 'content.json') } : {}),
     policy: { models: [model], workspace, strip_instructions: true },
     ...(isolated ? { guard: true, children: { permissions } } : {}),
     ...(REPLYING_PHASES.includes(phase) ? { replies: true } : {}),
@@ -128,7 +130,7 @@ export function v2Config(env, { exists = existsSync, real = realpathSync, read =
   if (!Object.keys(config.providers.anthropic.headers).length) {
     notes.push('::warning::this review carries no cost-attribution headers, so the gateway attributes its spend to nothing');
   }
-  for (const at of scopes.masked) notes.push(`::warning::the sandbox scope ${at} names a masked credential store, so it is refused rather than bound back`);
+  for (const at of scopes.masked) notes.push(annotation(`the sandbox scope ${at} names a masked credential store, so it is refused rather than bound back`, 'warning'));
   notes.push(
     `opencode ${env.OPENCODE_VERSION} runtime config written to ${env.OPENCODE_CONFIG}`,
     `model calls go through the provider relay to ${String(env.ANTHROPIC_BASE_URL).trim()}, authenticated by ${auth}`,
@@ -169,7 +171,7 @@ export function main(env = process.env, deps = {}) {
   const written = v2Config(env, deps);
   for (const line of written.notes) console.log(line);
   if (written.error) {
-    console.log(`::error::${written.error}`);
+    console.log(annotation(written.error));
     return 1;
   }
   mkdirSync(dirname(written.policyFile), { recursive: true });

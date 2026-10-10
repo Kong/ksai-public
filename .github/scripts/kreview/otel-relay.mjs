@@ -3,6 +3,7 @@ import { gunzipSync, inflateSync } from 'node:zlib';
 
 import { collectSecrets, scrub } from '../lib/opencode.mjs';
 import { attributes, pairs, post, runAttributes } from '../lib/otlp.mjs';
+import { annotation } from '../lib/text.cjs';
 import { encoded } from './otlp-protobuf.mjs';
 
 const SIGNALS = Object.freeze({ '/v1/traces': 'traces', '/v1/logs': 'logs' });
@@ -261,7 +262,7 @@ export async function startRelay({ env = process.env, fetchImpl = fetch, observe
     else {
       counts.refused += 1;
       if (counts.refused === 1) {
-        say(`::warning::the ${signal} this run exported were refused by ${where.endpoint}: ${outcome.said}`);
+        say(annotation(`the ${signal} this run exported were refused by ${where.endpoint}: ${outcome.said}`, 'warning'));
       }
     }
   };
@@ -365,7 +366,7 @@ export async function startRelay({ env = process.env, fetchImpl = fetch, observe
     else server.listen(0, '127.0.0.1', listening);
   });
   server.on('error', (error) => {
-    say(`::warning::the telemetry relay stopped (${error?.message}), so later records are unavailable`);
+    say(annotation(`the telemetry relay stopped (${error?.message}), so later records are unavailable`, 'warning'));
     server.close();
     server.closeAllConnections?.();
   });
@@ -401,9 +402,10 @@ export async function startRelay({ env = process.env, fetchImpl = fetch, observe
     server.closeAllConnections?.();
     const lost = counts.dropped + counts.refused + flight.size;
     if (where && lost > 0) {
-      say(
-        `::warning::${lost} of this run's telemetry exports did not reach ${where.endpoint}, which changes nothing about the review or what it reports spending`,
-      );
+      say(annotation(
+        `${lost} of this run's telemetry exports did not reach ${where.endpoint}, which changes nothing about the review or what it reports spending`,
+        'warning',
+      ));
     }
     if (where) {
       say(

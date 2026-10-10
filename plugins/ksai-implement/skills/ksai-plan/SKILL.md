@@ -200,7 +200,7 @@ to touch, an assumption you made - goes in `summary`, not into the title.
       requires it.
 - [ ] Every title is one line of plain prose, unique, within 200 characters, and implementable
       from the title alone.
-- [ ] Every phase heading is numbered from 1 and in order, and each carries one `### Steps` list holding at least one step.
+- [ ] Every phase heading is numbered from 1 and in order, and each carries one step list holding at least one step: `### Phase N steps` with the same number, or `### Steps` in a plan already written that way.
 
 ## Phase 6 - Write the plan document
 
@@ -217,7 +217,7 @@ The reconcile command writes unconditionally. Issue #42 asks for a flag that sho
 
 ## Phase 1 - the flag and the behaviour behind it
 
-### Steps
+### Phase 1 steps
 
 - Add a --dry-run flag to the reconcile command, defaulting to false
 - Skip the write path when --dry-run is set and log what would have changed
@@ -231,21 +231,23 @@ The reconcile command writes unconditionally. Issue #42 asks for a flag that sho
 - The `apply` command, which the issue does not mention.
 ```
 
-- Every `## Phase N` heading is numbered from 1 and in order, and each carries exactly one `### Steps`
-  list holding at least one step. A document naming no phase, and a `### Steps` list above the first
-  phase heading, are refused. A bullet under any other heading is prose: risks, open questions and
+- Every `## Phase N` heading is numbered from 1 and in order, and each carries exactly one step list
+  headed `### Phase N steps` with the same number, holding at least one step. Name every step list
+  for its phase this way, because a repeated heading fails the markdown lint many repositories run.
+  A document whose lists are already headed `### Steps` keeps that form when it is revised. A
+  document naming no phase, and a step list above the first phase heading, are refused. A bullet under any other heading is prose: risks, open questions and
   non-goals are safe to write as bullets under headings of their own.
 - Write the phase heading exactly: `## Phase N - <name>`, two hashes, the number with no leading zero, then a plain hyphen or colon. A heading that names a phase in any other shape - an em dash, a bracket, `###`, or the name on its own line underlined with `---` or `===` - is refused rather than read as prose, because its steps would join the phase above it and lose the checkpoint that would have held them.
 - Raw HTML anywhere in the document is refused. A reviewer approves what it looks like rendered, and `<details>` renders collapsed, so anything inside one is work nobody saw before approving it - and a tag opened above the steps folds those too. Write an example of markup inside a fenced code block.
 - A step is one `-` bullet in column 0, carrying a title. A line that is only a list marker with nothing after it is refused: a reader opens an empty list item there and reads every step below it as part of that item, so the document you write and the document they approve hold different work. A second line under a step is refused rather than read,
   indented or not - a sub-bullet, a wrapped line, a sentence continuing the one above - and an empty
   bullet carries no title and is refused with the plan. A numbered item, and a bullet below a `---` or
-  `***` rule inside a `### Steps` section, are refused rather than read - both render as list items an
+  `***` rule inside a step list, are refused rather than read - both render as list items an
   approver reads as steps, and neither is one. Close a step list with a heading, never with a rule.
-- A bullet below a paragraph or a code block, inside a `### Steps` section that already lists a step,
-  is refused as well: it renders under `### Steps` and would run as a step of its own. Put detail
-  about a step - target code, expected strings, the files it touches - in the phase prose above
-  `### Steps`, never below the step it describes.
+- A bullet below a paragraph or a code block, inside a step list that already lists a step, is
+  refused as well: it renders in the list and would run as a step of its own. Put detail about a
+  step - target code, expected strings, the files it touches - in the phase prose above the step
+  list, never below the step it describes.
 - An HTML comment beside text on any line is refused. A comment renders as nothing, so the line an
   approver reads is not the line this parses - and a bullet written inside a comment block is a step
   nobody approved, while one inside a phase heading erases the phase and its checkpoint.

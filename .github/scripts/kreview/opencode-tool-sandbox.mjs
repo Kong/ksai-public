@@ -55,9 +55,13 @@ export const TOOL_INJECTION_ENV = Object.freeze([
 
 export const TOOL_WRAPPER_ENV = Object.freeze([
   'FLOW',
+  'GOEXPERIMENT',
+  'GOMAXPROCS',
+  'GOMEMLIMIT',
   'GITHUB_WORKSPACE',
   'KSAI_GOROOT',
   'KSAI_GO_MODULE_CACHE',
+  'KSAI_NPM_CACHE',
   'KSAI_REVIEW_RESULT_DIR',
   'KSAI_STAGE_ARTIFACTS',
   'KSAI_STAGE_INPUTS',
@@ -95,6 +99,19 @@ const SAFE_CHILD_ENV = Object.freeze([
 const PATH_FALLBACK = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
 const MISE_SHIMS = /\/mise\/shims\/?$/;
 const READ_ONLY_ON_TEST = Object.freeze(['.git', '.ksai']);
+const GO_TOOL_SETTINGS = Object.freeze({
+  GOEXPERIMENT: /^[a-z][a-z0-9]*(?:,[a-z][a-z0-9]*)*$/,
+  GOMAXPROCS: /^[1-9][0-9]*$/,
+  GOMEMLIMIT: /^(?:off|[0-9]+(?:B|KiB|MiB|GiB|TiB)?)$/,
+});
+
+function goToolEnvironment(env) {
+  const denied = new Set(callerDeniedEnvironment(env));
+  return Object.fromEntries(Object.entries(GO_TOOL_SETTINGS).flatMap(([name, pattern]) => {
+    const value = String(env[name] ?? '').trim();
+    return !denied.has(name) && pattern.test(value) ? [[name, value]] : [];
+  }));
+}
 
 const inside = (at, root) => at === root || at.startsWith(`${root.replace(/\/+$/, '')}/`);
 
@@ -123,12 +140,18 @@ export function pinnedToolRoot(env = process.env) {
   return isAbsolute(root) ? root : '';
 }
 
+export function npmCachePayload(env) {
+  const root = String(env.KSAI_NPM_CACHE ?? '').trim();
+  return isAbsolute(root) && !root.includes(':') ? join(root, '_cacache') : '';
+}
+
 export function toolChildEnvironment(env = process.env) {
   const child = Object.create(null);
   for (const name of SAFE_CHILD_ENV) {
     const value = String(env[name] ?? '').trim();
     if (value) child[name] = value;
   }
+  Object.assign(child, goToolEnvironment(env));
   const workspace = String(env.GITHUB_WORKSPACE ?? '').replace(/\/+$/, '');
   const runnerTemp = String(env.RUNNER_TEMP ?? '').replace(/\/+$/, '');
   const safePath = String(env.PATH ?? '').split(':').filter((at) =>
@@ -145,6 +168,19 @@ export function toolChildEnvironment(env = process.env) {
   child.TMPDIR = '/tmp';
   child.GOPROXY = 'off';
   child.GOTOOLCHAIN = 'local';
+  child.MISE_OFFLINE = '1';
+  child.MISE_TASK_RUN_AUTO_INSTALL = '0';
+  if (npmCachePayload(env)) {
+    child.NPM_CONFIG_CACHE = '/tmp/ksai-npm-cache';
+    child.NPM_CONFIG_OFFLINE = 'true';
+    child.NPM_CONFIG_LOGS_DIR = '/tmp/ksai-npm-logs';
+  }
+  if (toolRoot) {
+    child.MISE_DATA_DIR = toolRoot;
+    child.MISE_CACHE_DIR = '/tmp/ksai-mise-cache';
+    child.MISE_TRUSTED_CONFIG_PATHS = workspace;
+    child.MISE_YES = '1';
+  }
   child.CI ||= 'true';
   child.LANG ||= 'C.UTF-8';
   child.LC_ALL ||= child.LANG;
@@ -183,7 +219,7 @@ export function toolSandboxArgs(
   const args = [
     '--ro-bind', '/', '/',
     '--dev', '/dev',
-    '--tmpfs', '/proc',
+    '--proc', '/proc',
     '--tmpfs', '/tmp',
     '--dir', '/tmp/ksai-home',
     '--tmpfs', '/run',
@@ -211,6 +247,13 @@ export function toolSandboxArgs(
     const directory = kind(at).isDirectory();
     args.push(directory ? '--tmpfs' : '--ro-bind', ...(directory ? [at] : ['/dev/null', at]));
   }
+  const npmCache = npmCachePayload(env);
+  if (npmCache && exists(npmCache)) {
+    args.push('--dir', '/tmp/ksai-npm-cache', '--dir', '/tmp/ksai-npm-cache/_cacache',
+      '--ro-bind', npmCache, '/tmp/ksai-npm-seed');
+    const content = join(npmCache, 'content-v2');
+    if (exists(content)) args.push('--ro-bind', content, '/tmp/ksai-npm-cache/_cacache/content-v2');
+  }
   args.push('--clearenv');
   for (const [name, value] of Object.entries(toolChildEnvironment(env))) args.push('--setenv', name, value);
   args.push(
@@ -235,9 +278,12 @@ export function toolShell(exists = existsSync) {
 
 export function isolatedToolCommand(command, args, workdir, linux = process.platform === 'linux', env = process.env) {
   if (!linux) return { command, args };
+  const npm = npmCachePayload(env)
+    ? ['/bin/sh', '-c', 'mkdir -p /tmp/ksai-npm-cache/_cacache && if [ -d /tmp/ksai-npm-seed/index-v5 ]; then cp -R /tmp/ksai-npm-seed/index-v5 /tmp/ksai-npm-cache/_cacache/ || exit; fi; exec "$@"', 'ksai-npm', command, ...args]
+    : [command, ...args];
   return {
     command: 'bwrap',
-    args: [...toolSandboxArgs(env, workdir), command, ...args],
+    args: [...toolSandboxArgs(env, workdir), ...npm],
   };
 }
 
@@ -249,7 +295,16 @@ const { spawnSync } = require('node:child_process');
 (async () => {
 const [relayUrl, workspace, deniedJson, ...hidden] = process.argv.slice(1);
 const denied = JSON.parse(deniedJson);
-if (fs.readdirSync('/proc').length !== 0) throw new Error('the parent process namespace is visible');
+if (!fs.readlinkSync('/proc/self/exe')) throw new Error('the isolated executable path is unavailable');
+if (fs.existsSync('/run/ksai-tool-proc')) throw new Error('the parent proc mount is visible');
+for (const pid of fs.readdirSync('/proc').filter((name) => /^[0-9]+$/.test(name))) {
+  try {
+    const exposed = fs.readFileSync('/proc/' + pid + '/environ', 'utf8');
+    if (denied.some((name) => exposed.includes(name + '='))) throw new Error('parent credentials are visible');
+  } catch (error) {
+    if (String(error.message).includes('credentials are visible')) throw error;
+  }
+}
 for (const name of denied) if (process.env[name]) throw new Error('credential environment was inherited');
 for (const path of hidden) {
   try {
@@ -292,20 +347,25 @@ export function toolIsolationProbe(env) {
     env.KSAI_TOKEN_DIR,
     env.KSAI_TOKEN_FILE,
   ]);
-  return isolatedToolCommand(
+  const isolated = isolatedToolCommand(
     'node',
     ['-e', PROBE_SOURCE, String(env.KSAI_PROVIDER_RELAY || env.KSAI_PROVIDER_SOCKET || ''), String(env.GITHUB_WORKSPACE ?? ''), JSON.stringify(TOOL_DENIED_ENV), ...hidden],
     String(env.GITHUB_WORKSPACE ?? ''),
     true,
     env,
   );
+  return {
+    command: '/usr/bin/env',
+    args: ['-i', ...Object.entries(toolLauncherEnvironment(env)).map(([name, value]) => `${name}=${value}`), isolated.command, ...isolated.args],
+  };
 }
 
 export function toolLauncherEnvironment(env = process.env) {
   const allowed = new Set(TOOL_WRAPPER_ENV);
+  const go = goToolEnvironment(env);
   const launcher = Object.fromEntries(Object.entries(env)
-    .filter(([name]) => allowed.has(name))
-    .map(([name, value]) => [name, String(value ?? '')]));
+    .filter(([name]) => allowed.has(name) && (!(name in GO_TOOL_SETTINGS) || Object.hasOwn(go, name)))
+    .map(([name, value]) => [name, go[name] ?? String(value ?? '')]));
   launcher.PATH = toolChildEnvironment(env).PATH;
   return launcher;
 }

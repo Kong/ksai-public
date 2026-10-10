@@ -31,6 +31,7 @@ const { combinedGuards } = require('./guards.cjs');
 const { DEFAULT_TRIGGER_PHRASE, afterTrigger } = require('../lib/text.cjs');
 const { labelReaders, readLabelBasis, readReviewBasis, recordBasis } = require('./label-basis.cjs');
 const loadKsaiConfig = require('./config.cjs');
+const { readAutofixPolicy } = require('../lib/served-config.cjs');
 const { controlPlaneApprovalRef, readControlPlaneApprovalRef } = require('./control-plane-approval.cjs');
 const { readNativeApprovalRef } = require('./native-approval-ref.cjs');
 const {
@@ -71,8 +72,14 @@ const {
 } = require('./phase.cjs');
 const path = require('node:path');
 const { isPlanFile, planDirOf, planFilePathFor, readRelease, scrub, withoutHold } = require('./plan.cjs');
-const { usingControlPlane } = require('../lib/control-plane.cjs');
-const { readFromArchive } = require('../lib/work-request.cjs');
+const { inertInline } = require('../lib/inert-markdown.cjs');
+const { codeOwnersOver, usingControlPlane } = require('../lib/control-plane.cjs');
+
+function owning(authorize, env, fetch = globalThis.fetch) {
+  const askOwners = codeOwnersOver(env, fetch);
+  return askOwners && typeof authorize === 'function' ? (asked) => authorize({ ...asked, askOwners }) : authorize;
+}
+const { readFromArchive } = require('../lib/task-request.cjs');
 const {
   renderDirectPrompt,
   renderDoPrompt,
@@ -95,7 +102,7 @@ function refusedByBar({ command, bar, undecided }, { outputs, notices }) {
   return { outputs, notices, failure: undecided ? undecidedWriteAccess(command) : null };
 }
 
-async function resolveBareGate({ github, core, owner, repo, env }) {
+async function resolveBareGate({ github, core, owner, repo, env, fetchImpl = fetch }) {
   const outputs = {
     mode: 'off',
     mine: 'false',
@@ -109,7 +116,7 @@ async function resolveBareGate({ github, core, owner, repo, env }) {
   };
   const asked = bareMode({ input: env.BARE_COMMENTS });
   if (asked.error) return { outputs, notices: [], failure: asked.error };
-  const config = await loadKsaiConfig({ github, core, owner, repo });
+  const config = await loadKsaiConfig({ github, core, owner, repo, env, fetchImpl });
   if (config.error && env.IS_CONTINUATION === 'true') {
     return {
       outputs,
@@ -157,8 +164,13 @@ async function resolveBareGate({ github, core, owner, repo, env }) {
   if (!addressed) return { outputs, notices: [], failure: null };
 
   const rootId = String(env.THREAD_ROOT_ID ?? '').trim();
-  const mine = await ownSurface({ github, core, owner, repo, rootId, prNumber: env.THREAD_NUM, botLogin: env.BOT_LOGIN });
+  let draft = false;
+  const mine = await ownSurface({
+    github, core, owner, repo, rootId, prNumber: env.THREAD_NUM, botLogin: env.BOT_LOGIN,
+    onPull: (pull) => { draft = pull.draft === true; },
+  });
   outputs.mine = mine ? 'true' : 'false';
+  if (mine && rootId === '') outputs.draft = draft ? 'true' : 'false';
   const where = rootId ? 'This thread opened with a finding this flow posted' : 'This pull request is one this flow opened';
   return {
     outputs,
@@ -190,12 +202,21 @@ function selectionNoticeFacts(out, env, answersRejection) {
   return facts === null ? null : { ...facts, on_issue: env.ON_ISSUE, thread_root_id: env.THREAD_ROOT_ID };
 }
 
-async function selectImplementArm({ github, core, owner, repo, env }) {
+const HOW_ASKED = Object.freeze({
+  explicit: 'named in the comment',
+  classifier: 'read out of the comment',
+  continuation: 'carried on from the run before this one',
+  label: 'asked for by a label',
+});
+
+async function selectImplementArm({ github, core, owner, repo, env, fetchImpl = fetch }) {
   const out = await resolveRequest({
     github,
     core,
     owner,
     repo,
+    env,
+    fetchImpl,
     prompt: env.PROMPT ?? '',
     onIssue: env.ON_ISSUE,
     threadRootId: env.THREAD_ROOT_ID,
@@ -260,7 +281,7 @@ async function selectImplementArm({ github, core, owner, repo, env }) {
           ...out.unauthorized,
         })
       : '') ||
-    (out.nudge ? renderNudge({ triggerPhrase: env.TRIGGER }) : '') ||
+    (out.nudge && env.ON_OWN_DRAFT === 'true' ? renderNudge({ triggerPhrase: env.TRIGGER }) : '') ||
     (out.unaddressed ? renderUnaddressed(out.unaddressed, { triggerPhrase: env.TRIGGER }) : '') ||
     (out.clarify
       ? renderClarification({ triggerPhrase: env.TRIGGER, disabledCommands: env.DISABLED_COMMANDS })
@@ -283,6 +304,7 @@ async function selectImplementArm({ github, core, owner, repo, env }) {
     effort_source: '',
     guidance_html: '',
     plan_mode: '',
+    plan_asked: '',
     route_source: out.routeSource ?? '',
     route_surface: '',
     receipt: '',
@@ -318,6 +340,10 @@ async function selectImplementArm({ github, core, owner, repo, env }) {
     return { outputs, notices, failure: null };
   }
   if (out.unauthorized) return refusedByBar(out.unauthorized, { outputs, notices });
+  if (out.nudge && env.ON_OWN_DRAFT !== 'true') {
+    notices.push('Comment reads as consent, and this pull request is no draft, so no plan waits on it; answering nothing.');
+    return { outputs, notices, failure: null };
+  }
   if (out.nudge) {
     notices.push('Comment reads as consent to the plan, which is named rather than classified; asking for the command.');
     return { outputs, notices, failure: null };
@@ -350,7 +376,8 @@ async function selectImplementArm({ github, core, owner, repo, env }) {
       return { outputs, notices, failure: planning.error };
     }
     outputs.plan_mode = planning.mode;
-    const how = out.classified === true ? 'read out of the comment' : 'named in the comment';
+    outputs.plan_asked = out.planAsk === planning.mode ? out.planAsk : '';
+    const how = HOW_ASKED[out.routeSource] ?? 'read from where it was asked';
     notices.push(`Answering the \`${out.command}\` command (${how}) at ${out.model} / ${out.effort}.`);
     Object.assign(outputs, {
       command: out.command,
@@ -397,12 +424,14 @@ function testerNoticeFacts(out, env) {
   return null;
 }
 
-async function selectTesterArm({ github, core, owner, repo, env }) {
+async function selectTesterArm({ github, core, owner, repo, env, fetchImpl = fetch }) {
   const out = await resolveRequest({
     github,
     core,
     owner,
     repo,
+    env,
+    fetchImpl,
     prompt: env.PROMPT ?? '',
     onIssue: env.ON_ISSUE,
     threadRootId: env.THREAD_ROOT_ID,
@@ -716,8 +745,8 @@ async function resolveRunContext({ github, context, env }) {
     attempt: String(out.attempt),
     stall: String(out.stall),
     prev_remaining: out.prevRemaining == null ? '' : String(out.prevRemaining),
-    work_request: await readers.seen(),
-    work_request_retry: (await readers.retried()) ? 'true' : '',
+    task_request: await readers.seen(),
+    task_request_retry: (await readers.retried()) ? 'true' : '',
     refusal: '',
     refused_on: '',
   };
@@ -831,7 +860,7 @@ async function checkpointFactsFromCP({ github, owner, repo, env, token, fetch })
 
 async function reviewStanding({ github, owner, repo, env }) {
   const asked = String(env.REVIEW_ID ?? '').trim();
-  if (!readFromArchive(env.WORK_REQUEST) || asked === '' || String(env.COMMENT_ID ?? '').trim() !== '') return { withdrawn: false, unreadable: null };
+  if (!readFromArchive(env.TASK_REQUEST) || asked === '' || String(env.COMMENT_ID ?? '').trim() !== '') return { withdrawn: false, unreadable: null };
   try {
     const { data } = await github.rest.pulls.getReview({ owner, repo, pull_number: Number(env.THREAD_NUM), review_id: Number(asked) });
     return { withdrawn: String(data?.state ?? '').toUpperCase() !== String(env.REVIEW_STATE ?? '').toUpperCase(), unreadable: null };
@@ -840,7 +869,8 @@ async function reviewStanding({ github, owner, repo, env }) {
   }
 }
 
-async function resolveCheckpoint({ github, core, owner, repo, env, authorize, writeAccess, fetch = globalThis.fetch }) {
+async function resolveCheckpoint({ github, core, owner, repo, env, authorize: authorizing, writeAccess, fetch = globalThis.fetch }) {
+  const authorize = owning(authorizing, env, fetch);
   const approvalRef = approvedInJira(env);
   const token = releaseTokenFor({
     command: env.COMMAND,
@@ -860,6 +890,7 @@ async function resolveCheckpoint({ github, core, owner, repo, env, authorize, wr
     disabledCommands: env.DISABLED_COMMANDS,
     commentEdited: env.COMMENT_EDITED,
     approvalRef,
+    releasedHold: env.RELEASED_HOLD,
     requestedAt: String(env.COMMENT_ID ?? '').trim() === '' ? env.REVIEW_SUBMITTED_AT : env.COMMENT_CREATED_AT,
   };
   let seen = { released: false, head: '', unreadable: null };
@@ -942,6 +973,7 @@ function noticeFor(out, env) {
     pending: out.pending,
     triggerPhrase: env.TRIGGER,
     scope: env.RECORD_SCOPE,
+    leftOut: out.leftOut,
   });
 }
 
@@ -968,7 +1000,15 @@ function phaseNotice(out, env) {
   return { notice: quiet ? '' : notice, quiet: quiet ? 'true' : '' };
 }
 
-async function decidePhase({ github, core, owner, repo, env, authorize, writeAccess }) {
+function phaseNoticeFacts(out, env) {
+  return {
+    source: 'phase_notice', reason: out.phase, pending: out.pending, scope: env.RECORD_SCOPE,
+    ...(out.leftOut && out.phase !== 'ambiguous' ? { left_out: out.leftOut } : {}),
+  };
+}
+
+async function decidePhase({ github, core, owner, repo, env, authorize: authorizing, writeAccess }) {
+  const authorize = owning(authorizing, env);
   const evidenceClient = env.EVIDENCE_TOKEN
     ? new github.constructor({ auth: env.EVIDENCE_TOKEN, baseUrl: env.GITHUB_API_URL })
     : undefined;
@@ -991,8 +1031,8 @@ async function decidePhase({ github, core, owner, repo, env, authorize, writeAcc
     threadStateFile: env.THREAD_STATE_FILE,
     commentId: env.COMMENT_ID,
     sawTrigger: env.SAW_TRIGGER,
-    successor: env.WORK_SESSION_SUCCESSOR,
-    retried: env.WORK_REQUEST_RETRY,
+    successor: env.TASK_SUCCESSOR,
+    retried: env.TASK_REQUEST_RETRY,
     checksFile: env.CHECKS_FILE,
     retryFile: env.RETRY_FILE,
     threadRootId: env.THREAD_ROOT_ID,
@@ -1036,7 +1076,9 @@ async function decidePhase({ github, core, owner, repo, env, authorize, writeAcc
       triggerPhrase: env.TRIGGER,
       onIssue: env.ON_ISSUE,
     });
-    outputs.stop_facts = JSON.stringify({ source: 'phase', command: env.COMMAND, on_issue: env.ON_ISSUE, detail: out.error });
+    outputs.stop_facts = JSON.stringify({
+      source: 'phase', command: env.COMMAND, on_issue: env.ON_ISSUE, detail: out.error, ...(out.stop ? { reason: out.stop } : {}),
+    });
     return { notices: [`The phase could not be decided: ${out.error}`], outputs };
   }
 
@@ -1048,9 +1090,7 @@ async function decidePhase({ github, core, owner, repo, env, authorize, writeAcc
   }
 
   const phaseSaid = phaseNotice(out, env);
-  const noticeFacts = phaseSaid.notice === '' ? '' : JSON.stringify({
-    source: 'phase_notice', reason: out.phase, pending: out.pending, scope: env.RECORD_SCOPE,
-  });
+  const noticeFacts = phaseSaid.notice === '' ? '' : JSON.stringify(phaseNoticeFacts(out, env));
   Object.assign(outputs, {
     phase: out.phase,
     request: out.request,
@@ -1076,17 +1116,16 @@ async function decidePhase({ github, core, owner, repo, env, authorize, writeAcc
   return { notices: outputs.quiet === 'true' ? [REVIEW_QUIET] : [], outputs };
 }
 
-const IDLE_REASON = Object.freeze(
-  Object.assign(Object.create(null), {
-    approve: 'This approval released nothing - no checkpoint was waiting',
-    resume: 'This resume released nothing - the plan was not paused',
+const IDLE = Object.freeze({
+  approve: Object.freeze({
+    released: 'This approval released nothing - no checkpoint was waiting',
+    note: 'No checkpoint is waiting for approval, so this approval released nothing and no step runs',
   }),
-);
-
-function idleNotice(command) {
-  const named = String(command ?? '').trim().toLowerCase();
-  return `${IDLE_REASON[named]} - so no successor is dispatched and no step runs`;
-}
+  resume: Object.freeze({
+    released: 'This resume released nothing - the plan was not paused',
+    note: 'This plan is not paused, so resuming it released nothing and no step runs',
+  }),
+});
 
 function resolveWork({ env }) {
   const outputs = {
@@ -1094,10 +1133,13 @@ function resolveWork({ env }) {
     reads_source: 'false',
     unblocked: 'true',
     released_nothing: 'false',
+    idle_command: '',
+    idle_notice: '',
+    idle_facts: '',
   };
   const said = (name) => String(env[name] ?? '');
   const blocked = said('BLOCKED') === 'true';
-  const idle = releasedNothing({
+  const idle = said('DRY_RUN') !== 'true' && releasedNothing({
     command: said('COMMAND'),
     phase: said('PHASE'),
     remaining: said('RELEASED_REMAINING'),
@@ -1115,7 +1157,15 @@ function resolveWork({ env }) {
   outputs.unblocked = blocked ? 'false' : 'true';
   outputs.released_nothing = idle ? 'true' : 'false';
   if (works) return { outputs, notices: [] };
-  if (idle) return { outputs, notices: [idleNotice(said('COMMAND'))] };
+  if (idle) {
+    if (said('PLAN_UNSETTLED') === 'true') return { outputs, notices: [] };
+    const command = said('COMMAND').trim().toLowerCase();
+    const { released, note } = IDLE[command];
+    outputs.idle_command = command;
+    outputs.idle_notice = asAlert('NOTE', note);
+    outputs.idle_facts = JSON.stringify({ source: 'plan', reason: `idle-${command}`, command });
+    return { outputs, notices: [`${released} - so no successor is dispatched and no step runs`] };
+  }
   return { outputs, notices: ['This run has no work to do, so nothing is sized and no model is called'] };
 }
 
@@ -1137,6 +1187,7 @@ function resolveSize({ env }) {
 
   const decision = plansWork({
     mode: env.PLAN_MODE,
+    askedPath: env.PLAN_ASKED,
     verdict: env.VERDICT,
     requireApproval: env.REQUIRE_APPROVAL,
     jiraKey: env.JIRA_KEY,
@@ -1148,7 +1199,7 @@ function resolveSize({ env }) {
   return { outputs, notices: [`This run builds the change directly, because ${decision.why}`] };
 }
 
-async function planClassification({ github, core, owner, repo, env }) {
+async function planClassification({ github, core, owner, repo, env, fetchImpl = fetch }) {
   const outputs = {
     classify: 'false',
     model: '',
@@ -1169,6 +1220,8 @@ async function planClassification({ github, core, owner, repo, env }) {
     core,
     owner,
     repo,
+    env,
+    fetchImpl,
     prompt: env.PROMPT ?? '',
     disabledCommands: env.DISABLED_COMMANDS,
     onIssue: env.FLOW === 'review' ? undefined : env.ON_ISSUE === 'true',
@@ -1355,6 +1408,7 @@ async function readPlan({ github, owner, repo, env, fetch = globalThis.fetch }) 
     remaining: '',
     remaining_steps: '',
     step_title: '',
+    step_shown: '',
     has_step: '',
     at_checkpoint: '',
     jira_key: '',
@@ -1362,15 +1416,17 @@ async function readPlan({ github, owner, repo, env, fetch = globalThis.fetch }) 
     requested_by: '',
     held: '',
     gate_waiting: '',
+    unsettled: '',
     released_hold: '',
   };
 
   if (isResume(env.COMMAND)) {
     const released = await releaseHold({ github, owner, repo, prNumber: env.PR_NUMBER, env, fetch });
-    if (released.error) return { outputs: { ...outputs, error: released.error } };
+    if (released.error) return { outputs: { ...outputs, error: released.error, unsettled: 'true' } };
     outputs.released_hold = released.released ? 'true' : 'false';
   }
   const out = await nextStep({ github, owner, repo, prNumber: env.PR_NUMBER, botLogin: env.BOT_LOGIN, env, fetch });
+  if (out.held || out.error) outputs.unsettled = 'true';
   if (out.held) {
     outputs.held = 'true';
     outputs.has_step = 'false';
@@ -1400,6 +1456,7 @@ async function readPlan({ github, owner, repo, env, fetch = globalThis.fetch }) 
     remaining: String(out.remaining),
     remaining_steps: String(out.remainingSteps),
     step_title: out.stepTitle,
+    step_shown: inertInline(out.stepTitle ?? ''),
     has_step: out.hasStep ? 'true' : 'false',
     at_checkpoint: out.atCheckpoint ? 'true' : 'false',
     jira_key: out.criteria?.kind === 'jira' ? out.criteria.key : '',
@@ -1409,8 +1466,9 @@ async function readPlan({ github, owner, repo, env, fetch = globalThis.fetch }) 
   if (!out.hasStep || out.atCheckpoint || !isApprove(env.COMMAND)) {
     return { outputs };
   }
-  const gate = await gateWaiting({ github, owner, repo, prNumber: env.PR_NUMBER, botLogin: env.BOT_LOGIN });
+  const gate = await gateWaiting({ github, owner, repo, prNumber: env.PR_NUMBER, botLogin: env.BOT_LOGIN, env, fetch });
   outputs.gate_waiting = gate.waiting ? 'true' : 'false';
+  outputs.unsettled = gate.unreadable ? 'true' : 'false';
   return { outputs, notices: gate.unreadable ? [gate.unreadable] : [] };
 }
 
@@ -1723,7 +1781,7 @@ const PHASES = Object.freeze(
 
 const merging = (env) => String(env?.PHASE ?? '') === 'do' && String(env?.MERGED_SHA ?? '').trim() !== '';
 
-function buildPrompt({ env }) {
+async function buildPrompt({ env, fetchImpl = fetch }) {
   const outputs = {
     file: '',
     allowed_tools: '',
@@ -1780,6 +1838,10 @@ function buildPrompt({ env }) {
   if (phase === 'fix' || phase === 'do') {
     const threads = String(env.THREADS_FILE ?? '') === '' ? null : readJson(env.THREADS_FILE);
     const checks = String(env.CHECKS_FILE ?? '') === '' ? null : readJson(env.CHECKS_FILE);
+    const autofix = await readAutofixPolicy({ env, fetchImpl, scope: String(env.REPO ?? '') });
+    if (autofix.error) {
+      return { outputs, failure: `the autofix policy of this repository could not be read: ${autofix.error}. Nothing was run` };
+    }
     const scoped = createScope({
       cwd: env.GITHUB_WORKSPACE,
       phase,
@@ -1790,6 +1852,7 @@ function buildPrompt({ env }) {
       threads,
       checks,
       merging: merging(env),
+      served: autofix.served,
       outFile: path.join(env.PROMPT_DIR, 'ksai-change-scope', 'scope.json'),
     });
     if (!scoped.ok) {
@@ -1877,6 +1940,7 @@ function implementRequest({ env }) {
 async function readApprovalReceipts({ owner, repo, env, fetch = globalThis.fetch }) {
   if (!usingControlPlane(env)) return { receipts: [] };
   const receipts = [];
+  let kinds = new Map();
   for (const thread of threadsToScan({ issueNumber: env.ISSUE_NUM, prNumber: env.PR_NUMBER })) {
     const held = await cpReport.readConversation({ number: thread, env, fetch });
     if (held.why) return { error: held.why };
@@ -1885,6 +1949,7 @@ async function readApprovalReceipts({ owner, repo, env, fetch = globalThis.fetch
         !Array.isArray(held.state.approvals ?? [])) {
       return { error: 'the control plane returned invalid approval state' };
     }
+    if (thread === Number(env.PR_NUMBER)) kinds = cpReport.keptKindsOf(held.state);
     for (const one of held.state.approvals ?? []) {
       const reference = String(one?.reference ?? '');
       const login = String(one?.approver ?? '');
@@ -1899,11 +1964,12 @@ async function readApprovalReceipts({ owner, repo, env, fetch = globalThis.fetch
         url: `https://github.com/${owner}/${repo}/issues/${thread}#issuecomment-${id}` });
     }
   }
-  return { receipts };
+  return { receipts, kinds };
 }
 
-async function resolveApprovalGate({ github, core, owner, repo, env, authorize, writeAccess,
-  fetch = globalThis.fetch }) {
+async function resolveApprovalGate({ github, core, owner, repo, env, authorize: authorizing, writeAccess,
+  fetch = globalThis.fetch, fetchImpl = fetch }) {
+  const authorize = owning(authorizing, env, fetch);
   const outputs = {
     blocked: 'true',
     reason: '',
@@ -1921,14 +1987,14 @@ async function resolveApprovalGate({ github, core, owner, repo, env, authorize, 
   };
 
   const applies = approvalApplies({ required: env.REQUIRE_APPROVAL, phase: env.PHASE });
-  const config = applies ? await loadKsaiConfig({ github, core, owner, repo }) : { aliases: null };
+  const config = applies ? await loadKsaiConfig({ github, core, owner, repo, env, fetchImpl }) : { writeAccess: null };
   if (config.error) {
-    outputs.reason = `could not read the command aliases, so an approval cannot be recognised: ${config.error}`;
+    outputs.reason = `could not read the guards, so an approval cannot be recognised: ${config.error}`;
     return { outputs, notices: [] };
   }
 
   const opened = applies
-    ? resolveWriteAccess({ input: env.WRITE_ACCESS_COMMANDS, fromFile: config.writeAccess, commandAliases: config.aliases })
+    ? resolveWriteAccess({ input: env.WRITE_ACCESS_COMMANDS, fromFile: config.writeAccess })
     : { commands: [] };
   if (opened.error) {
     outputs.reason = `could not read which commands write access releases here: ${opened.error}`;
@@ -1954,11 +2020,10 @@ async function resolveApprovalGate({ github, core, owner, repo, env, authorize, 
     botLogin: env.BOT_LOGIN,
     planFile: env.PLAN_FILE,
     trigger: env.TRIGGER,
-    commandAliases: config.aliases,
     releasedRef: env.RELEASED_REF,
     knownOwner: env.CHECKED_OWNER,
     disabledCommands: env.DISABLED_COMMANDS,
-    nativeReview: readFromArchive(env.WORK_REQUEST) ? null : {
+    nativeReview: readFromArchive(env.TASK_REQUEST) ? null : {
       id: env.REVIEW_ID,
       state: env.REVIEW_STATE,
       submitted_at: env.REVIEW_SUBMITTED_AT,
@@ -1974,9 +2039,12 @@ async function resolveApprovalGate({ github, core, owner, repo, env, authorize, 
       prNumber: env.CONTROL_PLANE_PR,
     },
     approvalReceipts: recorded.receipts,
+    keptKinds: recorded.kinds,
     authorize,
     writeAccess,
     writeAccessCommands: opened.commands,
+    env,
+    fetch,
   });
 
   Object.assign(outputs, {
@@ -2013,6 +2081,7 @@ module.exports = {
   resolveCheckpoint,
   decidePhase,
   phaseNotice,
+  phaseNoticeFacts,
   resolveWork,
   resolveSize,
   planClassification,

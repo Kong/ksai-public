@@ -5,6 +5,7 @@ const { counted, describe, locate, safeText } = require('../lib/text.cjs');
 const { neutralizeSections } = require('../lib/prompt-text.cjs');
 const { wholeNumber } = require('../lib/watchdog.cjs');
 const { ALLOWED_FLAGS, claimsAny, claimsAnyGlob, toGlobs, toPattern } = require('../lib/path-pattern.cjs');
+const { isRepoPath: servedPath, readServedConfig } = require('../lib/served-config.cjs');
 
 const RULES_PATH = '.ksai/review-rules.md';
 const PACKS_PATH = '.ksai/review-rules';
@@ -256,6 +257,11 @@ function resolveFileCap(value, ceiling) {
 
 const RULES_REMEDY = [
   'Nothing was reviewed. Fix `review-rules.md` in `.ksai/` on the default branch, or set the',
+  '`repo_rules` input to `off`, then ask again',
+].join('\n');
+
+const CONFIG_REMEDY = [
+  'Nothing was reviewed. Fix `.ksai/ksai.toml`, or the file it names, on the default branch, or set the',
   '`repo_rules` input to `off`, then ask again',
 ].join('\n');
 
@@ -617,7 +623,117 @@ async function readPacks({ github, owner, repo, budget, limits }) {
  *
  * Answers the step outputs, plus `failure` when the run must stop before a model is called.
  */
-async function loadRepoRules({ github, core, owner, repo, mode, trigger, changedFiles, maxBytes, maxRules, maxFileBytes }) {
+async function legacyRules({ github, owner, repo, limits }) {
+  const staged = [];
+
+  const found = await fetchOne({ github, owner, repo, path: RULES_PATH });
+  if (found.error) return { error: found.error };
+  if (!found.missing) {
+    const inline = inlineOf(found.data, RULES_PATH, `${owner}/${repo}`, limits);
+    if (inline.error) return { error: inline.error };
+    const scoping = Object.keys(parseHeader(inline.text, RULES_PATH).header ?? {}).filter((key) => HEADER_KEYS.includes(key));
+    if (scoping.length > 0) {
+      return {
+        error:
+          `\`${RULES_PATH}\` writes \`${scoping.join('` and `')}\` in its frontmatter, and this file is read whole: ` +
+          `its header is staged as rules and scopes nothing. Move the rule to \`${PACKS_PATH}/\` or to \`${MANIFEST_PATH}\`, which scope`,
+      };
+    }
+    const parsed = parseRules(inline.text, RULES_PATH, limits);
+    if (parsed.error) return { error: parsed.error };
+    staged.push({
+      name: RULES_PATH,
+      scope: null,
+      units: [{ key: `path:${RULES_PATH}`, path: RULES_PATH, sha: String(found.data.sha ?? ''), rules: parsed.rules, bytes: parsed.bytes }],
+    });
+  }
+
+  const budget = { charged: new Set(), read: new Map(), sources: limits.sources };
+  const listed = await readManifest({ github, owner, repo, budget, limits });
+  if (listed.error) return { error: listed.error };
+
+  const read = await readPacks({ github, owner, repo, budget, limits });
+  if (read.error) return { error: read.error };
+
+  const present = read.present || listed.present;
+  return {
+    staged,
+    groups: [...listed.packs, ...read.packs],
+    present,
+    where: listed.packs.some((pack) => pack.scope !== null) ? MANIFEST_PATH : PACKS_PATH,
+    quiet: present
+      ? `No rule under ${PACKS_PATH}/ or in ${MANIFEST_PATH} claims a changed file`
+      : `No ${RULES_PATH} on ${owner}/${repo}'s default branch`,
+  };
+}
+
+function servedRules(served, limits) {
+  const { source, problem, review } = served;
+  if (problem !== '') return { error: `\`${source}\` ${problem}` };
+  if (typeof review?.problem === 'string' && review.problem !== '') return { error: `\`${source}\` ${review.problem}` };
+  const files = review?.files ?? {};
+  if (typeof files !== 'object' || Array.isArray(files)) {
+    return { error: `the control plane served the review files of \`${source}\` as something other than a table` };
+  }
+  const units = new Map();
+  const unitOf = (path) => {
+    if (!Object.hasOwn(files, path) || typeof files[path] !== 'string') {
+      return { error: `the control plane served no text for \`${safeText(path)}\`, which \`${source}\` names` };
+    }
+    if (!units.has(path)) {
+      const parsed = parseRules(files[path], path, limits);
+      units.set(path, parsed.error ? { error: parsed.error } : { unit: { key: `path:${path}`, path, sha: '', rules: parsed.rules, bytes: parsed.bytes } });
+    }
+    return units.get(path);
+  };
+
+  const staged = [];
+  if (review?.rules_file !== undefined) {
+    if (!servedPath(review.rules_file)) {
+      return { error: `the control plane served a rules file of \`${source}\` that is not a path in the repository` };
+    }
+    const read = unitOf(review.rules_file);
+    if (read.error) return { error: read.error };
+    staged.push({ name: review.rules_file, scope: null, units: [read.unit] });
+  }
+
+  if (review?.packs !== undefined && !Array.isArray(review.packs)) {
+    return { error: `the control plane served the review packs of \`${source}\` as something other than a list` };
+  }
+  const listed = review?.packs ?? [];
+  if (listed.length > limits.rules) {
+    return { error: `\`${source}\` holds ${counted(listed.length, 'review pack')}, over the limit of ${limits.rules}` };
+  }
+  const unnamed = listed.findIndex((pack) => !Array.isArray(pack?.source_files) || !pack.source_files.every(servedPath));
+  if (unnamed >= 0) {
+    return { error: `the control plane served the review pack \`${safeText(listed[unnamed]?.name)}\` of \`${source}\` without a list of source files in the repository` };
+  }
+  const named = new Set(listed.flatMap((pack) => pack.source_files));
+  if (named.size > limits.sources) {
+    return { error: `\`${source}\` names ${counted(named.size, 'source file')}, over the limit of ${limits.sources}` };
+  }
+  const groups = [];
+  for (const pack of listed) {
+    const compiled = patternOf(pack, `the review pack \`${safeText(pack.name)}\` in \`${source}\``);
+    if (compiled.error) return { error: compiled.error };
+    const read = pack.source_files.map(unitOf);
+    const failed = read.find((one) => one.error);
+    if (failed) return { error: failed.error };
+    groups.push({ name: pack.name, scope: compiled.scope, units: read.map((one) => one.unit) });
+  }
+
+  return {
+    staged,
+    groups,
+    present: groups.length > 0,
+    where: source,
+    quiet: groups.length > 0 ? `No review pack in ${source} claims a changed file` : `${source} names no review rules`,
+  };
+}
+
+async function loadRepoRules({
+  github, core, owner, repo, mode, trigger, changedFiles, maxBytes, maxRules, maxFileBytes, env = process.env, fetchImpl = fetch,
+}) {
   const outputs = {
     rules: '',
     path: '',
@@ -628,8 +744,8 @@ async function loadRepoRules({ github, core, owner, repo, mode, trigger, changed
     mode: '',
     rejection: '',
   };
-  const stop = (error) => {
-    outputs.rejection = renderRulesRejection(error, trigger);
+  const stop = (error, remedy = RULES_REMEDY) => {
+    outputs.rejection = renderRulesRejection(error, trigger, remedy);
     return { outputs, failure: error };
   };
   const refuseInput = (error) => {
@@ -659,43 +775,19 @@ async function loadRepoRules({ github, core, owner, repo, mode, trigger, changed
     return { outputs, failure: null };
   }
 
-  const staged = [];
+  const served = await readServedConfig({ env, fetchImpl, scope: `${owner}/${repo}` });
+  if (served.error) return stop(`the control plane did not serve the review rules of ${owner}/${repo}: ${served.error}`);
+  const found = served.served.source === ''
+    ? await legacyRules({ github, owner, repo, limits })
+    : servedRules(served.served, limits);
+  if (found.error) return stop(found.error, served.served.source === '' ? RULES_REMEDY : CONFIG_REMEDY);
+  const { staged, groups } = found;
 
-  const found = await fetchOne({ github, owner, repo, path: RULES_PATH });
-  if (found.error) return stop(found.error);
-  if (!found.missing) {
-    const inline = inlineOf(found.data, RULES_PATH, `${owner}/${repo}`, limits);
-    if (inline.error) return stop(inline.error);
-    const scoping = Object.keys(parseHeader(inline.text, RULES_PATH).header ?? {}).filter((key) => HEADER_KEYS.includes(key));
-    if (scoping.length > 0) {
-      return stop(
-        `\`${RULES_PATH}\` writes \`${scoping.join('` and `')}\` in its frontmatter, and this file is read whole: ` +
-          `its header is staged as rules and scopes nothing. Move the rule to \`${PACKS_PATH}/\` or to \`${MANIFEST_PATH}\`, which scope`,
-      );
-    }
-    const parsed = parseRules(inline.text, RULES_PATH, limits);
-    if (parsed.error) return stop(parsed.error);
-    staged.push({
-      name: RULES_PATH,
-      scope: null,
-      units: [{ key: `path:${RULES_PATH}`, path: RULES_PATH, sha: String(found.data.sha ?? ''), rules: parsed.rules, bytes: parsed.bytes }],
-    });
-  }
-
-  const budget = { charged: new Set(), read: new Map(), sources: limits.sources };
-  const listed = await readManifest({ github, owner, repo, budget, limits });
-  if (listed.error) return stop(listed.error);
-
-  const read = await readPacks({ github, owner, repo, budget, limits });
-  if (read.error) return stop(read.error);
-
-  const groups = [...listed.packs, ...read.packs];
   const paths = (Array.isArray(changedFiles) ? changedFiles : []).filter((entry) => typeof entry === 'string' && entry !== '');
   const scoped = groups.filter((pack) => pack.scope !== null);
   if (scoped.length > 0 && paths.length === 0) {
-    const where = listed.packs.some((pack) => pack.scope !== null) ? MANIFEST_PATH : PACKS_PATH;
     return stop(
-      `\`${where}\` holds ${counted(scoped.length, 'rule')} scoped by path, and this run has no changed-file list to match them against`,
+      `\`${found.where}\` holds ${counted(scoped.length, 'rule')} scoped by path, and this run has no changed-file list to match them against`,
     );
   }
 
@@ -707,14 +799,10 @@ async function loadRepoRules({ github, core, owner, repo, mode, trigger, changed
     applied.push({ name: pack.name, sha: shaOf(pack), bytes: sizeOf(pack), matched });
     if (matched) staged.push(pack);
   }
-  if (read.present || listed.present) outputs.packs = JSON.stringify(applied);
+  if (found.present) outputs.packs = JSON.stringify(applied);
 
   if (staged.length === 0) {
-    core.info(
-      read.present || listed.present
-        ? `No rule under ${PACKS_PATH}/ or in ${MANIFEST_PATH} claims a changed file, so this review applies no repository rules.`
-        : `No ${RULES_PATH} on ${owner}/${repo}'s default branch, so this review applies no repository rules.`,
-    );
+    core.info(`${found.quiet}, so this review applies no repository rules.`);
     return { outputs, failure: null };
   }
 

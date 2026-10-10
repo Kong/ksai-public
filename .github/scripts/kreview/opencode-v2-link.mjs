@@ -198,8 +198,17 @@ export function governed(env, dir, plan, artifacts, { retry = '', context = '', 
   }), { mode: 0o600 });
   writeFileSync(join(dir, 'model.json'), JSON.stringify(plan.model), { mode: 0o600 });
   writeFileSync(join(dir, 'shell.json'), JSON.stringify({ timeout_ms: plan.shell_timeout_ms }), { mode: 0o600 });
+  writeFileSync(join(dir, 'content.json'), JSON.stringify(plan.guard
+    ? { socket: String(env.KSAI_GUARD_SOCKET ?? ''), required: plan.guard.required === true }
+    : {}), { mode: 0o600 });
   return notes;
 }
+
+export const driverError = (error) => ({
+  type: 'ksai.error', created: Date.now(), data: { error: { type: 'ksai.driver', message: [...String(error?.message ?? error)].slice(0, 500).join('') } },
+});
+
+export const feedEnded = (error) => driverError(`the OpenCode event stream ended before the session did${error ? `: ${error?.message ?? error}` : ''}`);
 
 export async function linked(env = process.env, { connect = createConnection, output = process.stdout, signals = process } = {}) {
   const socket = connect(String(env.KSAI_LINK_SOCKET ?? ''));
@@ -308,8 +317,11 @@ export async function linked(env = process.env, { connect = createConnection, ou
     await feed.next();
     const finished = (async () => {
       for (;;) {
-        const step = await feed.next().catch(() => ({ done: true }));
-        if (step.done) return 1;
+        const step = await feed.next().catch((error) => ({ done: true, error }));
+        if (step.done) {
+          if (!controller.signal.aborted) await write(feedEnded(step.error));
+          return 1;
+        }
         const event = step.value;
         if (event?.type === 'permission.asked' && record.tree.has(String(event.data?.sessionID ?? ''))) {
           await client.permission.reply({ sessionID: event.data.sessionID, requestID: event.data.id, decision: 'reject' }).catch(() => {});
@@ -345,7 +357,7 @@ export async function linked(env = process.env, { connect = createConnection, ou
     }
     return code;
   } catch (error) {
-    await write({ type: 'ksai.error', created: Date.now(), data: { error: { type: 'ksai.driver', message: String(error?.message ?? error).slice(0, 500) } } });
+    await write(driverError(error));
     return 1;
   } finally {
     const ending = opencodeSession;

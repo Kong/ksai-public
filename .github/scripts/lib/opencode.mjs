@@ -260,7 +260,7 @@ export const PROVIDER_TIMEOUTS = Object.freeze({ headerTimeout: 120_000, chunkTi
 
 export const UNCONTINUED = 'this rework found the conversation export its planning session left, which no control plane verified, so the governed run does not continue it and starts from the context the control plane renders. The plan and its export are kept as they are; a conversation the control plane verified is carried instead as a checkpoint it restores';
 
-export const PROVIDER_POLICY_VERSION = '1.18.34';
+export const PROVIDER_POLICY_VERSION = '1.18.35';
 
 export const PROVIDER_POLICY = Object.freeze([
   Object.freeze({ effect: 'deny', action: 'provider.use', resource: '*' }),

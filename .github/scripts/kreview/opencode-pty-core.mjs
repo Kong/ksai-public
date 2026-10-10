@@ -4,7 +4,7 @@ import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
-import { isolatedToolCommand } from './opencode-tool-sandbox.mjs';
+import { isolatedToolCommand, toolLauncherEnvironment } from './opencode-tool-sandbox.mjs';
 
 export const PTY_BUFFER_BYTES = 65_536;
 export const PTY_BUFFER_CODE_UNITS = Math.floor(PTY_BUFFER_BYTES / 3);
@@ -101,8 +101,8 @@ const CODE_SUBCOMMANDS = Object.freeze({
   bun: new Set(['build', 'run', 'test', 'x']),
   deno: new Set(['bench', 'compile', 'eval', 'jupyter', 'repl', 'run', 'serve', 'task', 'test']),
 });
-export const PTY_OPENCODE_VERSION = '1.18.34';
-const PTY_RUNTIME_LOCK_SHA256 = 'b9d74503f5b67d28e25dc9ab2f52812671bb4107c614739ac8c2845a91205575';
+export const PTY_OPENCODE_VERSION = '1.18.35';
+const PTY_RUNTIME_LOCK_SHA256 = '917b7c5f49af78bc5eff2c51de6a07b55d4991cec320b3a6a0ecbc0f7e9175a7';
 
 const executableName = (command) => command.replace(/\/+$/, '').split('/').at(-1).toLowerCase();
 const carriesEval = (args, short, long = []) => args.some((arg) =>
@@ -455,11 +455,16 @@ export function prunablePtyRecords(records, targetSize) {
 }
 
 /** isolatedPtyCommand keeps every Linux session inside its own killable PID namespace. */
-export function isolatedPtyCommand(command, args, workdir, linux = process.platform === 'linux') {
-  return isolatedToolCommand(command, args, workdir, linux, {
-    ...process.env,
-    GITHUB_WORKSPACE: process.env.GITHUB_WORKSPACE || workdir,
+export function isolatedPtyCommand(command, args, workdir, linux = process.platform === 'linux', env = process.env) {
+  const isolated = isolatedToolCommand(command, args, workdir, linux, {
+    ...env,
+    GITHUB_WORKSPACE: env.GITHUB_WORKSPACE || workdir,
   });
+  if (!linux) return isolated;
+  return {
+    command: '/usr/bin/env',
+    args: ['-i', ...Object.entries(toolLauncherEnvironment(env)).map(([name, value]) => `${name}=${value}`), isolated.command, ...isolated.args],
+  };
 }
 
 /** pinnedRuntime refuses a dependency graph that differs from the exact audited lock. */

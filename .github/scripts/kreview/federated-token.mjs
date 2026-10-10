@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer';
 import { fileURLToPath } from 'node:url';
 
 import { writeOutputs } from '../lib/outputs.mjs';
+import { annotation } from '../lib/text.cjs';
 
 const GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:jwt-bearer';
 const BETAS = 'oauth-2025-04-20,oidc-federation-2026-04-01';
@@ -328,7 +329,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     });
     console.error(`minted a bearer for ${originOf(process.env)}, expires_in ${expiresIn}s (request-id ${requestId})`);
   } catch (error) {
-    console.error(`::error::${error.message}`);
+    console.error(annotation(error.message));
     process.exit(1);
   }
 }

@@ -145,6 +145,21 @@ async function readConversation({ number = 0, env = process.env, fetch = globalT
   return { state: said.answer };
 }
 
+async function readKeptKinds({ owner = '', repo = '', number = 0, env = process.env, fetch = globalThis.fetch } = {}) {
+  const found = await readConversation({ number, env, fetch });
+  if (found.why) return { why: found.why };
+  if (found.none) return { kinds: new Map() };
+  if (String(found.state.repository ?? '').toLowerCase() !== `${owner}/${repo}`.toLowerCase()) {
+    return { why: 'the control plane returned a conversation for another repository' };
+  }
+  return { kinds: keptKindsOf(found.state) };
+}
+
+function keptKindsOf(state) {
+  const kept = (state?.messages ?? []).filter((said) => Number.isInteger(said?.comment) && typeof said?.kind === 'string');
+  return new Map(kept.map((said) => [said.comment, said.kind]));
+}
+
 module.exports = {
   headReport,
   heldReport,
@@ -152,6 +167,8 @@ module.exports = {
   readJobLog,
   readPull,
   readRunStates,
+  keptKindsOf,
   readConversation,
+  readKeptKinds,
   sayReport,
 };

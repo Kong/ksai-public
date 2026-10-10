@@ -5,7 +5,8 @@ import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { cap, MAX_PR_TITLE_CHARS, planDirOf, scrub, retargetPermalinks } = require('./plan.cjs');
+const { cap, inertCap, MAX_PR_TITLE_CHARS, planDirOf, scrub, retargetLocalSha } = require('./plan.cjs');
+const { inertAfter } = require('../lib/inert-markdown.cjs');
 const { safeEcho, verifyChunk, verifyMerge, gitVia, noChangeLeftBehind } = require('./verify-chunk.cjs');
 const { readScope, writeScopeResult } = require('./change-scope.cjs');
 const { renderDoMarker, unaskedRun, MAX_REPORT_CHARS } = require('./do.cjs');
@@ -59,8 +60,8 @@ export function renderReport({
   const report = verification?.status === 'unverified'
     ? 'The targeted check was not reproduced. This result is not verified.'
     : [account, field(summary)].filter(Boolean).join('\n\n');
-  const retargeted = retargetPermalinks(scrub(report, { triggerPhrase }), { repo, from: localSha, to: sha });
-  const said = cap(retargeted.trim(), MAX_REPORT_CHARS);
+  const retargeted = retargetLocalSha(scrub(report, { triggerPhrase }), { repo, from: localSha, to: sha }).trim();
+  const said = inertCap(retargeted, MAX_REPORT_CHARS);
   const footer = renderReportFooter({ sha, triggerPhrase, merged });
   return [footer, ...(said ? ['', said] : []), ...(marker ? ['', marker] : [])].join('\n');
 }
@@ -114,7 +115,7 @@ export function recordDo({
   if (read.message) return blocked(read.message);
 
   if (status === 'blocked') {
-    return blocked(`Stopped without doing anything: ${scrub(reasonOf(manifest), { triggerPhrase }).trim()}`, { blocker: modelBlocker(manifest) });
+    return blocked(`Stopped without doing anything: ${inertAfter(scrub(reasonOf(manifest), { triggerPhrase }).trim())}`, { blocker: modelBlocker(manifest) });
   }
   if (status !== 'done' && status !== 'answered') {
     return blocked(`The run reported an unrecognized status: ${safeEcho(shown(manifest?.status))}`);
@@ -145,6 +146,12 @@ export function recordDo({
     return blocked(
       `I did not push the work: the CI checks on this head could not be read, so \`${safeEcho(verification.target)}\` ` +
         'could not be reproduced here and the change would be a guess. Ask again once the checks can be read.',
+    );
+  }
+  if (pushing && !merging && verification.status === 'unverified' && verification.target) {
+    return blocked(
+      'I did not push the work: CI verification is unverified. The CI failure must be reproduced by a trusted ' +
+        `check before an autofix can be published. Verifier reason: \`${safeEcho(verification.reason)}\`.`,
     );
   }
   rmSync(manifestPath, { force: true });

@@ -14,10 +14,10 @@
     "knowledge": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["version", "session_id", "built_at", "items"],
+      "required": ["version", "task_id", "built_at", "items"],
       "properties": {
-        "version": {"const": "work-context/v1"},
-        "session_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "version": {"const": "task-context/v1"},
+        "task_id": {"type": "string", "minLength": 1, "maxLength": 128},
         "built_at": {"type": "string", "minLength": 1, "maxLength": 64},
         "head_sha": {"type": "string", "pattern": "^(?:[0-9a-f]{40})?$"},
         "next_review_thread_cursor": {"type": "string", "minLength": 1, "maxLength": 512},
