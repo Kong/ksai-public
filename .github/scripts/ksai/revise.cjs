@@ -1,6 +1,6 @@
 'use strict';
 
-const { ANSWERED, authorizeThreadContext, readThreads, selectThreads, threadState } = require('./threads.cjs');
+const { ANSWERED, authorizeThreadContext, readThreads, reviewBotsOf, selectThreads, threadState } = require('./threads.cjs');
 const { isPlanFile } = require('./plan.cjs');
 const { counted } = require('../lib/text.cjs');
 
@@ -17,6 +17,8 @@ async function resolveRevisePhase({
   writeAccess = null,
   writeAccessCommands = null,
   triggerPhrase = null,
+  env = process.env,
+  fetch = globalThis.fetch,
 } = {}) {
   if (!String(botLogin ?? '').trim()) {
     return { error: 'no bot_login was passed, so review thread state cannot be trusted' };
@@ -26,7 +28,7 @@ async function resolveRevisePhase({
     return { error: 'this pull request names no plan document, so there are no plan threads to answer' };
   }
 
-  const read = await readThreads({ github, owner, repo, prNumber });
+  const read = await readThreads({ github, owner, repo, prNumber, env, fetch });
   if (read.error) return { error: read.error };
 
   const onPlan = read.threads.filter((thread) => String(thread?.path ?? '') === named);
@@ -42,6 +44,7 @@ async function resolveRevisePhase({
     writeAccess,
     writeAccessCommands,
     triggerPhrase,
+    reviewBots: reviewBotsOf(env.FIX_REVIEW_BOTS),
   });
   if (trusted.error) return { error: trusted.error };
 
@@ -76,13 +79,15 @@ async function openPlanThreads({
   planFile = null,
   botLogin = null,
   includeAnswered = false,
+  env = process.env,
+  fetch = globalThis.fetch,
 } = {}) {
   const named = String(planFile ?? '').trim();
   if (!isPlanFile(named)) return { threads: [] };
   if (!String(botLogin ?? '').trim()) {
     return { error: 'no bot_login was passed, so an answered plan thread cannot be told from an unanswered one' };
   }
-  const read = await readThreads({ github, owner, repo, prNumber });
+  const read = await readThreads({ github, owner, repo, prNumber, env, fetch });
   if (read.error) return { error: read.error };
   const all = includeAnswered === true;
   return {

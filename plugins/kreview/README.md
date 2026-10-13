@@ -25,6 +25,7 @@ Add the [KSAI marketplace](../../README.md), then run:
 | :--- | :--- |
 | `go-code-review` | Go files, modules, and pull requests |
 | `lua-code-review` | Lua, OpenResty and Kong Gateway plugins, rockspecs, and Test::Nginx suites |
+| `rust-code-review` | Rust crates and pull requests, with unsafe checks it reads only when the diff touches `unsafe` code |
 | `vue-code-review` | Vue, Nuxt, and related TypeScript or JavaScript |
 | `nestjs-code-review` | NestJS services, modules, controllers, and dependencies |
 | `typescript-code-review` | TypeScript or JavaScript outside Vue and NestJS |
@@ -37,6 +38,7 @@ Pass a pull request URL, file paths, or a pasted diff:
 ```console
 /go-code-review <pr-url|file-paths|diff> [--no-audit]
 /lua-code-review <pr-url|file-paths|diff> [--no-audit]
+/rust-code-review <pr-url|file-paths|diff> [--no-audit]
 /vue-code-review <pr-url|file-paths|diff> [--no-audit]
 /nestjs-code-review <pr-url|file-paths|diff> [--no-audit]
 /typescript-code-review <pr-url|file-paths|diff> [--no-audit]
@@ -50,6 +52,7 @@ Matching skills can also trigger from a plain request such as “review this com
 - [`findings-auditor`](./agents/findings-auditor.md)
 - [`go-code-review`](./skills/go-code-review/SKILL.md)
 - [`lua-code-review`](./skills/lua-code-review/SKILL.md)
+- [`rust-code-review`](./skills/rust-code-review/SKILL.md)
 - [`vue-code-review`](./skills/vue-code-review/SKILL.md)
 - [`nestjs-code-review`](./skills/nestjs-code-review/SKILL.md)
 - [`typescript-code-review`](./skills/typescript-code-review/SKILL.md)

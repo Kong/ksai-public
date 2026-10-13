@@ -6,6 +6,7 @@ const { createHash } = require('node:crypto');
 const {
   DEFAULT_TIMEOUT, answeredRetrying, gatewayHandover, held, holdsFor, mask, minter, reachedFor, usingControlPlane,
 } = require('./control-plane.cjs');
+const { counted } = require('./text.cjs');
 
 const API_VERSION = 'effects/v1';
 const EFFECTS = '/v1/run/effects';
@@ -23,7 +24,7 @@ async function askControlPlane(effects, { env, fetch, timeout, secret, pause, ha
   if (said.why) return { why: said.why, unavailable: said.unavailable };
   const done = Array.isArray(said.answer?.done) ? said.answer.done : [];
   if (done.length < effects.length) {
-    return { why: `the control plane did ${done.length} of ${effects.length} effects`, unavailable: false, done };
+    return { why: `the control plane did ${done.length} of ${counted(effects.length, 'effect')}`, unavailable: false, done };
   }
   return { done };
 }

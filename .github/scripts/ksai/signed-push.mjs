@@ -137,32 +137,110 @@ function shortened(subject) {
   return subject.length <= MAX_COMMIT_LINE ? subject : `${within(subject, MAX_COMMIT_LINE - 1)}…`;
 }
 
-function fitted(lines) {
-  return [shortened(lines[0]), ...lines.slice(1).flatMap((line) => wrapped(line))];
+function fit(line) {
+  return TRAILER.test(line) || REFERENCE.test(line) ? [line] : wrapped(line);
 }
 
-export function normaliseMessage(raw) {
-  const kept = String(raw ?? '')
+function fitted(lines) {
+  return [shortened(lines[0]), ...lines.slice(1).flatMap((line) => fit(line))];
+}
+
+function withoutClaims(raw) {
+  return String(raw ?? '')
     .split('\n')
     .filter((line) => !claimsTheCommit(line))
     .join('\n')
     .replace(/\n{3,}/g, '\n\n')
     .replace(/\s+$/, '');
-  const lines = fitted(kept.split('\n'));
+}
+
+export function normaliseMessage(raw) {
+  const lines = fitted(withoutClaims(raw).split('\n'));
   if (lines.length < 2 || lines[1].trim() === '') return lines.join('\n');
   return [lines[0], '', ...lines.slice(1)].join('\n');
 }
 
-function rewriteMessage({ git, log, coAuthor, jiraKey, messageFile = defaultMessageFile() }) {
+const TRAILER =
+  /^(?:(?:Acked|Co-authored|Co-developed|Helped|Mentored|Released|Reported|Reviewed|Signed-off|Suggested|Tested)-by|Close[sd]?|Fix(?:e[sd])?|Jira|Ksai-[\w-]+|Refs?|Resolve[sd]?|See-also): \S/i;
+const REFERENCE = /^(?:Close[sd]?|Fix(?:e[sd])?|Refs?|Resolve[sd]?) (?:[\w.-]+\/[\w.-]+)?#\d+$/i;
+const FLOW_TRAILER = /^Ksai-[\w-]+:/i;
+const BREAKING_FOOTER = /^BREAKING[ -]CHANGE: \S/;
+const BREAKING_SUBJECT = /^\w+(?:\([^)]*\))?!: /;
+
+function footerIn(paragraph) {
+  const breaking = [];
+  const trailers = [];
+  let continues = false;
+  for (const line of paragraph.split('\n')) {
+    if (BREAKING_FOOTER.test(line)) {
+      breaking.push(line);
+      continues = true;
+    } else if (TRAILER.test(line) || REFERENCE.test(line)) {
+      if (!FLOW_TRAILER.test(line)) trailers.push(line);
+      continues = false;
+    } else if (continues) {
+      breaking[breaking.length - 1] += `\n${line}`;
+    } else {
+      return null;
+    }
+  }
+  return { breaking, trailers };
+}
+
+function foldedBody(messages) {
+  const breaking = [];
+  const trailers = new Set();
+  const entries = messages.map((message) => {
+    const paragraphs = String(message).trim().split(/\n{2,}/);
+    const footers = [];
+    for (let footer = null; paragraphs.length > 1 && (footer = footerIn(paragraphs.at(-1))) !== null; paragraphs.pop()) {
+      footers.unshift(footer);
+    }
+    const said = footers.flatMap((footer) => footer.breaking);
+    if (said.length === 0 && BREAKING_SUBJECT.test(paragraphs[0])) said.push(`BREAKING CHANGE: ${paragraphs[0].split('\n')[0]}`);
+    breaking.push(...said);
+    for (const trailer of footers.flatMap((footer) => footer.trailers)) trailers.add(trailer);
+    return `* ${paragraphs.join('\n\n')}`;
+  });
+  const footer = [...breaking, ...trailers];
+  return [...entries, ...(footer.length > 0 ? [footer.join('\n')] : [])].join('\n\n');
+}
+
+export function foldedMessage(subject, messages) {
+  const body = foldedBody(messages);
+  return body ? `${subject}\n\n${body}` : subject;
+}
+
+function foldedFor({ git, from, foldUnder }) {
+  if (!foldUnder) return { message: null };
+  const listed = git(['log', '--reverse', '--first-parent', '--format=%B%x00', `${from}..HEAD`]);
+  if (!listed?.ok) return { unreadable: 'the messages of the commits this pass made could not be read' };
+  const commits = String(listed.stdout).split('\0').slice(0, -1);
+  if (commits.length < 2) return { message: null };
+  const body = foldedBody(commits.map((one) => withoutClaims(one).trim()).filter(Boolean))
+    .split('\n')
+    .flatMap((line) => fit(line))
+    .join('\n');
+  return { message: body ? `${shortened(foldUnder)}\n\n${body}` : shortened(foldUnder) };
+}
+
+function foldsFrom({ git, from, foldUnder }) {
+  if (!foldUnder || git(['rev-parse', '--verify', '--quiet', 'HEAD^2'])?.ok) return false;
+  const counted = git(['rev-list', '--count', '--first-parent', `${from}..HEAD`]);
+  return Boolean(counted?.ok) && Number(String(counted.stdout).trim()) > 1;
+}
+
+function rewriteMessage({ git, log, coAuthor, jiraKey, messageFile = defaultMessageFile(), folds = false }) {
   const read = git(['log', '-1', '--format=%B']);
   if (!read?.ok) return { error: 'the local commit message could not be read, so nothing was published' };
   const raw = String(read.stdout);
   const stripped = normaliseMessage(raw);
   const { headline } = splitMessage(stripped);
   if (headline === '') {
+    if (folds) return { changed: false };
     return { error: 'the commit message is nothing but an attribution footer, so there is no subject to keep' };
   }
-  if (!SUBJECT_SHAPE.test(headline)) {
+  if (!folds && !SUBJECT_SHAPE.test(headline)) {
     return {
       error:
         `the commit subject is not a Conventional Commit subject with a scope: ${safeEcho(headline)}. It must ` +
@@ -294,6 +372,8 @@ export function pushSigned({
   jiraKey = env.JIRA_KEY,
   log = (message) => process.stdout.write(`${message}\n`),
   controlPlaneOnly = false,
+  coAuthor = env.CO_AUTHOR,
+  foldUnder = null,
 }) {
   const asking = asksControlPlane(env, appAuthor);
   const second = git(['rev-parse', '--verify', '--quiet', 'HEAD^2']);
@@ -335,15 +415,19 @@ export function pushSigned({
     return asking ? { error: `${changes.unreadable}, so nothing was published` } : { signed: false, reason: `${changes.unreadable}, so it is pushed as it is` };
   }
 
+  const folded = parent === '' ? foldedFor({ git, from: remoteSha, foldUnder }) : { message: null };
+  if (folded.unreadable) {
+    return asking ? { error: `${folded.unreadable}, so nothing was published` } : { signed: false, reason: `${folded.unreadable}, so it is pushed as it is` };
+  }
   const input = {
     branch: { repositoryNameWithOwner: repo, branchName: branch },
     expectedHeadOid: remoteSha,
-    message: splitMessage(message.stdout),
+    message: splitMessage(folded.message === null ? message.stdout : withTrailers(folded.message, { coAuthor, jiraKey })),
     fileChanges: { additions: changes.additions, deletions: changes.deletions },
   };
   const asked = {
     ...input,
-    message: splitMessage(withTrailers(normaliseMessage(message.stdout), { coAuthor: appAuthor, jiraKey })),
+    message: splitMessage(withTrailers(folded.message ?? normaliseMessage(message.stdout), { coAuthor: appAuthor, jiraKey })),
     ...(parent !== '' ? { merge: { parent, conflicted: changes.conflicted } } : {}),
     ...(controlPlaneOnly ? { controlPlaneOnly: true } : {}),
   };
@@ -438,11 +522,13 @@ export function publishCommit({
   jiraKey = env.JIRA_KEY,
   log = (message) => process.stdout.write(`${message}\n`),
   controlPlaneOnly = false,
+  foldUnder = null,
 }) {
   if (controlPlaneOnly && !asksControlPlane(env, appAuthorOf(env))) {
     return { ok: false, reason: 'this run cannot ask the control plane to commit its work, and a linked run publishes it no other way' };
   }
-  const normalised = rewriteMessage({ git, log, coAuthor, jiraKey, messageFile });
+  const folds = usingControlPlane(env) && foldsFrom({ git, from: createBranchAt ?? remoteSha, foldUnder });
+  const normalised = rewriteMessage({ git, log, coAuthor, jiraKey, messageFile, folds });
   if (normalised.error) return { ok: false, reason: normalised.error };
   const localSha = normalised.sha ?? verifiedSha;
   const lfs = uploadLfsObjects({
@@ -488,6 +574,8 @@ export function publishCommit({
     jiraKey,
     log,
     controlPlaneOnly,
+    coAuthor,
+    foldUnder,
   });
   if (attempt.error) return { ok: false, reason: attempt.error };
   if (attempt.signed) return { ok: true, sha: attempt.sha, signed: true };

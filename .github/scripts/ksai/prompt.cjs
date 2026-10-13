@@ -175,9 +175,12 @@ function renderGoNote({ version, failed = [] }) {
 function renderPackageNote({ manager, version, failed = false }) {
   const named = neutralize(text(manager));
   const pinned = neutralize(text(version));
+  const source = pinned === ''
+    ? `The repository carries an npm lockfile, and the trusted runner's \`${named}\` ${failed ? 'tried to install' : 'installed'}`
+    : `The repository pins \`${named}@${pinned}\`, and a trusted step ${failed ? 'tried to install' : 'installed'}`;
   return [
     PACKAGE_NOTE_START,
-    `The repository pins \`${named}@${pinned}\`, and a trusted step ${failed ? 'tried to install' : 'installed'} its`,
+    `${source} its`,
     `locked dependencies before this prompt ran, outside the sandbox${failed ? ' but did not finish' : ''}.`,
     ...(failed
       ? [
@@ -330,16 +333,19 @@ const PLAN_DOCUMENT_CONTRACT = Object.freeze([
   '    <why this work, and what you found in the repository - prose, any length>',
   '    ## Phase 1 - <a short name for this phase>',
   '    <prose about this phase, optional>',
-  '    ### Steps',
+  '    ### Phase 1 steps',
   '    - <step title>',
   '    - <step title>',
   '    ## Phase 2 - <a short name>',
-  '    ### Steps',
+  '    ### Phase 2 steps',
   '    - <step title>',
   '',
   'Every `## Phase N` heading is numbered from 1 and in order, and each one carries exactly one',
-  '`### Steps` list holding at least one step. A document naming no phase, and a `### Steps` list above',
-  'the first phase heading, are refused. A bullet under any other heading is prose and is not read as a',
+  'step list headed `### Phase N steps` with the same number, holding at least one step. Name every',
+  'step list for its phase this way, because a repeated heading fails the markdown lint many',
+  'repositories run. A document whose lists are already headed `### Steps` keeps that form when it',
+  'is revised. A document naming no phase, and a step list above the first phase heading, are',
+  'refused. A bullet under any other heading is prose and is not read as a',
   'step, so put risks, open questions and anything out of scope under headings of their own.',
   'Write that heading exactly: two hashes, `Phase`, the number with no leading zero, then a plain',
   'hyphen or colon. A heading that names a phase in any other shape - an em dash, a bracket, `###`',
@@ -357,12 +363,12 @@ const PLAN_DOCUMENT_CONTRACT = Object.freeze([
   'A second line under a step is refused rather than',
   'read, indented or not - a sub-bullet, a wrapped line, a sentence continuing the one above - because',
   'a nested bullet is not a step and a step you cannot see is one nobody approved. So is a numbered',
-  'item, and so is a bullet below a `---` or `***` rule inside a `### Steps` section: both render as',
+  'item, and so is a bullet below a `---` or `***` rule inside a step list: both render as',
   'list items a reviewer reads as steps, and neither is one. Close a step list with a heading, never',
-  'with a rule. A bullet below a paragraph or a code block, inside a `### Steps` section that already',
-  'lists a step, is refused as well: it renders under `### Steps` and would run as a step of its own. Put',
+  'with a rule. A bullet below a paragraph or a code block, inside a step list that already',
+  'lists a step, is refused as well: it renders in the list and would run as a step of its own. Put',
   'detail about a step - target code, expected strings, the files it touches - in the phase prose above',
-  '`### Steps`, never below the step it describes.',
+  'the step list, never below the step it describes.',
   'An HTML comment beside text on any line is refused too - a comment renders as nothing,',
   'so the line the reviewer reads is not the line this parses, whether it is a step or the phase',
   'heading above one.',
@@ -1078,6 +1084,7 @@ const {
   MAX_LOGGED_JOBS,
   MAX_LOG_LINES,
   MAX_NAMED_CHECKS,
+  MAX_FAILED_COMMAND_CHARS,
 } = require('./checks.cjs');
 
 function renderCheck(check, index) {
@@ -1087,6 +1094,8 @@ function renderCheck(check, index) {
   if (title) lines.push(`  ${title}`);
   const summary = neutralize(check?.summary);
   if (summary) for (const line of summary.split('\n')) lines.push(`    ${line}`);
+  const failedCommand = neutralize(check?.failedCommand);
+  if (failedCommand) lines.push(`  The failing step's exact runner command: ${failedCommand}`);
   const log = neutralize(check?.log);
   if (log) {
     lines.push(
@@ -1246,7 +1255,12 @@ function renderChecks(evidence, { headSha = null } = {}) {
         'passed over. If the cause is in one of those, say so rather than guessing from the ones you can see.',
       );
     }
-    lines.push(`A log below is the last ${MAX_LOG_LINES} lines at most, so the failure is at its end.`, '');
+    lines.push(
+      `A log below is the last ${MAX_LOG_LINES} lines at most, so the failure is at its end.`,
+      `The failed-step command is shown separately only when it is at most ${MAX_FAILED_COMMAND_CHARS} characters;`,
+      'if it is absent, do not guess a command.',
+      '',
+    );
     for (const [index, check] of failing.entries()) lines.push(renderCheck(check, index), '');
     for (const status of statuses) {
       const context = neutralize(status?.context);
@@ -1557,11 +1571,15 @@ function renderDoPrompt({
           '  Use "blocked" when the request needs a human decision, with that as the reason.',
           ...(failing > 0
             ? [
-                '  Before committing, run the command that exercises the failing target. Copy the exact target',
-                '  name and Bash command into `verification`; a trusted step reads the raw tool event and its',
-                '  exit status. A reproduced failure is refused before push. A zero exit is still unverified',
-                '  because CI does not expose a trusted target-to-command binding. If the command cannot run,',
-                '  leave `command` empty. Never substitute an unrelated command.',
+                '  After your final edit and before committing, run the failing step\'s exact runner command in',
+                '  ONE Bash tool call. Its `command` must be only that script, byte for byte. Do not add',
+                '  `cd`, `echo $?`, a wrapper, or any other text; keep operators already in the script.',
+                '  Run it from the failing step\'s working directory using the tool\'s `workdir` field.',
+                '  The Bash call itself must exit 0. Then copy the exact target name and command into',
+                '  `verification`. A trusted step matches the raw tool command to that check log and reads its',
+                '  exit status. A reproduced failure is refused before push. A passing inner command inside a',
+                '  compound Bash call is not verified. If the command cannot run or the log has no command,',
+                '  leave `command` empty. Never substitute one.',
               ]
             : []),
           '  One request is one run and one commit. There is no second pass: if the fix needs',

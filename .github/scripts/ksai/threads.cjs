@@ -49,6 +49,8 @@ const THREAD_COMMENTS_QUERY = `
 `;
 
 const { markerOf } = require('./marker.cjs');
+const { readKeptKinds } = require('../lib/cp-report.cjs');
+const { usingControlPlane } = require('../lib/control-plane.cjs');
 const { commandOf, editState, isOwnLogin, ownUnedited, wasEdited, UNEDITED } = require('./approval.cjs');
 const { commandAuthorized, writeAccessNames } = require('../lib/select-arm.cjs');
 
@@ -88,7 +90,29 @@ const shapeComment = (comment) => ({
   ...(comment && Object.hasOwn(comment, 'lastEditedAt') ? { last_edited_at: comment.lastEditedAt } : {}),
 });
 
-async function readThreads({ github = null, owner = null, repo = null, prNumber = null, maxPages = MAX_PAGES } = {}) {
+const POSTED_KINDS = Object.freeze([LOCK_KIND, UNLOCK_KIND, AGREED_KIND, UNCLEAR_KIND]);
+
+async function readThreads({ env = process.env, fetch = globalThis.fetch, github = null, owner = null, repo = null, prNumber = null, maxPages = MAX_PAGES } = {}) {
+  const read = await readGitHubThreads({ github, owner, repo, prNumber, maxPages });
+  if (read.error || read.threads.length === 0 || !usingControlPlane(env)) return read;
+  const kept = await readKeptKinds({ owner, repo, number: Number(prNumber), env, fetch });
+  if (kept.why) return { error: `could not read what the control plane posted in the review threads: ${kept.why}` };
+  const kinds = Object.fromEntries([...kept.kinds]
+    .filter(([, kind]) => POSTED_KINDS.includes(kind))
+    .map(([comment, kind]) => [String(comment), kind]));
+  for (const thread of read.threads) tagPosted(thread, kinds);
+  return { ...read, posted: kinds };
+}
+
+function tagPosted(thread, kinds) {
+  for (const comment of thread.comments ?? []) {
+    const kind = kinds[String(comment.commentId)];
+    if (kind) comment.kind = kind;
+  }
+  return thread;
+}
+
+async function readGitHubThreads({ github = null, owner = null, repo = null, prNumber = null, maxPages = MAX_PAGES } = {}) {
   if (typeof github?.graphql !== 'function') return { error: 'no GraphQL-capable GitHub client was passed' };
   const number = String(prNumber ?? '');
   if (!NUMBER_SHAPE.test(number)) return { error: `\`${number}\` is not a pull request number` };
@@ -176,7 +200,7 @@ function ownAnswer(thread, botLogin) {
   let marker = null;
   for (const [at, comment] of answers.entries()) {
     if (!ownUnedited(comment, botLogin)) continue;
-    const kind = markerOf(comment?.body)?.kind ?? null;
+    const kind = markerOf(comment?.body)?.kind ?? comment?.kind ?? null;
     const response = answers
       .slice(index + 1, at)
       .findLast((candidate) => !isOwnLogin(candidate?.login, botLogin, candidate?.actorType));
@@ -230,12 +254,13 @@ function threadByRoot(threads, rootCommentId) {
   return (threads ?? []).find((thread) => thread?.rootCommentId === wanted) ?? null;
 }
 
-async function hydrateScopedThread({ github, threads, threadRootId }) {
+async function hydrateScopedThread({ github, threads, threadRootId, posted = null }) {
   const scoped = threadByRoot(threads, threadRootId);
   if (scoped?.truncated !== true) return { threads };
   const complete = await readCompleteThread({ github, thread: scoped });
   if (complete.error) return { error: complete.error };
-  return { threads: threads.map((thread) => (thread === scoped ? complete.thread : thread)) };
+  const whole = posted ? tagPosted(complete.thread, posted) : complete.thread;
+  return { threads: threads.map((thread) => (thread === scoped ? whole : thread)) };
 }
 
 const REVIEW_ID_SHAPE = /^[1-9][0-9]{0,18}$/;
@@ -271,6 +296,17 @@ function countComments(threads) {
   );
 }
 
+const COPILOT_REVIEWER = 'copilot-pull-request-reviewer';
+
+const botName = (login) => String(login ?? '').trim().toLowerCase().replace(/\[bot\]$/, '');
+
+function reviewBotsOf(said) {
+  const named = String(said ?? '').trim();
+  if (named === '') return [COPILOT_REVIEWER];
+  if (named.toLowerCase() === 'none') return [];
+  return [...new Set(named.split(/[\s,]+/).filter(Boolean).map((login) => botName(login)))];
+}
+
 async function authorizeThreadContext({
   threads,
   github,
@@ -282,6 +318,7 @@ async function authorizeThreadContext({
   writeAccess,
   writeAccessCommands,
   triggerPhrase,
+  reviewBots = [],
   source = 'review-feedback',
   omitted = 0,
 }) {
@@ -316,6 +353,7 @@ async function authorizeThreadContext({
     };
     if (login === '') return decided(false, 'missing-login');
     if (isOwnLogin(login, botLogin, actorType)) return decided(true, 'publisher');
+    if (String(actorType ?? '').trim() === 'Bot' && reviewBots.includes(botName(login))) return decided(true, 'review-bot');
     const authorizationLogin = login.endsWith('[bot]') ? login.slice(0, -5) : login;
     if (!AUTHZ_LOGIN_SHAPE.test(authorizationLogin)) return decided(false, 'invalid-login');
     const key = login.toLowerCase();
@@ -430,7 +468,7 @@ async function authorizeThreadContext({
   core?.info?.(
     `Autofix context: source=${source} decision=filter kept=${keptCount} omitted=${omittedCount}.`,
   );
-  return { threads: accepted };
+  return { threads: accepted, omittedThreads: (threads ?? []).length - accepted.length };
 }
 
 function selectThread(threads, { threadRootId = null, core = null, botLogin = null, allowLocked = false, counts = { total: 0, resolved: 0, disputed: 0, scope: '' } } = {}) {
@@ -559,6 +597,8 @@ async function resolveFixPhase({
   writeAccess = null,
   writeAccessCommands = null,
   triggerPhrase = null,
+  env = process.env,
+  fetch = globalThis.fetch,
 } = {}) {
   if (!String(botLogin ?? '').trim()) {
     return { error: 'no bot_login was passed, so review thread state cannot be trusted' };
@@ -568,14 +608,14 @@ async function resolveFixPhase({
   const { ref, baseRef } = target;
   const number = String(target.prNumber);
 
-  const read = await readThreads({ github, owner, repo, prNumber: number });
+  const read = await readThreads({ github, owner, repo, prNumber: number, env, fetch });
   if (read.error) return { error: read.error };
 
   const scopedToReview = reviewScope(read.threads, reviewId);
   if (scopedToReview.error) return { error: scopedToReview.error };
   const omittedByReview = Math.max(0, countComments(read.threads) - countComments(scopedToReview.threads));
 
-  const hydrated = await hydrateScopedThread({ github, threads: scopedToReview.threads, threadRootId });
+  const hydrated = await hydrateScopedThread({ github, threads: scopedToReview.threads, threadRootId, posted: read.posted });
   if (hydrated.error) return { error: hydrated.error };
   let contextThreads = hydrated.threads;
   let scopedCounts = null;
@@ -613,6 +653,7 @@ async function resolveFixPhase({
     writeAccess,
     writeAccessCommands,
     triggerPhrase,
+    reviewBots: reviewBotsOf(env.FIX_REVIEW_BOTS),
     source: reviewId ? 'submitted-review' : threadRootId ? 'review-thread' : 'pull-request-review-threads',
     omitted: omittedByReview + omittedByThread,
   });
@@ -652,6 +693,7 @@ async function resolveFixPhase({
     resolved: selected.resolved,
     disputed: selected.disputed,
     scope: selected.scope,
+    omitted: trusted.omittedThreads ?? 0,
     target,
   };
 }
@@ -682,5 +724,6 @@ module.exports = {
   selectThreads,
   namesTheReview,
   authorizeThreadContext,
+  reviewBotsOf,
   resolveFixPhase,
 };

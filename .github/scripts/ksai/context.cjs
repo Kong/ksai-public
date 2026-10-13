@@ -1,9 +1,10 @@
 'use strict';
 
+
 const { readCount, MAX_ATTEMPTS } = require('./continue.cjs');
 const { JIRA_KEY_SHAPE, anyCommandOpen, safeEcho } = require('../lib/select-arm.cjs');
 const { editState, isOwnLogin, withLastEdits, UNEDITED } = require('./approval.cjs');
-const { readWorkRequest, requestedReaders } = require('../lib/work-request.cjs');
+const { readTaskRequest, requestedReaders } = require('../lib/task-request.cjs');
 
 const editRefusal = (comment, where) => {
   const state = editState(comment);
@@ -394,9 +395,9 @@ const commentReaders = ({ github, context, env = process.env, fetch = globalThis
     getSubmittedReview: async (pull_number, review_id) =>
       (await github.rest.pulls.getReview({ ...context.repo, pull_number, review_id })).data,
   },
-  read: () => readWorkRequest({ env, fetch }),
+  read: () => readTaskRequest({ env, fetch }),
   repository: `${context.repo.owner}/${context.repo.repo}`,
-  keptOnly: env.KSAI_WORK_SESSION_ACTION === 'retry',
+  keptOnly: env.KSAI_TASK_ACTION === 'retry',
 });
 
 function asCommentEvent({ dispatched, onIssue, payload = null }) {
