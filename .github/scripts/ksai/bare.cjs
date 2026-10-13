@@ -31,7 +31,7 @@ function bareMode({ input = null, fromFile = null } = {}) {
   return { mode: asked === 'off' || narrowed === 'off' ? 'off' : 'auto' };
 }
 
-async function ownedBy({ core, botLogin, id, named, read, complete, holds, onUnreadable }) {
+async function ownedBy({ core, botLogin, id, named, read, complete, holds, onUnreadable, seen = (/** @type {any} */ _data) => {} }) {
   const number = Number(String(id ?? '').trim());
   if (!Number.isSafeInteger(number) || number <= 0 || !String(botLogin ?? '').trim()) {
     onUnreadable();
@@ -49,13 +49,16 @@ async function ownedBy({ core, botLogin, id, named, read, complete, holds, onUnr
     onUnreadable();
     return false;
   }
-  return holds(data);
+  const holding = holds(data);
+  if (holding) seen(data);
+  return holding;
 }
 
-const ownPull = ({ github = null, core = null, owner = null, repo = null, prNumber = null, botLogin = null, onUnreadable = () => {} } = {}) =>
+const ownPull = ({ github = null, core = null, owner = null, repo = null, prNumber = null, botLogin = null, onUnreadable = () => {}, onPull = () => {} } = {}) =>
   ownedBy({
     core,
     onUnreadable,
+    seen: onPull,
     botLogin,
     id: prNumber,
     named: (number) => `#${number} to tell whether this flow opened it`,
@@ -79,9 +82,9 @@ const ownThread = ({ github = null, core = null, owner = null, repo = null, root
       (String(root?.body ?? '').includes(FINDING_MARKER) || CP_FINDING_MARKER.test(String(root?.body ?? ''))),
   });
 
-function ownSurface({ github = null, core = null, owner = null, repo = null, botLogin = null, rootId = null, prNumber = null, onUnreadable = () => {} } = {}) {
+function ownSurface({ github = null, core = null, owner = null, repo = null, botLogin = null, rootId = null, prNumber = null, onUnreadable = () => {}, onPull = () => {} } = {}) {
   const where = { github, core, owner, repo, botLogin, onUnreadable };
-  return String(rootId ?? '').trim() === '' ? ownPull({ ...where, prNumber }) : ownThread({ ...where, rootId });
+  return String(rootId ?? '').trim() === '' ? ownPull({ ...where, prNumber, onPull }) : ownThread({ ...where, rootId });
 }
 
 function renderNudge({ triggerPhrase = null } = {}) {

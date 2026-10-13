@@ -2652,6 +2652,7 @@ function writeEvidence(env = process.env) {
     command: neutralCut(env.COMMAND, 256),
     phase: neutralCut(env.PHASE, 256),
     plan_mode: asked(env.PLAN_MODE) === '' ? 'auto' : asked(env.PLAN_MODE),
+    ...(['always', 'never'].includes(asked(env.PLAN_ASKED)) ? { plan_asked: asked(env.PLAN_ASKED) } : {}),
     require_plan_approval: isTrue(env.REQUIRE_APPROVAL),
     request: neutralCut(env.REQUEST, 8_000),
     ask: neutralCut(env.KSAI_ASK, 8_000),
@@ -2757,7 +2758,12 @@ function planWriteTriage(env = process.env) {
     return { outputs, failure: '`triage` must be `auto` or `off`', warnings: [] };
   }
   if (env.PHASE === 'plan' && !sizing) {
-    const settled = settledPlan({ mode: env.PLAN_MODE, requireApproval: env.REQUIRE_APPROVAL, jiraKey: env.JIRA_KEY });
+    const settled = settledPlan({
+      mode: env.PLAN_MODE,
+      askedPath: env.PLAN_ASKED,
+      requireApproval: env.REQUIRE_APPROVAL,
+      jiraKey: env.JIRA_KEY,
+    });
     return settled?.plans === false
       ? { outputs: { ...outputs, verdict: 'small', reason: settled.why }, warnings: [] }
       : { outputs: { ...outputs, verdict: 'planning', reason: 'planning always uses the planning profile' }, warnings: [] };
@@ -2862,14 +2868,20 @@ function semanticVerdict(raw, sizing = false) {
 const asked = (value) => String(value ?? '').trim().toLowerCase();
 const isTrue = (value) => value === true || String(value) === 'true';
 
-function settledPlan({ mode = '', requireApproval = '', jiraKey = '' } = {}) {
+function settledPlan({ mode = '', askedPath = '', requireApproval = '', jiraKey = '' } = {}) {
   if (isTrue(requireApproval)) {
     return { plans: true, why: 'this repository requires a plan to be approved before anything is committed' };
   }
   if (String(jiraKey ?? '').trim() !== '') {
     return { plans: true, why: 'work read from a ticket is always planned, because its requester is not a GitHub identity' };
   }
+  if (asked(mode) === 'always' && asked(askedPath) === 'always') {
+    return { plans: true, why: 'the comment asked for a plan' };
+  }
   if (asked(mode) === 'always') return { plans: true, why: 'this repository plans every change' };
+  if (asked(mode) === 'never' && asked(askedPath) === 'never') {
+    return { plans: false, why: 'the comment asked to build without a plan' };
+  }
   if (asked(mode) === 'never') return { plans: false, why: 'this repository never plans before it works' };
   return null;
 }
@@ -2880,8 +2892,8 @@ function sizingApplies({ phase = '', mode = '', requireApproval = '', jiraKey = 
   return settledPlan({ mode, requireApproval, jiraKey }) === null;
 }
 
-function plansWork({ mode = '', verdict = '', requireApproval = '', jiraKey = '' } = {}) {
-  const settled = settledPlan({ mode, requireApproval, jiraKey });
+function plansWork({ mode = '', askedPath = '', verdict = '', requireApproval = '', jiraKey = '' } = {}) {
+  const settled = settledPlan({ mode, askedPath, requireApproval, jiraKey });
   if (settled !== null) return settled;
   if (String(verdict) === 'small') return { plans: false, why: 'the triager sized this work as small' };
   return { plans: true, why: 'the triager did not size this work as small' };
@@ -2928,7 +2940,7 @@ function canonicalModel(value) {
   return KNOWN_MODELS.find((model) => model.toLowerCase() === named.toLowerCase()) ?? named;
 }
 
-function automaticModel({ target, ceiling, allowed, current }) {
+function automaticModel({ target, ceiling, allowed, current, runs }) {
   const ceilingTier = configuredTier(ceiling);
   const currentTier = tierOf(current);
   if (ceilingTier === '') return { model: current, tier: currentTier, applied: false, limited: true };
@@ -2941,7 +2953,7 @@ function automaticModel({ target, ceiling, allowed, current }) {
     .filter(({ model, tier }) =>
       MODEL_SHAPE.test(model) && MODEL_TIERS.includes(tier) && tier !== 'fast' &&
       MODEL_TIERS.indexOf(tier) >= currentIndex && MODEL_TIERS.indexOf(tier) <= ceilingIndex &&
-      MODEL_TIERS.indexOf(tier) <= targetIndex,
+      MODEL_TIERS.indexOf(tier) <= targetIndex && runs(model),
     );
   if (candidates.length === 0) {
     return { model: current, tier: currentTier, applied: false, limited: currentTier !== target };
@@ -3011,12 +3023,32 @@ function withinEffortBounds(effort, { fallback, max, min, model }) {
   return at >= ALLOWED_EFFORTS.indexOf(bounds.floor) && at <= ALLOWED_EFFORTS.indexOf(bounds.ceiling);
 }
 
-function offeredModel(model, allowed) {
-  return allowed.length === 0 || allowed.some((one) => one.toLowerCase() === String(model).toLowerCase());
+const MAX_MODELS = 16;
+
+function holds(models, one) {
+  const wanted = String(one ?? '').trim().toLowerCase();
+  return wanted !== '' && models.some((held) => held.toLowerCase() === wanted);
 }
 
 /**
- * controlPlaneArm answers the write arm the control plane decided, or null where this run keeps its own.
+ * capabilityModels offers exactly what `controlPlaneArm` will take back: the
+ * configured model, which `allowed_models` never bounds, and then the allowed
+ * models. Offering a model the re-check refuses buys a decision this run
+ * announces and then drops, and leaving the configured model out has the control
+ * plane refuse the whole request.
+ */
+function capabilityModels(env, configured) {
+  const kept = [];
+  for (const model of [configured, ...parseAllowedModels(env.ALLOWED_MODELS)]) {
+    const one = String(model ?? '').trim();
+    if (one !== '' && MODEL_SHAPE.test(one) && !holds(kept, one)) kept.push(one);
+  }
+  return kept.slice(0, MAX_MODELS);
+}
+
+/**
+ * controlPlaneArm answers `{ arm }` with the write arm the control plane decided, `{}` where this run keeps its
+ * own, or `{ warning }` where the arm it was given is one this run cannot use.
  *
  * A pinned axis withdraws the whole answer rather than half of it. The decision names a model and an
  * effort together and carries one reason for both, so honouring the unpinned half would publish a
@@ -3027,8 +3059,8 @@ function offeredModel(model, allowed) {
 function controlPlaneArm(env, early) {
   const model = String(env.CP_MODEL ?? '').trim();
   const effort = String(env.CP_EFFORT ?? '').trim();
-  if (model === '' && effort === '') return null;
-  if (early.modelSource === 'pinned' || early.effortSource === 'pinned') return null;
+  if (model === '' && effort === '') return {};
+  if (early.modelSource === 'pinned' || early.effortSource === 'pinned') return {};
 
   const within = withinEffortBounds(effort, {
     fallback: String(env.DEFAULT_EFFORT ?? early.effort).trim(),
@@ -3036,15 +3068,22 @@ function controlPlaneArm(env, early) {
     min: env.MIN_EFFORT,
     model,
   });
-  const offered = offeredModel(model, parseAllowedModels(env.ALLOWED_MODELS)) && offersEffort(model, effort);
-  if (!MODEL_SHAPE.test(model) || !ALLOWED_EFFORTS.includes(effort) || !offered || !within) return null;
+  const offered = holds(capabilityModels(env, resolveModel(env.DEFAULT_MODEL)), model) && offersEffort(model, effort);
+  if (!MODEL_SHAPE.test(model) || !ALLOWED_EFFORTS.includes(effort) || !offered || !within) {
+    return {
+      warning: `the control plane chose \`${MODEL_SHAPE.test(model) ? model : safeEcho(model)}\` at \`${safeEcho(effort)}\`, ` +
+        'which this run cannot use, so the runner chose the arm itself',
+    };
+  }
 
   return {
-    model,
-    effort,
-    model_source: String(env.CP_MODEL_SOURCE ?? '').trim() || early.modelSource,
-    effort_source: String(env.CP_EFFORT_SOURCE ?? '').trim() || early.effortSource,
-    selection: selectionOf(tierOf(model), env.REASON),
+    arm: {
+      model,
+      effort,
+      model_source: String(env.CP_MODEL_SOURCE ?? '').trim() || early.modelSource,
+      effort_source: String(env.CP_EFFORT_SOURCE ?? '').trim() || early.effortSource,
+      selection: selectionOf(tierOf(model), env.REASON),
+    },
   };
 }
 
@@ -3063,8 +3102,8 @@ function selectWriteArm(env = process.env) {
   if (!MODEL_SHAPE.test(model) || !ALLOWED_EFFORTS.includes(effort)) {
     return { error: 'the early write arm was not resolved', outputs };
   }
-  const decided = controlPlaneArm(env, { model, effort, modelSource, effortSource });
-  if (decided) return { outputs: Object.assign(outputs, decided) };
+  const { arm, warning = '' } = controlPlaneArm(env, { model, effort, modelSource, effortSource });
+  if (arm) return { outputs: Object.assign(outputs, arm) };
   if (env.VERDICT === 'off' || env.VERDICT === 'explicit') {
     const tier = tierOf(model);
     Object.assign(outputs, {
@@ -3074,7 +3113,7 @@ function selectWriteArm(env = process.env) {
       effort_source: effortSource,
       selection: selectionOf(tier, env.REASON),
     });
-    return { outputs };
+    return { outputs, warning };
   }
 
   const profileName = PROFILES[String(env.VERDICT ?? '')] ? String(env.VERDICT) : 'uncertain';
@@ -3091,19 +3130,29 @@ function selectWriteArm(env = process.env) {
   const retryAtCeiling = retry && targetTier === selectedTier;
 
   if (!armFixed(modelSource) && profileName !== 'planning' && (hard || retry)) {
+    const usable = (candidate) => {
+      if (armFixed(effortSource)) return [effort];
+      const bounds = effortBounds({
+        fallback: String(env.DEFAULT_EFFORT ?? effort).trim() || defaultEffortFor(candidate),
+        max: env.MAX_EFFORT,
+        min: env.MIN_EFFORT,
+      });
+      return bounds
+        ? ALLOWED_EFFORTS.slice(ALLOWED_EFFORTS.indexOf(bounds.floor), ALLOWED_EFFORTS.indexOf(bounds.ceiling) + 1)
+        : [];
+    };
     const resolved = automaticModel({
       target: targetTier,
       ceiling: env.DEFAULT_MODEL ?? model,
       allowed: parseAllowedModels(env.ALLOWED_MODELS),
       current: model,
+      runs: (candidate) => usable(candidate).some((one) => offersEffort(candidate, one)),
     });
-    if (!armFixed(effortSource) || offersEffort(resolved.model, effort)) {
-      selectedModel = resolved.model;
-      selectedTier = resolved.tier;
-      automaticModelApplied = resolved.applied;
-      limited = resolved.limited || retryAtCeiling;
-      if (automaticModelApplied) selectedModelSource = 'triage';
-    }
+    selectedModel = resolved.model;
+    selectedTier = resolved.tier;
+    automaticModelApplied = resolved.applied;
+    limited = resolved.limited || retryAtCeiling;
+    if (automaticModelApplied) selectedModelSource = 'triage';
   }
   if (!armFixed(effortSource)) {
     const resolved = automaticEffort({
@@ -3120,12 +3169,12 @@ function selectWriteArm(env = process.env) {
     return { error: 'automatic write triage may not select Haiku for the main write run', outputs };
   }
 
-  const retryReason = retry
-    ? `previous KSAI attempt stayed red; ${env.REASON}`
-    : String(env.REASON ?? '');
-  const reason = limited && selectedTier !== ''
-    ? `bounded at ${selectedTier}; ${retryReason}`
-    : retryReason;
+  const [, givenBound = '', givenRetry = '', given] =
+    /^(?:bounded at ([a-z]+)(?:;\s*|$))?(previous KSAI attempt stayed red(?:;\s*|$))?([\s\S]*)$/.exec(String(env.REASON ?? ''));
+  const bound = selectedTier !== '' && (limited || givenBound === selectedTier) ? selectedTier : '';
+  let reason = given;
+  if (retry || givenRetry) reason = `previous KSAI attempt stayed red; ${reason}`;
+  if (bound) reason = `bounded at ${bound}; ${reason}`;
   Object.assign(outputs, {
     model: selectedModel,
     effort: selectedEffort,
@@ -3133,18 +3182,20 @@ function selectWriteArm(env = process.env) {
     effort_source: armFixed(effortSource) ? effortSource : 'triage',
     selection: selectionOf(selectedTier, reason),
   });
-  return { outputs };
+  return { outputs, warning };
 }
 
 module.exports = {
   PROFILES,
   SIZING_VERDICTS,
   VERDICTS,
+  capabilityModels,
   cargoMajorBumps,
   composerMajorBumps,
   criticalMatch,
   detectMajorBumps,
   effortBounds,
+  holds,
   inspectMajorBumps,
   withinEffortBounds,
   majorBumpDetails,

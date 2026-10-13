@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ksai.invalid/schemas/work-session-outcome/v1",
+  "$id": "https://ksai.invalid/schemas/task-outcome/v1",
   "type": "object",
   "required": ["job", "link", "flow", "phase", "status", "published"],
   "additionalProperties": false,

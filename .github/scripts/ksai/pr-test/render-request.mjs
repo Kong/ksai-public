@@ -5,6 +5,7 @@ import { bounded } from '../../lib/evidence.cjs';
 import { writeOutputs } from '../../lib/outputs.mjs';
 import { SINKS, renderRequest, writeRenderRequest } from '../../lib/render-request.cjs';
 import { runMain } from '../../lib/main.mjs';
+import { testVerdictPath } from '../workflow/runner.mjs';
 
 const GIT_TIMEOUT_MS = 120_000;
 const MAX = Object.freeze({ criteria: 65_536, environment: 65_536, changedFiles: 524_288, additionalPrompt: 32_768 });
@@ -42,7 +43,7 @@ export function testRequest(env = process.env, run = spawnSync) {
       { name: 'criteria', value: bounded(join(dir, 'CRITERIA.md'), "this run's acceptance criteria", MAX.criteria) },
       { name: 'environment', value: bounded(join(dir, 'ENVIRONMENT.md'), "this run's environment notes", MAX.environment) },
       { name: 'head_sha', value: commit(said(['rev-parse', 'HEAD'], env, run), 'the head commit') },
-      { name: 'test_run', value: { run_dir: dir, verdict_path: String(env.STAGE_RESULT ?? '') } },
+      { name: 'test_run', value: { run_dir: dir, verdict_path: testVerdictPath(String(env.STAGE_RESULT ?? '')) } },
     ],
   });
 }

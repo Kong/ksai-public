@@ -5,6 +5,7 @@ const { usableNonce } = require('../lib/prompt-text.cjs');
 const { SALVAGE_MARGIN_MINUTES, ceilingMinutes } = require('../lib/watchdog.cjs');
 const { isBranchForWork } = require('./phase.cjs');
 const { planFilePathFor } = require('./plan.cjs');
+const { MAX_FAILED_COMMAND_CHARS } = require('./checks.cjs');
 const { MAX_DIRECT_COMMITS, matchesBranchGrammar } = require('./verify-chunk.cjs');
 const { SINKS, renderRequest } = require('../lib/render-request.cjs');
 
@@ -158,6 +159,9 @@ function sanitizeChecks(value) {
       url: bounded(entry?.url, 4_096),
       title: bounded(entry?.title, 512),
       summary: bounded(entry?.summary, 8_192),
+      failedCommand: entry?.failedCommand === null
+        ? null
+        : bounded(entry?.failedCommand, MAX_FAILED_COMMAND_CHARS),
       log: entry?.log === null ? null : bounded(entry?.log, 12_288),
       log_lines: natural(entry?.logLines, 'check log line count'),
       log_truncated: entry?.logTruncated === true,
@@ -314,6 +318,7 @@ function contextFor(env, phase, goFacts, packageFacts) {
     major_bump: majorBumpFacts(env),
     package: packageFacts,
     writes_plan: phase === 'plan' && context.plan_path !== '',
+    phase_step_lists: true,
     thread_scoped: text(env.THREAD_ROOT_ID) !== '',
     deferred,
     has_deferred: deferred > 0,
