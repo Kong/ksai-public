@@ -109,9 +109,9 @@ export function counters(state, cost = null) {
 }
 
 export function material(state, flow = '') {
-  const kind = flow === 'review' ? 'code review' : 'implementation';
+  const kind = flow === 'review' ? 'a code review' : 'an implementation';
   const transcript = String(state?.transcript ?? '').trim();
-  return transcript ? `This is a ${kind} run. Recent transcript excerpts:\n\n${transcript}` : '';
+  return transcript ? `This is ${kind} run. Recent transcript excerpts:\n\n${transcript}` : '';
 }
 
 export function answerOf(text) {

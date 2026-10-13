@@ -4,6 +4,7 @@ const MODEL_CATALOG = require('./model-catalog.cjs');
 const { markdownTable } = require('./markdown-table.cjs');
 const { extractGivenPlan } = require('./plan-given.cjs');
 const { DEFAULT_TRIGGER_PHRASE, triggerAlternation, triggerMatcher } = require('./text.cjs');
+const { armText, nestable } = require('./inert-markdown.cjs');
 
 const TEST_CONTRACT_PATH = '.ksai/pr-test.json';
 
@@ -119,9 +120,9 @@ const shortModel = (model) =>
   String(model ?? '').trim().replace(/^zai-org\//, '').replace(/^claude-/, '').toLowerCase();
 
 function armLabel(model, effort) {
-  const said = shortModel(model);
+  const said = armText(shortModel(model));
   if (!said) return '';
-  const level = String(effort ?? '').trim();
+  const level = armText(String(effort ?? '').trim());
   return level ? `${said}/${level}` : said;
 }
 
@@ -661,16 +662,9 @@ const expandEveryCommand = (names) => names.flatMap((name) => (name === EVERY_CO
 
 const writeAccessNames = (input) => expandEveryCommand(parseDisabledCommands(input));
 
-function aliasedCommand(aliases, candidate) {
-  const found = aliases ? aliases[candidate] : undefined;
-  return typeof found === 'string' ? canonicalCommand(found) : undefined;
-}
-
-function resolveCommand(token, aliases) {
+function resolveCommand(token) {
   const candidate = canonicalCommand(token);
-  if (COMMANDS.includes(candidate)) return candidate;
-  const aliased = aliasedCommand(aliases, candidate);
-  return COMMANDS.includes(aliased) ? aliased : null;
+  return COMMANDS.includes(candidate) ? candidate : null;
 }
 
 const DEFAULT_COMMAND = 'review';
@@ -740,23 +734,20 @@ function undecidedWriteAccess(command, { subject = null } = {}) {
   );
 }
 
-function unknownCommandIn(named, { where = null, commandAliases = null } = {}) {
+function unknownCommandIn(named, { where = null } = {}) {
   const unknown = named.find((command) => !COMMANDS.includes(command));
   if (unknown === undefined) return null;
-  const aliased = aliasedCommand(commandAliases, unknown);
-  return COMMANDS.includes(aliased)
-    ? `${where} lists the alias \`${safeEcho(unknown)}\`; list the command \`${aliased}\` instead`
-    : `${where} names \`${safeEcho(unknown)}\`, which is not a command; the commands are ${COMMANDS.join(', ')}`;
+  return `${where} names \`${safeEcho(unknown)}\`, which is not a command; the commands are ${COMMANDS.join(', ')}`;
 }
 
 const carriedRefusal = (where, carried) =>
   `${where} names \`${safeEcho(carried)}\`, which is carried into a run already going rather than starting one, ` +
-  'so it is answered by whoever wrote the comment rather than by the command; remove it, and every command left ' +
+  'so it holds the bar of the run it reaches rather than one of its own; remove it, and every command left ' +
   'in the list keeps working';
 
-function resolveWriteAccess({ input = null, fromFile = null, commandAliases = null } = {}) {
+function resolveWriteAccess({ input = null, fromFile = null } = {}) {
   const named = [...new Set(writeAccessNames(input))];
-  const unknown = unknownCommandIn(named, { where: 'the `write_access_commands` input', commandAliases });
+  const unknown = unknownCommandIn(named, { where: 'the `write_access_commands` input' });
   if (unknown !== null) return { error: unknown };
   const carried = named.find((command) => deliveredCommand(command));
   if (carried !== undefined) return { error: carriedRefusal('the `write_access_commands` input', carried) };
@@ -790,7 +781,10 @@ const namedCommand = (command) => {
 const anyCommandOpen = (input) => (resolveWriteAccess({ input }).commands ?? NO_WRITE_ACCESS).length > 0;
 
 function commandBar(command, { writeAccessCommands = null } = {}) {
-  return (writeAccessCommands ?? NO_WRITE_ACCESS).includes(namedCommand(command)) ? WRITE_BAR : CODEOWNERS_BAR;
+  const open = writeAccessCommands ?? NO_WRITE_ACCESS;
+  const named = namedCommand(command);
+  const every = OPENABLE.every((one) => open.includes(one));
+  return open.includes(named) || (deliveredCommand(named) && every) ? WRITE_BAR : CODEOWNERS_BAR;
 }
 
 const opensApprove = (writeAccessCommands) => commandBar('approve', { writeAccessCommands }) === WRITE_BAR;
@@ -819,7 +813,7 @@ function commandAuthorized(command, { codeowner = null, write = null, writeAcces
 
 const escapeHtml = (text) => String(text ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-function parseOptions(prompt, { commandAliases = null, defaultCommand = DEFAULT_COMMAND, bare = false, callerFlags = [] } = {}) {
+function parseOptions(prompt, { defaultCommand = DEFAULT_COMMAND, bare = false, callerFlags = [] } = {}) {
   const flags = new Set([...FLAGS, ...callerFlags]);
   const options = new Set([...OPTIONS, ...callerFlags]);
   const text = String(prompt ?? '');
@@ -842,7 +836,7 @@ function parseOptions(prompt, { commandAliases = null, defaultCommand = DEFAULT_
   skipSeparators();
 
   const commandStart = i;
-  const leading = resolveCommand(readToken(), commandAliases);
+  const leading = resolveCommand(readToken());
   if (leading) {
     command = leading;
     skipSeparators();
@@ -865,7 +859,7 @@ function parseOptions(prompt, { commandAliases = null, defaultCommand = DEFAULT_
       continue;
     }
     if (!token.startsWith('--')) {
-      const candidate = command == null ? resolveCommand(token, commandAliases) : null;
+      const candidate = command == null ? resolveCommand(token) : null;
       if (candidate && candidate !== defaultCommand) {
         return reject(`the command \`${safeEcho(token)}\` must be the first word after the trigger phrase`);
       }
@@ -956,7 +950,6 @@ function selectArm({
   maxEffort = null,
   minEffort = null,
   triage = null,
-  commandAliases = null,
   callerFlags = [],
   onIssue = null,
   threadRootId = null,
@@ -1001,13 +994,10 @@ function selectArm({
     };
   }
 
-  const turnedOff = unknownCommandIn(parseDisabledCommands(disabledCommands), {
-    where: 'the `disabled_commands` input',
-    commandAliases,
-  });
+  const turnedOff = unknownCommandIn(parseDisabledCommands(disabledCommands), { where: 'the `disabled_commands` input' });
   if (turnedOff !== null) return { error: turnedOff };
 
-  const opened = resolveWriteAccess({ input: writeAccessCommands, fromFile: writeAccessFromFile, commandAliases });
+  const opened = resolveWriteAccess({ input: writeAccessCommands, fromFile: writeAccessFromFile });
   if (opened.error) return { error: opened.error };
 
   const configuredCeiling = String(maxEffort ?? '').trim();
@@ -1036,7 +1026,7 @@ function selectArm({
   let { ceiling, floor } = bounds;
 
   const defaultCommand = defaultCommandFor(onIssue, threadRootId, onReview, reviewState);
-  const parsed = parseOptions(prompt, { commandAliases, defaultCommand, bare, callerFlags: offered.map((one) => one.flag) });
+  const parsed = parseOptions(prompt, { defaultCommand, bare, callerFlags: offered.map((one) => one.flag) });
   if (parsed.error) {
     return {
       error: parsed.error,
@@ -1278,7 +1268,7 @@ function scrubTrigger(body, trigger) {
 function asAlert(kind, body) {
   const text = String(body ?? '');
   if (text === '') return '';
-  const quoted = text.split('\n').map((line) => (line === '' ? '>' : `> ${line}`));
+  const quoted = nestable(text).split('\n').map((line) => (line === '' ? '>' : `> ${line}`));
   return [`> [!${kind}]`, ...quoted].join('\n');
 }
 
@@ -1396,7 +1386,6 @@ module.exports = {
   namedCommand,
   undecidedWriteAccess,
   parseDisabledCommands,
-  parseAllowedCommands: parseDisabledCommands,
   writeAccessNames,
   EVERY_COMMAND,
   scrubTrigger,

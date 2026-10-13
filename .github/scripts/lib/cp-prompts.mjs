@@ -13,7 +13,8 @@ export const toolPrefixOf = (version) => (isV2(version) ? TOOL_PREFIX_V2 : TOOL_
 export const REMINDER_ID = 'static.runtime.opencode-max-steps';
 const CLASSIFICATION = Object.freeze({ internal: 'internal', public: 'public' });
 export { SINKS, renderRequest, writeRenderRequest } from './render-request.cjs';
-import { schemaDigestFor } from './render-request.cjs';
+import { schemaDigestFor, schemaFileDigestFor } from './render-request.cjs';
+import { counted, plural } from './text.cjs';
 
 export const ARTIFACTS = Object.freeze({
   prompt: 'prompt.md',
@@ -136,9 +137,12 @@ function staticOf(answer, version, lockDigest, locked) {
 }
 
 function heldContract(promptId, entry, version) {
-  const carried = String(entry?.schema_digest ?? '');
+  const selected = String(entry?.validation_digest ?? '');
+  const carried = selected || String(entry?.schema_digest ?? '');
   const here = schemaDigestFor(promptId);
-  if (carried === here || (!carried && here)) return;
+  const legacy = schemaFileDigestFor(promptId);
+  if ((carried && carried === here) || (!selected && carried && carried === legacy) || (!carried && here && !promptId.startsWith('runtime.task-'))) return;
+  if (!carried && here) throw new Error(`prompt release ${version} names no schema digest for ${promptId}; this release checks ${here}`);
   throw new Error(
     carried && here
       ? `prompt release ${version} validates ${promptId} against a schema this release does not carry: it names ${carried} and this release checks ${here}`
@@ -211,7 +215,7 @@ export async function renderThroughControlPlane({
   if (reached.why) throw new Error(reached.why);
   const { signal } = reached;
   const headers = { authorization: `Bearer ${reached.token}` };
-  const answered = await asked(fetch, `${reached.base}/v1/prompts/render`, {
+  const render = (body) => asked(fetch, `${reached.base}/v1/prompts/render`, {
     method: 'POST',
     headers: {
       ...headers,
@@ -220,9 +224,18 @@ export async function renderThroughControlPlane({
         ? { 'x-ksai-provider-observations': 'v5' }
         : {}),
     },
-    body: JSON.stringify(request),
+    body: JSON.stringify(body),
     signal,
   }, 'the render', { retries: RETRIES, wait });
+  let answered;
+  try {
+    answered = await render(request);
+  } catch (error) {
+    if (!request?.schema_digest || !String(error?.message ?? '').includes('unknown object member name "schema_digest"')) throw error;
+    const legacy = { ...request };
+    delete legacy.schema_digest;
+    answered = await render(legacy);
+  }
   const rendered = renderedOf(await answered.json(), request);
   const { version, lock_digest: lockDigest } = rendered.catalog;
   const catalog = `${reached.base}/v1/prompts/catalogs/${encodeURIComponent(version)}`;
@@ -362,7 +375,8 @@ export async function reportDeliveries({
 }) {
   const { written, deliveries } = deliveriesUnder({ files, root, read, list });
   if (written.length !== deliveries.length) {
-    console.log(`::warning::${written.length - deliveries.length} delivery lines name no render this job made, so they are not reported`);
+    const stray = written.length - deliveries.length;
+    console.log(`::warning::${counted(stray, 'delivery line')} ${plural(stray, 'names', 'name')} no render this job made, so ${plural(stray, 'it is', 'they are')} not reported`);
   }
   if (deliveries.length === 0) return { reported: 0 };
   const reached = await reachedFor({ env, fetch, timeout, secret });

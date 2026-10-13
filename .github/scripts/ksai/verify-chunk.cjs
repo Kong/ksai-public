@@ -541,7 +541,7 @@ function verifyChunk({
   const walked = git(['rev-list', '--reverse', `${baseSha}..${tipSha}`]);
   if (!walked.ok) return deny(`git could not list the commits on \`${branchName}\`.`);
   const commits = walked.stdout.split('\n').map((line) => line.trim()).filter((line) => SHA_SHAPE.test(line));
-  if (commits.length !== ahead) return deny(`git listed ${commits.length} commits on \`${branchName}\` where it counted ${ahead}.`);
+  if (commits.length !== ahead) return deny(`git listed ${counted(commits.length, 'commit')} on \`${branchName}\` where it counted ${ahead}.`);
 
   let from = baseSha;
   for (const commit of commits) {

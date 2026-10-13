@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 
 import { writeOutputs } from '../lib/outputs.mjs';
+import { packageTrees } from './egress.mjs';
 
 const require = createRequire(import.meta.url);
 const { MODULE_FILE, moduleDirs, warn } = require('./gomod.cjs');
@@ -23,7 +24,10 @@ function tracked(workspace) {
 
 export function main(env = process.env) {
   const workspace = env.WORKSPACE || process.cwd();
-  const found = moduleDirs(tracked(workspace));
+  const configured = packageTrees(env.KSAI_EGRESS_PACKAGES);
+  const selectedRoots = configured?.filter((one) => one.manager === 'go').map((one) => one.root);
+  const selected = configured === null || selectedRoots.includes('*') ? null : new Set(selectedRoots);
+  const found = moduleDirs(tracked(workspace)).filter((one) => selected === null || selected.has(one));
   const dirs = found.filter((one) => !/[\r\n]/.test(one));
 
   if (dirs.length !== found.length) {

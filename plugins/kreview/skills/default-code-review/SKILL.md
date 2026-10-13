@@ -10,7 +10,7 @@ allowed-tools: Agent, Task, Bash, Read, Grep, Glob
 Orchestrate an adversarial review with no language-specific knowledge base. The skill resolves the diff, reviews it under the [`default-code-reviewer`](reviewer.md) mandate beside this file, then runs the [`findings-auditor`](../../agents/findings-auditor.md) agent to red-team the findings before anything reaches the user. Two passes: one attacks the **code**, the next attacks the **findings**.
 
 This is the fallback path: try a language-specific kreview skill first (e.g.
-`go-code-review`, `lua-code-review`, `vue-code-review`, `nestjs-code-review`, `typescript-code-review`). Reach for this skill only when none matches the
+`go-code-review`, `lua-code-review`, `rust-code-review`, `vue-code-review`, `nestjs-code-review`, `typescript-code-review`). Reach for this skill only when none matches the
 diff's primary language or framework — it substitutes universal correctness/security axes
 for a per-language mistake catalog, so it catches fewer idiom-specific issues than a
 dedicated reviewer would.

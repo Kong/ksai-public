@@ -1,3 +1,5 @@
+const { inertLine } = require('./inert-markdown.cjs');
+
 const MAX_REASON_CHARS = 160;
 
 const ASSUMED_CEILING_MINUTES = 35;
@@ -56,7 +58,7 @@ function watchdogDetail(env) {
   const kept = [...said];
   const shown =
     kept.length > MAX_REASON_CHARS ? `${kept.slice(0, MAX_REASON_CHARS - 1).join('')}…` : said;
-  return ` It stopped because ${shown}.`;
+  return ` It stopped because ${inertLine(shown)}.`;
 }
 
 module.exports = {

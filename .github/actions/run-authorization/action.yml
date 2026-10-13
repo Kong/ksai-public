@@ -1,0 +1,99 @@
+name: Run authorization
+description: >-
+  Tell the control plane what this run's gate decided, which is what the write token a later job asks
+  for is scoped by. A run that decided `review` or `help` may comment, `test` may comment on the pull
+  request, `implement` may push, and a refused run may only say why and clear the review request.
+
+  The control plane holds the decision against the record it dispatched the run for, so a run
+  dispatched for a review cannot report an implement. Each attempt reports once, and a later attempt of
+  the same run replaces what an earlier one said. A continuation reports `implement`, because it resumes
+  work a gate already authorized. A gate that runs more than one command, as a prompt naming none runs
+  both the review and the implement job, reports the one the record names where it is among them,
+  because that is the only one the control plane accepts. Where the record names none, it reports the
+  one whose write reaches furthest - implement, then review, help and test - and each of those
+  grants covers the ones after it.
+
+  Under `cp`, which is also what a call that passes no App key is on, a decision that could not be
+  reported fails the gate, because every write token after it would be refused. Under `shadow` it is
+  tried once and only warns, since the run still holds its own key, and under `local` nothing is
+  reported.
+
+  A successful initial native comment gate that intentionally chose no work posts `{authorized:false,job}`
+  to `/run/no-work`. Its 204 confirms the control plane retained the Task outcome before this run
+  finishes. That acknowledgement is required in every token mode. An older replica's 404 or 405 is
+  retried within the request budget, and an outcome nobody acknowledged fails the gate. A failed
+  gate, permission refusal, continuation or request carrying a command reports no such outcome.
+
+inputs:
+  authorized:
+    description: the gate's `authorized` output
+    required: true
+  review:
+    description: the gate's `review` output
+    required: false
+    default: ""
+  implement:
+    description: the gate's `implement` output
+    required: false
+    default: ""
+  test:
+    description: the gate's `test` output
+    required: false
+    default: ""
+  help:
+    description: the gate's `help` output
+    required: false
+    default: ""
+  continuation:
+    description: "`true` when this dispatch resumes work an earlier run's gate authorized"
+    required: false
+    default: "false"
+  record_command:
+    description: >-
+      the command the dispatch record names, and empty for a record that names none, as one
+      answering a comment does
+    required: false
+    default: ""
+  record_bound_command:
+    description: the command retained by a continuing Task, empty for an initial request
+    required: false
+    default: ""
+  comment_kind:
+    description: the comment space named by the dispatch record
+    required: false
+    default: ""
+  no_work:
+    description: "`true` only when the routing intentionally answered the comment with no work"
+    required: false
+    default: "false"
+  native_pending:
+    description: "`true` when the gate read the validated original pending Task request from its archive"
+    required: false
+    default: "false"
+  gate_outcome:
+    description: the outcome of the completed gate step, required to report ordinary no work
+    required: false
+    default: ""
+  job:
+    description: the job reporting, which the control plane keeps beside the decision
+    required: false
+    default: ${{ github.job }}
+  endpoint:
+    description: Base URL of the control plane, with no trailing path
+    required: true
+  audience:
+    description: >-
+      Audience the OIDC token is minted for. Both ends have to name the same string, and the control
+      plane refuses a token minted for anything else.
+    required: false
+    default: ksai-cp
+  mode:
+    description: >-
+      the `run_tokens` setting - local, shadow or cp, and cp for a caller that passes no App key - and
+      empty where none was served
+    required: false
+    default: ""
+
+runs:
+  using: node24
+  main: main.mjs

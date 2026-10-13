@@ -32,6 +32,7 @@ const {
   SUBJECT_SHAPE,
 } = require('./plan.cjs');
 const { marked } = require('./marker.cjs');
+const { inertInline } = require('../lib/inert-markdown.cjs');
 const { NUMBER_SHAPE } = require('./context.cjs');
 const { COMMIT_TYPES, safeEcho } = require('./verify-chunk.cjs');
 
@@ -155,14 +156,15 @@ export function subjectFrom(manifest, { noun = 'The run', triggerPhrase = null, 
  * than sharing it.
  */
 export function blockerFor(manifestPath) {
-  return (message, { blocker = '' } = {}) => {
+  return (message, options = {}) => {
     rmSync(manifestPath, { force: true });
-    return blocker ? { status: 'blocked', message, blocker } : { status: 'blocked', message };
+    const blocker = 'blocker' in options ? options.blocker : null;
+    return typeof blocker === 'string' ? { status: 'blocked', message, blocker } : { status: 'blocked', message };
   };
 }
 
 export function blockerFileOf(result, messageFile) {
-  if (!result.blocker) return '';
+  if (typeof result.blocker !== 'string') return '';
   const at = join(dirname(messageFile), 'ksai-blocker.txt');
   writeFileSync(at, result.blocker);
   return at;
@@ -193,7 +195,7 @@ export function readManifest(manifestPath, { noun = null, triggerPhrase = null }
   try {
     return { manifest: JSON.parse(readFileSync(manifestPath, 'utf8')) };
   } catch (error) {
-    const said = oneLine(error?.message, { triggerPhrase }).slice(0, MAX_PARSE_DETAIL_CHARS);
+    const said = inertInline(oneLine(error?.message, { triggerPhrase }).slice(0, MAX_PARSE_DETAIL_CHARS));
     const detail = said === '' ? '' : ` ${said}`;
     return { message: `${noun} produced a manifest that is not valid JSON.${detail}` };
   }

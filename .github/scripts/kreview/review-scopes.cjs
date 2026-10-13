@@ -1,10 +1,24 @@
 const { createHash } = require('node:crypto');
-const { mkdirSync, writeFileSync } = require('node:fs');
+const { mkdirSync, statSync, writeFileSync } = require('node:fs');
 const { dirname, join } = require('node:path');
 
 const { boundedBytes } = require('../lib/evidence.cjs');
 
 const SCOPE_LIMITS = Object.freeze({ count: 8, files: 8, bytes: 49_152, lines: 600, inputBytes: 16_777_216, inventoryBytes: 1_048_576, units: 4096 });
+const MIB = 1_048_576;
+const DIFF_MIB = Object.freeze({ least: 1, most: 64 });
+const grouped = (value) => value.toLocaleString('en-US');
+const diffBytesOf = (value) => {
+  const mib = Number(value);
+  return Number.isInteger(mib) && mib >= DIFF_MIB.least && mib <= DIFF_MIB.most ? mib * MIB : SCOPE_LIMITS.inputBytes;
+};
+const TOO_LARGE = Object.freeze({
+  patch: (bytes) => `its diff is larger than the ${bytes / MIB} MiB a review reads`,
+  inventory: `its list of changed paths is larger than the ${SCOPE_LIMITS.inventoryBytes / MIB} MiB a review reads`,
+  files: (count) => `it changes ${grouped(count)} files, and a review reads at most ${grouped(SCOPE_LIMITS.units)}`,
+  units: `it splits into more than ${grouped(SCOPE_LIMITS.units)} separate changes, the most a review reads`,
+});
+const tooLarge = (reason) => Object.assign(new Error(`review is too large: ${reason}`), { tooLarge: reason });
 const hash = (value) => createHash('sha256').update(value).digest('hex');
 const header = /^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@[^\n]*(?:\n|$)/gm;
 
@@ -39,10 +53,12 @@ function changedLines(patch) {
 const fits = (patch) => Buffer.byteLength(patch) <= SCOPE_LIMITS.bytes && changedLines(patch) <= SCOPE_LIMITS.lines;
 const supported = (path) => path.length <= 512 && !/^(?:\/|[A-Za-z]:)/.test(path) && !path.split(/[\\/]/).some((part) => ['', '.', '..'].includes(part)) && !/[\p{C}]/u.test(path);
 
-function scopePlan(patch, inventory) {
-  if (Buffer.byteLength(patch) > SCOPE_LIMITS.inputBytes || Buffer.byteLength(inventory) > SCOPE_LIMITS.inventoryBytes) throw new Error('review scope input exceeds its bound');
+function scopePlan(patch, inventory, mib = '') {
+  const inputBytes = diffBytesOf(mib);
+  if (Buffer.byteLength(patch) > inputBytes) throw tooLarge(TOO_LARGE.patch(inputBytes));
+  if (Buffer.byteLength(inventory) > SCOPE_LIMITS.inventoryBytes) throw tooLarge(TOO_LARGE.inventory);
   const files = inventoryOf(inventory);
-  if (files.length > SCOPE_LIMITS.units) throw new Error('review has too many files');
+  if (files.length > SCOPE_LIMITS.units) throw tooLarge(TOO_LARGE.files(files.length));
   const blocks = patch === '' ? [] : patch.split(/(?=^diff --git )/m);
   if (blocks.some((block) => !block.startsWith('diff --git '))) throw new Error('review patch has an unsupported preamble');
   const units = [];
@@ -66,7 +82,7 @@ function scopePlan(patch, inventory) {
         const unit = { id: `${id}-${piece + 1}`, path: file.path, patch: value, lines: changedLines(value), bytes: Buffer.byteLength(value) };
         if (!fits(value)) omitted.push({ id: unit.id, path: file.path, reason: 'oversized-hunk-or-header' });
         else units.push(unit);
-        if (units.length + omitted.length > SCOPE_LIMITS.units) throw new Error('review has too many scope units');
+        if (units.length + omitted.length > SCOPE_LIMITS.units) throw tooLarge(TOO_LARGE.units);
       }
     }
   }
@@ -92,12 +108,26 @@ function scopePlan(patch, inventory) {
   return { version: 1, digest: hash(patch + '\0' + inventory), total_files: files.length, total_units: units.length + omitted.filter((unit) => unit.reason !== 'scope-limit').length, scopes, omitted };
 }
 
-function readBounded(path, limit) {
+function readBounded(path, limit, reason) {
+  if (statSync(path).size > limit) throw tooLarge(reason);
   return new TextDecoder('utf-8', { fatal: true }).decode(boundedBytes(path, 'review scope input', limit));
 }
 
-function materializeScopes(patchPath, inventoryPath) {
-  const plan = scopePlan(readBounded(patchPath, SCOPE_LIMITS.inputBytes), readBounded(inventoryPath, SCOPE_LIMITS.inventoryBytes));
+function planOf(patchPath, inventoryPath, mib) {
+  const inputBytes = diffBytesOf(mib);
+  return scopePlan(readBounded(patchPath, inputBytes, TOO_LARGE.patch(inputBytes)), readBounded(inventoryPath, SCOPE_LIMITS.inventoryBytes, TOO_LARGE.inventory), mib);
+}
+
+function fitted(patchPath, inventoryPath, mib = '') {
+  try {
+    return { plan: materializeScopes(patchPath, inventoryPath, mib), tooLarge: '' };
+  } catch (error) {
+    return { plan: null, tooLarge: error.tooLarge ?? '' };
+  }
+}
+
+function materializeScopes(patchPath, inventoryPath, mib = '') {
+  const plan = planOf(patchPath, inventoryPath, mib);
   const dir = join(dirname(patchPath), 'scopes');
   mkdirSync(dir, { recursive: true });
   plan.scopes = plan.scopes.map(({ patch, ...scope }) => {
@@ -110,4 +140,4 @@ function materializeScopes(patchPath, inventoryPath) {
   return plan;
 }
 
-module.exports = { SCOPE_LIMITS, scopePlan, materializeScopes };
+module.exports = { DIFF_MIB, SCOPE_LIMITS, diffBytesOf, fitted, scopePlan, materializeScopes };
