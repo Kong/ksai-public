@@ -46,8 +46,8 @@ inputs:
   anthropic_base_url:
     description: >-
       origin the classifier is called on, with no version segment. Kong's own callers default to Kong AI
-      Gateway, where KSAI spend is attributed; the published mirror carries no default, so a caller there sets
-      its own origin. Empty is refused rather than falling back to api.anthropic.com.
+      Gateway, where KSAI spend is attributed; the published mirror carries no default, and its workflow passes
+      the origin the control plane serves. Empty is refused rather than falling back to api.anthropic.com.
     required: false
     default: ""
   anthropic_auth:
@@ -98,7 +98,7 @@ inputs:
       retained comment must name it or name no command. Nothing classifies a bound comment
     required: false
     default: ""
-  record_session_action:
+  record_task_action:
     description: >-
       how a task successor's record carries on its task, or empty. A `retry` reads only the request
       the control plane kept and refuses to read the comment as it stands now
@@ -239,8 +239,9 @@ outputs:
   authorized:
     description: >-
       whether the requester clears the bar the asked command holds here - CODEOWNERS ownership with write
-      access, or plain write access for a command named in `write_access_commands`. Empty where no
-      CODEOWNERS answer was read at all, which is neither a yes nor a no.
+      access, or plain write access for a command named in `write_access_commands`, and for `stop` and
+      `pause` where that list opens every command. Empty where no CODEOWNERS answer was read at all, which
+      is neither a yes nor a no.
     value: ${{ steps.bar.outputs.authorized }}
   bar:
     description: which bar the asked command held, `codeowners` or `write`
@@ -248,7 +249,8 @@ outputs:
   codeowner:
     description: >-
       whether the requester owns a path in this repository's CODEOWNERS and holds write access, which is
-      the bar every command not named in `write_access_commands` holds
+      the bar every command not named in `write_access_commands` holds, except `stop` and `pause` where
+      that list opens every command
     value: ${{ steps.authz.outputs.authorized }}
   write_access:
     description: >-
@@ -352,6 +354,13 @@ runs:
         set -euo pipefail
         echo "ref=${KSAI_REF:-$ACTION_REF}" >> "$GITHUB_OUTPUT"
 
+    - name: Point every gate step at the control plane
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        PROMPT_ENDPOINT: ${{ inputs.prompt_endpoint }}
+      with:
+        script: core.exportVariable('KSAI_CP_ENDPOINT', process.env.PROMPT_ENDPOINT);
+
     - name: Check out trusted ksai code for the gate
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
@@ -386,13 +395,14 @@ runs:
         PR_NUMBER: ${{ inputs.pr_number }}
         TRIGGERING_ACTOR: ${{ github.triggering_actor }}
         APP_SLUG: ${{ inputs.app_slug }}
-        KSAI_WORK_REQUEST_ENDPOINT: ${{ startsWith(inputs.opencode_version, '2.') && inputs.prompt_endpoint || '' }}
-        KSAI_WORK_SESSION_ACTION: ${{ inputs.record_session_action }}
+        KSAI_TASK_REQUEST_ENDPOINT: ${{ startsWith(inputs.opencode_version, '2.') && inputs.prompt_endpoint || '' }}
+        KSAI_TASK_ACTION: ${{ inputs.record_task_action }}
         SCRIPTS: ${{ github.workspace }}/_ksai/.github/scripts
       with:
         github-token: ${{ inputs.authorization_github_token }}
         retries: 3
         script: |
+          require(`${process.env.SCRIPTS}/../actions/codeowners-authz/bounded-reads.cjs`).boundReads(github, { core });
           const { resolveRequester } = require(`${process.env.SCRIPTS}/ksai/route.cjs`);
           const { login, failure, securityPolicyRefused } =
             await resolveRequester({ github, context, env: process.env });
@@ -419,20 +429,22 @@ runs:
     - name: Authorize commenter against CODEOWNERS
       id: authz
       if: ${{ inputs.authorization_github_token != '' }}
-      uses: ./_ksai/.github/actions/codeowners-authz
+      uses: ./_ksai/.github/actions/codeowners-authz  # zizmor: ignore[self-repository]
       with:
         github-token: ${{ inputs.authorization_github_token }}
         username: ${{ steps.requester.outputs.login }}
         write_access: ${{ inputs.write_access_commands != '' }}
+        github_calls: ${{ inputs.github_calls }}
 
     - name: Authorize the operator who continued a task
       id: authz_operator
       if: ${{ inputs.authorization_github_token != '' && inputs.record_bound_command != '' }}
-      uses: ./_ksai/.github/actions/codeowners-authz
+      uses: ./_ksai/.github/actions/codeowners-authz  # zizmor: ignore[self-repository]
       with:
         github-token: ${{ inputs.authorization_github_token }}
         username: ${{ inputs.record_requester }}
         write_access: ${{ inputs.write_access_commands != '' }}
+        github_calls: ${{ inputs.github_calls }}
 
     - name: Combine the guards with the ones this repository sets
       id: guards
@@ -450,6 +462,7 @@ runs:
         github-token: ${{ inputs.authorization_github_token }}
         retries: 3
         script: |
+          require(`${process.env.SCRIPTS}/../actions/codeowners-authz/bounded-reads.cjs`).boundReads(github, { core });
           const { guards } = require(`${process.env.SCRIPTS}/ksai/guards.cjs`);
           await guards({ github, core, context, env: process.env });
 
@@ -479,14 +492,15 @@ runs:
         PR_NUMBER: ${{ inputs.pr_number }}
         TRIGGERING_ACTOR: ${{ github.triggering_actor }}
         APP_SLUG: ${{ inputs.app_slug }}
-        KSAI_WORK_REQUEST_ENDPOINT: ${{ startsWith(inputs.opencode_version, '2.') && inputs.prompt_endpoint || '' }}
-        KSAI_WORK_SESSION_ACTION: ${{ inputs.record_session_action }}
+        KSAI_TASK_REQUEST_ENDPOINT: ${{ startsWith(inputs.opencode_version, '2.') && inputs.prompt_endpoint || '' }}
+        KSAI_TASK_ACTION: ${{ inputs.record_task_action }}
         PROMPT_FILE: ${{ runner.temp }}/ksai-classify-prompt.txt
         SCRIPTS: ${{ github.workspace }}/_ksai/.github/scripts
       with:
         github-token: ${{ inputs.authorization_github_token }}
         retries: 3
         script: |
+          require(`${process.env.SCRIPTS}/../actions/codeowners-authz/bounded-reads.cjs`).boundReads(github, { core });
           const { route } = require(`${process.env.SCRIPTS}/ksai/route.cjs`);
           await route({ github, core, context, env: process.env });
 
@@ -504,7 +518,6 @@ runs:
         REPO: ${{ github.repository }}
         TRIGGER: ${{ inputs.trigger_phrase }}
         SCRIPTS: ${{ github.workspace }}/_ksai/.github/scripts
-        KSAI_CP_ENDPOINT: ${{ inputs.prompt_endpoint }}
         KSAI_GITHUB_CALLS: ${{ inputs.github_calls }}
       with:
         github-token: ${{ inputs.post_github_token }}
@@ -598,7 +611,6 @@ runs:
         PROMPT_FILE: ${{ steps.trigger.outputs.classify_file }}
         REQUEST_FILE: ${{ steps.trigger.outputs.classify_request_file }}
         KSAI_PROMPT_RENDERING: ${{ steps.rendering.outputs.prompt }}
-        KSAI_CP_ENDPOINT: ${{ inputs.prompt_endpoint }}
         EXECUTION_FILE: ${{ runner.temp }}/ksai-gate-classify-execution.json
         ATTRIBUTION_HEADERS: ${{ steps.gate_headers.outputs.value }}
         ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
@@ -640,6 +652,7 @@ runs:
         github-token: ${{ inputs.authorization_github_token }}
         retries: 3
         script: |
+          require(`${process.env.SCRIPTS}/../actions/codeowners-authz/bounded-reads.cjs`).boundReads(github, { core });
           const { settle } = require(`${process.env.SCRIPTS}/ksai/route.cjs`);
           await settle({ github, context, core, env: process.env });
 
@@ -754,7 +767,6 @@ runs:
         RUN_ID: ${{ github.run_id }}
         TRIGGER: ${{ inputs.trigger_phrase }}
         SCRIPTS: ${{ github.workspace }}/_ksai/.github/scripts
-        KSAI_CP_ENDPOINT: ${{ inputs.prompt_endpoint }}
         KSAI_GITHUB_CALLS: ${{ inputs.github_calls }}
       with:
         github-token: ${{ inputs.post_github_token }}
@@ -807,7 +819,6 @@ runs:
           github.event.issue.number || github.event.pull_request.number }}
         RUN_ID: ${{ github.run_id }}
         SCRIPTS: ${{ github.workspace }}/_ksai/.github/scripts
-        KSAI_CP_ENDPOINT: ${{ inputs.prompt_endpoint }}
         KSAI_GITHUB_CALLS: ${{ inputs.github_calls }}
       with:
         github-token: ${{ inputs.post_github_token }}
@@ -849,7 +860,6 @@ runs:
         ANTHROPIC_SERVICE_ACCOUNT_ID: ${{ inputs.service_account_id }}
         ANTHROPIC_WORKSPACE_ID: ${{ inputs.workspace_id }}
         SCRIPTS: ${{ github.workspace }}/_ksai/.github/scripts
-        KSAI_CP_ENDPOINT: ${{ inputs.prompt_endpoint }}
         KSAI_GITHUB_CALLS: ${{ inputs.github_calls }}
       run: timeout 30 node "${SCRIPTS}/ksai/federation-preflight.mjs"
 
@@ -864,7 +874,6 @@ runs:
         REPO: ${{ github.repository }}
         TRIGGER: ${{ inputs.trigger_phrase }}
         SCRIPTS: ${{ github.workspace }}/_ksai/.github/scripts
-        KSAI_CP_ENDPOINT: ${{ inputs.prompt_endpoint }}
         KSAI_GITHUB_CALLS: ${{ inputs.github_calls }}
       with:
         github-token: ${{ inputs.post_github_token }}
@@ -906,6 +915,7 @@ runs:
         github-token: ${{ inputs.authorization_github_token }}
         retries: 3
         script: |
+          require(`${process.env.SCRIPTS}/../actions/codeowners-authz/bounded-reads.cjs`).boundReads(github, { core });
           const { testerContract } = require(`${process.env.SCRIPTS}/ksai/config.cjs`);
           await testerContract({
             github,
@@ -928,7 +938,6 @@ runs:
         REPO: ${{ github.repository }}
         TRIGGER: ${{ inputs.trigger_phrase }}
         SCRIPTS: ${{ github.workspace }}/_ksai/.github/scripts
-        KSAI_CP_ENDPOINT: ${{ inputs.prompt_endpoint }}
         KSAI_GITHUB_CALLS: ${{ inputs.github_calls }}
       with:
         github-token: ${{ inputs.post_github_token }}

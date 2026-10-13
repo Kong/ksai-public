@@ -2,6 +2,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { writeOutputs } from '../lib/outputs.mjs';
+import { annotation } from '../lib/text.cjs';
 import { requestReview } from './governed-review.mjs';
 
 const ASKED = { review: requestReview, flow: (env) => ({ request_file: String(env.REQUEST_FILE ?? '').trim() }) };
@@ -21,7 +22,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   try {
     main(process.argv.slice(2), process.env);
   } catch (error) {
-    console.log(`::error::${error.message}`);
+    console.log(annotation(error.message));
     process.exitCode = 1;
   }
 }

@@ -5,6 +5,7 @@ const { setTimeout: pauseFor } = require('node:timers/promises');
 const { scrub } = require('./plan.cjs');
 const { asAlert } = require('../lib/select-arm.cjs');
 const { counted, plural } = require('../lib/text.cjs');
+const { inertInline } = require('../lib/inert-markdown.cjs');
 const { postTo, reachControlPlane, unreached } = require('../lib/control-plane.cjs');
 const { MAX_ATTEMPTS } = require('../lib/write-record.cjs');
 
@@ -121,7 +122,7 @@ function renderStop({ reason = null, stall = null, attempt = null, remaining = n
   const boxes = left === null ? 'unfinished steps' : counted(left, 'unfinished step');
   if (reason === 'stalled') {
     return out(
-      `Stopped after ${readCount(stall) ?? MAX_STALL} consecutive runs that completed no step, with ${boxes} left. ` +
+      `Stopped after ${counted(readCount(stall) ?? MAX_STALL, 'consecutive run')} that completed no step, with ${boxes} left. ` +
       'Something is failing the same way each time; the run logs for those attempts say which step and why. ' +
       'Re-triggering the bot on this issue resumes from the first unchecked box once it is fixed'
     );
@@ -136,7 +137,7 @@ function renderStop({ reason = null, stall = null, attempt = null, remaining = n
   }
   if (reason === 'attempts') {
     return out(
-      `Stopped after ${readCount(attempt) ?? MAX_ATTEMPTS} runs, with ${boxes} left. ` +
+      `Stopped after ${counted(readCount(attempt) ?? MAX_ATTEMPTS, 'run')}, with ${boxes} left. ` +
       'That is the hard ceiling on one chain rather than a failure of any single step. ' +
       'Re-triggering the bot on this issue starts a fresh chain from the first unchecked box'
     );
@@ -154,7 +155,7 @@ function renderUndispatched({ reason = null, remaining = null, triggerPhrase = n
     'WARNING',
     scrub(
       `This run finished its work and GitHub would not start the next one, so nothing is running now and ` +
-        `there ${plural(left, 'is', 'are')} ${boxes} left: ${reason}. ` +
+        `there ${plural(left, 'is', 'are')} ${boxes} left: ${inertInline(scrub(`${reason}`, { triggerPhrase }))}. ` +
         'Re-triggering the bot resumes from the first unchecked box',
       { triggerPhrase },
     ),
@@ -388,7 +389,13 @@ async function continueThroughControlPlane({
         };
       }
       const run = readCount(told?.run_id);
-      return { outcome: 'dispatched', reason: '', run: run === null || run === 0 ? '' : String(run) };
+      if (run === null || run === 0) {
+        if (told?.owed === true) {
+          return { outcome: 'owed', reason: 'the control plane recorded the successor before it failed to start it' };
+        }
+        return { outcome: 'failed', reason: 'the control plane accepted the continuation but named no successor run' };
+      }
+      return { outcome: 'dispatched', reason: '', run: String(run) };
     }
     const refused = await refusalOf(answer);
     if (refused.owed) {

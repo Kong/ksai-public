@@ -41,6 +41,11 @@ export function outputOf(answer) {
   } catch {
     throw new Error('the stage answered no JSON stage candidate');
   }
+  if (object(candidate) && !Object.hasOwn(candidate, 'artifacts') && object(candidate.output) &&
+    Array.isArray(candidate.output.artifacts) && candidate.output.artifacts.length === 0) {
+    const { artifacts, ...output } = candidate.output;
+    candidate = { ...candidate, output, artifacts };
+  }
   let enveloped = true;
   try {
     candidateEnvelope(candidate);

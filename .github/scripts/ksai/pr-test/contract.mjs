@@ -2,6 +2,8 @@ import { readFile } from 'node:fs/promises';
 
 export const KINDS = ['docker-compose', 'mise', 'make'];
 
+export const CONTRACT_VERSION = 1;
+
 const TARGET = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 
 const FIELDS = Object.assign(Object.create(null), {
@@ -39,7 +41,7 @@ export function parseContract(document, source = '.ksai/pr-test.json') {
   if (!document || typeof document !== 'object' || Array.isArray(document)) {
     throw new Error(`${source}: not a mapping`);
   }
-  if (document.version !== 1) fail(`version must be 1, got ${JSON.stringify(document.version)}`);
+  if (document.version !== CONTRACT_VERSION) fail(`version must be ${CONTRACT_VERSION}, got ${JSON.stringify(document.version)}`);
   for (const key of Object.keys(document)) {
     if (!['version', 'default', 'environments'].includes(key)) fail(`unknown top-level key ${key}`);
   }

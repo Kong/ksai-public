@@ -246,10 +246,12 @@ async function heldByPlanThreads({
   forced = false,
   by = null,
   candidates = 0,
+  env = process.env,
+  fetch = globalThis.fetch,
 } = {}) {
   const clear = { refusal: null, overrode: false };
   if (String(phase ?? '').trim() !== ALWAYS_APPROVED) return clear;
-  const open = await openPlanThreads({ github, owner, repo, prNumber, planFile, botLogin });
+  const open = await openPlanThreads({ github, owner, repo, prNumber, planFile, botLogin, env, fetch });
   const refused = (reason, extra) => ({ refusal: { required: true, blocked: true, reason, ...extra, candidates }, overrode: false });
   if (open.error) return refused(open.error, {});
   if (open.threads.length === 0) return clear;
@@ -273,7 +275,6 @@ async function resolveApproval({
   botLogin = null,
   planFile = null,
   trigger = null,
-  commandAliases = null,
   authorize = null,
   writeAccess = null,
   writeAccessCommands = NO_WRITE_ACCESS,
@@ -283,6 +284,9 @@ async function resolveApproval({
   nativeReview = null,
   controlPlaneApproval = null,
   approvalReceipts = [],
+  keptKinds = new Map(),
+  env = process.env,
+  fetch = globalThis.fetch,
 } = {}) {
   const settled = await withoutScan({
     github,
@@ -296,7 +300,7 @@ async function resolveApproval({
   });
   if (settled !== null) {
     if (settled.required !== true || settled.blocked !== false) return settled;
-    const { refusal } = await heldByPlanThreads({ github, core, owner, repo, phase, prNumber, planFile, botLogin });
+    const { refusal } = await heldByPlanThreads({ github, core, owner, repo, phase, prNumber, planFile, botLogin, env, fetch });
     return refusal ?? { ...settled, overrode: false };
   }
 
@@ -358,7 +362,7 @@ async function resolveApproval({
     }
     const conversation = mergeByArrival(comments ?? [], (reviewComments ?? []).filter((one) => one?.user?.type !== 'Bot'));
     byThread.set(thread, comments ?? []);
-    adopt(found, findApprovals(conversation, { trigger, commandAliases }), thread);
+    adopt(found, findApprovals(conversation, { trigger }), thread);
   }
 
   const acknowledgments = byThread.get(Number(prNumber)) ?? [];
@@ -395,7 +399,7 @@ async function resolveApproval({
   adopt(found, approvedInJira.approvals, Number(prNumber));
 
   const ownScanned = threads.includes(Number(prNumber));
-  const reworked = lastRework([...(ownReplies ?? []), ...(ownComments ?? [])], { botLogin });
+  const reworked = lastRework([...(ownReplies ?? []), ...(ownComments ?? [])], { botLogin, kept: keptKinds });
   const confirmed = already !== null ? found.filter((one) => one.login === already.login) : found;
 
   if (confirmed.length === 0) {
@@ -492,6 +496,8 @@ async function resolveApproval({
       forced: candidate.forced,
       by: `@${candidate.login}`,
       candidates: considered.length,
+      env,
+      fetch,
     });
     if (refusal) return refusal;
 

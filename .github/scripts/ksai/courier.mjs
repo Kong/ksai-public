@@ -12,6 +12,8 @@ const { isOwnLogin } = require('./threads.cjs');
 
 const DEFAULT_API_URL = 'https://api.github.com';
 
+const CALL_TIMEOUT_MS = 15_000;
+
 const MESSAGE_KIND = 'message';
 
 const REVIEW_KIND = 'review-comment';
@@ -42,10 +44,6 @@ export function wanted({ comment, kind, triggerPhrase = '', botLogin = null, own
   if (addressed !== null && HELP_SHAPE.test(addressed.trimStart())) return false;
   if (kind === REVIEW_KIND || String(ownPull) === 'true') return true;
   return triggerMatcher(triggerPhrase).test(String(comment?.body ?? ''));
-}
-
-export function stopAsked(comment, triggerPhrase = '') {
-  return haltAsked(comment, triggerPhrase)?.text ?? '';
 }
 
 export function haltAsked(comment, triggerPhrase = '') {
@@ -88,6 +86,7 @@ export function octokitOver(token, fetchImpl = fetch, apiUrl = DEFAULT_API_URL) 
         'x-github-api-version': '2022-11-28',
         ...headers,
       },
+      signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
     });
     if (!response.ok) {
       throw Object.assign(new Error(`${path} answered ${response.status}`), { status: response.status });
@@ -140,6 +139,7 @@ export async function listComments({
           authorization: `Bearer ${token}`,
           'x-github-api-version': '2022-11-28',
         },
+        signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
       });
       if (!response.ok) throw new Error(`${kind} comment page ${page} answered ${response.status}`);
       const body = await response.json();
@@ -159,6 +159,7 @@ const graphqlOver = ({ token, apiUrl, fetchImpl }) => async (query, variables) =
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     body: JSON.stringify({ query, variables }),
+    signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
   });
   if (!response.ok) throw new Error(`the GraphQL API answered ${response.status}`);
   const body = await response.json();
