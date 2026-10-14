@@ -1,3 +1,4 @@
+
 import { rendererFor } from './anchors.mjs';
 import { canonical, digest } from './artifacts.mjs';
 import { MAX_CARRIED_TURNS } from './conversation.mjs';
@@ -43,6 +44,7 @@ function valid(value, test, name) {
 export function verifyResumePermit(bundle, { trust, predicate }, expected, now = new Date()) {
   const statement = verifyStatement(Buffer.from(typeof bundle === 'string' ? bundle : JSON.stringify(bundle)), trust, predicate, now);
   const permit = statement.predicate ?? {};
+  if (Object.hasOwn(permit, 'work_session_id')) throw new Error('the resume permit carries an obsolete task field');
   const kept = permit.export ?? {};
   const exportSha = valid(kept.sha256, (value) => HEX.test(String(value)), 'export.sha256');
   const subjects = Array.isArray(statement.subject) ? statement.subject : [];
@@ -70,7 +72,7 @@ export function verifyResumePermit(bundle, { trust, predicate }, expected, now =
   return {
     checkpoint: valid(permit.checkpoint_id, (value) => HEX.test(String(value)), 'checkpoint_id'),
     modelSession: valid(permit.model_session_id, (value) => SESSION.test(String(value)), 'model_session_id'),
-    workSession: valid(permit.work_session_id, (value) => typeof value === 'string' && value !== '' && value.length <= 256, 'work_session_id'),
+    task: valid(permit.task_id, (value) => typeof value === 'string' && value !== '' && value.length <= 256, 'task_id'),
     export: { sha256: exportSha, bytes: valid(kept.bytes, (value) => Number.isSafeInteger(value) && value > 0, 'export.bytes') },
     carried: {
       history: `sha256:${valid(history.sha256, (value) => HEX.test(String(value)), 'history.sha256')}`,

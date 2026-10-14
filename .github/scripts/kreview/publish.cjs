@@ -10,6 +10,7 @@ const { scrub } = require('../ksai/plan.cjs');
 const { stoppedBy, watchdogDetail } = require('../lib/watchdog.cjs');
 const { collectSecrets, scrub: scrubSecrets } = require('./secrets.cjs');
 const { counted } = require('../lib/text.cjs');
+const { codeCell, inertInline } = require('../lib/inert-markdown.cjs');
 const { RUN_REPORT_KEYS, pick, rendered, unrendered, withMarkers } = require('../lib/cp-render.cjs');
 const { usingControlPlane } = require('../lib/control-plane.cjs');
 
@@ -111,7 +112,7 @@ function runSpend(raw, env = process.env) {
     duration: `${Math.round((result.duration_ms ?? 0) / 1000)}s`,
     permission_denials: String(Number.isFinite(denials) ? denials : 0),
     denied: refused === null ? '' : JSON.stringify(refused),
-    ended_on: typeof result.stop_reason === 'string' ? result.stop_reason.replace(/\s+/g, ' ').trim().slice(0, MAX_ENDED_ON) : '',
+    ended_on: typeof result.stop_reason === 'string' ? [...result.stop_reason.replace(/\s+/g, ' ').trim()].slice(0, MAX_ENDED_ON).join('') : '',
   };
   return { warning: Number.isFinite(totalCost) ? null : MISSING_COST, ...outputs };
 }
@@ -341,16 +342,16 @@ function reviewRow(env) {
   const totals = env.HAS_RESULT === 'true';
   return [
     env.RUN_URL ? `[1](${env.RUN_URL})` : '1',
-    `\`${env.ENGINE || 'claude'}\``,
-    `\`${env.CONCLUSION}\``,
+    codeCell(env.ENGINE || 'claude'),
+    codeCell(`${env.CONCLUSION}`),
     `\`${armLabel(env.MODEL, env.EFFORT)}\``,
-    totals ? `\`${env.NUM_TURNS}\`` : BLANK_CELL,
+    totals ? codeCell(`${env.NUM_TURNS}`) : BLANK_CELL,
     totals ? `$${env.COST}` : BLANK_CELL,
   ];
 }
 
 function endedOnLine(env) {
-  const said = String(env.ENDED_ON ?? '').replace(/[`\r\n]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, MAX_ENDED_ON);
+  const said = [...String(env.ENDED_ON ?? '').replace(/[`\r\n]+/g, ' ').replace(/\s+/g, ' ').trim()].slice(0, MAX_ENDED_ON).join('');
   return said === '' || !endedBadly(env) ? [] : ['', `Ended on: \`${scrub(said, { triggerPhrase: env.TRIGGER })}\``];
 }
 
@@ -529,8 +530,9 @@ function reviewHeading(env, status, kind) {
 
 function decideReviewNotice(env) {
   if (env.SELECT_ERROR !== '') return 'invalid';
-  if (env.BUILD_ERROR) return 'unbuildable';
+  if (env.BUILD_ERROR && !env.TOO_LARGE) return 'unbuildable';
   if (env.STAND_DOWN !== '') return 'stood_down';
+  if (env.TOO_LARGE) return 'too_large';
   if (env.RULES_NOTICE) return 'rules';
   const live = env.DRY_RUN === 'false';
   if (live && env.VALIDATE_OUTCOME === 'success' && env.TRIAGE_SKIP === 'true') return 'skipped';
@@ -563,10 +565,17 @@ function renderReviewNotice(kind, env, { headed = true } = {}) {
       ]
       : [];
   if (kind === 'invalid') return env.SELECT_ERROR_NOTICE;
+  if (kind === 'too_large') {
+    return [
+      ...opened('Skipped', 'stopped'),
+      `This pull request is too large to review: ${inertInline(scrub(`${env.TOO_LARGE}`, { triggerPhrase: env.TRIGGER }))}. Split it into smaller pull ` +
+        'requests to have each one reviewed',
+    ].join('\n');
+  }
   if (kind === 'unbuildable') {
     return [
       ...opened('Nothing ran', 'failed'),
-      `The review prompt could not be assembled: ${env.BUILD_ERROR}. This is a configuration fault rather ` +
+      `The review prompt could not be assembled: ${inertInline(scrub(`${env.BUILD_ERROR}`, { triggerPhrase: env.TRIGGER }))}. This is a configuration fault rather ` +
         'than a failed review, so re-running will not change it',
     ].join('\n');
   }
@@ -575,15 +584,15 @@ function renderReviewNotice(kind, env, { headed = true } = {}) {
   if (kind === 'skipped') {
     return [
       ...opened('Skipped', 'stopped'),
-      `Triage found nothing to review: ${env.TRIAGE_SKIP_REASON}. Push a change to reviewable code and ask ` +
+      `Triage found nothing to review: ${inertInline(scrub(`${env.TRIAGE_SKIP_REASON}`, { triggerPhrase: env.TRIGGER }))}. Push a change to reviewable code and ask ` +
         'again to run a full review',
     ].join('\n');
   }
   const halted =
     env.WATCHDOG_CAUSE === 'progress'
-      ? `The review watchdog stopped it because it had stopped making progress.${watchdogDetail(env)}`
+      ? 'The review watchdog stopped it because it had stopped making progress.'
       : env.WATCHDOG_CAUSE === 'halt'
-        ? `The review was stopped on request.${watchdogDetail(env)}`
+        ? 'The review was stopped on request.'
         : `The review watchdog stopped it about 1 minute short of the job's ${env.CEILING}-minute ceiling.`;
   const finished = env.WATCHDOG_FIRED !== 'true' && env.STOP_REASON === 'success';
   const stopped =
@@ -602,7 +611,7 @@ function renderReviewNotice(kind, env, { headed = true } = {}) {
         : 'Nothing was salvaged to post as a review.';
   return [
     ...opened('Failed', 'failed'),
-    `${stopped} ${salvage} What it spent is below; see the [workflow run](${env.RUN_URL}) for details`,
+    `${stopped}${finished ? '' : watchdogDetail(env)} ${salvage} What it spent is below; see the [workflow run](${env.RUN_URL}) for details`,
   ].join('\n');
 }
 
@@ -610,7 +619,8 @@ function reviewNoticeDue(env) {
   const kind = decideReviewNotice(env);
   if (kind === null) return { kind: '', why: 'this run posted a review, so it published no notice' };
   if (String(env.REPORT_PUBLISHED ?? '') === 'true' && CARRIED_NOTICE.includes(kind)) {
-    return { kind: '', why: `the run report carried the \`${kind}\` notice, so nothing was published beside it` };
+    const said = carriedKind(env) === null ? 'said the run was cancelled' : `carried the \`${kind}\` notice`;
+    return { kind: '', why: `the run report ${said}, so nothing was published beside it` };
   }
   return { kind, why: '' };
 }

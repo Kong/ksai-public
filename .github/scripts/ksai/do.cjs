@@ -384,11 +384,12 @@ function pushedShaOf(body) {
  */
 /*
  * UNASKED_TRIGGERS are the triggers the control plane records for a run nobody typed a command for: a failed
- * build, a failed status, an autofix label going on, and a submitted review. Named rather than read as
+ * build, a failed status, an autofix label going on, a submitted review, and a press of the review check's fix
+ * button. Named rather than read as
  * "anything but `comment`", so a trigger the control plane learns later, an empty one from a hand-started
  * run, or a record written before triggers existed is still treated as a request somebody wrote.
  */
-const UNASKED_TRIGGERS = Object.freeze(['build_failed', 'status_failed', 'labeled', 'review_submitted']);
+const UNASKED_TRIGGERS = Object.freeze(['build_failed', 'status_failed', 'labeled', 'review_submitted', 'check_action']);
 
 /**
  * Whether the control plane started this run rather than a comment. Both must hold: a recorded trigger nobody
@@ -749,9 +750,9 @@ async function resolveDoPhase({
   let thread = null;
   if (wantsThread) {
     if (!threadsFile) return { error: 'no path was given to write the review thread to' };
-    const read = await readThreads({ github, owner, repo, prNumber: number });
+    const read = await readThreads({ github, owner, repo, prNumber: number, env, fetch });
     if (read.error) return { error: read.error };
-    const hydrated = await hydrateScopedThread({ github, threads: read.threads, threadRootId });
+    const hydrated = await hydrateScopedThread({ github, threads: read.threads, threadRootId, posted: read.posted });
     if (hydrated.error) return { error: hydrated.error };
     const picked = selectThreads(hydrated.threads, { threadRootId, core, botLogin });
     if (picked.lockedScope === true) return { error: picked.error };

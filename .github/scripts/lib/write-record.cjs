@@ -10,8 +10,7 @@ const {
   SELECTION_SOURCES,
   canonicalCommand,
 } = require('./select-arm.cjs');
-const { markerJson } = require('./run-record.cjs');
-const { runSettingsArmOf } = require('./run-settings-migration.cjs');
+const { markerJson, runSettingsArmOf } = require('./run-record.cjs');
 const { escapeForRegExp } = require('./text.cjs');
 
 const VERSION = 1;
@@ -26,6 +25,8 @@ const MAX_PAID_RUNS = 204;
 const MAX_ARM_KINDS = 12;
 const MAX_VERIFICATION_COMMANDS = 96;
 const MAX_VERIFICATION_COMMAND_CHARS = 160;
+const MAX_TARGET_CHARS = 200;
+const MAX_COMMAND_CHARS = 1024;
 const VERIFICATION_COMMAND_SHAPE = /^(?:<command redacted>|[A-Za-z0-9_.+-]{1,120}(?: <arguments redacted>)?)$/;
 
 const ATTEMPT_ID_SHAPE = /^\d{1,20}:\d{1,10}:[A-Za-z0-9_.~-]{1,40}:\d{1,10}$/;
@@ -93,8 +94,8 @@ function validVerification(verification) {
   if (verification === null || verification === undefined) return true;
   if (!verification || typeof verification !== 'object' || Array.isArray(verification)) return false;
   if (!VERIFICATION_STATUSES.includes(verification.status)) return false;
-  if (typeof verification.target !== 'string' || [...verification.target].length > 200) return false;
-  if (typeof verification.command !== 'string' || [...verification.command].length > 1024) return false;
+  if (typeof verification.target !== 'string' || [...verification.target].length > MAX_TARGET_CHARS) return false;
+  if (typeof verification.command !== 'string' || [...verification.command].length > MAX_COMMAND_CHARS) return false;
   if (!validNullableInteger(verification.exit_status)) return false;
   const commands = verification.commands ?? [];
   if (!Array.isArray(commands) || commands.length > MAX_VERIFICATION_COMMANDS) return false;
@@ -350,7 +351,9 @@ module.exports = {
   UNCLASSIFIED_REASON,
   IDENTITY_PREFIX,
   MAX_ATTEMPTS,
+  MAX_COMMAND_CHARS,
   MAX_PAID_RUNS,
+  MAX_TARGET_CHARS,
   MAX_VERIFICATION_COMMANDS,
   MAX_VERIFICATION_COMMAND_CHARS,
   PREFIX,

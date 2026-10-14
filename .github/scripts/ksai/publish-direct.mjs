@@ -12,14 +12,24 @@ const {
   planDirOf,
   pullUrl,
   renderDirectBody,
+  retargetLocalSha,
   scrub,
   shortenedNote,
 } = require('./plan.cjs');
+const { inertInline } = require('../lib/inert-markdown.cjs');
 const { MAX_DIRECT_COMMITS, gitVia, safeEcho, verifyChunk } = require('./verify-chunk.cjs');
 const { expectationWarning, readExpectationEdits } = require('./expectation-edits.cjs');
 import { blockerFileOf, blockerFor, createPull, field, modelBlocker, readManifest, reasonOf, runCommand, shown, subjectFrom } from './run.mjs';
 import { publishCommit } from './signed-push.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
+
+function replacedBy(git, { base, tip, landed, signed }) {
+  if (landed === tip) return [];
+  const range = `${base}..${tip}`;
+  const kept = signed ? null : git(['rev-list', range, '--not', landed]);
+  const walked = kept?.ok ? kept : git(['rev-list', range]);
+  return [tip, ...String(walked.ok ? walked.stdout ?? '' : '').split('\n')];
+}
 
 export function publishDirect({
   manifestPath = null,
@@ -44,6 +54,7 @@ export function publishDirect({
   jiraSite = null,
   readEdits = readExpectationEdits,
   run = runCommand,
+  env = process.env,
 } = {}) {
   const block = blockerFor(manifestPath);
 
@@ -58,7 +69,7 @@ export function publishDirect({
     return block(`The run produced an unrecognized status: ${safeEcho(raw)}`);
   }
   if (status === 'blocked') {
-    return block(`The work was not finished: ${oneLine(reasonOf(manifest), { triggerPhrase })}`, { blocker: modelBlocker(manifest) });
+    return block(`The work was not finished: ${inertInline(oneLine(reasonOf(manifest), { triggerPhrase }))}`, { blocker: modelBlocker(manifest) });
   }
   if (status !== 'done') return block(`The run produced an unrecognized status: ${safeEcho(status)}`);
 
@@ -66,15 +77,6 @@ export function publishDirect({
   if (subject.blocker) return block(subject.blocker);
   const { title } = subject;
 
-  const bodyFor = (warning = '') => renderDirectBody({
-    issueNumber: Number(issueNumber),
-    requestedBy,
-    summary: manifest?.summary,
-    repository: repo,
-    triggerPhrase,
-    warning,
-  });
-  let rendered = throughControlPlane ? null : bodyFor();
   const summaryLength = Array.from(String(manifest?.summary ?? '')).length;
   const summaryShortened = summaryLength > 500 ? summaryLength : undefined;
 
@@ -107,8 +109,6 @@ export function publishDirect({
   } else {
     warning = expectationWarning({ readEdits, git, from: baseSha, to: verified.sha, noun: 'This run' });
   }
-  if (warning !== '' && !throughControlPlane) rendered = bodyFor(warning);
-
   const published = publishCommit({
     cwd,
     repo,
@@ -120,19 +120,34 @@ export function publishDirect({
     git,
     run,
     bodyFile: commitFile ?? undefined,
+    env,
+    foldUnder: title,
   });
   if (!published.ok) {
     return block(`The work did not reach the remote: ${published.reason} - see the workflow run.`);
   }
   recordPushed(published.sha);
+  const summary = retargetLocalSha(manifest?.summary, {
+    repo,
+    from: replacedBy(git, { base: baseSha, tip: verified.sha, landed: published.sha, signed: published.signed }),
+    to: published.sha,
+  });
 
   if (throughControlPlane) {
     return { status: 'pending', pushedSha: published.sha, summaryShortened,
       facts: { kind: 'direct', base: defaultBranch, head: branch, issue: Number(issueNumber),
-        title, summary: manifest?.summary, requester: requestedBy, trigger: triggerPhrase,
+        title, summary, requester: requestedBy, trigger: triggerPhrase,
         jira_key: jiraKey, jira_site: jiraSite, expectation_edits: expectationEdits } };
   }
 
+  const rendered = renderDirectBody({
+    issueNumber: Number(issueNumber),
+    requestedBy,
+    summary,
+    repository: repo,
+    triggerPhrase,
+    warning,
+  });
   writeFileSync(bodyFile, rendered.body);
   const created = createPull({ repo, base: defaultBranch, head: branch, title, bodyFile, run });
   if (created.refused) {
@@ -193,6 +208,7 @@ export function main(env = process.env, { run = runCommand,
     jiraSite: env.JIRA_SITE,
     readEdits,
     run,
+    env,
   });
 
   const finish = (resolved) => {

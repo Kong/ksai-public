@@ -51,14 +51,14 @@ export function inventoryProblem(listed, expected) {
   for (const file of expected.files) {
     const found = plugins.find((one) => one?.source?.path === file);
     if (!found) return `the plugin at ${file} was not loaded (${plugins.length} plugins listed), and OpenCode drops a plugin it cannot load without a word`;
-    if (found.state?.status !== 'active') return `the plugin at ${file} is ${found.state?.status ?? 'in no state'}: ${String(found.state?.error?.message ?? found.state?.error ?? '').slice(0, 300)}`;
+    if (found.state?.status !== 'active') return `the plugin at ${file} is ${found.state?.status ?? 'in no state'}: ${[...String(found.state?.error?.message ?? found.state?.error ?? '')].slice(0, 300).join('')}`;
   }
   for (const id of expected.removed) {
     if (plugins.some((one) => one?.id === id)) return `the built-in plugin ${id} is still loaded although the config removes it`;
   }
   const stranger = plugins.find((one) => ['local', 'package'].includes(one?.source?.type) && one?.state?.status !== 'disabled' &&
     !expected.files.includes(one?.source?.path));
-  if (stranger) return `the plugin ${String(stranger.id ?? stranger.source?.target ?? stranger.source?.path).slice(0, 200)} is loaded although ksai named no such plugin, so it could run beside the governed session`;
+  if (stranger) return `the plugin ${[...String(stranger.id ?? stranger.source?.target ?? stranger.source?.path)].slice(0, 200).join('')} is loaded although ksai named no such plugin, so it could run beside the governed session`;
   return '';
 }
 

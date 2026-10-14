@@ -1,0 +1,78 @@
+name: Run token
+description: >-
+  Hand a `ksai.yml` step the GitHub token it needs, from the control plane or from the App key the
+  caller passes, as the `run_tokens` fleet setting says. The control plane holds the App key, admits a run
+  it dispatched from a released `ksai.yml`, and mints one narrow token per ask, so a repository that
+  asks it holds no key a workflow on any of its branches could read.
+
+  The run names a grant and never a permission. `source` reads the ksai source repository, `read` reads this repository,
+  `write` writes to it within what the gate decided, and `modules` reads one owner's repositories for
+  private Go modules. The control plane answers with the token and the App it was minted as, or refuses with the
+  reason, which this step fails with. A refusal that would answer the same again fails at once, and so
+  does a 502 the control plane wrote itself, which says GitHub would not mint the token. A failure that
+  can pass - the OIDC mint, the network, a 408 or any other 5xx - is tried again for about a minute,
+  and each ask waits longer than the control plane takes to mint. Once a step in a job gives up on a
+  control plane it could not reach, the steps after it in that job ask once, so a job holding several
+  tokens does not wait the same outage out per token.
+
+  Under `local`, and with no setting served, the token the App key minted in the step before is handed on
+  as it is. Under `shadow` that happens too, and the control plane is also asked once, and what it
+  serves is revoked at once, so the setting proves the path without a run depending on it. Under `cp`,
+  which the gate answers for a call that passes no key, the control plane's token is the one handed on,
+  and it is revoked when the job ends.
+
+inputs:
+  grant:
+    description: the grant this step asks for - source, read, write or modules
+    required: true
+  owner:
+    description: the owner whose repositories a modules token reads, and empty for every other grant
+    required: false
+    default: ""
+  job:
+    description: the job asking, which the control plane keeps beside the token and never decides on
+    required: false
+    default: ${{ github.job }}
+  endpoint:
+    description: >-
+      Base URL of the control plane, with no trailing path. A step that has to ask it fails where this
+      is empty.
+    required: false
+    default: ""
+  audience:
+    description: >-
+      Audience the OIDC token is minted for. Both ends have to name the same string, and the control
+      plane refuses a token minted for anything else.
+    required: false
+    default: ksai-cp
+  mode:
+    description: >-
+      the `run_tokens` setting - local, shadow or cp, and cp for a caller that passes no App key - and
+      empty where none was served
+    required: false
+    default: ""
+  key_token:
+    description: the token the App key minted in the step before, handed on under local and shadow
+    required: false
+    default: ""
+  key_app_slug:
+    description: the App that token was minted as
+    required: false
+    default: ""
+  key_outcome:
+    description: >-
+      the outcome of the step that minted with the App key. Off cp, `success` hands its token on and
+      anything else fails this step too, so a condition reading this step sees the key mint fail.
+    required: false
+    default: ""
+
+outputs:
+  token:
+    description: the token this step hands on
+  app-slug:
+    description: the App the token was minted as, which is the login a run posts and reads its own comments under
+
+runs:
+  using: node24
+  main: main.mjs
+  post: post.mjs

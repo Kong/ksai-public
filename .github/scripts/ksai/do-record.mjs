@@ -5,14 +5,15 @@ import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { cap, MAX_PR_TITLE_CHARS, planDirOf, scrub, retargetPermalinks } = require('./plan.cjs');
+const { cap, inertCap, MAX_PR_TITLE_CHARS, planDirOf, scrub, retargetLocalSha } = require('./plan.cjs');
+const { inertAfter } = require('../lib/inert-markdown.cjs');
 const { safeEcho, verifyChunk, verifyMerge, gitVia, noChangeLeftBehind } = require('./verify-chunk.cjs');
 const { readScope, writeScopeResult } = require('./change-scope.cjs');
 const { renderDoMarker, unaskedRun, MAX_REPORT_CHARS } = require('./do.cjs');
 import { blockerFileOf, blockerFor, field, modelBlocker, readManifest, reasonOf, runCommand, shown } from './run.mjs';
 import { publishCommit } from './signed-push.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
-import { commandSecrets, verificationOf, writeVerification } from './fix-verification.mjs';
+import { commandSecrets, verifiedRun, writeRan, writeVerification } from './fix-verification.mjs';
 
 export function renderReportFooter({ sha = null, triggerPhrase = null, merged = null } = {}) {
   const short = typeof sha === 'string' && /^[0-9a-f]{7,64}$/.test(sha) ? sha.slice(0, 12) : '';
@@ -59,8 +60,8 @@ export function renderReport({
   const report = verification?.status === 'unverified'
     ? 'The targeted check was not reproduced. This result is not verified.'
     : [account, field(summary)].filter(Boolean).join('\n\n');
-  const retargeted = retargetPermalinks(scrub(report, { triggerPhrase }), { repo, from: localSha, to: sha });
-  const said = cap(retargeted.trim(), MAX_REPORT_CHARS);
+  const retargeted = retargetLocalSha(scrub(report, { triggerPhrase }), { repo, from: localSha, to: sha }).trim();
+  const said = inertCap(retargeted, MAX_REPORT_CHARS);
   const footer = renderReportFooter({ sha, triggerPhrase, merged });
   return [footer, ...(said ? ['', said] : []), ...(marker ? ['', marker] : [])].join('\n');
 }
@@ -86,6 +87,7 @@ export function recordDo({
   checksPath = null,
   eventsPath = null,
   verificationPath = null,
+  ranPath = null,
   changeScopePath = null,
   recordScope = writeScopeResult,
   secrets = [],
@@ -109,12 +111,13 @@ export function recordDo({
   const manifest = read.manifest;
   const status = field(manifest?.status);
   const pushing = merging || status === 'done';
-  const verification = verificationOf({ manifest, checksPath, eventsPath, merging, noChange: !pushing, secrets });
+  const { verification, ran } = verifiedRun({ manifest, checksPath, eventsPath, merging, noChange: !pushing, secrets });
   writeVerification(verificationPath, verification);
+  writeRan(ranPath, ran);
   if (read.message) return blocked(read.message);
 
   if (status === 'blocked') {
-    return blocked(`Stopped without doing anything: ${scrub(reasonOf(manifest), { triggerPhrase }).trim()}`, { blocker: modelBlocker(manifest) });
+    return blocked(`Stopped without doing anything: ${inertAfter(scrub(reasonOf(manifest), { triggerPhrase }).trim())}`, { blocker: modelBlocker(manifest) });
   }
   if (status !== 'done' && status !== 'answered') {
     return blocked(`The run reported an unrecognized status: ${safeEcho(shown(manifest?.status))}`);
@@ -145,6 +148,12 @@ export function recordDo({
     return blocked(
       `I did not push the work: the CI checks on this head could not be read, so \`${safeEcho(verification.target)}\` ` +
         'could not be reproduced here and the change would be a guess. Ask again once the checks can be read.',
+    );
+  }
+  if (pushing && !merging && verification.status === 'unverified' && verification.target) {
+    return blocked(
+      'I did not push the work: CI verification is unverified. The CI failure must be reproduced by a trusted ' +
+        `check before an autofix can be published. Verifier reason: \`${safeEcho(verification.reason)}\`.`,
     );
   }
   rmSync(manifestPath, { force: true });
@@ -311,6 +320,7 @@ export function main(env = process.env, { run = runCommand } = {}) {
   const tmp = env.RUNNER_TEMP || '/tmp';
   const messageFile = path.join(tmp, 'ksai-message.txt');
   const verificationFile = env.VERIFICATION_FILE || path.join(tmp, 'ksai-fix-verification.json');
+  const ranFile = env.RAN_FILE || path.join(tmp, 'ksai-ran.json');
 
   const result = recordDo({
     manifestPath: env.MANIFEST,
@@ -333,6 +343,7 @@ export function main(env = process.env, { run = runCommand } = {}) {
     checksPath: env.CHECKS_FILE,
     eventsPath: env.OPENCODE_EVENTS_FILE,
     verificationPath: verificationFile,
+    ranPath: ranFile,
     changeScopePath: env.CHANGE_SCOPE_FILE,
     secrets: commandSecrets(env),
     retry: String(env.RETRY_FILE ?? '').trim() !== '',
@@ -350,6 +361,7 @@ export function main(env = process.env, { run = runCommand } = {}) {
     status: result.status,
     message_file: messageFile,
     verification_file: verificationFile,
+    ran_file: ranFile,
     commit_sha: result.commitSha ?? '',
     blocker_file: blockerFileOf(result, messageFile),
   });
