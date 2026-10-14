@@ -1,7 +1,6 @@
 {
   "source": "kong-konnect/ksai-cp/prompts/public/runtime",
-  "source_release": "v0.2.388",
-  "source_change": "kong-konnect/ksai-cp#732",
+  "source_change": "kong-konnect/ksai-cp#945",
   "inputs": {
     "runtime.claude-generic": [
       "request",
@@ -130,6 +129,10 @@
       "patch",
       "resolution"
     ],
+    "runtime.review-stage-correction": [
+      "findings",
+      "stage"
+    ],
     "runtime.task-continue": [
       "base_prompt",
       "followup",
@@ -139,7 +142,7 @@
     "runtime.task-followup": [
       "comment",
       "requests",
-      "sessions"
+      "tasks"
     ],
     "runtime.task-start": [
       "base_prompt",
@@ -169,5 +172,6 @@
       "review_threads",
       "triage"
     ]
-  }
+  },
+  "source_status": "draft"
 }

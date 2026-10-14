@@ -20,6 +20,7 @@ const {
   primaryCommandOf,
   THREAD_SURFACE,
   surfaceOfEvent,
+  resolveWriteAccess,
 } = require('../lib/select-arm.cjs');
 const { LABEL_SOURCE, receiptOf, sourceOf } = require('../lib/request-intent.cjs');
 const loadConfig = require('./config.cjs');
@@ -48,8 +49,8 @@ const { usingControlPlane } = require('../lib/control-plane.cjs');
 const { releasedTokens } = require('./checkpoint.cjs');
 const { readConversation } = require('./cp-report.cjs');
 
-function attributeCommand(flow, prompt, commandAliases, defaultCommand) {
-  const command = parseOptions(prompt ?? '', { commandAliases, defaultCommand }).command;
+function attributeCommand(flow, prompt, defaultCommand) {
+  const command = parseOptions(prompt ?? '', { defaultCommand }).command;
   if (command === undefined) return;
   return ownsCommand(flow, command ?? defaultCommand);
 }
@@ -73,6 +74,8 @@ async function classifyTarget({
   reviewState = null,
   bare = false,
   readConfig = null,
+  env = process.env,
+  fetchImpl = fetch,
 } = {}) {
   if (continuation === true || String(continuation) === 'true') return { classify: false };
   const surface = surfaceForComment({ onOwnPull: bare, onIssue, threadRootId, onReview });
@@ -89,10 +92,9 @@ async function classifyTarget({
     return said === '' ? { classify: false } : { classify: true, comment: said };
   }
   try {
-    const config = await (readConfig ? readConfig() : loadConfig({ github, core, owner, repo }));
+    const config = await (readConfig ? readConfig() : loadConfig({ github, core, owner, repo, env, fetchImpl }));
     if (config.error) return { classify: false };
     const parsed = parseOptions(String(prompt ?? ''), {
-      commandAliases: config.aliases,
       defaultCommand: defaultCommandFor(onIssue, threadRootId, onReview, reviewState),
     });
     if (parsed.error) return { classify: false };
@@ -129,6 +131,8 @@ async function resolveRequest({
   operator = null,
   codeowner = null,
   write = null,
+  env = process.env,
+  fetchImpl = fetch,
 } = {}) {
   const own = String(flow ?? '').trim().toLowerCase();
   const boundTo = String(bound ?? '').trim();
@@ -143,18 +147,28 @@ async function resolveRequest({
   const requestSurface = surfaceOfEvent(onIssue, threadRootId, onReview);
 
   if (continuation === true || String(continuation) === 'true') {
-    const armed = selectArm({ ...arm, prompt: '' });
+    const config = await loadConfig({ github, core, owner, repo, env, fetchImpl });
+    const opened = config.error
+      ? { error: config.error }
+      : resolveWriteAccess({ input: arm?.writeAccessCommands, fromFile: config.writeAccess });
+    if (opened.error) core?.warning?.(`${opened.error}; no command is open to write access on this run.`);
+    const armed = selectArm({
+      ...arm,
+      prompt: '',
+      ...(opened.error ? { writeAccessCommands: '' } : { writeAccessFromFile: config.writeAccess }),
+    });
     if (armed.error) return { error: armed.error };
     const primary = primaryCommandOf(own);
     if (!commandEnabled(primary, { flow: own, disabledCommands: arm?.disabledCommands })) {
       return { mine: false, disabled: primary };
     }
-    const unoperated = boundTo === '' ? '' : operatorRefusal(primary, operator ?? {});
+    const unoperated = boundTo === '' ? '' : operatorRefusal(primary, operator ?? {}, [...armed.writeAccess]);
     if (unoperated !== '') return { error: unoperated, mine: true };
     const source = sourceOf({ continuation: true });
     return {
       mine: true,
       command: primary,
+      writeAccessCommands: armed.writeAccess,
       model: armed.model,
       effort: armed.effort,
       modelSelectedBy: armed.modelSelectedBy,
@@ -174,19 +188,18 @@ async function resolveRequest({
     return { mine: false, help: true };
   }
 
-  const config = await loadConfig({ github, core, owner, repo });
+  const config = await loadConfig({ github, core, owner, repo, env, fetchImpl });
   if (config.error) {
     return {
       error: config.error,
       rejection: renderConfigRejection(config.error, trigger),
-      mine: attributeCommand(own, prompt, undefined, here),
+      mine: attributeCommand(own, prompt, here),
     };
   }
 
   const result = selectArm({
     ...arm,
     prompt: prompt ?? '',
-    commandAliases: config.aliases,
     writeAccessFromFile: config.writeAccess,
     onIssue,
     threadRootId,
@@ -196,7 +209,7 @@ async function resolveRequest({
   });
   if (result.error) {
     const mine =
-      result.command === undefined ? attributeCommand(own, prompt, config.aliases, here) : ownsCommand(own, result.command);
+      result.command === undefined ? attributeCommand(own, prompt, here) : ownsCommand(own, result.command);
     const { error, allowed, ceiling, floor, command } = result;
     return { error, rejection: renderRejection({ error, allowed, ceiling, floor, command, trigger }), mine };
   }

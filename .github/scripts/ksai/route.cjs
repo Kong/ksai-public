@@ -108,7 +108,7 @@ function routeVerdict({ verdict, onIssue, disabledCommands }) {
   return decide({ command: verdict, spelled: null, onIssue, disabledCommands });
 }
 
-async function routeCommand({ eventName, onIssue, threadRootId, onReview, reviewState, body, trigger, disabledCommands, loadConfig }) {
+async function routeCommand({ eventName, onIssue, threadRootId, onReview, reviewState, body, trigger, disabledCommands }) {
   const here = defaultCommandFor(onIssue, threadRootId, onReview, reviewState);
 
   if (String(onReview) === 'true') {
@@ -131,16 +131,11 @@ async function routeCommand({ eventName, onIssue, threadRootId, onReview, review
   const request = afterTrigger(body, trigger);
   if (request === null) return { review: false, implement: false, test: false };
 
-  const config = await loadConfig();
-  const parsed = parseOptions(request, {
-    commandAliases: config.error ? undefined : config.aliases,
-    defaultCommand: here,
-  });
+  const parsed = parseOptions(request, { defaultCommand: here });
 
-  if (parsed.error) return both();
-  if (config.error && parsed.command === null) return both();
-  if (parsed.command === null && String(parsed.prompt ?? '').trim() !== '') return { ...both(), worded: true };
   if (deliveredCommand(parsed.command)) return { review: false, implement: false, command: parsed.command };
+  if (parsed.error) return both();
+  if (parsed.command === null && String(parsed.prompt ?? '').trim() !== '') return { ...both(), worded: true };
 
   return decide({ command: parsed.command ?? here, spelled: parsed.command, onIssue, disabledCommands });
 }
@@ -186,7 +181,7 @@ async function resolvedWriteCommands({ core, env, readConfig }) {
     core.warning(`${config.error}; no command is open to write access on this run.`);
     return '';
   }
-  const opened = resolveWriteAccess({ input: asked, fromFile: config.writeAccess, commandAliases: config.aliases });
+  const opened = resolveWriteAccess({ input: asked, fromFile: config.writeAccess });
   if (opened.error) {
     core.warning(`${opened.error}; no command is open to write access on this run.`);
     return '';
@@ -231,7 +226,7 @@ async function resolveRequester({ github, context, env }) {
   return { login, failure: null };
 }
 
-async function routeLabelled({ github, core, context, env, basis, asker = 'A label' }) {
+async function routeLabelled({ github, core, context, env, fetchImpl, basis, asker = 'A label' }) {
   const bound = String(env.RECORD_BOUND_COMMAND ?? '').trim();
   const decision = decide({ command: basis.command, spelled: basis.command, onIssue: false, disabledCommands: env.DISABLED_COMMANDS });
   const unrunnable = bound === '' ? '' : boundUnrunnable({
@@ -247,7 +242,7 @@ async function routeLabelled({ github, core, context, env, basis, asker = 'A lab
   }
   let pending;
   const readConfig = () => {
-    pending ??= loadKsaiConfig({ github, core, owner: context.repo.owner, repo: context.repo.repo });
+    pending ??= loadKsaiConfig({ github, core, owner: context.repo.owner, repo: context.repo.repo, env, fetchImpl });
     return pending;
   };
   core.setOutput('review', decision.review ? 'true' : 'false');
@@ -266,13 +261,13 @@ async function routeLabelled({ github, core, context, env, basis, asker = 'A lab
   return decision;
 }
 
-async function route({ github, core, context, env }) {
+async function route({ github, core, context, env, fetchImpl = fetch }) {
   const basis = recordBasis(env);
   if (basis?.error) {
     core.setFailed(basis.error);
     return null;
   }
-  if (basis) return routeLabelled({ github, core, context, env, basis });
+  if (basis) return routeLabelled({ github, core, context, env, fetchImpl, basis });
 
   const readers = commentReaders({ github, context, env });
   const dispatched = await resolveDispatchedComment({
@@ -317,7 +312,7 @@ async function route({ github, core, context, env }) {
 
   let pending;
   const readConfig = () => {
-    pending ??= loadKsaiConfig({ github, core, owner: context.repo.owner, repo: context.repo.repo });
+    pending ??= loadKsaiConfig({ github, core, owner: context.repo.owner, repo: context.repo.repo, env, fetchImpl });
     return pending;
   };
 
@@ -349,7 +344,7 @@ async function route({ github, core, context, env }) {
     core.setFailed(reviewed.error);
     return null;
   }
-  if (reviewed) return routeLabelled({ github, core, context, env, basis: reviewed, asker: 'A review' });
+  if (reviewed) return routeLabelled({ github, core, context, env, fetchImpl, basis: reviewed, asker: 'A review' });
 
   const bound = String(env.RECORD_BOUND_COMMAND ?? '').trim();
   const routed = await routeCommand({
@@ -361,7 +356,6 @@ async function route({ github, core, context, env }) {
     body,
     trigger: env.TRIGGER,
     disabledCommands,
-    loadConfig: readConfig,
   });
   const continued = eventName === 'workflow_dispatch';
   const request = continued ? null : afterTrigger(body, env.TRIGGER);
@@ -385,7 +379,7 @@ async function route({ github, core, context, env }) {
     return null;
   }
 
-  core.setOutput('no_work', 'false');
+  core.setOutput('no_work', deliveredCommand(decision.command) ? 'true' : 'false');
   core.setOutput('native_pending', (await readers.initialPending()) ? 'true' : 'false');
   core.setOutput('review', decision.review ? 'true' : 'false');
   core.setOutput('implement', decision.implement ? 'true' : 'false');
@@ -487,7 +481,7 @@ async function route({ github, core, context, env }) {
   return decision;
 }
 
-async function testerRuns({ github, context, core, env }) {
+async function testerRuns({ github, context, core, env, fetchImpl }) {
   if (!github || !context) return true;
   return declaresTesterContract({
     github,
@@ -495,10 +489,12 @@ async function testerRuns({ github, context, core, env }) {
     owner: context.repo.owner,
     repo: context.repo.repo,
     prNumber: env.ISSUE_NUMBER,
+    env,
+    fetchImpl,
   });
 }
 
-async function settle({ github = null, context = null, core, env, readFile = (at) => fs.readFileSync(at, 'utf8') }) {
+async function settle({ github = null, context = null, core, env, fetchImpl = fetch, readFile = (at) => fs.readFileSync(at, 'utf8') }) {
   core.setOutput('no_work', 'false');
   const onIssue = env.ON_ISSUE === 'true';
   const onOwnPull = env.ON_OWN_PULL === 'true';
@@ -574,7 +570,7 @@ async function settle({ github = null, context = null, core, env, readFile = (at
   }
 
   core.info(`The comment reads as \`${verdict}\`.`);
-  if (ownsCommand('tester', verdict) && !(await testerRuns({ github, context, core, env }))) {
+  if (ownsCommand('tester', verdict) && !(await testerRuns({ github, context, core, env, fetchImpl }))) {
     core.info(
       'The base branch declares no contract to run, so the verdict is dropped and the command it already ' +
         'resolved to decides.',

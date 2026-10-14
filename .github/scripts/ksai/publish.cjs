@@ -4,6 +4,7 @@ const { react } = require('../lib/react.cjs');
 const { updateOrCreate } = require('../lib/comment.cjs');
 const { watchdogDetail } = require('../lib/watchdog.cjs');
 const { plural } = require('../lib/text.cjs');
+const { inertInline } = require('../lib/inert-markdown.cjs');
 const { releaseKind, renderReleased, renderWaiting, withPhaseRelease } = require('./checkpoint.cjs');
 const {
   continueThroughControlPlane,
@@ -264,12 +265,13 @@ const NOTICE_ORDER = Object.freeze([
   Object.freeze({ body: 'PLAN_NOTICE', at: 'REPORT_NUM', reason: false, kind: '' }),
   Object.freeze({ body: 'JIRA_ERROR', at: 'THREAD_NUM', reason: true, kind: '' }),
   Object.freeze({ body: 'HELD_NOTICE', at: 'REPORT_NUM', reason: true, kind: '' }),
+  Object.freeze({ body: 'IDLE_NOTICE', at: 'REPORT_NUM', reason: false, kind: '' }),
 ]);
 
 function preflightNoticeFacts(said, env) {
   const serialized = {
     SUBJECT_NOTICE: 'SUBJECT_FACTS', CLOSED_NOTICE: 'CLOSED_FACTS', STOP_NOTICE: 'STOP_FACTS',
-    PHASE_NOTICE: 'PHASE_FACTS', PLAN_NOTICE: 'PLAN_FACTS',
+    PHASE_NOTICE: 'PHASE_FACTS', PLAN_NOTICE: 'PLAN_FACTS', IDLE_NOTICE: 'IDLE_FACTS',
   }[said.body];
   if (serialized) {
     const facts = JSON.parse(String(env[serialized] ?? ''));
@@ -500,6 +502,9 @@ async function publishWaiting({ github, owner, repo, env, fetch = globalThis.fet
   if (env.REASON === 'already-released') {
     return { notices: ['this approval already released a phase, so there is nothing to say again'] };
   }
+  if (env.REASON === 'idle-resume') {
+    return { notices: ['this resume released nothing, which its own notice says, so the wait is not said again'] };
+  }
 
   await commentNotice({
     github, owner, repo, number: Number(env.PR_NUMBER),
@@ -620,7 +625,7 @@ const KEPT = Object.freeze(
 function keptSaid(env) {
   const held = KEPT[String(env.PRESERVED ?? '')];
   if (held) return held;
-  const why = String(env.PRESERVE_REASON ?? '').trim();
+  const why = inertInline(scrub(String(env.PRESERVE_REASON ?? ''), { triggerPhrase: env.TRIGGER }));
   return why === '' ? '' : ` Nothing uncommitted was kept: ${why}.`;
 }
 
@@ -666,7 +671,7 @@ const STOPPED_BY = Object.freeze(
       opening: '❌ This run did not complete.',
       said: (env) =>
         `The watchdog stopped it about a minute short of the job's ${env.CEILING}-minute ceiling, so the work ` +
-        `ran out of time rather than failing. ${outOfTimeAdvice(env)}${keptSaid(env)}`,
+        `ran out of time rather than failing.${watchdogDetail(env)} ${outOfTimeAdvice(env)}${keptSaid(env)}`,
     },
     paused: {
       kind: 'run-paused',
@@ -688,10 +693,9 @@ function causeOf(env) {
 async function publishRunFailed({ github, owner, repo, env, fetch = globalThis.fetch }) {
   const fired = env.WATCHDOG_FIRED === 'true';
   const notice = fired ? STOPPED_BY[causeOf(env)] ?? STOPPED_BY.ceiling : STOPPED_BY.ceiling;
-  const reason = fired
-    ? notice.said(env)
-    : `See the [workflow run](${env.RUN_URL}) for details.${keptSaid(env)}`;
-  const said = `${notice.opening} ${reason}`;
+  const said = fired
+    ? `${notice.opening} ${notice.said(env)}`
+    : `${notice.opening}${watchdogDetail(env)} See the [workflow run](${env.RUN_URL}) for details.${keptSaid(env)}`;
 
   const target = env.REPORT_NUM;
   if (!target) {

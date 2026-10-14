@@ -5,7 +5,7 @@ const { setTimeout: wait } = require('node:timers/promises');
 const { NUMBER_SHAPE } = require('./context.cjs');
 const { heldBy } = require('./plan.cjs');
 const { matchesBranchGrammar } = require('./verify-chunk.cjs');
-const { headOrigin, sameRepo } = require('../lib/repo.cjs');
+const { headOrigin, sameRepo } = require('./repo.cjs');
 
 const DEFAULT_NOUN = 'branch to work on';
 

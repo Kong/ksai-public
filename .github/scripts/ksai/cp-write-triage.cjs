@@ -3,14 +3,16 @@
 const {
   SIZING_VERDICTS,
   VERDICTS: WRITE_VERDICTS,
+  capabilityModels,
+  holds,
   withinEffortBounds,
   writeEvidence,
 } = require('./write-triage.cjs');
 const {
   ALLOWED_EFFORTS,
   MODEL_SHAPE,
-  parseAllowedModels,
   defaultEffortFor,
+  resolveModel,
 } = require('../lib/select-arm.cjs');
 const { gatewayHandover, mintedId, postTo, reachControlPlane } = require('../lib/control-plane.cjs');
 const { withinBytes } = require('../lib/prompt-text.cjs');
@@ -18,8 +20,6 @@ const { withinBytes } = require('../lib/prompt-text.cjs');
 const API_VERSION = 'triage/v1';
 
 const COMMIT_SHAPE = /^[0-9a-f]{40}$/;
-
-const MAX_MODELS = 16;
 
 /**
  * MAX_TEXT_BYTES is what `triage/v1` bounds every evidence text field at, and it
@@ -45,27 +45,6 @@ const SOURCES = Object.freeze(['input', 'comment', 'triage', 'fallback']);
 const RUNNER_VERDICT = Object.freeze(
   Object.assign(Object.create(null), { planned: 'planning' }),
 );
-
-function holds(models, one) {
-  const wanted = String(one ?? '').trim().toLowerCase();
-  return wanted !== '' && models.some((held) => held.toLowerCase() === wanted);
-}
-
-/**
- * capabilityModels offers exactly what `controlPlaneArm` will take back: the
- * allowed models where a caller pinned any, and the configured model alone where
- * it pinned none. Offering a model the re-check refuses buys a decision this run
- * announces and then drops.
- */
-function capabilityModels(env, configured) {
-  const allowed = parseAllowedModels(env.ALLOWED_MODELS);
-  const kept = [];
-  for (const model of allowed.length === 0 ? [configured] : allowed) {
-    const one = String(model ?? '').trim();
-    if (one !== '' && MODEL_SHAPE.test(one) && !holds(kept, one)) kept.push(one);
-  }
-  return kept.slice(0, MAX_MODELS);
-}
 
 function boundedEvidence(evidence) {
   for (const field of TEXT_FIELDS) {
@@ -96,7 +75,7 @@ function writeTriageRequest(env = process.env) {
     return { error: 'this run carries no head to bind a decision to' };
   }
 
-  const configured = String(env.DEFAULT_MODEL ?? '').trim();
+  const configured = resolveModel(env.DEFAULT_MODEL);
   if (!MODEL_SHAPE.test(configured)) return { error: 'this run carries no configured model' };
   const configuredEffort = effortIn(env.DEFAULT_EFFORT) || defaultEffortFor(configured);
   if (configuredEffort === '') return { error: 'this run carries no configured effort' };
@@ -247,7 +226,7 @@ async function decideWrite({
   try {
     const response = await postTo(fetch, `${base}/v1/triage/write`, { token, body: JSON.stringify(body), timeout, headers });
     if (response.status === 409) return kept('the evidence this run sent is no longer current');
-    if (!response.ok) return kept('the control plane did not decide this run');
+    if (!response.ok) return kept(`the control plane did not decide this run (HTTP ${response.status})`);
     answer = await response.json();
   } catch {
     return kept('the control plane did not decide this run');

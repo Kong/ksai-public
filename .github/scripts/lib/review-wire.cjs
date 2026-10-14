@@ -44,9 +44,10 @@ const cell = (value) => typeof value === 'string' && value.length <= CELL_LIMIT 
 const lineList = (value, limit = LINE_LIMIT) => Array.isArray(value) && value.length > 0 && value.length <= limit && value.every((line) => typeof line === 'string' && !/[\n\r]/.test(line));
 const joinLines = (value) => (lineList(value) ? value.join('\n') : value);
 
-/** renderVerdict writes the verdict table, so a malformed one cannot be submitted at all. */
+const cut = (text, limit) => Array.from(text).slice(0, limit).join('');
+
 function renderVerdict(verdict) {
-  return markdownTable(['Check', 'Result'], VERDICT_LABELS.map(([key, label]) => [label, verdict[key]]));
+  return markdownTable(['Check', 'Result'], VERDICT_LABELS.map(([key, label]) => [label, cut(String(verdict[key] ?? '').replace(/\r\n?|\n/g, ' '), CELL_LIMIT)]));
 }
 
 function verdictProblem(verdict, assessment) {
@@ -57,7 +58,11 @@ function verdictProblem(verdict, assessment) {
   return '';
 }
 
-const withBody = (finding) => (finding && typeof finding === 'object' && !Array.isArray(finding) ? { ...finding, body: joinLines(finding.body) } : finding);
+function withBody(finding, bounded = false) {
+  if (!finding || typeof finding !== 'object' || Array.isArray(finding)) return finding;
+  const body = joinLines(finding.body);
+  return { ...finding, body: bounded && typeof body === 'string' ? cut(body, BODY_CHARS) : body };
+}
 
 /** wireProblem answers the shape the model submits, before `fromWire` renders it. */
 function wireProblem(kind, submission) {
@@ -75,17 +80,18 @@ function wireProblem(kind, submission) {
 }
 
 /** fromWire renders the submitted shape into the review every later reader already expects. */
-function fromWire(kind, submission) {
+function fromWire(kind, submission, bounded = false) {
   if (!submission || typeof submission !== 'object' || Array.isArray(submission)) return submission;
   const rendered = { ...submission };
-  if (Array.isArray(submission.findings)) rendered.findings = submission.findings.map((finding) => withBody(finding));
-  if (Array.isArray(submission.decisions)) rendered.decisions = submission.decisions.map((decision) => (decision && typeof decision === 'object' && !Array.isArray(decision) ? { ...decision, finding: withBody(decision.finding) } : decision));
-  if (kind !== 'final') return rendered;
-  if (verdictProblem(submission.verdict, submission.assessment)) return rendered;
+  if (Array.isArray(submission.findings)) rendered.findings = submission.findings.map((finding) => withBody(finding, bounded));
+  if (Array.isArray(submission.decisions)) rendered.decisions = submission.decisions.map((decision) => (decision && typeof decision === 'object' && !Array.isArray(decision) ? { ...decision, finding: withBody(decision.finding, bounded) } : decision));
   const { verdict, assessment, findings } = rendered;
-  return { summary: [renderVerdict(verdict), ...assessment].join('\n\n'), findings };
+  if (kind !== 'final' || !verdict || typeof verdict !== 'object' || Array.isArray(verdict)) return rendered;
+  const paragraphs = (Array.isArray(assessment) ? assessment : [assessment]).filter((paragraph) => typeof paragraph === 'string');
+  const kept = bounded ? paragraphs.slice(0, ASSESSMENT_LIMIT).map((paragraph) => cut(paragraph, ASSESSMENT_CHARS)) : paragraphs;
+  return { summary: [renderVerdict(verdict), ...kept].join('\n\n'), findings };
 }
 
-const rendered = (review) => fromWire(Array.isArray(review.decisions) || review.coverage !== undefined ? 'stage' : 'final', review);
+const rendered = (review) => fromWire(Array.isArray(review.decisions) || review.coverage !== undefined ? 'stage' : 'final', review, true);
 
 module.exports = { VERDICT_LABELS, CELL_LIMIT, LINE_LIMIT, BODY_CHARS, ASSESSMENT_LIMIT, ASSESSMENT_CHARS, renderVerdict, wireProblem, fromWire, rendered };
