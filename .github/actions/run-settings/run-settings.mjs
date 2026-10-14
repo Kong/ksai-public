@@ -1,9 +1,17 @@
 import { fetchRunSettings } from './migration.mjs';
+import { isIP } from 'node:net';
+import path from 'node:path';
 
 const SEGMENT = '[A-Za-z0-9][A-Za-z0-9._-]{0,63}';
 export const MODEL = new RegExp(`^${SEGMENT}(/${SEGMENT}){0,2}$`);
 
 const ARM = new RegExp(`^${SEGMENT}(:${SEGMENT})?$`);
+
+const JIRA_ATTEMPTS = 8;
+const JIRA_DELAY_MS = 250;
+const pause = (milliseconds = 0) => new Promise((resolve) => {
+  setTimeout(resolve, milliseconds);
+});
 
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 
@@ -22,12 +30,14 @@ export const ALIASES = ['fast', 'balanced', 'flagship', 'opus', 'sonnet', 'haiku
 
 const WHERE = (/** @type {string} */ value) => ['local', 'shadow', 'cp'].includes(value);
 
+const namedModels = (/** @type {string} */ value) => value.split(/[,\s]+/).filter((one) => one !== '');
+
 export const PINNED = {
   shadow_percent: (/** @type {string} */ value) =>
     SHARE.test(value) && Number(value) >= 0 && Number(value) <= 100,
   review_triage_mode: WHERE,
   allowed_models: (/** @type {string} */ value) => {
-    const named = value.split(/[,\s]+/).filter((one) => one !== '');
+    const named = namedModels(value);
     return named.length > 0
       && named.every((one) => MODEL.test(one) && !ALIASES.includes(one.toLowerCase()));
   },
@@ -42,6 +52,8 @@ export const PINNED = {
   run_tokens: WHERE,
   prompt_rendering: WHERE,
   engine: (/** @type {string} */ value) => ['opencode', 'opencode2'].includes(value),
+  review_strategy: (/** @type {string} */ value) => ['baseline', 'evidence', 'dual'].includes(value),
+  review_diff_mib: between(1, 64),
 };
 
 /**
@@ -92,8 +104,18 @@ const NO_SETTINGS = {
   bare_comments: '',
   stop_mode: '',
   require_plan_approval: '',
+  jira_site: '',
+  jira_projects: '',
+  fix_review_bots: '',
+  egress_endpoints: '',
+  egress_packages: '',
   blocker: '',
+  said: '',
 };
+
+const REVIEW_BOT = String.raw`[A-Za-z0-9][A-Za-z0-9-]{0,38}(?:\[bot\])?`;
+
+const REVIEW_BOTS = new RegExp(`^${REVIEW_BOT}(?:[ ,] ?${REVIEW_BOT})*$`);
 
 const DENIED_PATH = String.raw`(?!\.\.?(?:/|[\n,]|$))[A-Za-z0-9._@+-]+(?:/(?!\.\.?(?:/|[\n,]|$))[A-Za-z0-9._@+-]+)*/?`;
 
@@ -110,7 +132,121 @@ const RUNNER_LABEL = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 const WORKFLOW_FILE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}\.ya?ml$/;
 
+const JIRA_SITE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.atlassian\.net$/;
+
+const JIRA_PROJECT = /^[A-Z][A-Z0-9]{1,9}$/;
+
 const PHRASE = /^\/[A-Za-z0-9._-]{1,64}$|^@[A-Za-z0-9._-]{1,64}$/;
+
+const EGRESS_PRESET = /^[a-z][a-z0-9-]{0,63}$/;
+
+function record(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function exact(value, names) {
+  return Object.keys(value).every((name) => names.includes(name));
+}
+
+function publicHost(host) {
+  if (host !== host.toLowerCase() || host.length > 253 || !host.includes('.') || isIP(host) !== 0) return false;
+  return host.split('.').every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label));
+}
+
+function endpointHost(value) {
+  if (typeof value !== 'string') return '';
+  const split = value.lastIndexOf(':');
+  if (split < 1 || value.slice(split + 1) !== '443') return '';
+  const host = value.slice(0, split);
+  return publicHost(host) ? host : '';
+}
+
+function safeRoot(value) {
+  return value === '*' || (typeof value === 'string' && value !== '' && value === path.posix.normalize(value)
+    && !value.startsWith('/') && value !== '..' && !value.startsWith('../') && !value.includes('\\')
+    && !value.includes('\0'));
+}
+
+function registryHost(value) {
+  if (typeof value !== 'string') return '';
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'https:' || parsed.username !== '' || parsed.password !== ''
+      || parsed.search !== '' || parsed.hash !== '' || !['', '443'].includes(parsed.port)
+      || !publicHost(parsed.hostname)) return '';
+    return parsed.hostname;
+  } catch {
+    return '';
+  }
+}
+
+function addPackage(packages, one) {
+  const key = `${one.manager}\0${one.root}`;
+  const current = packages.get(key);
+  if (current && current.registry !== one.registry) return false;
+  const wildcard = packages.get(`${one.manager}\0*`);
+  if (wildcard && wildcard.registry !== one.registry) return false;
+  if (one.root === '*' && [...packages.values()].some(
+    (configured) => configured.manager === one.manager && configured.registry !== one.registry,
+  )) return false;
+  packages.set(key, one);
+  return true;
+}
+
+export function egressOf(value) {
+  if (!record(value) || !exact(value, ['presets', 'definitions'])) return null;
+  const presets = value.presets;
+  const definitions = value.definitions;
+  if (!Array.isArray(presets) || presets.length < 1 || presets.length > 16
+    || new Set(presets).size !== presets.length || !presets.every((name) => typeof name === 'string' && EGRESS_PRESET.test(name))
+    || !record(definitions) || Object.keys(definitions).length < 1 || Object.keys(definitions).length > 32
+    || !presets.every((name) => Object.hasOwn(definitions, name))) return null;
+
+  const expanded = new Map();
+  for (const [name, preset] of Object.entries(definitions)) {
+    if (!EGRESS_PRESET.test(name) || !record(preset) || !exact(preset, ['endpoints', 'packages'])) return null;
+    const endpoints = preset.endpoints ?? [];
+    const packages = preset.packages ?? [];
+    if (!Array.isArray(endpoints) || endpoints.length > 64 || new Set(endpoints).size !== endpoints.length
+      || !endpoints.every((endpoint) => endpointHost(endpoint) !== '') || !Array.isArray(packages)
+      || packages.length > 16 || (endpoints.length === 0 && packages.length === 0)
+      || (packages.length > 0 && endpoints.length === 0)) return null;
+    const available = new Set(endpoints.map((endpoint) => endpointHost(endpoint)));
+    const checked = [];
+    for (const one of packages) {
+      if (!record(one) || !exact(one, ['manager', 'root', 'registry'])
+        || !['go', 'npm'].includes(one.manager) || !safeRoot(one.root)) return null;
+      const registry = one.registry ?? '';
+      if (one.manager === 'go' && registry !== '') return null;
+      if (one.manager === 'npm') {
+        const host = registryHost(registry);
+        if (host === '' || !available.has(host)) return null;
+      }
+      checked.push({ manager: one.manager, root: one.root, ...(registry === '' ? {} : { registry }) });
+    }
+    expanded.set(name, { endpoints, packages: checked });
+  }
+
+  const endpoints = new Set();
+  const packages = new Map();
+  for (const name of presets) {
+    const preset = expanded.get(name);
+    for (const endpoint of preset.endpoints) endpoints.add(endpoint);
+    for (const one of preset.packages) {
+      if (!addPackage(packages, one)) return null;
+    }
+  }
+  return {
+    egress_endpoints: [...endpoints].join(' '),
+    egress_packages: JSON.stringify([...packages.values()]),
+  };
+}
+
+export function egressHostsOf(value) {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 64 || new Set(value).size !== value.length
+    || !value.every((endpoint) => endpointHost(endpoint) !== '')) return null;
+  return value;
+}
 
 const FEDERATION = Object.freeze({
   federation_rule_id: /^fdrl_[A-Za-z0-9]{1,64}$/,
@@ -119,7 +255,7 @@ const FEDERATION = Object.freeze({
   workspace_id: /^wrkspc_[A-Za-z0-9]{1,64}$/,
 });
 
-function settingsOf(served = Object.create(null)) {
+function settingsOf(served, dependencyEgress, egressHosts) {
   const settings = { ...NO_SETTINGS };
   const phrase = served.trigger_phrase;
   if (typeof phrase === 'string' && PHRASE.test(phrase)) settings.trigger_phrase = phrase;
@@ -129,11 +265,31 @@ function settingsOf(served = Object.create(null)) {
     if (typeof value === 'string' && shape.test(value)) settings[name] = value;
   }
 
+  if (typeof served.jira_site === 'string' && JIRA_SITE.test(served.jira_site)
+    && typeof served.jira_projects === 'string' && JIRA_PROJECT.test(served.jira_projects)
+    && settings.require_plan_approval === 'true') {
+    settings.jira_site = served.jira_site;
+    settings.jira_projects = served.jira_projects;
+  }
+
+  const bots = served.fix_review_bots;
+  if (bots === '') settings.fix_review_bots = 'none';
+  else if (typeof bots === 'string' && REVIEW_BOTS.test(bots)) settings.fix_review_bots = bots;
+
   const workflow = served.continuation_workflow;
   if (typeof workflow === 'string' && WORKFLOW_FILE.test(workflow)) settings.continuation_workflow = workflow;
 
   if (served.clear_request === true) settings.clear_request = 'true';
   if (served.blocker === true) settings.blocker = 'true';
+  if (served.said === true) settings.said = 'true';
+
+  if (dependencyEgress !== null && egressHosts !== null) {
+    if (dependencyEgress !== undefined) Object.assign(settings, dependencyEgress);
+    if (egressHosts !== undefined) {
+      const endpoints = settings.egress_endpoints === '' ? [] : settings.egress_endpoints.split(' ');
+      settings.egress_endpoints = [...new Set([...endpoints, ...egressHosts])].join(' ');
+    }
+  }
 
   const labels = served.runs_on;
   if (typeof labels === 'string' && labels !== '') {
@@ -173,15 +329,28 @@ export function catalogOf(value) {
   return Array.isArray(models) && models.length > 0 ? value : null;
 }
 
-export function runs(catalog, wanted) {
+function runnableModel(catalog, wanted) {
   const models = /** @type {{ models: unknown[] }} */ (catalog).models;
-  return models.some((one) => {
+  return /** @type {{ id?: unknown } | undefined} */ (models.find((one) => {
     if (one === null || typeof one !== 'object') return false;
     const model = /** @type {{ id?: unknown, aliases?: unknown, runnable?: unknown }} */ (one);
     if (model.runnable !== true) return false;
     const names = [model.id, ...(Array.isArray(model.aliases) ? model.aliases : [])];
     return names.some((name) => String(name ?? '').toLowerCase() === wanted.toLowerCase());
-  });
+  }));
+}
+
+export function runs(catalog, wanted) {
+  return runnableModel(catalog, wanted) !== undefined;
+}
+
+export function runnableAllowed(catalog, allowed, model) {
+  const named = namedModels(allowed);
+  if (named.length === 0) return '';
+  const runnable = [...new Set(named.filter((name) => runs(catalog, name)))];
+  if (runnable.length > 0) return runnable.join(',');
+  return [runnableModel(catalog, model)?.id, model]
+    .find((one) => typeof one === 'string' && MODEL.test(one) && PINNED.allowed_models(one)) ?? null;
 }
 
 /**
@@ -228,8 +397,12 @@ export async function readRunSettings({
   secret = () => {},
   fetch = globalThis.fetch,
   timeout = 10000,
-}) {
-  const keep = (why) => held(model, effort, pinned, why);
+}, wait = pause) {
+  let jira = false;
+  const keep = (why) => {
+    if (jira) throw new Error(`The control plane did not return valid Jira context. Reason: ${why}.`);
+    return held(model, effort, pinned, why);
+  };
 
   if (endpoint === '') return keep('');
   if (!bare(endpoint)) return keep('the control plane endpoint is not a bare https URL');
@@ -249,15 +422,32 @@ export async function readRunSettings({
   secret(token);
 
   let served = /** @type {Record<string, unknown>} */ ({});
-  try {
-    const answer = await fetchRunSettings(fetch, endpoint, {
-      headers: { authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(timeout),
-    });
+  for (let attempt = 0; attempt < JIRA_ATTEMPTS; attempt += 1) {
+    let answer;
+    let body;
+    try {
+      answer = await fetchRunSettings(fetch, endpoint, {
+        headers: { authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(timeout),
+      });
+      if (answer.ok || answer.status === 503) body = await answer.json();
+    } catch {
+      return keep('the control plane did not answer with run settings');
+    }
+    if (answer.status === 503 && body?.error === 'jira_context_unavailable') {
+      throw new Error('The control plane refused the Jira context.');
+    }
+    if (answer.status === 503 && body?.error === 'jira_context_pending') {
+      jira = true;
+      if (attempt + 1 === JIRA_ATTEMPTS) {
+        throw new Error(`The Jira context is unavailable after ${JIRA_ATTEMPTS} attempts.`);
+      }
+      await wait(JIRA_DELAY_MS * (2 ** attempt));
+      continue;
+    }
     if (!answer.ok) return keep('the control plane did not answer with run settings');
-    served = /** @type {Record<string, unknown>} */ (await answer.json());
-  } catch {
-    return keep('the control plane did not answer with run settings');
+    served = body;
+    break;
   }
 
   const servedModel = served?.model;
@@ -293,11 +483,23 @@ export async function readRunSettings({
       if (!refused.includes(name)) refused.push(name);
     }
   }
+  if (catalog !== null) {
+    const allowed = runnableAllowed(catalog, runSettings.allowed_models, servedModel);
+    if (allowed === null) return keep('the control plane served a model no allowed list can name');
+    runSettings.allowed_models = allowed;
+  }
 
-  const settings = settingsOf(served);
-  for (const name of Object.keys(GUARDS)) {
+  const dependencyEgress = served.egress === undefined ? undefined : egressOf(served.egress);
+  const egressHosts = served.egress_hosts === undefined ? undefined : egressHostsOf(served.egress_hosts);
+  const settings = settingsOf(served, dependencyEgress, egressHosts);
+  if (jira && (settings.jira_site === '' || settings.jira_projects === '' || settings.require_plan_approval !== 'true')) {
+    return keep('the control plane did not answer with valid Jira context');
+  }
+  for (const name of [...Object.keys(GUARDS), 'fix_review_bots', 'jira_site', 'jira_projects']) {
     if (served[name] !== undefined && served[name] !== '' && settings[name] === '') refused.push(name);
   }
+  if (dependencyEgress === null) refused.push('egress');
+  if (egressHosts === null) refused.push('egress_hosts');
 
   return {
     model: servedModel, effort: servedEffort, arm, runSettings, settings,

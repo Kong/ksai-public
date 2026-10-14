@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const { usingControlPlane } = require('../lib/control-plane.cjs');
+const { inertAfter, inertInline } = require('../lib/inert-markdown.cjs');
 const { writerFor } = require('../lib/cp-effects.cjs');
 const { checkStep, oneLine, planDirOf, scrub, storedTitle } = require('./plan.cjs');
 const { readCount } = require('./continue.cjs');
@@ -39,16 +40,17 @@ export function recordStep({
 } = {}) {
   const block = blockerFor(manifestPath);
 
-  const quoted = oneLine(stepTitle, { triggerPhrase });
+  const given = oneLine(stepTitle, { triggerPhrase });
+  const quoted = inertInline(given);
 
   const read = readManifest(manifestPath, { noun: 'The step', triggerPhrase });
   if (read.message) return block(read.message);
   const manifest = read.manifest;
 
   const claimed = storedTitle(field(manifest?.step), { triggerPhrase });
-  if (claimed && claimed !== quoted) {
+  if (claimed && claimed !== given) {
     return block(
-      `The step reported work on "${claimed}", but this run was given "${quoted}". Nothing was pushed and no ` +
+      `The step reported work on "${inertInline(claimed)}", but this run was given "${quoted}". Nothing was pushed and no ` +
         'box was ticked, because a report naming another step is not a report of this one.',
     );
   }
@@ -60,7 +62,7 @@ export function recordStep({
   let expectationEdits = null;
 
   if (status === 'blocked') {
-    return block(`Stopped on "${quoted}": ${scrub(reasonOf(manifest), { triggerPhrase }).trim()}`, { blocker: modelBlocker(manifest) });
+    return block(`Stopped on "${quoted}": ${inertAfter(scrub(reasonOf(manifest), { triggerPhrase }).trim())}`, { blocker: modelBlocker(manifest) });
   }
 
   rmSync(manifestPath, { force: true });
@@ -212,7 +214,7 @@ export function main(env = process.env, { run = runCommand, tick = (facts) => wr
       return writeResult(env, messageFile, result);
     }).catch((error) => {
       result.status = 'blocked';
-      result.message = `I pushed "${env.STEP_TITLE}" but the control plane could not tick its box (${error.message}). The commit is on the branch.`;
+      result.message = `I pushed "${inertInline(oneLine(env.STEP_TITLE, { triggerPhrase: env.TRIGGER }))}" but the control plane could not tick its box (${inertInline(String(error?.message ?? error))}). The commit is on the branch.`;
       return writeResult(env, messageFile, result);
     });
   }

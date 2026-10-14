@@ -1,7 +1,7 @@
 import {
   chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync,
 } from 'node:fs';
-import { join, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
 import { canonicalJson, parseIJson } from '../../lib/json.cjs';
 import {
@@ -153,13 +153,40 @@ export function validateCandidate({ candidate, bytes, artifactsRoot, held }) {
   return { output: candidate.output, digest: sha256(Buffer.from(canonicalJson(candidate.output))) };
 }
 
-/** Validate a candidate against its pinned manifest before returning trusted output. */
-export function acceptStage({ descriptor: descriptorPath }) {
+function stageDescriptor(descriptorPath) {
   regular(descriptorPath, 'workflow descriptor');
   const descriptor = parseIJson(readFileSync(descriptorPath), 'workflow descriptor');
   fields(descriptor, ['record', 'registryRoot', 'runtimeRoot'], ['record', 'registryRoot', 'runtimeRoot'], 'workflow descriptor');
   const record = recordOf(descriptor.record);
   const held = verifiedStage(record, descriptor.registryRoot);
+  return { descriptor, record, held };
+}
+
+export function testVerdictPath(candidatePath) {
+  if (typeof candidatePath !== 'string' || !isAbsolute(candidatePath)) throw new Error('the tester stage result has no absolute path');
+  return join(dirname(candidatePath), 'test-verdict.json');
+}
+
+export function adaptTestVerdict({ descriptor: descriptorPath }) {
+  const { descriptor, record, held } = stageDescriptor(descriptorPath);
+  if (record.workflow.name !== 'adversarial-pull-request-test' || record.workflow.version !== '1.0.0' || record.stage.id !== 'test' || held.stage.profile !== 'product-test') {
+    throw new Error('the legacy tester verdict names no built-in test stage');
+  }
+  const candidatePath = join(descriptor.runtimeRoot, 'result', 'candidate.json');
+  const verdictPath = testVerdictPath(candidatePath);
+  const stat = regular(verdictPath, 'tester verdict');
+  const limit = Math.min(MAX_CANDIDATE_BYTES, held.manifest.spec.limits?.bytes?.candidateResult ?? MAX_CANDIDATE_BYTES);
+  if (stat.size > limit) throw new Error(`tester verdict exceeds ${limit} bytes`);
+  const output = parseIJson(readFileSync(verdictPath), 'tester verdict');
+  const candidate = { apiVersion: CANDIDATE_VERSION, output, artifacts: [] };
+  const packed = `${canonicalJson(candidate)}\n`;
+  validateCandidate({ candidate, bytes: Buffer.byteLength(packed), artifactsRoot: join(descriptor.runtimeRoot, 'artifacts'), held });
+  writeFileSync(candidatePath, packed, { mode: 0o600, flag: 'wx' });
+  return candidatePath;
+}
+
+export function acceptStage({ descriptor: descriptorPath }) {
+  const { descriptor, held } = stageDescriptor(descriptorPath);
   const candidatePath = join(descriptor.runtimeRoot, 'result', 'candidate.json');
   const stat = regular(candidatePath, 'stage candidate');
   const limit = Math.min(MAX_CANDIDATE_BYTES, held.manifest.spec.limits?.bytes?.candidateResult ?? MAX_CANDIDATE_BYTES);

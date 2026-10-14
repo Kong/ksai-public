@@ -23,6 +23,8 @@ const say = (stateDir, line) => {
 };
 
 const loadAuthorize = () => require('../codeowners-authz/authorize.cjs');
+const { codeOwnersOver } = require('../lib/control-plane.cjs');
+const { writeAccessNames } = require('../lib/select-arm.cjs');
 
 const stopLatch = (signals) => {
   const stop = new AbortController();
@@ -31,14 +33,14 @@ const stopLatch = (signals) => {
   return { asked: () => stop.signal.aborted, signal: stop.signal, close: () => signals.off('SIGTERM', ask) };
 };
 
-export function authorizerOver({ github, owner, repo, load = loadAuthorize, writeAccessCommands = null }) {
+export function authorizerOver({ github, owner, repo, load = loadAuthorize, writeAccessCommands = null, command = '', askOwners }) {
   let authorize;
   try {
     authorize = load();
   } catch {
     return null;
   }
-  const opens = String(writeAccessCommands ?? '').trim() !== '';
+  const opens = writeAccessNames(writeAccessCommands).includes(String(command ?? '').trim().toLowerCase());
   let cache = Object.create(null);
   return async (username) => {
     let stuck = false;
@@ -51,7 +53,7 @@ export function authorizerOver({ github, owner, repo, load = loadAuthorize, writ
         stuck = true;
       },
     };
-    const allowed = await authorize({ github, core, owner, repo, username, cache });
+    const allowed = await authorize({ github, core, owner, repo, username, cache, askOwners });
     if (stuck) {
       cache = Object.create(null);
       return null;
@@ -102,7 +104,9 @@ export async function main(
   const carrying = existsSync(inbox);
   const watching = carrying ? inbox : stateDir;
   const authorize = carrying
-    ? authorizerOver({ github, owner, repo: name, load, writeAccessCommands: env.WRITE_ACCESS_COMMANDS })
+    ? authorizerOver({
+      github, owner, repo: name, load, writeAccessCommands: env.WRITE_ACCESS_COMMANDS, command: env.RUN_COMMAND, askOwners: codeOwnersOver(env, fetchImpl),
+    })
     : () => false;
   if (!authorize) {
     say(stateDir, 'the courier could not load the authorization it carries every comment through, so it read none');

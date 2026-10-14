@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 import controlPlane from '../lib/control-plane.cjs';
 import jsonSchema from '../lib/json-schema.cjs';
 import { jobOf, linkId } from '../lib/link-protocol.mjs';
-import OUTCOME_SCHEMA from '../lib/work-session-schemas/outcome-v1.json' with { type: 'json' };
+import OUTCOME_SCHEMA from '../lib/task-schemas/task-outcome-v1.json' with { type: 'json' };
 import blockerModule from './blocker.cjs';
 import planModule from './plan.cjs';
 import trustedGit from './trusted-git.cjs';
@@ -129,7 +129,8 @@ export function outcomeBody(env, entries, options) {
   if (!/^[a-z][a-z0-9-]{0,99}$/.test(phase)) throw new Error(`the run names phase ${JSON.stringify(phase)}, which reports no outcome`);
   const job = jobOf(env);
   const link = linkId({ repository: env.GITHUB_REPOSITORY, runId: env.GITHUB_RUN_ID, attempt: env.GITHUB_RUN_ATTEMPT, job });
-  const status = env.PUBLISH_FAILED === 'true' ? 'failed' : entries.length ? 'published' : env.BLOCKED === 'true' ? 'blocked' : 'nothing';
+  const blocked = env.BLOCKED === 'true' && env.STOPPED !== 'true';
+  const status = env.PUBLISH_FAILED === 'true' ? 'failed' : entries.length ? 'published' : blocked ? 'blocked' : 'nothing';
   const blocker = status === 'blocked' ? blockerOf(env, options) : '';
   const body = { job, link, flow, phase, status, ...(blocker ? { blocker } : {}), published: entries };
   const problems = jsonSchema.validateSchema(OUTCOME_SCHEMA, body, 'outcome');
@@ -137,24 +138,12 @@ export function outcomeBody(env, entries, options) {
   return body;
 }
 
-const CONFLICT_TRIES = 6;
-const CONFLICT_WAIT_MS = 1_000;
-const sleep = (ms) => new Promise((resolve) => {
-  setTimeout(resolve, ms);
-});
-
-const passing = (status) => status === 409 || status === undefined || status === 429 || status >= 500;
-
-export async function outcomeSent({ endpoint, fetch, token, body, wait = sleep }) {
-  const sending = JSON.stringify(body);
-  for (let tried = 1; ; tried += 1) {
-    const said = await controlPlane.answered(fetch, `${endpoint}/v1/run/tasks/outcome`, { token, body: sending, timeout: CALL_MS });
-    if (!said.why) return { sent: true };
-    if (!passing(said.status) || tried >= CONFLICT_TRIES) {
-      throw new Error(`the control plane did not keep this run's outcome: ${said.why}${tried > 1 ? ` after ${tried} tries` : ''}`);
-    }
-    await wait(CONFLICT_WAIT_MS * tried);
+export async function outcomeSent({ endpoint, fetch, token, body, wait = controlPlane.held }) {
+  const said = await controlPlane.reportKept(fetch, `${endpoint}/v1/run/tasks/outcome`, { token, body: JSON.stringify(body), timeout: CALL_MS }, wait);
+  if (said.why) {
+    throw new Error(`the control plane did not keep this run's outcome: ${said.why}${said.tried > 1 ? ` after ${said.tried} tries` : ''}`);
   }
+  return { sent: true };
 }
 
 export async function main(env = process.env, { fetch = globalThis.fetch, reach = controlPlane.reachedFor, git = trustedGit.directGit(String(env.GITHUB_WORKSPACE ?? '')), log = (line) => console.log(line) } = {}) {

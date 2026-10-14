@@ -1,6 +1,8 @@
 # 100 Go Mistakes - Code Review Reference
 
 > **You cannot run any of this.** The reviewer holds no test runner, build, linter, formatter or package manager. A command named anywhere below describes what to look for in the tree under review, never something to execute. Where reading cannot settle a claim, say so in the finding.
+>
+> Version-gated entries (#16, #32, #49, #63, #101, #102-103) are decided by the tree's language version — read the `go` directive in `go.mod` of the tree under review, which you may open with Read.
 
 Source: <https://100go.co/>
 
@@ -24,14 +26,14 @@ they're left as reference and shouldn't be turned into findings on their own.
 | 6 | **Producer-Side Interfaces** | Don't flag a consumer-side interface; flag one defined on the producer side that forces the abstraction onto consumers → implicit satisfaction enables consumer-driven design |
 | 7 | **Returning Interfaces** | Don't flag a function returning a concrete type; flag one returning an interface that needlessly restricts the caller and creates a dependency → return concrete, accept interfaces |
 | 8 | **`any` Overuse** | Don't flag `any` where genuinely needed (marshaling, truly heterogeneous data); flag it where a concrete type or generic would serve (overgeneralization) |
-| 9 | **Premature Generics** | Don't flag a generic solving a real present problem; flag one added for an anticipated-not-actual need where duplication would read clearer |
+| 9 | **Premature Generics** | Don't flag a generic solving a real present problem; flag one added for an anticipated-not-actual need where duplication would read clearer (for generic *methods*, see #102) |
 | 10 | **Type Embedding** | Don't flag embedding used for a genuine promotion need; flag embedding for syntactic sugar, or that promotes private/unintended behavior |
 | 11 | **No Functional Options** | Don't flag a small fixed config struct; flag a growing/optional config passed positionally where functional options (unexported struct + option funcs returning `func(*options) error`) fit |
 | 12 | **Misorganization** | Don't flag package layout on taste; flag nano-packages, huge grab-bag packages, or a package named for what it contains rather than what it provides → organize by context/layer |
 | 13 | **Utility Packages** | Don't flag a specifically-named helper package; flag `common`, `util`, `shared` grab-bag names → require a specific, meaningful name |
 | 14 | **Package Collisions** | Don't flag distinct names; flag a var or import that collides with a package name with no distinct name or import alias |
 | 15 | **Missing Docs** | Don't flag unexported or already-documented elements; flag an exported element with no doc comment, a comment not starting with the element name, or a package doc missing the `// Package` prefix |
-| 16 | **No Linters** | Don't flag a repository whose CI already runs them; flag a change that adds a lint target, a config or a CI step which drops `go vet`, `errcheck`, `golangci-lint` or `gofmt`/`goimports` from the checks the tree had |
+| 16 | **No Linters** | Don't flag a repository whose CI already runs them; flag a change that adds a lint target, a config or a CI step which drops `go vet`, `errcheck`, `golangci-lint` or `gofmt`/`goimports` from the checks the tree had; on Go 1.27+ that includes the `go fix` modernizers and the vet `stdversion` check `go test` runs by default |
 
 ## Data Types (17-29)
 
@@ -89,7 +91,7 @@ they're left as reference and shouldn't be turned into findings on their own.
 | # | Issue | Check For |
 | --- | ------- | --------- |
 | 48 | **Panicking** | Don't flag `panic` for truly unrecoverable cases (programmer errors, missing mandatory dependency at startup); flag `panic` used for ordinary/expected errors that should return an `error` |
-| 49 | **Error Wrapping** | Don't flag a deliberate `%w`/`%v` choice; flag `%w` that leaks an internal error into the public API as unwanted coupling, or `%v` where callers need to `errors.Is/As` the cause |
+| 49 | **Error Wrapping** | Don't flag a deliberate `%w`/`%v` choice; flag `%w` that leaks an internal error into the public API as unwanted coupling, `%v` where callers need to `errors.Is/As` the cause, or `%w` given a `*E` where `E` itself implements `error` — `errors.Is`/type assertions on `E` fail against the wrapped pointer (vet `printf` flags it on Go 1.27+) |
 | 50 | **Error Type Comparison** | Don't flag `errors.As(err, &target)`; flag a type assertion or `==` on a possibly-wrapped error where `errors.As` is needed |
 | 51 | **Error Value Comparison** | Don't flag `errors.Is(err, sentinel)`; flag `==` against a sentinel on a possibly-wrapped error where `errors.Is` is needed |
 | 52 | **Handling Twice** | Don't flag handling an error once (log OR return); flag one both logged and returned (double handling) → wrap and return to propagate with context |
@@ -167,6 +169,13 @@ they're left as reference and shouldn't be turned into findings on their own.
 | 99 | **Diagnostics** | pprof (CPU/memory/goroutine profiling), trace (execution) |
 | 100 | **GC** | Understand triggers, tuning options, latency impact |
 | 101 | **Container Limits** | Don't flag GOMAXPROCS on Go 1.25+ (cgroup-aware, respects Docker/K8s CPU limits); flag pre-1.25 code in a CPU-limited container with no explicit GOMAXPROCS or `automaxprocs` |
+
+## Go 1.27 (102-103)
+
+| # | Issue | Check For |
+| --- | ------- | --------- |
+| 102 | **Generic Methods** | Don't flag a generic method (a method declaring its own type parameters, Go 1.27+) solving a real present problem; flag one that is meant to satisfy an interface method — generic methods do not satisfy interface methods, and interface methods cannot declare type parameters, so the intended satisfaction is a compile error, not style |
+| 103 | **Struct Literal Keys** | Don't flag a field-selector key like `Line{B.Y: 5}` as invalid — valid Go 1.27+; flag it only when the tree's `go` directive is below 1.27 |
 
 ## Common Patterns
 

@@ -68,7 +68,7 @@ async function resolveOverriddenThreads({
   env = process.env,
   fetch = globalThis.fetch,
 } = {}) {
-  const open = await openPlanThreads({ github, owner, repo, prNumber, planFile, botLogin, includeAnswered: true });
+  const open = await openPlanThreads({ github, owner, repo, prNumber, planFile, botLogin, includeAnswered: true, env, fetch });
   if (open.error) return { answered: 0, resolved: 0, notices: [open.error] };
 
   const override = { triggerPhrase, prNumber, command, ask, env, fetch };

@@ -26,7 +26,7 @@ const { ceilingMinutes } = require('../lib/watchdog.cjs');
 const { SKILLS: REVIEWER_SKILLS, skipsAuthor, stackManifests, triage } = require('../triage/policy.cjs');
 const { renderReviewPrompt, renderPipelineContext } = require('./prompt.cjs');
 const { STRATEGIES, experimentOf, promptDigest } = require('./review-pipeline.cjs');
-const { materializeScopes } = require('./review-scopes.cjs');
+const { fitted, materializeScopes } = require('./review-scopes.cjs');
 const { availableReviewers, bodyOf, resolveReviewers, sharedFields } = require('./reviewers.cjs');
 
 const PLUGIN_DIR = '_ksai/plugins/kreview';
@@ -140,7 +140,10 @@ function jwtClaims(token) {
   return JSON.parse(Buffer.from(pieces[1], 'base64url').toString('utf8'));
 }
 
-function validReviewDecision(decision, { evidenceRevision, requestId, headSha, models }) {
+const ROUTED_NAME = /^[a-z][a-z0-9-]{0,127}$/;
+
+function validReviewDecision(decision, { evidenceRevision, requestId, headSha, models, declared = REVIEWER_SKILLS }) {
+  const routable = (skill) => (declared.length > 0 ? declared.includes(skill) : ROUTED_NAME.test(String(skill)));
   const exactKeys = (value, keys) => value && typeof value === 'object' && !Array.isArray(value)
     && Object.keys(value).every((key) => keys.includes(key)) && keys.every((key) => Object.hasOwn(value, key));
   const top = [
@@ -156,7 +159,7 @@ function validReviewDecision(decision, { evidenceRevision, requestId, headSha, m
     || !['', 'fast', 'balanced', 'flagship'].includes(decision.tier)
     || !MODEL_SHAPE.test(String(decision.model ?? '')) || !models.includes(decision.model)
     || !Array.isArray(decision.skills) || decision.skills.length > 2
-    || decision.skills.some((skill) => !REVIEWER_SKILLS.includes(skill))
+    || decision.skills.some((skill) => !routable(skill))
     || new Set(decision.skills).size !== decision.skills.length
     || typeof decision.risk !== 'boolean' || typeof decision.api_surface !== 'boolean'
     || !decision.facts || !Number.isInteger(decision.facts.reviewable_files) || decision.facts.reviewable_files < 0
@@ -219,7 +222,7 @@ async function requestReviewTriage({ core, endpoint, request, mint, call = fetch
     throw new Error('the control plane returned a malformed review decision');
   }
   if (!validReviewDecision(decision, {
-    evidenceRevision, requestId, headSha: request.head_sha, models: request.capabilities.models,
+    evidenceRevision, requestId, headSha: request.head_sha, models: request.capabilities.models, declared: request.capabilities.reviewer_skills,
   })) {
     throw new Error('the control plane returned a stale or malformed review decision');
   }
@@ -232,27 +235,36 @@ async function runTriage({ github, core, owner, repo, prNumber, env = process.en
   let source = 'local';
   let mismatch = [];
   let policyVersion = '';
+  let untriaged = '';
+  const mode = TRIAGE_MODES.includes(env.REVIEW_TRIAGE_MODE) ? env.REVIEW_TRIAGE_MODE : 'local';
+  const decides = mode === 'cp';
+  const unruled = (why) => {
+    result = NO_TRIAGE;
+    source = 'fallback';
+    untriaged = why;
+  };
   try {
     const pull_number = Number(prNumber);
-    const manifests = readStackManifests({ github, core, owner, repo });
     const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number });
     const files = await github.paginate(github.rest.pulls.listFiles, { owner, repo, pull_number, per_page: 100 });
     const author = pr.user?.login;
-    const commits = skipsAuthor(author)
+    const readsAuthors = decides ? String(author ?? '').endsWith('[bot]') : skipsAuthor(author);
+    const commits = readsAuthors
       ? await commitAuthorsOf({ github, core, owner, repo, pull_number })
       : { authors: [], read: false, error: '' };
-    result = {
-      ...triage({
-        author,
-        commitAuthors: skipsAuthor(author) ? commits.authors : null,
-        commitCount: pr.commits,
-        changedFiles: pr.changed_files,
-        manifests: await manifests,
-        files: files.map((f) => ({ path: f.filename, additions: f.additions, deletions: f.deletions })),
-      }),
-      model: null,
-    };
-    const mode = TRIAGE_MODES.includes(env.REVIEW_TRIAGE_MODE) ? env.REVIEW_TRIAGE_MODE : 'local';
+    if (!decides) {
+      result = {
+        ...triage({
+          author,
+          commitAuthors: skipsAuthor(author) ? commits.authors : null,
+          commitCount: pr.commits,
+          changedFiles: pr.changed_files,
+          manifests: await readStackManifests({ github, core, owner, repo }),
+          files: files.map((f) => ({ path: f.filename, additions: f.additions, deletions: f.deletions })),
+        }),
+        model: null,
+      };
+    }
     const record = mintedId(env.RECORD_ID);
     const remoteReady = env.CONTROL_PLANE_ENDPOINT && record !== ''
       && SHA.test(env.RUN_HEAD_SHA ?? '') && SHA.test(pr.head?.sha ?? '');
@@ -265,7 +277,7 @@ async function runTriage({ github, core, owner, repo, prNumber, env = process.en
         record_id: record,
         run_head_sha: env.RUN_HEAD_SHA,
         head_sha: pr.head.sha.toLowerCase(),
-        capabilities: { reviewer_skills: [...REVIEWER_SKILLS], models },
+        capabilities: { reviewer_skills: decides ? [] : [...REVIEWER_SKILLS], models },
         enforcement: {
           triage: env.TRIAGE_MODE === 'off' ? 'off' : 'auto',
           configured_model: env.CONFIGURED_MODEL,
@@ -293,23 +305,24 @@ async function runTriage({ github, core, owner, repo, prNumber, env = process.en
           mint: mint ?? ((audience) => core.getIDToken(audience)), call, rest,
         });
         policyVersion = remote.policy_version;
-        mismatch = differentFields(decisionOf(result), remote);
-        source = mode === 'cp' ? 'cp' : 'shadow';
-        if (mode === 'cp') result = resultOf(remote);
+        if (decides) {
+          result = resultOf(remote);
+          source = 'cp';
+        } else {
+          mismatch = differentFields(decisionOf(result), remote);
+          source = 'shadow';
+        }
       } catch (error) {
         if (error.undecided) core?.notice?.(error.message);
         else core?.warning?.(`Control-plane review triage failed: ${error.message}`);
-        if (mode === 'cp') {
-          result = NO_TRIAGE;
-          source = 'fallback';
-        }
+        if (decides) unruled(error.message);
       }
-    } else if (mode === 'cp') {
-      result = NO_TRIAGE;
-      source = 'fallback';
+    } else if (decides) {
+      unruled('this run names no control plane to triage it');
     }
   } catch (error) {
     core?.warning?.(`Triage failed, falling back to the configured arm: ${error.message}`);
+    if (decides) unruled(error.message);
   }
 
   const outputs = {
@@ -327,14 +340,15 @@ async function runTriage({ github, core, owner, repo, prNumber, env = process.en
     why: (result.facts?.reasons ?? []).slice(0, 3).join('; '),
     source,
     policy_version: source === 'cp' ? policyVersion : source === 'fallback' ? 'configured' : 'local/review-v1',
-    local_policy_version: 'local/review-v1',
+    local_policy_version: decides ? '' : 'local/review-v1',
     cp_policy_version: policyVersion,
     mismatch: mismatch.join(','),
+    untriaged,
   };
   return outputs;
 }
 
-async function selectReviewArm({ github, core, owner, repo, env }) {
+async function selectReviewArm({ github, core, owner, repo, env, fetchImpl = fetch }) {
   const outputs = {
     error: '',
     rejection: '',
@@ -352,13 +366,13 @@ async function selectReviewArm({ github, core, owner, repo, env }) {
     prompt_content_report: '',
   };
 
-  const config = await loadKsaiConfig({ github, core, owner, repo });
+  const config = await loadKsaiConfig({ github, core, owner, repo, env, fetchImpl });
   if (config.error) {
     Object.assign(outputs, {
       error: config.error,
       rejection: renderConfigRejection(config.error, env.TRIGGER),
     });
-    return { ...outputs, rejected: `Rejected the command alias config: ${config.error}`, note: '' };
+    return { ...outputs, rejected: `Rejected the repository config: ${config.error}`, note: '' };
   }
 
   const result = selectArm({
@@ -375,7 +389,6 @@ async function selectReviewArm({ github, core, owner, repo, env }) {
     triage: { tier: env.TRIAGE_TIER, model: env.TRIAGE_MODEL, effort: env.TRIAGE_EFFORT },
     modelPinned: env.MODEL_PINNED,
     effortPinned: env.EFFORT_PINNED,
-    commandAliases: config.aliases,
     onIssue: false,
     threadRootId: env.THREAD_ROOT_ID,
   });
@@ -488,7 +501,42 @@ async function reviewCommandStatus(options) {
   return { error, skipped };
 }
 
+function releasedReviewers(env) {
+  return {
+    reviewers: [],
+    routed: String(env.TRIAGE_SKILLS ?? '').split(',').map((name) => name.trim()).filter(Boolean),
+    available: [],
+    common: [],
+    auditorPath: '',
+    refusal: '',
+  };
+}
+
 function reviewOptions(env, experiment) {
+  const { reviewers, routed, available, common, auditorPath, refusal } = (env.REVIEWERS_FROM === 'release' ? releasedReviewers : pluginReviewers)(env);
+  const options = {
+    baseRef: env.BASE_REF,
+    workspace: env.WORKSPACE,
+    conventionsDir: env.CONVENTIONS_DIR,
+    request: env.REQUEST_HTML,
+    priorFindings: experiment.prior_findings === 'ignore' ? '' : env.PRIOR_FINDINGS,
+    diffPath: env.DIFF_PATCH,
+    changedFilesPath: env.DIFF_FILES,
+    shortstat: env.DIFF_SHORTSTAT,
+    reviewers,
+    routed,
+    available,
+    common,
+    auditorPath,
+    rules: env.REPO_RULES,
+    budgetMinutes: ceilingMinutes(env.JOB_TIMEOUT_MINUTES),
+    channelNonce: env.CHANNEL_NONCE,
+    resultTransport: experiment.result_transport,
+  };
+  return { options, refusal };
+}
+
+function pluginReviewers(env) {
   const pluginRoot = `${env.WORKSPACE}/${PLUGIN_DIR}`;
   const routed = resolveReviewers(env.TRIAGE_SKILLS, pluginRoot);
   const open = routed.reviewers.length > 0 ? { reviewers: [], refused: [] } : availableReviewers(pluginRoot);
@@ -513,25 +561,18 @@ function reviewOptions(env, experiment) {
               : !fs.existsSync(auditorPath)
                 ? `the plugin checkout carries no auditor mandate at ${auditorPath}`
                 : '';
-  const options = {
-    baseRef: env.BASE_REF,
-    workspace: env.WORKSPACE,
-    conventionsDir: env.CONVENTIONS_DIR,
-    request: env.REQUEST_HTML,
-    priorFindings: experiment.prior_findings === 'ignore' ? '' : env.PRIOR_FINDINGS,
-    diffPath: env.DIFF_PATCH,
-    changedFilesPath: env.DIFF_FILES,
-    shortstat: env.DIFF_SHORTSTAT,
-    reviewers: mandates.routed,
-    available: mandates.open,
-    common,
-    auditorPath,
-    rules: env.REPO_RULES,
-    budgetMinutes: ceilingMinutes(env.JOB_TIMEOUT_MINUTES),
-    channelNonce: env.CHANNEL_NONCE,
-    resultTransport: experiment.result_transport,
-  };
-  return { options, refusal };
+  return { reviewers: mandates.routed, available: mandates.open, common, auditorPath, refusal };
+}
+
+const strategyOf = (env) => env.REVIEW_STRATEGY || 'baseline';
+
+function reviewFits(env) {
+  if (strategyOf(env) === 'baseline') return { too_large: '', scope_plan: '' };
+  const { plan, tooLarge } = fitted(env.DIFF_PATCH ?? '', env.DIFF_STATUS ?? '', env.REVIEW_DIFF_MIB ?? '');
+  if (plan === null) return { too_large: tooLarge, scope_plan: '' };
+  const at = `${env.DIFF_PATCH}.scopes.json`;
+  fs.writeFileSync(at, JSON.stringify(plan));
+  return { too_large: '', scope_plan: at };
 }
 
 function buildReviewPrompt({ env }) {
@@ -544,7 +585,7 @@ function buildReviewPrompt({ env }) {
     lsp_measure: '',
     error: '',
   };
-  const strategy = env.REVIEW_STRATEGY || 'baseline';
+  const strategy = strategyOf(env);
   let experiment;
   try {
     if (!STRATEGIES.includes(strategy)) throw new Error('review_strategy must be baseline, evidence or dual');
@@ -568,7 +609,7 @@ function buildReviewPrompt({ env }) {
   if (strategy !== 'baseline') {
     try {
       if (!env.DIFF_PATCH || !env.DIFF_STATUS) throw new Error('scoped review requires the trusted patch and NUL status inventory');
-      scoping = materializeScopes(env.DIFF_PATCH, env.DIFF_STATUS);
+      scoping = env.SCOPE_PLAN ? JSON.parse(fs.readFileSync(env.SCOPE_PLAN, 'utf8')) : materializeScopes(env.DIFF_PATCH, env.DIFF_STATUS, env.REVIEW_DIFF_MIB ?? '');
       scoping.scopes = scoping.scopes.map((scope) => ({ ...scope,
         context: renderPipelineContext({ ...options, diffPath: scope.diffPath, changedFilesPath: scope.changedFilesPath, shortstat: `${scope.files.length} files; ${scope.lines} changed lines in this scope` }),
       }));
@@ -604,6 +645,7 @@ module.exports = {
   reviewCommandStatus,
   selectReviewArm,
   buildReviewPrompt,
+  reviewFits,
   reviewOptions,
   EXTRA_ARGS_REFUSAL,
 };

@@ -4,9 +4,9 @@
   "title": "Owned task follow-up classifier input",
   "type": "object",
   "additionalProperties": false,
-  "required": ["sessions", "requests", "comment"],
+  "required": ["tasks", "requests", "comment"],
   "properties": {
-    "sessions": {
+    "tasks": {
       "type": "array",
       "minItems": 0,
       "maxItems": 5,

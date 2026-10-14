@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "The control plane answers a governed context query",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["session"],
+  "oneOf": [
+    { "required": ["manifest"] },
+    { "required": ["error"] }
+  ],
+  "properties": {
+    "session": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$" },
+    "manifest": { "type": "object" },
+    "error": { "type": "string", "minLength": 1, "maxLength": 200 }
+  }
+}

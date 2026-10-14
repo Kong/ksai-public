@@ -63,6 +63,7 @@ function reviewOf(options) {
     has_shortstat: shortstat !== '',
     pipeline: Boolean(options.pipeline),
     reviewers,
+    ...(Array.isArray(options.routed) ? { routed: options.routed.map(text) } : {}),
     route: reviewers.length > 0 ? 'routed' : 'open',
     scope: scopeOf(reviewers),
     shortstat,

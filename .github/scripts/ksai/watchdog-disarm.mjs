@@ -97,7 +97,7 @@ export function verdict(env, say = console.log) {
     `This run was stopped on purpose: ${reason || 'no reason was recorded'}. The "SDK execution error" and "exited with code 143" above are that stop - 143 is SIGTERM - and not a fault in the run. What it had done before it was stopped is under "What the run did"`,
   );
   say('The watchdog fired: the CLI was stopped short of the job ceiling');
-  return { fired: 'true', cause, reason, missed };
+  return { fired: 'true', cause, reason: cause === 'ceiling' ? '' : reason, missed };
 }
 
 export async function main(env = process.env, say = console.log) {

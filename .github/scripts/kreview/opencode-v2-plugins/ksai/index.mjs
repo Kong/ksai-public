@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 
 import { admitted, governed, optionsOf, refuseAll } from '../../../governance/opencode-v2-plugin/index.mjs';
 import { offerChildTools } from './child-tools.mjs';
+import { contentGuard } from './content.mjs';
 import { guard } from './guard.mjs';
 import { capped, serve } from './models.mjs';
 import { policy } from './policy.mjs';
@@ -41,5 +42,7 @@ export default {
     if (options.replies) await ctx.tool.hook('execute.before', replyLimit(directory));
     if (options.children) await offerChildTools(ctx, options.children, directory);
     await governed(ctx, governance);
+    const content = options.content ? given(options.content) : null;
+    if (content?.socket || content?.required) await ctx.tool.hook('execute.after', contentGuard(content).after);
   },
 };

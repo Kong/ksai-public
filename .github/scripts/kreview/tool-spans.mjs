@@ -5,6 +5,7 @@ import { runMain } from '../lib/main.mjs';
 import { CLAUDE_NAME, parsed, refused } from '../lib/opencode.mjs';
 import { CLAUDE_NAME as NATIVE_NAME, isNativeStream, refused as refusedCall, toolCalls } from '../lib/opencode-v2.mjs';
 import { attributes, pairs, post, runAttributes } from '../lib/otlp.mjs';
+import { annotation, counted, plural } from '../lib/text.cjs';
 import { encoded } from './otlp-protobuf.mjs';
 
 const SCOPE = 'io.kongcloud.ksai';
@@ -188,7 +189,8 @@ export function spansFrom({ events, children = [], context, env = process.env, s
   const native = isNativeStream(events);
   const calls = native ? nativeCalls({ events, context: run, env }) : recordedCalls({ events, children, run, env });
   if (calls.length > MAX_SPANS) {
-    say(`::notice::${calls.length - MAX_SPANS} tool calls are not in this run's exported timeline, which holds ${MAX_SPANS}`);
+    const left = calls.length - MAX_SPANS;
+    say(`::notice::${counted(left, 'tool call')} ${plural(left, 'is', 'are')} not in this run's exported timeline, which holds ${MAX_SPANS}`);
   }
   /* The window is every event's, not every tool call's: a review spends time before its first call
      and, on the turn that writes the review, after its last - which is the time being hunted. */
@@ -233,9 +235,7 @@ export async function report({ env = process.env, fetchImpl = fetch, read = read
     const events = parsed(String(read(String(env.EVENTS_FILE ?? ''), 'utf8')));
     spans = spansFrom({ events, children: childEvents(read, env.OPENCODE_CHILDREN_FILE), context: traceContext(env), env });
   } catch (error) {
-    console.log(
-      `::warning::the tool call timeline could not be read (${error?.message ?? error}), so this run published none`,
-    );
+    console.log(annotation(`the tool call timeline could not be read (${error?.message ?? error}), so this run published none`, 'warning'));
     return null;
   }
   if (!spans) return null;
@@ -257,9 +257,10 @@ export async function report({ env = process.env, fetchImpl = fetch, read = read
     fetchImpl,
   });
   if (!outcome.ok) {
-    console.log(
-      `::warning::this run's tool call timeline did not reach ${endpoint} (${outcome.said}), which changes nothing about the review or what it reports spending`,
-    );
+    console.log(annotation(
+      `this run's tool call timeline did not reach ${endpoint} (${outcome.said}), which changes nothing about the review or what it reports spending`,
+      'warning',
+    ));
     return false;
   }
   return true;
@@ -285,9 +286,7 @@ function childEvents(read, at) {
       }
     }
   } catch (error) {
-    console.log(
-      `::warning::the sub-agent sessions could not be read (${error?.message ?? error}), so the timeline holds the review's own calls alone`,
-    );
+    console.log(annotation(`the sub-agent sessions could not be read (${error?.message ?? error}), so the timeline holds the review's own calls alone`, 'warning'));
     return [];
   }
   return out;
