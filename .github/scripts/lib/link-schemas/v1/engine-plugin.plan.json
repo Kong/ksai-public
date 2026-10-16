@@ -111,12 +111,21 @@
             "description": "Where under the run's governed plugin the host lays the static down, as the attested lock records it",
             "type": "string",
             "maxLength": 512,
-            "pattern": "^plugins/[a-z][a-z0-9-]*(/[A-Za-z0-9][A-Za-z0-9_-]*(\\.[A-Za-z0-9_-]+)*)+$"
+            "pattern": "^\\.github/runtime/[a-z][a-z0-9-]*(/[A-Za-z0-9][A-Za-z0-9_-]*(\\.[A-Za-z0-9_-]+)*)+$"
           }
         }
       }
     },
     "nonce": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
-    "shell_timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 3600000 }
+    "shell_timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 3600000 },
+    "guard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["api_version", "required"],
+      "properties": {
+        "api_version": { "const": "2" },
+        "required": { "type": "boolean" }
+      }
+    }
   }
 }
