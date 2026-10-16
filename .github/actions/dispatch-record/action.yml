@@ -1,233 +1,69 @@
 name: Dispatch record
 description: >-
-  Read what the control plane decided for this run. The control plane writes a record before it
-  dispatches and names it in the dispatch, so a decision it makes does not have to fit the ten inputs
-  workflow_dispatch allows.
-
-  Nothing here is a secret. The caller is named by a GitHub Actions OIDC token whose repository and
-  run claims are signed by GitHub and cannot be changed from inside the job. The control plane ties a
-  record to the run its dispatch started and answers only that run, so the gate and the job that does
-  the work can both read it and no other run can. A run asking for a record tied to another run, or to
-  none, or asking from a workflow other than `ksai-cp.yml` pinned to a commit or a release tag, is
-  refused with a 403 and fails at once, naming the reason the control plane gave. A run that asks
-  before the control plane has tied the record gets a 503 and asks again like any other failure that
-  can pass.
-
-  A caller naming no control plane skips the read. Every other run asks for the record its own token
-  names, and reads it or fails, and nothing falls back to the dispatch inputs. The control plane sends
-  a dispatch whose answer was lost again under the same record, so a run that carried on without
-  reading it could be the second run of that dispatch doing the work twice, or a run answering a
-  different question than the one decided. A control plane holding no record for this run says so on
-  its 404, and the run reads nothing rather than failing; a 404 it did not mark fails the run, because
-  a failover or an older route answers the same way and neither means the record is gone. A failure
-  that can pass - the token mint, the network, a body that does not parse, a 408, a 429 or a 5xx - is
-  tried again first, and a run that still cannot read its record fails after at most about two and a
-  half minutes, however long the control plane asks it to wait. A refusal that would answer the same
-  again fails the run at once.
-
-  What comes back is read, never relayed. Every field is matched against the shape this workflow will
-  pass on, and one it will not refuses the whole record: a record is one decision, so dropping a model
-  this action does not understand and keeping the command beside it would start the run somebody asked
-  for at a model nobody chose.
-
-  The requester is a name and never a grant. It says who asked, for a run nothing on GitHub started.
-  The implement job hands it to the runner as `work_actor`, which checks that login against
-  CODEOWNERS read from GitHub and refuses the run where it owns nothing, so this value can only ever
-  add a refusal and never lifts one.
-
-  Guidance is whatever that person said beyond naming the work, and the work item is what the work
-  source says the work is. Both reach the run as context and never as instruction, and both are free
-  text, so they go to a step through `env:` and never through an expression a shell would expand.
-
-  The logic ships beside this action.yml, so every caller already has it wherever it has the action,
-  and it is a module rather than a shell block so the refusals above are unit-testable.
+  Read one control-plane package-stage record. Authenticate the run with GitHub OIDC. Validate the
+  complete stage contract before the workflow uses any value. Retry temporary failures within a
+  fixed budget. Refuse incomplete records and records for other runtime flows.
 
 inputs:
   endpoint:
-    description: >-
-      Base URL of the control plane, with no trailing path. Empty, which is the default, reads nothing
-      at all, so it is right only for a caller no control plane serves.
+    description: The bare HTTPS control-plane URL. An empty value skips the read.
     required: false
     default: ""
   record_id:
-    description: >-
-      The record a caller named, which only the standalone core does. A run is handed the record its
-      own dispatch was tied to, so the id itself is read by nothing - but naming one says this run
-      carries its work in dispatch inputs too, and may carry on where a 404 the control plane did not
-      mark leaves it with no record.
+    description: The record ID from the workflow gate. Its presence permits a named 404 response.
     required: false
     default: ""
   audience:
-    description: >-
-      Audience the OIDC token is minted for. Both ends have to name the same string, and the control
-      plane refuses a token minted for anything else.
+    description: The audience for the GitHub OIDC token.
     required: false
     default: ksai-cp
 
 outputs:
   read:
-    description: "`true` where a record was read, `false` where no control plane wrote one for this run"
+    description: Whether the control plane returned a package-stage record.
     value: ${{ steps.record.outputs.read }}
   record_id:
-    description: >-
-      the record the control plane served, as it named itself, or empty where none was read. The run
-      never chooses it; it is what the endpoints a run goes on to call about the same record take.
+    description: The control-plane record that identifies this package-stage run.
     value: ${{ steps.record.outputs.record_id }}
-  issue_number:
-    description: the issue a plan continuation is for, or empty
-    value: ${{ steps.record.outputs.issue_number }}
-  actor:
-    description: >-
-      the login the control plane says asked, for the run to authorize against CODEOWNERS itself. It
-      names who asked and grants nothing: the run can only refuse on it, never admit on it
-    value: ${{ steps.record.outputs.actor }}
-  work_ref:
-    description: the work to do where there is no GitHub issue, as `jira/<KEY>`, or empty
-    value: ${{ steps.record.outputs.work_ref }}
-  attempt:
-    description: runs already spent by this continuation chain, or empty
-    value: ${{ steps.record.outputs.attempt }}
-  stall:
-    description: consecutive runs of this chain that completed no step, or empty
-    value: ${{ steps.record.outputs.stall }}
-  prev_remaining:
-    description: unchecked boxes the predecessor saw, with empty distinct from zero
-    value: ${{ steps.record.outputs.prev_remaining }}
-  command:
-    description: >-
-      the command the control plane decided this run is for, or empty where it decided none - which is
-      every run answering a comment, since a comment names its own
-    value: ${{ steps.record.outputs.command }}
-  autofix_capability:
-    description: >-
-      the secured autofix context/output policy this runner validated, or empty for other records
-    value: ${{ steps.record.outputs.autofix_capability }}
-  bound_command:
-    description: >-
-      the command a task successor is bound to, or empty for every other record. It is the
-      `command` too, including a test successor's, whose record names none and binds a workflow stage
-      attempt instead. The retained comment must name this command or name none, and nothing classifies it
-    value: ${{ steps.record.outputs.bound_command }}
-  session_action:
-    description: >-
-      how a task successor carries on the task its record binds: `continue`, `restart` or
-      `retry`, or empty for every other record. A retry repeats the request the control plane kept, so it
-      never reads a comment as it stands now
-    value: ${{ steps.record.outputs.session_action }}
   workflow_job:
-    description: >-
-      the workflow package job whose stage this run executes, or empty for every record that dispatches no
-      stage. A stage record names no command, and its job, instance, attempt and lease are what the run
-      completes the stage against
+    description: The package job for this stage.
     value: ${{ steps.record.outputs.workflow_job }}
   workflow_instance:
-    description: the stage instance this run executes, or empty where the record dispatches no stage
+    description: The stage instance for this run.
     value: ${{ steps.record.outputs.workflow_instance }}
   workflow_attempt:
-    description: the attempt of that stage instance this run is, or empty where the record dispatches no stage
+    description: The attempt number for this stage instance.
     value: ${{ steps.record.outputs.workflow_attempt }}
   workflow_lease:
-    description: >-
-      the lease the control plane gave this attempt, or empty where the record dispatches no stage. It binds a
-      completion to this attempt beside the run's own token, and grants nothing on its own
+    description: The control-plane lease for this attempt.
     value: ${{ steps.record.outputs.workflow_lease }}
   source_revision:
-    description: the commit the stage reads, from the stage record, or empty where the record dispatches no stage
+    description: The source revision from the package-stage record.
     value: ${{ steps.record.outputs.source_revision }}
+  stage_pull:
+    description: The pull request from the package-stage record, if present.
+    value: ${{ steps.record.outputs.stage_pull }}
+  stage_issue:
+    description: The issue from the package-stage record, if present.
+    value: ${{ steps.record.outputs.stage_issue }}
+  stage_work_ref:
+    description: The external work reference from the package-stage record, if present.
+    value: ${{ steps.record.outputs.stage_work_ref }}
+  plan_path:
+    description: The control-plane plan path for this task, if present.
+    value: ${{ steps.record.outputs.plan_path }}
   stage_minutes:
-    description: >-
-      the minutes a stage's model may run, ending three minutes before the control plane reaps the attempt, or
-      empty where the record names no deadline
+    description: The model budget, in minutes, before the control plane reaps the attempt.
     value: ${{ steps.record.outputs.stage_minutes }}
   stage_job_minutes:
-    description: >-
-      the minutes a stage's job may run, ending one minute before the control plane reaps the attempt, or empty
-      where the record names no deadline
+    description: The job budget, in minutes, before the control plane reaps the attempt.
     value: ${{ steps.record.outputs.stage_job_minutes }}
-  comment_id:
-    description: the comment or submitted review id read from the trusted record, or empty
-    value: ${{ steps.record.outputs.comment_id }}
-  comment_kind:
-    description: the GitHub comment space read from the trusted record, or empty
-    value: ${{ steps.record.outputs.comment_kind }}
-  label:
-    description: >-
-      the label a run nobody typed rests on, or empty. It names a fact for the runner to read back from
-      GitHub - that the pull request still carries it, and who applied it - and grants nothing by itself
-    value: ${{ steps.record.outputs.label }}
-  pr:
-    description: the pull request the record was decided for, or empty
-    value: ${{ steps.record.outputs.pr }}
-  head_sha:
-    description: the head commit the record was decided for, or empty; a run finding the head moved stands down
-    value: ${{ steps.record.outputs.head_sha }}
-  scope:
-    description: >-
-      the work the label behind this run admits, comma-separated, or empty where the record narrows the
-      run to nothing in particular. A record naming work this runner does not do fails the run rather
-      than being read as empty
-    value: ${{ steps.record.outputs.scope }}
-  trigger:
-    description: >-
-      what the control plane says set this run going - `build_failed`, `status_failed`, `labeled`,
-      `review_submitted`, `comment`, `opened`, `review_requested`, `pushed` or `check_action` - or empty. Its own word, from a
-      set it holds, so a run may state it plainly
-    value: ${{ steps.record.outputs.trigger }}
-  trigger_run:
-    description: the workflow run that failed, where one did, or empty
-    value: ${{ steps.record.outputs.trigger_run }}
-  trigger_attempt:
-    description: >-
-      which attempt of that run it was, or empty. A run's jobs answer for its latest attempt, so the
-      id alone names whatever has happened since
-    value: ${{ steps.record.outputs.trigger_attempt }}
-  trigger_state:
-    description: what that thing reported - a conclusion or a review state - or empty
-    value: ${{ steps.record.outputs.trigger_state }}
-  trigger_name:
-    description: >-
-      the workflow file or commit status context beside it, or empty. Written by whoever added the
-      file or reports the status, so it reaches the model as evidence and never as an instruction
-    value: ${{ steps.record.outputs.trigger_name }}
-  requester:
-    description: >-
-      the GitHub login of whoever asked, for a run nothing on GitHub started, or empty. Never a grant:
-      the runner checks it against CODEOWNERS read from GitHub, and it can only add a refusal
-    value: ${{ steps.record.outputs.requester }}
-  approver:
-    description: >-
-      the GitHub login the control plane verified through GitHub sign-in as approving the plan in Jira,
-      or empty. Unlike the requester it is proven, and it still grants nothing by itself: the approval
-      gate re-checks it against CODEOWNERS, and only at the pull request and head the record names
-    value: ${{ steps.record.outputs.approver }}
-  approval_id:
-    description: the identifier the control plane minted for that approval, or empty
-    value: ${{ steps.record.outputs.approval_id }}
-  model:
-    description: the model this run was asked for, or empty where nobody asked for one
-    value: ${{ steps.record.outputs.model }}
-  effort:
-    description: the effort this run was asked for, or empty where nobody asked for one
-    value: ${{ steps.record.outputs.effort }}
-  guidance:
-    description: >-
-      whatever the requester said beyond naming the work, or empty. Free text that reaches the run as
-      context and never as instruction, so it is passed through `env:` and never through an expression
-    value: ${{ steps.record.outputs.guidance }}
-  guidance_html:
-    description: >-
-      the same words HTML-escaped, which is the shape the plan prompt's guidance slot takes: it refuses
-      a raw `<` or `>` outright, because that slot is where a comment's own words already arrive
-    value: ${{ steps.record.outputs.guidance_html }}
-  work_item:
-    description: >-
-      what the work source says the work is, read by the control plane as the requester, or empty. The
-      same rule as guidance: context, never instruction, and passed through `env:` alone
-    value: ${{ steps.record.outputs.work_item }}
-  ask:
-    description: >-
-      the Jira ask this run answers, as the control plane minted it, or empty where the run answers none
-    value: ${{ steps.record.outputs.ask }}
+  workflow_steering_file:
+    description: The file that holds the exact control-plane steering envelope.
+    value: ${{ steps.record.outputs.workflow_steering_file }}
+  workflow_steering_sha256:
+    description: The digest of the exact control-plane steering envelope.
+    value: ${{ steps.record.outputs.workflow_steering_sha256 }}
 
 runs:
   using: composite
@@ -242,8 +78,10 @@ runs:
         RECORD_NAMED: ${{ inputs.record_id }}
       with:
         script: |
-          const { escapeHtml, isPolicyRefusal, readRecord, reportPolicyRefusal } =
+          const { isPolicyRefusal, readRecord, reportPolicyRefusal } =
             await import(`file://${process.env.RECORD_ACTION_PATH}/record.mjs`);
+          const fs = require('fs');
+          const path = require('path');
           let answer;
           try {
             answer = await readRecord({
@@ -252,14 +90,16 @@ runs:
               named: process.env.RECORD_NAMED !== '',
               mint: (audience) => core.getIDToken(audience),
               secret: (token) => core.setSecret(token),
-              note: (why, wait) => core.info(`ksai could not read the dispatch record yet, trying again in ${Math.round(wait / 1000)}s: ${why}`),
+              note: (why, wait) => core.info(
+                `ksai could not read the dispatch record yet, trying again in ${Math.round(wait / 1000)}s: ${why}`,
+              ),
             });
           } catch (refused) {
             if (isPolicyRefusal(refused)) {
               try {
                 await reportPolicyRefusal({
                   endpoint: process.env.RECORD_ENDPOINT,
-                      audience: process.env.RECORD_AUDIENCE,
+                  audience: process.env.RECORD_AUDIENCE,
                   mint: (audience) => core.getIDToken(audience),
                   secret: (token) => core.setSecret(token),
                 });
@@ -270,23 +110,25 @@ runs:
             core.setFailed(refused.message);
             return;
           }
-          if (answer.read) {
-            core.notice(`ksai read the dispatch record${answer.command ? `: command ${answer.command}` : ''}`);
-          }
+          if (answer.read) core.notice('ksai read the package-stage record');
           core.setOutput('read', answer.read ? 'true' : 'false');
-          for (const [name, held] of [['record_id', 'recordId'], ['issue_number', 'issueNumber'],
-            ['actor', 'actor'], ['work_ref', 'workRef'], ['attempt', 'attempt'], ['stall', 'stall'],
-            ['prev_remaining', 'prevRemaining'], ['command', 'command'], ['autofix_capability', 'autofixCapability'],
-            ['comment_id', 'commentId'], ['comment_kind', 'commentKind'], ['label', 'label'], ['pr', 'pr'],
-            ['head_sha', 'head_sha'], ['scope', 'scope'], ['trigger', 'trigger'],
-            ['trigger_run', 'triggerRun'], ['trigger_attempt', 'triggerAttempt'],
-            ['trigger_state', 'triggerState'], ['trigger_name', 'triggerName'],
-            ['requester', 'requester'], ['approver', 'approver'], ['approval_id', 'approvalId'], ['model', 'model'],
-            ['effort', 'effort'], ['guidance', 'guidance'], ['work_item', 'workItem'], ['ask', 'ask'],
-            ['bound_command', 'boundCommand'], ['session_action', 'sessionAction'], ['workflow_job', 'workflowJob'],
-            ['workflow_instance', 'workflowInstance'], ['workflow_attempt', 'workflowAttempt'],
-            ['workflow_lease', 'workflowLease'], ['source_revision', 'sourceRevision'], ['stage_minutes', 'stageMinutes'],
-            ['stage_job_minutes', 'stageJobMinutes']]) {
-            core.setOutput(name, answer[held]);
+          for (const [name, held] of [
+            ['record_id', 'recordId'],
+            ['workflow_job', 'workflowJob'],
+            ['workflow_instance', 'workflowInstance'],
+            ['workflow_attempt', 'workflowAttempt'],
+            ['workflow_lease', 'workflowLease'],
+            ['source_revision', 'sourceRevision'],
+            ['stage_pull', 'stagePull'],
+            ['stage_issue', 'stageIssue'],
+            ['stage_work_ref', 'stageWorkRef'],
+            ['plan_path', 'planPath'],
+            ['stage_minutes', 'stageMinutes'],
+            ['stage_job_minutes', 'stageJobMinutes'],
+          ]) {
+            core.setOutput(name, answer[held] ?? '');
           }
-          core.setOutput('guidance_html', escapeHtml(answer.guidance));
+          const file = path.join(process.env.RUNNER_TEMP, `ksai-steering-${answer.recordId}.json`);
+          fs.writeFileSync(file, answer.workflowSteering, { encoding: 'utf8', mode: 0o600 });
+          core.setOutput('workflow_steering_file', file);
+          core.setOutput('workflow_steering_sha256', answer.workflowSteeringDigest);

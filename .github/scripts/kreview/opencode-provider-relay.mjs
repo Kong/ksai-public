@@ -3,14 +3,35 @@ import { randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { authHeaders, bearer } from '../lib/opencode-token.mjs';
-import { ARTIFACTS, promptRendering } from '../lib/cp-prompts.mjs';
+import { authHeaders, bearer } from './opencode-token.mjs';
+import { ARTIFACTS } from './cp-prompts.mjs';
 import { canonical, digest, record as objectOf } from '../governance/artifacts.mjs';
 import { boundedSteps, CarryRefused, carriedOf, conversation, MAX_RESPONSE_BYTES, reminderText } from '../governance/conversation.mjs';
 import { governRequest } from '../governance/provider.mjs';
-import { originProblem } from './federated-token.mjs';
+import { originProblem } from './gateway-token.mjs';
 
 export { MAX_RESPONSE_BYTES };
+
+export function latchGuard(state, why) {
+  state.latched ||= `the guard stopped this run: ${why}`;
+  return new Error(state.latched);
+}
+
+export const rendersOf = (governed) => (governed
+  ? { current: digest(governed.prompt), carried: governed.carried ? [governed.carried.original, ...(governed.carried.earlier ?? [])] : [] }
+  : null);
+
+export async function guardedBody(body, state, governed) {
+  if (!governed) {
+    if (state.gate.required) throw latchGuard(state, 'the guard checks only a governed provider request');
+    return body;
+  }
+  try {
+    return await state.gate.checked(body, rendersOf(state.held?.governed));
+  } catch (error) {
+    throw latchGuard(state, error.message);
+  }
+}
 
 const REQUEST_BYTES = 32 * 1024 * 1024;
 const OBSERVATION_BYTES = 256 * 1024 * 1024;
@@ -115,23 +136,21 @@ export function recordProviderRequest(body, env, governed = null) {
   const request = JSON.parse(body.toString('utf8'));
   const first = request.messages?.[0];
   const text = first?.role === 'user' && first.content?.[0]?.type === 'text' ? first.content[0].text : '';
-  const setting = promptRendering(env);
-  if (typeof request.model !== 'string' || !request.model || (setting === 'cp' && !text)) {
+  if (typeof request.model !== 'string' || !request.model || !text) {
     throw new Error('provider request does not identify its model and governed prompt');
   }
   const id = randomBytes(16).toString('hex');
-  const mode = ['cp', 'shadow'].includes(setting) ? setting : 'local';
   const metadata = {
-    id, mode, model: request.model, prompt_digest: text ? digest(text) : '',
+    id, mode: 'cp', model: request.model, prompt_digest: digest(text),
     ...(governed?.carried ? { continuation_digest: digest(governed.prompt) } : {}),
     request_digest: digest(body), request_bytes: body.length, status: 0,
   };
   mkdirSync(root, { recursive: true, mode: 0o700 });
-  const retained = mode === 'cp' ? Buffer.from(JSON.stringify({ messages: request.messages.slice(1) })) : body;
+  const retained = Buffer.from(JSON.stringify({ messages: request.messages.slice(1) }));
   const used = retainedBytes.get(root) ?? readdirSync(root).filter((name) => /\.(body|dynamic)$/.test(name))
     .reduce((size, name) => size + statSync(join(root, name)).size, 0);
   if (used + retained.length > OBSERVATION_BYTES) throw new Error('provider observations exceed the run storage limit');
-  writeFileSync(join(root, `${id}.${mode === 'cp' ? 'dynamic' : 'body'}`), retained, { mode: 0o600, flag: 'wx' });
+  writeFileSync(join(root, `${id}.dynamic`), retained, { mode: 0o600, flag: 'wx' });
   retainedBytes.set(root, used + retained.length);
   const path = join(root, `${id}.json`);
   writeFileSync(path, JSON.stringify(metadata), { mode: 0o600, flag: 'wx' });
@@ -165,6 +184,7 @@ export async function relayProviderRequest(request, env, fetchImpl = fetch, toke
   const target = new URL(request.url ?? '/', 'http://127.0.0.1');
   if (request.method !== 'POST' || target.pathname !== '/v1/messages' || !queries.includes(target.search)) return null;
   if (state) state.asked = true;
+  if (state?.latched) throw new Error(state.latched);
   if (state?.completion) {
     const failure = await state.completion;
     if (failure) throw failure;
@@ -177,7 +197,7 @@ export async function relayProviderRequest(request, env, fetchImpl = fetch, toke
       headers.set(name, Array.isArray(value) ? value.join(', ') : value);
     }
   }
-  for (const [name, value] of Object.entries(authHeaders(held, { ANTHROPIC_AUTH: env.ANTHROPIC_AUTH }))) {
+  for (const [name, value] of Object.entries(authHeaders(held))) {
     headers.set(name, value);
   }
   const abort = new AbortController();
@@ -185,9 +205,10 @@ export async function relayProviderRequest(request, env, fetchImpl = fetch, toke
   let talk;
   try {
     let body = await bodyOf(request);
-    if (env.KSAI_PROVIDER_OBSERVATIONS === 'true' && promptRendering(env) === 'cp') {
+    if (env.KSAI_PROVIDER_OBSERVATIONS === 'true') {
       ({ body, talk } = enforceGovernedRequest(body, env, state));
     }
+    if (state?.gate) body = await guardedBody(body, state, Boolean(talk));
     const pinned = { session: state?.session ?? '', model: state?.held?.governed.model };
     const unadmitted = talk ? (state?.admit?.(pinned.session, pinned.model) ?? '') : '';
     if (unadmitted) throw new Error(`the provider call was not made, because its usage could not be counted: ${unadmitted}`);
@@ -214,7 +235,7 @@ export async function relayProviderRequest(request, env, fetchImpl = fetch, toke
 
 /** startProviderRelay keeps the bearer and provider origin outside the model process. */
 export async function startProviderRelay({ env = process.env, fetchImpl = fetch, token = bearer, record = env.KSAI_PROVIDER_OBSERVATIONS === 'true' ? recordProviderRequest : null, socket = '', stallMs = 0, queries = [''], counted = null, admit = null } = {}) {
-  const state = { completion: null, held: null, governing: '', session: '', counted, admit, carryRefused: new Map(), asked: false };
+  const state = { completion: null, held: null, governing: '', session: '', counted, admit, carryRefused: new Map(), asked: false, gate: null, latched: '' };
   const server = createServer(async (request, response) => {
     const gone = new AbortController();
     response.once('close', () => {
@@ -276,6 +297,13 @@ export async function startProviderRelay({ env = process.env, fetchImpl = fetch,
       state.completion = null;
       state.governing = dir;
     },
+    guard: (gate) => {
+      state.gate = gate;
+    },
+    gated: () => state.gate !== null,
+    required: () => state.gate?.required === true,
+    latch: (why) => latchGuard(state, why),
+    latched: () => state.latched,
     settled: () => state.held?.talk.settled() ?? null,
     asked: () => state.asked,
     drained: () => state.completion,
