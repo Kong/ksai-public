@@ -89,6 +89,8 @@ function digestFor(key) {
 export function signedWithDigest(bundle) {
   const entity = toSignedEntity(bundle);
   const content = entity.signature;
+  const preAuthEncoding = 'preAuthEncoding' in content ? content.preAuthEncoding : undefined;
+  if (!Buffer.isBuffer(preAuthEncoding)) throw new Error('the signature content has no DSSE pre-authentication bytes');
   return {
     ...entity,
     signature: {
@@ -96,7 +98,7 @@ export function signedWithDigest(bundle) {
       compareSignature: (signature) => content.compareSignature(signature),
       compareDigest: (value) => content.compareDigest(value),
       compareSignedDigest: (value) => content.compareSignedDigest(value),
-      verifySignature: (key) => verify(digestFor(key), content.preAuthEncoding, key, content.signature),
+      verifySignature: (key) => verify(digestFor(key), preAuthEncoding, key, content.signature),
     },
   };
 }

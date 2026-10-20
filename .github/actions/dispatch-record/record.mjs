@@ -1,212 +1,62 @@
+import { createHash } from 'node:crypto';
+
+import { admitReviewDeadline, reviewMinuteBudget } from '../../scripts/lib/review-deadline.mjs';
+
 const RECORD_ID = /^[0-9a-f]{32}$/;
 
-/**
- * COMMANDS is every command this runner answers, copied from `.github/scripts/lib/select-arm.cjs`
- * rather than imported: the module ships beside this action.yml, so a caller has it wherever it has
- * the action, and a parity test holds the copy to the original.
- */
-export const COMMANDS = Object.freeze([
-  'review', 'implement', 'approve', 'fix', 'revise', 'unlock', 'stop', 'pause', 'resume', 'help', 'test',
-]);
-
-export const AUTOFIX_CAPABILITY = 'secured-context-output/v1';
-
-export const SECURED_FIX_COMMAND = 'fix-secured-v1';
-
-/**
- * WORK_SCOPES is every kind of work a record may narrow a run to, copied from
- * `.github/scripts/ksai/phase.cjs` rather than imported, for the reason COMMANDS is copied, and held to
- * the original by the same kind of parity test.
- */
-export const WORK_SCOPES = Object.freeze(['builds', 'merges', 'reviews']);
-
-/**
- * TIMEOUT is how long one read may take, in milliseconds, before it counts as a failure that can pass.
- */
 export const TIMEOUT = 10000;
 
-/**
- * DELAYS is how long each retry of a failure that can pass waits, in milliseconds, unless the control
- * plane asks for longer, up to the longest of them.
- */
 export const DELAYS = Object.freeze([2000, 4000, 8000, 15000, 30000, 30000]);
 
-/**
- * BUDGET is the most time a run spends trying to read its record, in milliseconds, however long the
- * control plane asks it to wait: the reads and the waits between them stop there, which leaves the gate
- * job's five minutes room for the steps before the read. A control plane unreachable for longer fails
- * the run, which a person can start again; a run that carried on without its record cannot be taken
- * back.
- */
 export const BUDGET = 150000;
-
-const SEGMENT = '[A-Za-z0-9][A-Za-z0-9._-]{0,63}';
-
-export const MODEL = new RegExp(`^${SEGMENT}(/${SEGMENT}){0,2}$`);
-
-export const EFFORTS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
-
-const REQUESTER = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
-
-export const escapeHtml = (value) =>
-  String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-const GUIDANCE_MAX = 4096;
-
-const WORK_ITEM_MAX = 16384;
-
-const TOLD_MAX = 300;
-
-const NO_RECORD_HEADER = 'Ksai-No-Record';
-
-const WHY_STATUS = Object.freeze({
-  401: 'the control plane could not tell which run this is',
-  403: 'the control plane refused this run its record',
-  404: 'the control plane holds no readable record for this run - it may have expired, or this repository may not be on the control plane',
-  503: 'the control plane could not reach its records, or has not tied this record to a run yet',
-});
-
-export const NO_STAGE = Object.freeze({
-  workflowJob: '', workflowInstance: '', workflowAttempt: '', workflowLease: '', sourceRevision: '',
-  stageMinutes: '', stageJobMinutes: '',
-});
-
-const NO_RECORD = Object.freeze({
-  ...NO_STAGE,
-  read: false,
-  recordId: '',
-  issueNumber: '',
-  actor: '',
-  workRef: '',
-  attempt: '',
-  stall: '',
-  prevRemaining: '',
-  command: '',
-  label: '',
-  pr: '',
-  head_sha: '',
-  scope: '',
-  autofixCapability: '',
-  commentId: '',
-  commentKind: '',
-  trigger: '',
-  triggerRun: '',
-  triggerAttempt: '',
-  triggerState: '',
-  triggerName: '',
-  requester: '',
-  approver: '',
-  approvalId: '',
-  model: '',
-  effort: '',
-  guidance: '',
-  workItem: '',
-  ask: '',
-  boundCommand: '',
-  sessionAction: '',
-});
-
-const PR_SHAPE = /^[1-9][0-9]{0,9}$/;
-
-const SHA_SHAPE = /^[0-9a-fA-F]{40}$/;
-
-const LABEL_MAX = 50;
-
-/**
- * TRIGGERS is what the control plane may say set a run going, and TRIGGER_STATES what it may say that
- * thing reported. Both are words it chooses from sets of its own, so a run states them plainly.
- *
- * SHOWABLE_NAME is the alphabet the one author-written value is drawn from: a workflow file is named
- * by whoever added it and a status context by whoever reports it. The control plane holds the same
- * alphabet, and it has no angle bracket in it, so the name cannot spell the constraint block a run
- * puts it inside - which is the property that survives without anyone listing the ways to hide a
- * character. The one addition is the ellipsis the control plane appends to a name it cut, which is
- * its own mark rather than the author's, and refusing it here would drop every long name.
- *
- * None of these refuses a run. They are evidence rather than a boundary, so a word this release does
- * not know is dropped and the run carries on with what it has: refusing would redden every autofix
- * dispatch in a repository the day the control plane learned one more.
- */
-export const TRIGGERS = Object.freeze([
-  'build_failed', 'status_failed', 'labeled', 'review_submitted', 'comment', 'opened', 'review_requested', 'pushed',
-  'check_action',
-]);
-
-const BOUND_TRIGGERS = Object.freeze([
-  'build_failed', 'status_failed', 'labeled', 'review_submitted', 'comment', 'opened', 'review_requested', 'pushed',
-]);
-
-export const TRIGGER_STATES = Object.freeze([
-  'failure', 'timed_out', 'error', 'changes_requested', 'commented', 'approved', 'dismissed',
-]);
-
-const SHOWABLE_NAME = /^[A-Za-z0-9 ._/:-]+\u2026?$/;
-
-/*
- * NAME_BOUND is the control plane's own cut, and the ellipsis is the one character it may add past
- * it. Both counted in UTF-16 units, which is the same number as its bytes: the alphabet above is
- * ASCII, so a name that fits its 256-byte cut fits this, and one that does not was never sent.
- */
-const NAME_BOUND = 256;
-
-const CUT_MARK = '\u2026';
-
-const COUNT_SHAPE = /^[1-9][0-9]{0,18}$/;
-
-const CHAIN_SHAPE = /^[0-9]{1,6}$/;
-
-const WORK_REF_SHAPE = /^jira\/[A-Za-z][A-Za-z0-9_]*-[0-9]{1,10}$/;
-
-const COMMENT_KINDS = Object.freeze(['issue', 'review', 'submitted_review']);
-
-const SESSION_ACTIONS = Object.freeze(['continue', 'restart', 'retry']);
-
-const BOUND_COMMANDS = new Map([['review', ['review']], ['implement', ['implement', SECURED_FIX_COMMAND]]]);
-
-const COMMENTED_BOUND_COMMANDS = new Map([['implement', ['fix', 'revise']]]);
-
-const COMMENTED_KINDS = Object.freeze(['issue', 'review']);
-
-const STAGE_BOUND_COMMANDS = new Map([['test', 'test']]);
-
-const STAGE_PART = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
-
-/**
- * STAGE_JOB and STAGE_INSTANCE are the shapes ksai-cp mints a stage's job and instance in, copied
- * from `.github/scripts/lib/stage-contract/stage-completion.schema.json` rather than read, for the
- * reason COMMANDS is copied, and held to it by a parity test.
- */
-export const STAGE_JOB = /^job_[0-9a-f]{32}$/;
-
-export const STAGE_INSTANCE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\[(?:0|[1-9][0-9]*)\])?$/;
-
-const shaped = (value, shape) => typeof value === 'string' && shape.test(value);
-
-function boundCommandOf(flow, command, { job, stage, instance, commented }) {
-  const named = typeof flow === 'string' ? flow : '';
-  const staged = STAGE_BOUND_COMMANDS.get(named);
-  const runs = BOUND_COMMANDS.get(named)?.includes(command) || (commented && COMMENTED_BOUND_COMMANDS.get(named)?.includes(command));
-  if (staged === undefined ? !runs : command !== undefined) {
-    throw policyStopped('the record binds a task to a flow its command does not run');
-  }
-  if (staged === undefined) return command === SECURED_FIX_COMMAND ? 'fix' : command;
-  if (!shaped(job, STAGE_PART) || !shaped(stage, STAGE_PART) || !shaped(instance, STAGE_INSTANCE)) {
-    throw policyStopped('the record binds a workflow successor to no stage attempt the control plane could have admitted');
-  }
-  return staged;
-}
 
 const STAGE_RECORD_VERSION = 'ksai.konghq.com/stage-record/v1alpha1';
 
 const STAGE_EXECUTION = 'stage';
 
+const STAGE_JOB = /^job_[0-9a-f]{32}$/;
+
+const STAGE_INSTANCE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\[(?:0|[1-9][0-9]*)\])?$/;
+
 const STAGE_LEASE = /^[\w.-]{1,128}$/;
 
 const REVISION = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
+const COUNT = /^[1-9][0-9]{0,18}$/;
+
 const DEADLINE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
 
 const MINUTE = 60_000;
+
+const TOLD_MAX = 300;
+
+const STEERING_MAX = 1 << 20;
+
+const STEERING_DIGEST = /^sha256:[0-9a-f]{64}$/;
+
+const NO_RECORD_HEADER = 'Ksai-No-Record';
+
+const WHY_STATUS = Object.freeze({
+  401: 'the control plane did not accept this run token',
+  403: 'the control plane refused this run',
+  404: 'the control plane has no dispatch record for this run',
+  503: 'the control plane has not bound this dispatch record yet',
+});
+
+const NO_RECORD = Object.freeze({ read: false });
+
+const shaped = (value, shape) => typeof value === 'string' && shape.test(value);
+
+const stopped = (why) => new Error(`${why} - so this run starts nothing`);
+
+const policyStopped = (why) => Object.assign(stopped(why), { code: 'security_policy_refused' });
+
+export const isPolicyRefusal = (error) => error?.code === 'security_policy_refused';
+
+const pullOf = (subject) =>
+  (subject?.type === 'pull-request' && Number.isSafeInteger(subject.number) && subject.number > 0
+    ? String(subject.number)
+    : '');
 
 function budgetOf(deadline, at) {
   if (deadline === undefined) return { stageMinutes: '', stageJobMinutes: '' };
@@ -217,23 +67,38 @@ function budgetOf(deadline, at) {
   return { stageMinutes: String(left - 3), stageJobMinutes: String(left - 1) };
 }
 
-function stageOf(served, commanded, at) {
-  const {
-    workflow_execution: execution, workflow_record: written, workflow_job: job, workflow_instance: instance,
-    workflow_attempt: tried, workflow_lease: lease, workflow_deadline: deadline,
-  } = served;
-  if (execution === undefined) {
-    if (written !== undefined && !commanded) {
-      throw stopped('the record carries a package stage its control plane did not mark as one, so the control plane predates this runner');
-    }
-    return NO_STAGE;
+function recordFrom(served, at) {
+  if (served === null || typeof served !== 'object' || Array.isArray(served)) {
+    throw policyStopped('the control plane answered something other than a record');
   }
-  if (execution !== STAGE_EXECUTION) throw policyStopped('the record names a workflow execution this runner does not run');
-  if (commanded) throw policyStopped('the record dispatches a package stage and names a command or a task beside it');
-  if (!shaped(job, STAGE_JOB) || !shaped(instance, STAGE_INSTANCE) || !shaped(lease, STAGE_LEASE) || counted(tried) === ''
-    || !Number.isSafeInteger(Number(tried))) {
+
+  const {
+    record_id: recordId,
+    workflow_execution: execution,
+    workflow_record: written,
+    workflow_job: job,
+    workflow_instance: instance,
+    workflow_attempt: tried,
+    workflow_lease: lease,
+    workflow_deadline: deadline,
+    workflow_steering: workflowSteering,
+    workflow_steering_sha256: workflowSteeringDigest,
+    issue_number: issueNumber,
+    work_ref: workRef,
+    plan_path: planPath,
+  } = /** @type {Record<string, unknown>} */ (served);
+
+  if (!shaped(recordId, RECORD_ID)) {
+    throw policyStopped('the record does not name the control-plane decision that started this run');
+  }
+  if (execution !== STAGE_EXECUTION) {
+    throw policyStopped('the record does not dispatch a package stage');
+  }
+  if (!shaped(job, STAGE_JOB) || !shaped(instance, STAGE_INSTANCE) || !shaped(lease, STAGE_LEASE)
+    || !shaped(tried, COUNT) || !Number.isSafeInteger(Number(tried))) {
     throw policyStopped('the record dispatches a package stage it does not fully name');
   }
+
   let record;
   try {
     record = typeof written === 'string' ? JSON.parse(written) : null;
@@ -244,55 +109,51 @@ function stageOf(served, commanded, at) {
   if (record?.apiVersion !== STAGE_RECORD_VERSION || typeof revision !== 'string' || !REVISION.test(revision)) {
     throw policyStopped('the record dispatches a package stage its stage record does not describe');
   }
+  const hasSteering = typeof workflowSteering === 'string' && workflowSteering !== '';
+  const hasSteeringDigest = typeof workflowSteeringDigest === 'string' && workflowSteeringDigest !== '';
+  if (!hasSteering || !hasSteeringDigest) {
+    throw policyStopped('the record carries an incomplete workflow steering decision');
+  }
+  const bytes = Buffer.from(workflowSteering, 'utf8');
+  const digest = `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+  let envelope;
+  try {
+    envelope = JSON.parse(workflowSteering);
+  } catch {
+    envelope = null;
+  }
+  if (bytes.length > STEERING_MAX || envelope === null || typeof envelope !== 'object' || Array.isArray(envelope)
+    || !STEERING_DIGEST.test(workflowSteeringDigest) || digest !== workflowSteeringDigest) {
+    throw policyStopped('the record carries workflow steering bytes that do not match their digest');
+  }
+
+  let reviewAdmission;
+  try {
+    reviewAdmission = admitReviewDeadline(served, record, envelope, at);
+  } catch (error) {
+    throw policyStopped(error.message);
+  }
+
   return {
-    workflowJob: job, workflowInstance: instance, workflowAttempt: tried, workflowLease: lease, sourceRevision: revision,
-    ...budgetOf(deadline, at),
+    read: true,
+    recordId,
+    workflowJob: job,
+    workflowInstance: instance,
+    workflowAttempt: tried,
+    workflowLease: lease,
+    sourceRevision: revision,
+    stagePull: pullOf(record.job.subject),
+    workflowSteering,
+    workflowSteeringDigest,
+    stageIssue: typeof issueNumber === 'string' ? issueNumber : '',
+    stageWorkRef: typeof workRef === 'string' ? workRef : '',
+    planPath: typeof planPath === 'string' ? planPath : '',
+    ...(reviewAdmission ? {
+      reviewAdmission: JSON.stringify(reviewAdmission),
+      ...reviewMinuteBudget(reviewAdmission, at),
+    } : budgetOf(deadline, at)),
   };
 }
-
-/** oneOf answers a value from a set the control plane chooses from, or empty for anything else. */
-const oneOf = (value, of) => (typeof value === 'string' && of.includes(value) ? value : '');
-
-/** counted answers a positive whole number as it was written, or empty. */
-const counted = (value) => (typeof value === 'string' && COUNT_SHAPE.test(value) ? value : '');
-
-/*
- * showable answers the name a run may be shown, or empty.
- *
- * Trimmed because a name of nothing but spaces is inside the alphabet and would render a heading over
- * a blank line, which reads as a name this action lost rather than as one nobody wrote.
- */
-function showable(value) {
-  if (typeof value !== 'string') return '';
-  const name = value.trim();
-  const bound = name.endsWith(CUT_MARK) ? NAME_BOUND + CUT_MARK.length : NAME_BOUND;
-  return name.length <= bound && SHOWABLE_NAME.test(name) ? name : '';
-}
-
-/**
- * narrows reports whether a scope names work this runner does. A record naming work it does not is
- * refused rather than passed on empty: an empty scope narrows nothing, so passing it on would widen the
- * run to everything the control plane meant to keep it away from.
- *
- * @param {string} scope
- */
-function narrows(scope) {
-  const parts = scope.split(',');
-  return new Set(parts).size === parts.length && parts.every((one) => WORK_SCOPES.includes(one));
-}
-
-const hasControl = (text) => [...text].some((character) => {
-  const point = character.codePointAt(0) ?? 0;
-  return point < 32 || point === 127;
-});
-
-const text = (value) => (typeof value === 'string' ? value : '');
-
-const stopped = (why) => new Error(`${why} - so this run starts nothing`);
-
-const policyStopped = (why) => Object.assign(stopped(why), { code: 'security_policy_refused' });
-
-export const isPolicyRefusal = (error) => error?.code === 'security_policy_refused';
 
 const passing = (status) => status === 408 || status === 429 || status >= 500;
 
@@ -303,19 +164,9 @@ const release = (answer) => Promise.resolve().then(() => answer.body?.cancel()).
 const told = (answer) =>
   Promise.resolve()
     .then(() => answer.text())
-    .then((said) => text(said).replace(/\s+/g, ' ').trim().slice(0, TOLD_MAX), () => '')
+    .then((said) => (typeof said === 'string' ? said : '').replace(/\s+/g, ' ').trim().slice(0, TOLD_MAX), () => '')
     .then((said) => said || 'it said nothing');
 
-/**
- * baseOf answers the origin and path a route may be appended to, or an empty string where the
- * endpoint is not an https URL with a host and nothing a request would carry past its path. The
- * token goes out in a header, so a query, a fragment or credentials would put the read somewhere
- * other than the control plane. It is built from what was parsed rather than from what was typed,
- * because an endpoint ending in a bare `?` or `#` parses with neither and still swallows the route
- * appended to the raw string.
- *
- * @param {string} endpoint
- */
 function baseOf(endpoint) {
   let url;
   try {
@@ -328,45 +179,19 @@ function baseOf(endpoint) {
   return bare ? `${url.origin}${url.pathname}`.replace(/\/+$/, '') : '';
 }
 
-/**
- * waitAsked reads a Retry-After the control plane gave in whole seconds, as milliseconds, or null.
- *
- * @param {{ headers?: { get(name: string): string | null } }} answer
- */
 function waitAsked(answer) {
   const header = (answer.headers?.get('retry-after') ?? '').trim();
   return /^\d+$/.test(header) ? Number(header) * 1000 : null;
 }
 
-/**
- * because names what a throw said, so a line about a failure carries its reason and not only the fact
- * of it. A network error keeps the reason in its cause, where the code is the part worth reading.
- *
- * @param {unknown} thrown
- */
 function because(thrown) {
   const cause = thrown instanceof Error && thrown.cause instanceof Error ? thrown.cause : null;
   const coded = /** @type {{ code?: unknown }} */ (cause ?? {}).code;
-  const said = (typeof coded === 'string' && coded) || cause?.message || (thrown instanceof Error ? thrown.message : '');
+  const said = (typeof coded === 'string' && coded) || cause?.message
+    || (thrown instanceof Error ? thrown.message : '');
   return said || 'it said nothing';
 }
 
-/**
- * attempt makes one read. It answers the served body, or the reason a failure that can pass gave and
- * the wait the control plane asked for, and throws on a refusal that would answer the same again. A
- * response it does not read is released first, so a retry does not hold its connection open.
- *
- * @param {{
- *   url: string,
- *   audience: string,
- *   mint: (audience: string) => Promise<string>,
- *   secret: (token: string) => void,
- *   fetch: typeof globalThis.fetch,
- *   timeout: number,
- *   named?: boolean,
- * }} asked
- * @returns {Promise<{ served: unknown } | { none: true } | { retry: string, asked: number | null }>}
- */
 async function attempt({ url, audience, mint, secret, fetch, timeout, named = false }) {
   let token = '';
   try {
@@ -389,14 +214,13 @@ async function attempt({ url, audience, mint, secret, fetch, timeout, named = fa
     return { retry: `the control plane could not be reached: ${because(unreached)}`, asked: null };
   }
 
-  const why = WHY_STATUS[/** @type {401|403|404|503} */ (answer.status)] ?? `the control plane answered ${answer.status}`;
+  const why = WHY_STATUS[/** @type {401|403|404|503} */ (answer.status)]
+    ?? `the control plane answered ${answer.status}`;
   if (passing(answer.status)) {
     await release(answer);
     return { retry: why, asked: waitAsked(answer) };
   }
-  if (answer.status === 403) {
-    throw stopped(`${why}: ${await told(answer)}`);
-  }
+  if (answer.status === 403) throw stopped(`${why}: ${await told(answer)}`);
   if (answer.status === 404) {
     const mine = answer.headers?.get?.(NO_RECORD_HEADER) === '1';
     await release(answer);
@@ -415,182 +239,6 @@ async function attempt({ url, audience, mint, secret, fetch, timeout, named = fa
   }
 }
 
-/**
- * recordFrom hands on what a served record decided, and throws on anything the runner could not use,
- * so nothing half-read is passed on.
- *
- * @param {unknown} served
- */
-function recordFrom(served, at) {
-  if (served === null || typeof served !== 'object' || Array.isArray(served)) {
-    throw policyStopped('the control plane answered something other than a record');
-  }
-
-  const {
-    record_id: recordId,
-    issue_number: issueNumber, actor, work_ref: workRef,
-    attempt: spent, stall, prev_remaining: prevRemaining,
-    command, label, pr, head_sha: headSha, scope, requester, approver, approval_id: approvalId,
-    model, effort, guidance, work_item: workItem, ask,
-    autofix_capability: autofixCapability, comment_id: commentId, comment_kind: commentKind,
-    trigger, trigger_run: triggerRun, trigger_attempt: triggerAttempt,
-    trigger_state: triggerState, trigger_name: triggerName,
-    work_session_id: sessionId, work_session_action: sessionAction,
-    work_session_parent_id: sessionParent, work_session_flow: sessionFlow, classification,
-    workflow_job: workflowJob, workflow_stage: workflowStage, workflow_instance: workflowInstance,
-  } = /** @type {Record<string, unknown>} */ (served);
-  if (recordId !== undefined && (typeof recordId !== 'string' || !RECORD_ID.test(recordId))) {
-    throw policyStopped('the record names itself as something the control plane could not have minted');
-  }
-  const securedFix = command === SECURED_FIX_COMMAND;
-  if (command !== undefined && (typeof command !== 'string' || (!COMMANDS.includes(command) && !securedFix))) {
-    throw policyStopped('the record names a command this runner does not answer');
-  }
-  if (label !== undefined && (typeof label !== 'string' || label === '' || label.length > LABEL_MAX || hasControl(label))) {
-    throw policyStopped('the record names a label GitHub could not hold');
-  }
-  if (issueNumber !== undefined && (typeof issueNumber !== 'string' || !PR_SHAPE.test(issueNumber))) {
-    throw policyStopped('the record names an issue that is not a number');
-  }
-  if (actor !== undefined && (typeof actor !== 'string' || !REQUESTER.test(actor))) {
-    throw policyStopped('the record names an actor GitHub could not have');
-  }
-  if (workRef !== undefined && (typeof workRef !== 'string' || !WORK_REF_SHAPE.test(workRef))) {
-    throw policyStopped('the record names work this runner cannot address');
-  }
-  for (const [name, count] of [['attempt', spent], ['stall', stall], ['prev_remaining', prevRemaining]]) {
-    if (count !== undefined && (typeof count !== 'string' || !CHAIN_SHAPE.test(count))) {
-      throw policyStopped(`the record names a ${name} that is not a count`);
-    }
-  }
-  if (pr !== undefined && (typeof pr !== 'string' || !PR_SHAPE.test(pr))) {
-    throw policyStopped('the record names a pull request that is not a number');
-  }
-  if (headSha !== undefined && (typeof headSha !== 'string' || !SHA_SHAPE.test(headSha))) {
-    throw policyStopped('the record names a head that is not a commit');
-  }
-  if (scope !== undefined && (typeof scope !== 'string' || scope === '' || !narrows(scope))) {
-    throw policyStopped('the record narrows this run to work this runner does not do');
-  }
-  if (requester !== undefined && (typeof requester !== 'string' || !REQUESTER.test(requester))) {
-    throw policyStopped('the record names a requester that is not a GitHub login');
-  }
-  if (approver !== undefined && (typeof approver !== 'string' || !REQUESTER.test(approver))) {
-    throw policyStopped('the record names an approver that is not a GitHub login');
-  }
-  if (approvalId !== undefined && (typeof approvalId !== 'string' || !RECORD_ID.test(approvalId))) {
-    throw policyStopped('the record names an approval the control plane could not have minted');
-  }
-  if ((approver !== undefined || approvalId !== undefined) &&
-    (approver === undefined || approvalId === undefined || command !== 'approve' || pr === undefined || headSha === undefined)) {
-    throw policyStopped('the record names an approval without the approver, the approval, the pull request and the head it was given for');
-  }
-  if (model !== undefined && (typeof model !== 'string' || !MODEL.test(model))) {
-    throw policyStopped('the record names a model this workflow will not pass on');
-  }
-  if (effort !== undefined && (typeof effort !== 'string' || !EFFORTS.includes(effort))) {
-    throw policyStopped('the record names an effort this workflow will not pass on');
-  }
-  if (guidance !== undefined && (typeof guidance !== 'string' || !sayable(guidance, GUIDANCE_MAX))) {
-    throw policyStopped('the record carries guidance this workflow will not pass on');
-  }
-  if (workItem !== undefined && (typeof workItem !== 'string' || !sayable(workItem, WORK_ITEM_MAX))) {
-    throw policyStopped('the record carries a work item this workflow will not pass on');
-  }
-  if (ask !== undefined && (typeof ask !== 'string' || !RECORD_ID.test(ask))) {
-    throw policyStopped('the record names a Jira ask the control plane could not have minted');
-  }
-  if (commentId !== undefined && (typeof commentId !== 'string' || !COUNT_SHAPE.test(commentId))) {
-    throw policyStopped('the record names a comment or review that is not a positive id');
-  }
-  if (commentKind !== undefined &&
-    (typeof commentKind !== 'string' || !COMMENT_KINDS.includes(commentKind) || commentId === undefined)) {
-    throw policyStopped('the record names a comment space without a usable comment or review id');
-  }
-  if (securedFix || autofixCapability !== undefined) {
-    if (!securedFix || autofixCapability !== AUTOFIX_CAPABILITY) {
-      throw policyStopped('the secured autofix command and capability do not name the same policy');
-    }
-    if (label === undefined || pr === undefined || headSha === undefined || scope === undefined) {
-      throw policyStopped('the secured autofix record has no complete label, pull request, head and scope basis');
-    }
-    if (commentKind !== undefined && commentKind !== 'submitted_review') {
-      throw policyStopped('the secured autofix record names a comment surface automatic writes do not use');
-    }
-    if (!BOUND_TRIGGERS.includes(/** @type {string} */ (trigger))) {
-      throw policyStopped('the secured autofix record names no trigger this runner can bind to its context');
-    }
-    if (trigger === 'review_submitted' && (commentId === undefined || commentKind !== 'submitted_review')) {
-      throw policyStopped('the secured review autofix record names no submitted review identity');
-    }
-    if (trigger !== 'review_submitted' && (commentId !== undefined || commentKind !== undefined)) {
-      throw policyStopped('the secured autofix record names a review identity for a trigger that is not a submitted review');
-    }
-  }
-  const bound = [sessionId, sessionAction, sessionParent, sessionFlow].some((one) => one !== undefined);
-  let boundCommand = '';
-  if (bound) {
-    if (typeof sessionId !== 'string' || !RECORD_ID.test(sessionId)) {
-      throw policyStopped('the record binds a task the control plane could not have minted');
-    }
-    if (typeof sessionAction !== 'string' || !SESSION_ACTIONS.includes(sessionAction)) {
-      throw policyStopped('the record binds a task to an action a successor does not take');
-    }
-    if (sessionAction === 'restart'
-      ? typeof sessionParent !== 'string' || !RECORD_ID.test(sessionParent) || sessionParent === sessionId
-      : sessionParent !== undefined) {
-      throw policyStopped('the record binds a task to a parent its action does not name');
-    }
-    boundCommand = boundCommandOf(sessionFlow, command, {
-      job: workflowJob,
-      stage: workflowStage,
-      instance: workflowInstance,
-      commented: typeof commentKind === 'string' && COMMENTED_KINDS.includes(commentKind),
-    });
-    if (classification !== undefined) {
-      throw policyStopped('the record binds a task to a classified comment, which a successor never replays');
-    }
-    if (requester === undefined) {
-      throw policyStopped('the record binds a task but names no operator who continued it');
-    }
-  }
-  const stage = stageOf(served, command !== undefined || bound, at);
-  return {
-    read: true,
-    command: boundCommand || (securedFix ? 'fix' : text(command)),
-    boundCommand,
-    sessionAction: text(sessionAction),
-    autofixCapability: securedFix ? AUTOFIX_CAPABILITY : '',
-    label: text(label),
-    pr: text(pr),
-    head_sha: text(headSha).toLowerCase(),
-    scope: text(scope),
-    commentId: text(commentId),
-    commentKind: text(commentKind),
-    trigger: oneOf(trigger, TRIGGERS),
-    triggerRun: counted(triggerRun),
-    triggerAttempt: counted(triggerAttempt),
-    triggerState: oneOf(triggerState, TRIGGER_STATES),
-    triggerName: showable(triggerName),
-    requester: text(requester),
-    recordId: text(recordId),
-    issueNumber: text(issueNumber),
-    actor: text(actor),
-    workRef: text(workRef),
-    attempt: text(spent),
-    stall: text(stall),
-    prevRemaining: text(prevRemaining),
-    approver: text(approver),
-    approvalId: text(approvalId),
-    model: text(model),
-    effort: text(effort),
-    guidance: text(guidance),
-    workItem: text(workItem),
-    ask: text(ask),
-    ...stage,
-  };
-}
-
 /** Report one authenticated, body-free policy refusal without changing the original failure. */
 export async function reportPolicyRefusal({ endpoint, audience, mint, secret, fetch = globalThis.fetch }) {
   const base = baseOf(endpoint);
@@ -598,44 +246,20 @@ export async function reportPolicyRefusal({ endpoint, audience, mint, secret, fe
   const token = await mint(audience);
   if (typeof token !== 'string' || token === '') return false;
   secret(token);
-  const answer = await fetch(
-    `${base}/v1/run/security-refusal`,
-    {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(TIMEOUT),
-    },
-  );
+  const answer = await fetch(`${base}/v1/run/security-refusal`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(TIMEOUT),
+  });
   await release(answer);
   return answer.ok;
 }
 
-function sayable(value, limit) {
-  if (value.length > limit) return false;
-  for (const character of value) {
-    const code = character.codePointAt(0) ?? 0;
-    if (code === 0x09 || code === 0x0a) continue;
-    if (code < 0x20 || code === 0x7f) return false;
-  }
-  return true;
-}
-
 /**
- * readRecord reads what the control plane decided for this run. A caller naming no control plane
- * reads nothing; every other run asks for the record its own OIDC token names, and reads it or this
- * throws with the reason, and nothing falls back to the dispatch inputs. A control plane holding no
- * record says so on its 404, which reads as nothing rather than throwing, and a 404 it did not mark
- * throws unless the caller named a record of its own.
- *
- * A failure that can pass - the token mint, the network, a body that did not parse, a 408, a 429 or a
- * 5xx - is tried again on the delays given, waiting longer where the control plane asks to, up to the
- * longest delay, and never past the budget: each read is cut to the time left, and a wait that would
- * run past it stops the run instead. A refusal that would answer the same again throws at once, and
- * every refusal is decided before a token is minted where it can be.
- *
  * @param {{
  *   endpoint?: string,
  *   audience?: string,
+ *   named?: boolean,
  *   env?: Record<string, string | undefined>,
  *   mint: (audience: string) => Promise<string>,
  *   secret?: (token: string) => void,
@@ -644,7 +268,6 @@ function sayable(value, limit) {
  *   delays?: readonly number[],
  *   sleep?: (ms: number) => Promise<void>,
  *   note?: (why: string, wait: number) => void,
- *   named?: boolean,
  *   budget?: number,
  *   now?: () => number,
  * }} asked
@@ -675,7 +298,9 @@ export async function readRecord({
   const longest = Math.max(0, ...delays);
   const started = now();
   const tries = async (left) => {
-    const outcome = await attempt({ ...asked, timeout: Math.max(1, Math.min(timeout, budget - (now() - started))) });
+    const elapsed = now() - started;
+    if (elapsed >= budget) throw stopped(`the ${Math.round(budget / 1000)}s allowed to read the record ran out`);
+    const outcome = await attempt({ ...asked, timeout: Math.max(1, Math.min(timeout, budget - elapsed)) });
     if ('none' in outcome) return NO_RECORD;
     if ('served' in outcome) return recordFrom(outcome.served, now());
     if (left.length === 0) {
