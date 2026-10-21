@@ -9,9 +9,7 @@ export { compareVersions, versionParts };
 
 const LOCK_SUBJECT = /^ksai-cp-prompts-(v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))\.lock\.json$/;
 const TOOL_NAME = /^[a-z][a-z0-9_-]{0,63}$/;
-export const TOOL_PREFIX = 'static.runtime.opencode-tool-';
-
-export const TOOL_PREFIX_V2 = 'static.runtime.opencode2-tool-';
+export const TOOL_PREFIX = 'static.runtime.opencode2-tool-';
 const REMINDER_ID = 'static.runtime.opencode-max-steps';
 export const NOTES_ID = 'static.runtime.ksai-link-notes';
 export const STATUS_TOOL = 'status';

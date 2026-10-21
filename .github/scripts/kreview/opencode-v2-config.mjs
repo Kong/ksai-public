@@ -1,38 +1,61 @@
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join, normalize } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-
-import modelCatalog from '../lib/model-catalog.cjs';
 
 import {
   PROVIDER_POLICY_GITIGNORE,
   headerLines,
   isolatedToolPhase,
   mergedDenials,
-  phaseDenials,
   providerPolicyFile,
   underWorkspace,
-} from '../lib/opencode.mjs';
+} from './opencode.mjs';
 import {
-  KSAI_PLUGIN,
-  SHELL_TIMEOUT_MS,
   V2_PROVIDER_POLICY_CONFIG,
   governedRules,
   opencodeDataDir,
   permissionRules,
-  phasePermissionRules,
   rule,
   v2RuntimeConfig,
   v2SandboxScopes,
   validateV2Version,
-} from '../lib/opencode-v2.mjs';
+} from './opencode-v2.mjs';
 import { LINK_TOOLS } from '../governance/release.mjs';
-import { REPLYING_PHASES } from '../ksai/reply-limit.cjs';
-import { AUTH_MODES, originProblem } from './federated-token.mjs';
+import { annotation } from '../lib/text.cjs';
+import { originProblem } from './gateway-token.mjs';
+import { GOVERNED_FILE, PLUGIN_DIR, PLUGIN_ENTRY } from './link-governed.mjs';
+import {
+  TOOL_DENIED_ENV,
+  TOOL_INJECTION_ENV,
+  TOOL_WRAPPER_ENV,
+  callerDeniedEnvironment,
+  toolPathRoots,
+  toolProtectedPaths,
+} from './opencode-tool-sandbox.mjs';
 
 const TOOL_SHELL = fileURLToPath(new URL('./opencode-tool-shell.mjs', import.meta.url));
 
-export function v2Config(env, { exists = existsSync, real = realpathSync, read = readFileSync } = {}) {
+const REPLYING_PHASES = Object.freeze(['fix', 'revise']);
+
+export function governedSessionOf(env) {
+  const plugin = String(env.KSAI_GOVERNED_PLUGIN ?? '').trim();
+  const root = String(env.KSAI_GOVERNED_DIR ?? '').trim();
+  const at = dirname(dirname(plugin));
+  const laid = isAbsolute(plugin) && isAbsolute(root) && normalize(plugin) === plugin && basename(plugin) === PLUGIN_ENTRY &&
+    basename(dirname(plugin)) === PLUGIN_DIR && dirname(at) === join(root, 'link');
+  return laid ? at : '';
+}
+
+export function guardOptions(env, workspace) {
+  return {
+    keep: [...TOOL_WRAPPER_ENV],
+    blank: [...new Set([...TOOL_DENIED_ENV, ...TOOL_INJECTION_ENV, ...callerDeniedEnvironment(env)])],
+    roots: toolPathRoots(env, workspace),
+    protected: toolProtectedPaths(env),
+  };
+}
+
+export function v2Config(env, { exists = existsSync, real = realpathSync } = {}) {
   const notes = [];
   const refuse = (error) => ({ error, notes });
   if (!env.OPENCODE_CONFIG) return refuse('OPENCODE_CONFIG names no path, so the review would run on a config it discovered itself');
@@ -47,72 +70,51 @@ export function v2Config(env, { exists = existsSync, real = realpathSync, read =
   if (origin) {
     return refuse(`anthropic_base_url ${origin} - the provider relay forwards every model call to it, and empty takes the review off Kong AI Gateway rather than falling back to Anthropic`);
   }
-  const auth = String(env.ANTHROPIC_AUTH ?? '').trim();
-  if (!AUTH_MODES.includes(auth)) return refuse(`anthropic_auth must be one of ${AUTH_MODES.join(', ')}, got: ${auth || '(empty)'}`);
-
   const model = String(env.OPENCODE_MODEL ?? '').trim();
   if (!model) return refuse('OPENCODE_MODEL names no model, and an OpenCode 2 run configures only the model it was dispatched with');
 
-  if (String(env.OPENCODE_LSP_TOOL ?? '').trim() === 'native') return refuse('lsp_tool: native has no OpenCode 2 equivalent: OpenCode 2 runs no language servers');
   const phase = String(env.OPENCODE_PHASE ?? '').trim();
-  const resultTransport = String(env.REVIEW_RESULT_TRANSPORT ?? '').trim() || 'text';
-  if (resultTransport !== 'text') return refuse(`an OpenCode 2 run is governed and answers in text, and this one asked for the ${resultTransport} result transport`);
-  const governing = String(env.GOVERNANCE_OPTIONS_FILE ?? '').trim();
   const linked = String(env.KSAI_LINK_DIR ?? '').trim();
-  let governance;
-  let served;
-  if (linked) {
-    const steps = Number(env.KSAI_GOVERNED_STEPS ?? 0);
-    governance = {
-      from: join(linked, 'governance.json'),
-      tools: String(env.KSAI_GOVERNED_TOOLS ?? '').split(',').map((one) => one.trim()).filter(Boolean),
-      ...(Number.isInteger(steps) && steps > 0 ? { steps } : {}),
-    };
-    served = join(linked, 'model.json');
-  } else if (governing) {
-    try {
-      governance = JSON.parse(read(governing, 'utf8'));
-    } catch (error) {
-      return refuse(`the governance options at ${governing} cannot be read: ${error.message}`);
-    }
-    const listed = servedModel(env, model, read);
-    if (listed.error) return refuse(listed.error);
-    served = listed.model;
-  } else {
-    return refuse('an OpenCode 2 run is governed, and this one names neither a link nor the governance options it is held to');
-  }
+  if (!linked) return refuse('the control plane supplied no linked OpenCode session');
+  const session = governedSessionOf(env);
+  if (!session) return refuse('the governed OpenCode plugin is named nowhere this host lays the plugin the control plane supplies');
+  const plugin = String(env.KSAI_GOVERNED_PLUGIN).trim();
+  const steps = Number(env.KSAI_GOVERNED_STEPS ?? 0);
+  const governance = {
+    from: join(session, GOVERNED_FILE),
+    tools: String(env.KSAI_GOVERNED_TOOLS ?? '').split(',').map((one) => one.trim()).filter(Boolean),
+    ...(Number.isInteger(steps) && steps > 0 ? { steps } : {}),
+  };
   const governedTools = governance.tools ?? [];
 
   const stated = String(env.OPENCODE_ALLOWED ?? '').trim();
+  if (!stated) return refuse('the control plane supplied no allowed tool policy');
   const policy = { allowed: stated, disallowed: env.OPENCODE_DISALLOWED };
-  for (const { name, key, granted } of stated ? mergedDenials(policy) : phaseDenials(phase)) {
-    notes.push(`::warning::${name} is denied and ${granted.join(' and ')} granted, and OpenCode gates them all behind one ${key} permission - so the denial is dropped and ${name} is reachable here where the shared policy refuses it`);
+  for (const { name, key, granted } of mergedDenials(policy)) {
+    notes.push(annotation(`${name} is denied and ${granted.join(' and ')} granted, and OpenCode gates them all behind one ${key} permission - so the denial is dropped and ${name} is reachable here where the shared policy refuses it`, 'warning'));
   }
   const scopes = v2SandboxScopes(env, exists, real);
   const reachable = [...scopes.allow, ...scopes.deny];
   const dataDir = opencodeDataDir(home);
-  const base = stated ? permissionRules(policy, reachable, dataDir) : phasePermissionRules(phase, reachable, dataDir);
-  if (!base) {
-    return refuse(`opencode_phase ${phase || '(empty)'} names no entry in the shared tool table, so this run has no tool policy - a phase resolving to a default would run a write flow read-only, or hand a reviewer the tools to change the tree it is reviewing`);
-  }
-  const permissions = [...governedRules(base, governedTools), ...(linked ? LINK_TOOLS.map((name) => rule(name, '*', 'allow')) : [])];
+  const base = permissionRules(policy, reachable, dataDir);
+  const permissions = [...governedRules(base, governedTools), ...LINK_TOOLS.map((name) => rule(name, '*', 'allow'))];
 
   const workspace = String(env.GITHUB_WORKSPACE ?? '').trim();
   const isolated = isolatedToolPhase(phase);
-  const plugins = [[KSAI_PLUGIN, {
-    governance: linked ? { from: governance.from } : governance,
-    model: served,
-    shell: linked ? join(linked, 'shell.json') : { timeout_ms: SHELL_TIMEOUT_MS },
+  const trustedSkills = String(env.OPENCODE_SKILLS ?? '')
+    .split('\n')
+    .map((one) => underWorkspace(one, env))
+    .filter(Boolean);
+  const plugins = [[plugin, {
+    governance: { from: governance.from },
+    model: join(session, 'model.json'),
+    shell: join(session, 'shell.json'),
+    content: join(session, 'content.json'),
     policy: { models: [model], workspace, strip_instructions: true },
-    ...(isolated ? { guard: true, children: { permissions } } : {}),
+    ...(isolated ? { guard: guardOptions(env, workspace), children: { permissions, launcher: TOOL_SHELL, skills: trustedSkills } } : {}),
     ...(REPLYING_PHASES.includes(phase) ? { replies: true } : {}),
   }]];
-  const skills = governedTools.includes('skill')
-    ? String(env.OPENCODE_SKILLS ?? '')
-      .split('\n')
-      .map((one) => underWorkspace(one, env))
-      .filter(Boolean)
-    : [];
+  const skills = governedTools.includes('skill') ? trustedSkills : [];
   const config = v2RuntimeConfig({
     plugins,
     shell: isolated ? TOOL_SHELL : '',
@@ -124,52 +126,24 @@ export function v2Config(env, { exists = existsSync, real = realpathSync, read =
     defaultAgent: '',
     compacting: false,
   });
-  notes.push(`this run is governed: it sends the model only the prompt ${linked ? governance.from : governing} names, with its governed tools`);
+  notes.push(`this run is governed: it sends the model only the prompt ${governance.from} names, with its governed tools`);
   if (!Object.keys(config.providers.anthropic.headers).length) {
     notes.push('::warning::this review carries no cost-attribution headers, so the gateway attributes its spend to nothing');
   }
-  for (const at of scopes.masked) notes.push(`::warning::the sandbox scope ${at} names a masked credential store, so it is refused rather than bound back`);
+  for (const at of scopes.masked) notes.push(annotation(`the sandbox scope ${at} names a masked credential store, so it is refused rather than bound back`, 'warning'));
   notes.push(
     `opencode ${env.OPENCODE_VERSION} runtime config written to ${env.OPENCODE_CONFIG}`,
-    `model calls go through the provider relay to ${String(env.ANTHROPIC_BASE_URL).trim()}, authenticated by ${auth}`,
-    `this run works under the ${stated ? 'tool list its caller named' : `${phase} tool policy`}${skills.length ? `, with skills from ${skills.join(', ')}` : ' and no skills'}`,
+    `model calls go through the provider relay to ${String(env.ANTHROPIC_BASE_URL).trim()}, authenticated by GitHub OIDC`,
+    `this run works under the tool list its caller named${skills.length ? `, with skills from ${skills.join(', ')}` : ' and no skills'}`,
   );
   return { config, policy: V2_PROVIDER_POLICY_CONFIG, policyFile: providerPolicyFile(home), notes };
-}
-
-export function servedModel(env, model, read = readFileSync) {
-  const at = String(env.KSAI_MODEL_CATALOG ?? '').trim();
-  if (!at) return { error: `the control plane served no model catalog, so ${model} has no limits for OpenCode 2 to run it under` };
-  let catalog;
-  try {
-    catalog = JSON.parse(read(at, 'utf8'));
-  } catch (error) {
-    return { error: `the served model catalog at ${at} cannot be read: ${error.message}` };
-  }
-  const entry = Array.isArray(catalog?.models) ? catalog.models.find((one) => one?.id === model) : undefined;
-  if (entry?.runnable !== true) return { error: `the control plane runs no model ${model}` };
-  if (!Number.isInteger(entry.limit?.context) || !Number.isInteger(entry.limit?.output)) return { error: `the control plane knows no limit for model ${model}` };
-  const optional = (value) => value === undefined || modelCatalog.rate(value) !== null;
-  if (modelCatalog.rate(entry.input) === null || modelCatalog.rate(entry.output) === null || !optional(entry.cache_read) || !optional(entry.cache_write)) {
-    return { error: `the control plane serves no price for model ${model}, so its spend could not be counted` };
-  }
-  return {
-    model: {
-      id: entry.id,
-      name: typeof entry.name === 'string' && entry.name ? entry.name : entry.id,
-      limit: { context: entry.limit.context, output: entry.limit.output },
-      cost: { input: entry.input, output: entry.output, cache_read: entry.cache_read ?? 0, cache_write: entry.cache_write ?? 0 },
-      image: entry.image === true,
-      variants: Array.isArray(entry.variants) ? entry.variants : [],
-    },
-  };
 }
 
 export function main(env = process.env, deps = {}) {
   const written = v2Config(env, deps);
   for (const line of written.notes) console.log(line);
   if (written.error) {
-    console.log(`::error::${written.error}`);
+    console.log(annotation(written.error));
     return 1;
   }
   mkdirSync(dirname(written.policyFile), { recursive: true });

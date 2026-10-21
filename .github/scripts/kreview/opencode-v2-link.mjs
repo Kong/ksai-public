@@ -1,19 +1,18 @@
 import { createHash, generateKeyPairSync } from 'node:crypto';
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { createConnection, createServer } from 'node:net';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 
-import { deliveriesAt, governanceOptions } from '../governance/anchors.mjs';
 import { digest } from '../governance/artifacts.mjs';
 import { linkTrust, verifyLinkCertificate } from '../governance/link-certificate.mjs';
-import { NOTES_ID, TOOL_PREFIX_V2 } from '../governance/release.mjs';
 import { planToolsDigest, resumeTrust, verifyResumePermit } from '../governance/resume-permit.mjs';
-import { VERSION, declaredFields, keyId, open, rawPublicKey, sign } from '../lib/link-protocol.mjs';
+import { VERSION, declaredFields, keyId, open, rawPublicKey, sign } from '../link/link-protocol.mjs';
 import { connected, expectedPlugins, importedSession, inventoryProblem, modelRef, recorder, relays, settledInventory } from './opencode-v2-driver.mjs';
+import { sessionPlanPolicy } from './link-session-policy.mjs';
+import { GOVERNED_FILE, GOVERNED_UNDER, LINK_ASKS, PLUGIN_ENTRY } from './link-governed.mjs';
 
-const REMINDER_ID = 'static.runtime.opencode-max-steps';
 const DIRECTIVES = new Set(['note', 'stop', 'stop.enforce']);
 const STOPPED = 143;
 const EXPORT_MS = 15_000;
@@ -22,7 +21,7 @@ export const EXPORT_FILE = 'session.export.json';
 export const SESSION_FILE = 'opencode-session';
 export const RESUME_EXPORT = 'resume.export.json';
 export const RESUME_ERROR = 'resume-error';
-export const CARRY_REFUSED = 'carry-refused';
+export const CARRY_REFUSED = LINK_ASKS.carry;
 
 export function carryRefusedIn(dir) {
   try {
@@ -92,32 +91,22 @@ export function lines(socket) {
   }));
 }
 
-export function laidDown(dir, plan) {
-  const artifacts = join(dir, 'artifacts');
-  mkdirSync(join(artifacts, 'tools'), { recursive: true, mode: 0o700 });
-  const statics = new Map(plan.statics.map((one) => [one.id, one.body]));
-  writeFileSync(join(artifacts, 'prompt.md'), plan.prompt.text, { mode: 0o600 });
-  writeFileSync(join(artifacts, 'render.sigstore.json'), JSON.stringify(plan.prompt.bundle), { mode: 0o600 });
-  writeFileSync(join(artifacts, 'catalog.lock.json'), Buffer.from(plan.prompt.catalog.lock, 'base64'), { mode: 0o600 });
-  writeFileSync(join(artifacts, 'catalog.sigstore.json'), Buffer.from(plan.prompt.catalog.attestation, 'base64'), { mode: 0o600 });
-  for (const name of plan.tools) {
-    const body = statics.get(`${TOOL_PREFIX_V2}${name}`);
-    if (body === undefined) throw new Error(`the plan governs the ${name} tool and carries no definition of it`);
-    writeFileSync(join(artifacts, 'tools', `${name}.json`), body, { mode: 0o600 });
+export function laidPlugin(entry, plan, { read = readFileSync, exists = existsSync } = {}) {
+  const at = dirname(entry);
+  const modules = plan.statics.filter((one) => String(one.destination ?? '').startsWith(GOVERNED_UNDER));
+  if (!entry || !modules.some((one) => one.destination === `${GOVERNED_UNDER}${PLUGIN_ENTRY}`) || join(at, PLUGIN_ENTRY) !== entry) {
+    throw new Error('the plan carries no governed plugin for the path the OpenCode config loads it from');
   }
-  if (plan.steps > 0) {
-    const reminder = statics.get(REMINDER_ID);
-    if (reminder === undefined) throw new Error('the plan limits the steps and carries no reminder');
-    writeFileSync(join(artifacts, 'max-steps.json'), reminder, { mode: 0o600 });
+  for (const one of modules) {
+    let held;
+    try {
+      held = read(join(at, one.destination.slice(GOVERNED_UNDER.length)), 'utf8');
+    } catch {
+      throw new Error(`the host laid no ${one.destination}, so OpenCode would load a plugin the plan does not carry`);
+    }
+    if (held !== one.body) throw new Error(`the laid ${one.destination} is not the one the plan carries`);
   }
-  const notes = statics.get(NOTES_ID);
-  if (notes === undefined) throw new Error('the plan carries no run notes to say its directives in');
-  writeFileSync(join(artifacts, 'link-notes.json'), notes, { mode: 0o600 });
-  if (plan.resume) {
-    writeFileSync(join(artifacts, 'original.md'), plan.resume.original.text, { mode: 0o600 });
-    writeFileSync(join(artifacts, 'original.sigstore.json'), JSON.stringify(plan.resume.original.bundle), { mode: 0o600 });
-  }
-  return artifacts;
+  if (!exists(join(dirname(at), GOVERNED_FILE))) throw new Error('the host laid no governed session for the plugin to read');
 }
 
 export function writeDirective(dir, message) {
@@ -172,36 +161,15 @@ export function questions(path, name, ask, reply) {
   };
 }
 
-export function governed(env, dir, plan, artifacts, { retry = '', context = '', directory = process.cwd(), carried = null } = {}) {
-  if (!Number.isSafeInteger(plan.shell_timeout_ms) || plan.shell_timeout_ms <= 0) throw new Error('the plan bounds no shell call, so one could hold the run until the job is cancelled');
-  const notes = join(dir, 'notes');
-  mkdirSync(notes, { recursive: true, mode: 0o700 });
-  const options = governanceOptions({
-    endpoint: env.KSAI_CP_ENDPOINT,
-    artifacts,
-    report: deliveriesAt(String(env.KSAI_GOVERNED_DIR ?? '')),
-    trustedRoot: String(env.KSAI_TRUSTED_ROOT ?? ''),
-    expect: {
-      promptId: String(env.KSAI_RENDER_PROMPT_ID ?? ''),
-      sink: String(env.KSAI_RENDER_SINK ?? ''),
-      model: plan.model.id,
-      finalDigest: digest(Buffer.from(plan.prompt.text, 'utf8')),
-      ...(plan.steps > 0 ? { steps: plan.steps } : {}),
-      ...(carried ? { carried } : {}),
-    },
-    tools: plan.tools,
-    arm: '',
-  }, pinsOf(env));
-  writeFileSync(join(dir, 'governance.json'), JSON.stringify({
-    ...options, notes, nonce: plan.nonce, flow: String(env.FLOW ?? ''), directory, ...(retry ? { retry } : {}), ...(context ? { context } : {}),
-    ...(carried ? { carryRefusal: join(dir, CARRY_REFUSED) } : {}),
-  }), { mode: 0o600 });
-  writeFileSync(join(dir, 'model.json'), JSON.stringify(plan.model), { mode: 0o600 });
-  writeFileSync(join(dir, 'shell.json'), JSON.stringify({ timeout_ms: plan.shell_timeout_ms }), { mode: 0o600 });
-  return notes;
-}
+export const driverError = (error) => ({
+  type: 'ksai.error', created: Date.now(), data: { error: { type: 'ksai.driver', message: [...String(error?.message ?? error)].slice(0, 500).join('') } },
+});
 
-export async function linked(env = process.env, { connect = createConnection, output = process.stdout, signals = process } = {}) {
+export const feedEnded = (error) => driverError(`the OpenCode event stream ended before the session did${error ? `: ${error?.message ?? error}` : ''}`);
+
+export async function linked(env = process.env, {
+  connect = createConnection, output = process.stdout, signals = process, openRelays = relays, connectModel = connected,
+} = {}) {
   const socket = connect(String(env.KSAI_LINK_SOCKET ?? ''));
   await new Promise((resolve, reject) => {
     socket.once('connect', resolve);
@@ -245,6 +213,12 @@ export async function linked(env = process.env, { connect = createConnection, ou
   const first = await heard();
   if (first?.kind !== 'plan') throw new Error(`the engine sent ${first?.kind ?? 'nothing'} before a plan`);
   const plan = first.body;
+  try {
+    sessionPlanPolicy(env, plan);
+  } catch (error) {
+    socket.end();
+    throw error;
+  }
   const dir = String(env.KSAI_LINK_DIR ?? '');
   const refusedResume = async (error) => {
     const said = resumeError(error);
@@ -261,15 +235,20 @@ export async function linked(env = process.env, { connect = createConnection, ou
       return refusedResume(error);
     }
   }
-  const retrySocket = join(dir, 'retry.sock');
-  const retry = questions(retrySocket, 'retry', (id, asked) => say('retry.ask', id, { ...asked, session }), retryReply);
-  const contextSocket = join(dir, 'context.sock');
-  const context = questions(contextSocket, 'context', (id, asked) => say('context.ask', id, { session, ...contextAsked(asked) }), contextReply);
+  try {
+    laidPlugin(String(env.KSAI_GOVERNED_PLUGIN ?? ''), plan);
+  } catch (error) {
+    socket.end();
+    throw error;
+  }
+  const notes = join(dir, LINK_ASKS.notes);
+  mkdirSync(notes, { recursive: true, mode: 0o700 });
+  const retry = questions(join(dir, LINK_ASKS.retry), 'retry', (id, asked) => say('retry.ask', id, { ...asked, session }), retryReply);
+  const context = questions(join(dir, LINK_ASKS.context), 'context', (id, asked) => say('context.ask', id, { session, ...contextAsked(asked) }), contextReply);
   await Promise.all([retry.listening, context.listening]);
-  const notes = governed(env, dir, plan, laidDown(dir, plan), { retry: retrySocket, context: contextSocket, carried: carrying?.permit.carried });
 
-  const opened = await relays(env);
-  const connection = await connected({ ...env, ...opened.extra });
+  const opened = await openRelays(env);
+  const connection = await connectModel({ ...env, ...opened.extra });
   const { client, server } = connection;
   const controller = new AbortController();
   let code = 1;
@@ -308,8 +287,11 @@ export async function linked(env = process.env, { connect = createConnection, ou
     await feed.next();
     const finished = (async () => {
       for (;;) {
-        const step = await feed.next().catch(() => ({ done: true }));
-        if (step.done) return 1;
+        const step = await feed.next().catch((error) => ({ done: true, error }));
+        if (step.done) {
+          if (!controller.signal.aborted) await write(feedEnded(step.error));
+          return 1;
+        }
         const event = step.value;
         if (event?.type === 'permission.asked' && record.tree.has(String(event.data?.sessionID ?? ''))) {
           await client.permission.reply({ sessionID: event.data.sessionID, requestID: event.data.id, decision: 'reject' }).catch(() => {});
@@ -345,7 +327,7 @@ export async function linked(env = process.env, { connect = createConnection, ou
     }
     return code;
   } catch (error) {
-    await write({ type: 'ksai.error', created: Date.now(), data: { error: { type: 'ksai.driver', message: String(error?.message ?? error).slice(0, 500) } } });
+    await write(driverError(error));
     return 1;
   } finally {
     const ending = opencodeSession;

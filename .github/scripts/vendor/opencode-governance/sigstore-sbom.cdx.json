@@ -1,0 +1,160 @@
+{
+  "$schema": "https://cyclonedx.org/schema/bom-1.6.schema.json",
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "library",
+      "bom-ref": "sigstore-verifier",
+      "name": "sigstore-verifier",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "6669a9f5980314a632c22f5a48f2d281d6bf7d1ee5c169588831c32dcbe501a6"
+        }
+      ]
+    },
+    "tools": {
+      "components": [
+        {
+          "type": "application",
+          "name": "esbuild",
+          "version": "0.28.2",
+          "hashes": [
+            {
+              "alg": "SHA-512",
+              "content": "1ca54b4bc76f208fb1a0a5bd926ab16d12ab9d61177c926bfc56618499a2a880747b4e7740d605a8e068b9330efe4e6c203e0cbc28940afbfc6fd338877db020"
+            }
+          ],
+          "licenses": [
+            {
+              "license": {
+                "id": "MIT"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40sigstore/bundle@5.0.0",
+      "group": "@sigstore",
+      "name": "bundle",
+      "version": "5.0.0",
+      "purl": "pkg:npm/%40sigstore/bundle@5.0.0",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "c1e7e3ca0b9d10d6f36d0324b35b79bb7e043f47c5a03d17bda10fec33943ffb172afa20cc4258170e44ea97a01b2a77a27196cd51182956b76cd656c93617f8"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40sigstore/core@4.0.1",
+      "group": "@sigstore",
+      "name": "core",
+      "version": "4.0.1",
+      "purl": "pkg:npm/%40sigstore/core@4.0.1",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "f6fe61463ba39f9357abca3b5c511480bc80b5daf9222b1be29cccd39bb72bad484b9ab784fde5b96027764d1190f3cb4d41684db83b55bf38510d5941e6a359"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40sigstore/protobuf-specs@0.5.2",
+      "group": "@sigstore",
+      "name": "protobuf-specs",
+      "version": "0.5.2",
+      "purl": "pkg:npm/%40sigstore/protobuf-specs@0.5.2",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "490aaf14cb7857bf1f7637037585fa1db89548e47840add983009ad8a3aca290203c81f2d6b539503526ccb974dabe68cb26987181d1d61a700d193fc947be33"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40sigstore/verify@4.1.2",
+      "group": "@sigstore",
+      "name": "verify",
+      "version": "4.1.2",
+      "purl": "pkg:npm/%40sigstore/verify@4.1.2",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "05f0fd78baf3dc0fc31b9f1a4a07e065898847a57d630f7a41537f7ebb6ed9b107edcb524e4d930ef1d4d76ba7dc9b033c14ea4cd92a90892e723c658e9385a9"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "sigstore-verifier",
+      "dependsOn": [
+        "pkg:npm/%40sigstore/bundle@5.0.0",
+        "pkg:npm/%40sigstore/core@4.0.1",
+        "pkg:npm/%40sigstore/protobuf-specs@0.5.2",
+        "pkg:npm/%40sigstore/verify@4.1.2"
+      ]
+    },
+    {
+      "ref": "pkg:npm/%40sigstore/bundle@5.0.0",
+      "dependsOn": [
+        "pkg:npm/%40sigstore/protobuf-specs@0.5.2"
+      ]
+    },
+    {
+      "ref": "pkg:npm/%40sigstore/core@4.0.1",
+      "dependsOn": []
+    },
+    {
+      "ref": "pkg:npm/%40sigstore/protobuf-specs@0.5.2",
+      "dependsOn": []
+    },
+    {
+      "ref": "pkg:npm/%40sigstore/verify@4.1.2",
+      "dependsOn": [
+        "pkg:npm/%40sigstore/bundle@5.0.0",
+        "pkg:npm/%40sigstore/core@4.0.1",
+        "pkg:npm/%40sigstore/protobuf-specs@0.5.2"
+      ]
+    }
+  ]
+}

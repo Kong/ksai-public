@@ -1,15 +1,12 @@
 import { readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
-
+import { createHash } from 'node:crypto';
+import { join } from 'node:path';
 import controlPlane from '../../lib/control-plane.cjs';
 import { canonicalJson, parseIJson } from '../../lib/json.cjs';
 import { runMain } from '../../lib/main.mjs';
-import { withinBytes } from '../../lib/prompt-text.cjs';
-import { sha256 } from './manifest.mjs';
-import { candidateEnvelope, object } from './runner.mjs';
-
-const require = createRequire(import.meta.url);
-const { finalResult } = require('../classify.cjs');
+import { collectSecrets } from '../../kreview/secrets.cjs';
+import trustedGit from '../trusted-git.cjs';
+import { WRITE_PROFILE, captureChangeset, uploadChangeset } from './changeset.mjs';
 
 const { answeredRetrying, held, holdsFor, mask, reachedFor } = controlPlane;
 
@@ -21,6 +18,34 @@ const TOO_LARGE = 413;
 const TIMEOUT_MS = 30_000;
 
 const said = (value) => String(value ?? '').trim();
+const object = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+const sha256 = (value) => createHash('sha256').update(value).digest('hex');
+
+const withinBytes = (value, limit) => {
+  const text = String(value ?? '');
+  if (Buffer.byteLength(text, 'utf8') <= limit) return text;
+  const cut = Buffer.from(text, 'utf8').subarray(0, limit).toString('utf8');
+  return cut.endsWith('\uFFFD') ? cut.slice(0, -1) : cut;
+};
+
+function finalResult(raw) {
+  let log;
+  try {
+    log = JSON.parse(String(raw ?? ''));
+  } catch {
+    return { result: null, why: 'left no readable execution log' };
+  }
+  if (!Array.isArray(log)) return { result: null, why: 'run wrote no message list' };
+  const result = log.findLast((entry) => entry?.type === 'result') ?? null;
+  return result ? { result, why: '' } : { result: null, why: 'run wrote no result, so it did not finish' };
+}
+
+function candidateEnvelope(candidate) {
+  if (!object(candidate) || candidate.apiVersion !== 'ksai.konghq.com/stage-candidate/v1alpha1'
+    || !Object.hasOwn(candidate, 'output') || !Array.isArray(candidate.artifacts)) {
+    throw new Error('stage candidate version or artifacts are invalid');
+  }
+}
 
 export function stageOf(env) {
   const stage = {
@@ -41,6 +66,11 @@ export function outputOf(answer) {
   } catch {
     throw new Error('the stage answered no JSON stage candidate');
   }
+  if (object(candidate) && !Object.hasOwn(candidate, 'artifacts') && object(candidate.output) &&
+    Array.isArray(candidate.output.artifacts) && candidate.output.artifacts.length === 0) {
+    const { artifacts, ...output } = candidate.output;
+    candidate = { ...candidate, output, artifacts };
+  }
   let enveloped = true;
   try {
     candidateEnvelope(candidate);
@@ -60,9 +90,20 @@ function ended(stage, status, reason) {
   };
 }
 
-export function completionOf(stage, { conclusion, execution }) {
+export function completionOf(stage, { conclusion, execution, notice, unmerged = '' }) {
   const failed = (reason) => ended(stage, 'failed', reason);
   if (said(conclusion) === 'cancelled') return ended(stage, 'cancelled', 'the run executing the stage was cancelled');
+  if (said(unmerged) !== '') return failed(`the base was not merged into the checkout: ${said(unmerged)}`);
+  if (said(notice) !== '') {
+    const output = { status: 'skipped', summary: said(notice) };
+    return {
+      apiVersion: COMPLETION_VERSION,
+      ...stage,
+      status: 'succeeded',
+      result_digest: `sha256:${sha256(canonicalJson(output))}`,
+      output,
+    };
+  }
   const { result, why } = finalResult(execution);
   if (!result) return failed(`the model ${why}`);
   if (said(conclusion) !== 'success' || result.is_error) {
@@ -74,7 +115,31 @@ export function completionOf(stage, { conclusion, execution }) {
   } catch (error) {
     return failed(error.message);
   }
-  return { apiVersion: COMPLETION_VERSION, ...stage, status: 'succeeded', result_digest: sha256(canonicalJson(output)), output };
+  return { apiVersion: COMPLETION_VERSION, ...stage, status: 'succeeded', result_digest: `sha256:${sha256(canonicalJson(output))}`, output };
+}
+
+export async function withChangeset(completion, stage, env, {
+  reached, fetch, pause, capture = captureChangeset, upload = uploadChangeset, git = null,
+}) {
+  if (completion.status !== 'succeeded' || said(env.STAGE_PROFILE) !== WRITE_PROFILE) return completion;
+  try {
+    if (!said(env.RUNNER_TEMP) || !said(env.GITHUB_WORKSPACE)) throw new Error('the runner names no checkout or temporary directory');
+    const { body } = capture({
+      git: git ?? trustedGit.directGit(said(env.GITHUB_WORKSPACE)),
+      base: said(env.BOUND_HEAD_SHA),
+      mergeBase: said(env.MERGE_BASE),
+      index: join(said(env.RUNNER_TEMP), 'ksai-changeset.index'),
+      stageAttempt: stage,
+      maxBytes: Number(said(env.CHANGESET_MAX_BYTES)),
+      maxFiles: Number(said(env.CHANGESET_MAX_FILES)),
+      secrets: collectSecrets(env),
+      events: said(env.EVENTS_FILE),
+    });
+    const artifact = await upload({ fetch, base: reached.base, token: reached.token, body, pause });
+    return { ...completion, artifacts: [artifact] };
+  } catch (error) {
+    return ended(stage, 'failed', `the stage's change was not kept: ${error.message}`);
+  }
 }
 
 function executionOf(at) {
@@ -87,10 +152,16 @@ function executionOf(at) {
 
 export async function main(env = process.env, { fetch = globalThis.fetch, secret = mask, pause = held } = {}) {
   const stage = stageOf(env);
-  let completion = completionOf(stage, { conclusion: env.CONCLUSION, execution: executionOf(env.EXECUTION_FILE) });
+  let completion = completionOf(stage, {
+    conclusion: env.CONCLUSION,
+    execution: executionOf(env.EXECUTION_FILE),
+    notice: env.CONTROL_PLANE_NOTICE,
+    unmerged: env.MERGE_FAILURE,
+  });
   const reached = await reachedFor({ env, fetch, timeout: TIMEOUT_MS, holds: holdsFor(TIMEOUT_MS), secret });
   if (reached.why) throw new Error(`the stage's completion could not be sent: ${reached.why}`);
-  const send = () => answeredRetrying(fetch, `${reached.base}/run/complete`, {
+  completion = await withChangeset(completion, stage, env, { reached, fetch, pause });
+  const send =() => answeredRetrying(fetch, `${reached.base}/run/complete`, {
     token: reached.token, body: canonicalJson(completion), timeout: TIMEOUT_MS,
   }, pause);
   let sent = await send();
