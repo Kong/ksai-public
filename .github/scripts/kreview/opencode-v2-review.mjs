@@ -1,18 +1,10 @@
-import { createRequire } from 'node:module';
-
-import { answer, everything, rootSessions, sessionOf, toolCalls } from '../lib/opencode-v2.mjs';
-
-const require = createRequire(import.meta.url);
-const { reviewAnswerOf } = require('../lib/review-output.cjs');
-const result = require('./review-result.cjs');
+import { rootSessions, sessionOf, toolCalls } from './opencode-v2.mjs';
 
 const SESSION = /^ses_[a-zA-Z0-9]+$/;
 
 const TRANSPORT = new Set(['provider.transport', 'provider.timeout', 'provider.invalid-output']);
 
 const TERMINAL = new Set(['session.execution.failed', 'session.step.failed']);
-
-export const reviewAnswer = (events) => reviewAnswerOf(answer(events), everything(events));
 
 function lastRootStep(events, roots) {
   return events.findLast((event) => event?.type === 'session.step.ended' && roots.has(sessionOf(event)));
@@ -46,49 +38,6 @@ export function streamFailure(events) {
   const spent = step.data?.finish === 'stop' && Number(step.data?.tokens?.output) > 0;
   const session = sessionOf(step);
   return spent && !spokeIn(events, step.data?.assistantMessageID) && SESSION.test(session) ? { kind: 'empty-turn', session_id: session } : null;
-}
-
-const QUOTA = new Set(['session.execution.failed', 'session.step.failed', 'session.retry.scheduled']);
-
-export function gatewayDiagnostics(events) {
-  return events
-    .filter((event) => QUOTA.has(event?.type))
-    .map((event) => Number(event.data?.error?.status))
-    .filter((status) => Number.isInteger(status) && status >= 400 && status <= 599)
-    .slice(-8)
-    .map((status) => ({ status, headers: {} }));
-}
-
-export function recordedCompletion(events) {
-  const { roots } = rootSessions(events);
-  const step = lastRootStep(events, roots);
-  const session = sessionOf(step);
-  const message = String(step?.data?.assistantMessageID ?? '');
-  if (!SESSION.test(session) || !/^msg_[a-zA-Z0-9]+$/.test(message)) return { completion: { status: 'unavailable' } };
-  const mine = events.filter((event) => event?.data?.assistantMessageID === message && sessionOf(event) === session);
-  const texts = mine
-    .filter((event) => event.type === 'session.text.ended' && typeof event.data?.text === 'string')
-    .sort((a, b) => Number(a.data.ordinal ?? 0) - Number(b.data.ordinal ?? 0))
-    .map((event) => event.data.text);
-  const text = texts.join('\n');
-  const parts = Object.create(null);
-  const count = (name) => {
-    parts[name] = (parts[name] || 0) + 1;
-  };
-  for (const event of mine) {
-    if (event.type === 'session.text.ended') count('text');
-    if (event.type === 'session.tool.success' || event.type === 'session.tool.failed') count('tool');
-    if (event.type === 'session.step.started') count('step-start');
-    if (event.type === 'session.step.ended') count('step-finish');
-  }
-  return { text: text || null, completion: { status: 'recorded', message_id: message, parts, text_bytes: Buffer.byteLength(text) } };
-}
-
-export function submitted({ file, events, kind, candidateIds = [] }) {
-  const calls = toolCalls(events)
-    .filter((call) => call.tool === result.TOOL_NAME)
-    .map((call) => ({ status: call.status, submission: call.input?.submission, sessionID: call.session_id }));
-  return result.submittedCalls({ file, calls, kind, candidateIds });
 }
 
 export function toolTiming(events, beganAt, endedAt) {

@@ -1,5 +1,5 @@
 import { canonical, digest, record } from '../governance/artifacts.mjs';
-import { MAX_RESPONSE_BYTES } from '../governance/conversation.mjs';
+import { MAX_RESPONSE_BYTES, streamFrame } from '../governance/conversation.mjs';
 
 export const COUNTERS = 'invocation-calls-v1';
 
@@ -40,10 +40,10 @@ function* framesOf(bytes) {
 }
 
 function eventOf(frame) {
-  const lines = new TextDecoder('utf-8', { fatal: true }).decode(frame).split('\n');
-  if (lines.length !== 2 || !lines[0].startsWith('event: ') || !lines[1].startsWith('data: ')) throw new Error('the answer has an unsupported event frame');
-  const event = record(JSON.parse(lines[1].slice(6)), 'the answer event');
-  if (event.type !== lines[0].slice(7)) throw new Error('the answer event name does not match its data');
+  const held = streamFrame(new TextDecoder('utf-8', { fatal: true }).decode(frame).split('\n'));
+  if (!held) return null;
+  const event = record(JSON.parse(held.data), 'the answer event');
+  if (event.type !== held.name) throw new Error('the answer event name does not match its data');
   return event;
 }
 
@@ -54,11 +54,16 @@ function indexOf(event, name) {
 
 function grammar() {
   let state = 'initial';
-  let open = -1;
+  const started = new Set();
+  const open = new Set();
   let last = -1;
   return (event) => {
     const out = (why) => {
       throw new Error(`${event.type} ${why}`);
+    };
+    const named = () => {
+      if (state !== 'content' || !started.has(indexOf(event, event.type))) out('names no started content block');
+      return event.index;
     };
     switch (event.type) {
       case 'message_start':
@@ -69,24 +74,24 @@ function grammar() {
         if (state === 'initial' || state === 'stopped') out('is out of sequence');
         return;
       case 'content_block_start': {
-        if (state !== 'content' || open >= 0) out('is out of sequence');
+        if (state !== 'content') out('is out of sequence');
         record(event.content_block, 'the content block');
         const index = indexOf(event, event.type);
         if (index <= last) out('does not raise the content block index');
-        open = index;
+        started.add(index);
+        open.add(index);
         last = index;
         return;
       }
       case 'content_block_delta':
-        if (state !== 'content' || open < 0 || indexOf(event, event.type) !== open) out('names no open content block');
+        named();
         record(event.delta, 'the content block delta');
         return;
       case 'content_block_stop':
-        if (state !== 'content' || open < 0 || indexOf(event, event.type) !== open) out('names no open content block');
-        open = -1;
+        open.delete(named());
         return;
       case 'message_delta':
-        if (state !== 'content' || open >= 0) out('is out of sequence');
+        if (state !== 'content' || open.size) out('is out of sequence');
         record(event.delta, 'the message_delta payload');
         state = 'delta';
         return;
@@ -111,6 +116,7 @@ export function callUsage({ status, bytes, model }) {
   try {
     for (const frame of framesOf(bytes)) {
       const event = eventOf(frame);
+      if (!event) continue;
       if (stopped) throw new Error(`${event.type} follows message_stop`);
       if (event.type === 'error') {
         record(event.error, 'the upstream error');
