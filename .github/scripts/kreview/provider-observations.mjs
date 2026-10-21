@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import controlPlane from '../lib/control-plane.cjs';
+import { annotation } from '../lib/text.cjs';
 
 const { mask, reachedFor } = controlPlane;
 const wait = (ms) => new Promise((done) => { setTimeout(done, ms); });
@@ -19,7 +20,7 @@ export function observationsIn(env, skip = new Set(), answered = false) {
       throw error;
     }
     if (answered && !(one.status > 0)) return [];
-    return [{ one, body: readFileSync(join(root, `${one.id}.${one.mode === 'cp' ? 'dynamic' : 'body'}`)) }];
+    return [{ one, body: readFileSync(join(root, `${one.id}.dynamic`)) }];
   });
 }
 
@@ -65,7 +66,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     const count = await reportProviderObservations();
     console.log(`reported ${count} provider-boundary prompt observations`);
   } catch (error) {
-    console.log(`::error::${error.message}`);
+    console.log(annotation(error.message));
     process.exitCode = 1;
   }
 }

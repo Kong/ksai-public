@@ -66,7 +66,7 @@ export function usageCollector({ path, scope, send }) {
   };
   return {
     counted(session, model, call) {
-      if (refusal || state.mode === 'legacy' || state.mode === 'unavailable') return;
+      if (refusal) return;
       try {
         counter.add(session, model, call);
         keep({ ...state, snapshots: counter.snapshots() });
@@ -86,9 +86,11 @@ export function usageCollector({ path, scope, send }) {
     },
     welcomed(body) {
       offered = body?.usage?.counters === COUNTERS;
-      if (offered && !refusal) {
-        if (state.mode === 'unregistered' || state.mode === 'ambiguous') ask();
-        flush();
+      if (!offered && !refusal) {
+        refusal = `the engine does not support the required ${COUNTERS} usage contract`;
+      } else if (!refusal) {
+        if (state.mode !== 'cumulative') ask();
+        else flush();
       }
       wake();
     },
@@ -100,8 +102,8 @@ export function usageCollector({ path, scope, send }) {
         refusal = `the engine answered source ${body.source} for the intent registered as ${state.source}`;
       } else if (body.outcome === 'registered') {
         if (keep({ ...state, source: body.source, mode: 'cumulative', asking: false })) flush();
-      } else if (body.outcome === 'unavailable' && state.mode !== 'cumulative') {
-        keep({ ...state, mode: 'unavailable', asking: false });
+      } else if (body.outcome === 'unavailable') {
+        refusal = 'the control plane has no cumulative usage receiver for this run';
       }
       wake();
     },
@@ -112,26 +114,20 @@ export function usageCollector({ path, scope, send }) {
     },
     tick: () => flush(),
     ready: () => until(() => {
-      if (!refusal && state.mode === 'cumulative' && !offered) refusal = 'the engine no longer takes this registered run\'s cumulative usage, and a registered run never falls back to the legacy report';
-      if (!refusal && (state.mode === 'ambiguous' || state.asking) && !offered) refusal = 'this run\'s usage source registration may have committed and was never confirmed, and the engine takes no cumulative usage to confirm it';
       if (refusal) throw new Error(refusal);
-      return state.mode === 'cumulative' || state.mode === 'unavailable' || state.mode === 'legacy' || (!offered && state.mode === 'unregistered');
+      return state.mode === 'cumulative';
     }),
     delivered(nudge = () => {}) {
       flush();
-      const kept = () => refusal !== '' || !offered || state.mode !== 'cumulative' || !undelivered();
+      const kept = () => refusal !== '' || state.mode !== 'cumulative' || !undelivered();
       if (!kept()) nudge();
       return until(kept);
     },
-    legacy() {
-      if (refusal || state.mode === 'cumulative' || state.mode === 'ambiguous' || state.asking) return false;
-      return state.mode === 'legacy' || keep({ ...state, mode: 'legacy' });
-    },
     ending() {
-      if (refusal) return { legacy: false, error: refusal };
+      if (refusal) return { error: refusal };
       const settled = ending(state);
       if (state.mode !== 'cumulative') return settled;
-      return undelivered() ? { legacy: false, error: 'the engine never acknowledged this run\'s last cumulative usage, and a registered run never falls back to the legacy report' } : settled;
+      return undelivered() ? { error: 'the engine never acknowledged this run\'s last cumulative usage' } : settled;
     },
     mode: () => state.mode,
   };
