@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "package": "@sigstore/verify",
+  "version": "4.1.2",
+  "integrity": "sha512-BfD9eLrz3A/DG58aSgfgZYmIR6V9Yw96QVN/frtu2bEH7ctSTk2TDvHU12un3JsDPBTqTNkqkIkucjxljpOFqQ==",
+  "registry": "https://registry.npmjs.org/@sigstore%2fverify/4.1.2",
+  "revision": "769a53d8713248a8bf49edfc2a5d1955b0dcc24d",
+  "license": {
+    "url": "https://raw.githubusercontent.com/sigstore/sigstore-js/769a53d8713248a8bf49edfc2a5d1955b0dcc24d/LICENSE",
+    "sha256": "364a130d2ca340bd56eb1e6d045fc6929bb0f9d0aa018f2c1949b29517e1cdd0",
+    "equalTarballFile": "node_modules/@sigstore/core/LICENSE"
+  },
+  "notice": {
+    "url": "https://api.github.com/repos/sigstore/sigstore-js/git/trees/769a53d8713248a8bf49edfc2a5d1955b0dcc24d?recursive=1",
+    "sha256": "5afe7b6b27761cea86825f7a085c23b1a086b872b9f526ada84c7a0c71aca6ce",
+    "truncated": false,
+    "noticeFiles": [],
+    "verifyLicenseFiles": []
+  }
+}

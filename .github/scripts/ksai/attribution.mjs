@@ -8,8 +8,6 @@ export const ATTRIBUTION = Object.freeze([
   { name: 'X-Initiated-By', of: () => 'KSAI' },
   { name: 'X-Ksai-Repo', of: ({ repository = '' } = {}) => repository },
   { name: 'X-Ksai-Team', of: ({ team = '' } = {}) => team },
-  { name: 'X-Ksai-Federation-Rule', of: ({ federationRule = '' } = {}) => federationRule },
-  { name: 'X-Ksai-Service-Account', of: ({ serviceAccount = '' } = {}) => serviceAccount },
   { name: 'X-Ksai-Workflow', of: ({ workflow = '' } = {}) => workflow },
   { name: 'X-Ksai-Run-Id', of: ({ runId = '' } = {}) => runId },
   { name: 'X-Ksai-Actor', of: ({ actor = '' } = {}) => actor },
@@ -39,8 +37,6 @@ export function callOf(env = {}) {
   return {
     repository: env.REPO,
     team: env.TEAM,
-    federationRule: env.FEDERATION_RULE,
-    serviceAccount: env.SERVICE_ACCOUNT,
     workflow: env.WORKFLOW,
     runId: env.RUN_ID,
     actor: env.ACTOR,

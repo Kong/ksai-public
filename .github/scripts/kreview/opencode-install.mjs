@@ -1,8 +1,11 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, createReadStream, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { open } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
+
+import { annotation } from '../lib/text.cjs';
 
 export const REGISTRY = 'https://registry.npmjs.org';
 
@@ -80,7 +83,7 @@ export async function installOpencode({
   const tarball = join(distDir, `${unscoped(name)}-${version}.tgz`);
   let fetched = false;
   if (!existsSync(tarball) || !sha512(readFileSync(tarball)).equals(expected)) {
-    if (existsSync(tarball)) log(`::warning::the cached ${name}@${version} tarball does not match the registry integrity, so it was downloaded again`);
+    if (existsSync(tarball)) log(annotation(`the cached ${name}@${version} tarball does not match the registry integrity, so it was downloaded again`, 'warning'));
     const response = await fetchImpl(tarballUrl, { signal: AbortSignal.timeout(TARBALL_TIMEOUT_MS) });
     if (!response.ok) throw new Error(`the registry answered ${response.status} for the ${name}@${version} tarball`);
     const declared = Number(response.headers?.get?.('content-length'));
@@ -108,6 +111,125 @@ export async function installOpencode({
   }
 }
 
+async function archiveMatches(path, expected, count, check) {
+  let size = 0;
+  const digest = createHash('sha512');
+  try {
+    if (!lstatSync(path).isFile()) throw new Error('the fixed OpenCode archive cache is not a regular file');
+    for await (const chunk of createReadStream(path)) {
+      check();
+      size += chunk.length;
+      if (size > count) return false;
+      digest.update(chunk);
+    }
+    return size === count && digest.digest().equals(expected);
+  } catch (error) {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+function extractProfileArchive(tarball, into, { signal, deadlineAtMilliseconds, nowMilliseconds }) {
+  return new Promise((resolve, reject) => {
+    const child = spawn('/usr/bin/tar', ['-xzf', tarball, '-C', into, '--no-same-owner', '--no-same-permissions', 'package/bin/opencode'], {
+      stdio: 'ignore', detached: false, signal,
+      env: { PATH: '/usr/bin:/bin' },
+    });
+    const timer = setTimeout(() => child.kill('SIGKILL'), Math.max(0, Math.min(120_000, deadlineAtMilliseconds - nowMilliseconds())));
+    child.once('error', reject);
+    child.once('close', (code) => {
+      clearTimeout(timer);
+      resolve(code === 0);
+    });
+  });
+}
+
+async function writeProfileChunk(output, bytes, check) {
+  let offset = 0;
+  while (offset < bytes.length) {
+    check();
+    const { bytesWritten } = await output.write(bytes, offset, bytes.length - offset);
+    if (bytesWritten < 1) throw new Error('the fixed OpenCode archive write failed');
+    offset += bytesWritten;
+  }
+}
+
+export async function installProfileOpencode({
+  artifacts, distDir, toolDir, signal, deadlineAtMilliseconds,
+}, {
+  fetchImpl = fetch, platform = process.platform, arch = process.arch,
+  glibc = glibcRuntime(), cpuinfo = readCpu(), nowMilliseconds = Date.now,
+  extract = extractProfileArchive,
+} = {}) {
+  const check = () => {
+    if (signal.aborted) throw new Error('the fixed OpenCode install was cancelled');
+    if (!Number.isSafeInteger(deadlineAtMilliseconds) || nowMilliseconds() >= deadlineAtMilliseconds) {
+      throw new Error('the fixed OpenCode install deadline expired');
+    }
+  };
+  check();
+  const version = '2.0.29';
+  const name = packageFor({ platform, arch, glibc, cpuinfo, major: 2 });
+  if (!name) throw new Error('the immutable OpenCode profile does not support this runner');
+  const descriptor = artifacts?.[name];
+  if (!descriptor || !INTEGRITY_SHAPE.test(descriptor.integrity) || !Number.isSafeInteger(descriptor.bytes)
+    || descriptor.bytes < 1 || descriptor.bytes > TARBALL_BYTES || !distDir || !toolDir) {
+    throw new Error('the fixed OpenCode artifact descriptor is invalid');
+  }
+  const expected = Buffer.from(descriptor.integrity.slice(7), 'base64');
+  if (expected.toString('base64') !== descriptor.integrity.slice(7)) throw new Error('the fixed OpenCode integrity is not canonical');
+  mkdirSync(distDir, { recursive: true, mode: 0o700 });
+  const tarball = join(distDir, `${unscoped(name)}-${version}.tgz`);
+  let fetched = false;
+  if (!await archiveMatches(tarball, expected, descriptor.bytes, check)) {
+    check();
+    const response = await fetchImpl(`${REGISTRY}/${name}/-/${unscoped(name)}-${version}.tgz`, {
+      redirect: 'error', signal: AbortSignal.any([signal, AbortSignal.timeout(Math.max(1, Math.min(TARBALL_TIMEOUT_MS, deadlineAtMilliseconds - nowMilliseconds())))]),
+    });
+    if (!response.ok || !response.body) throw new Error('the fixed OpenCode archive request failed');
+    const declared = response.headers?.get?.('content-length');
+    if (declared !== null && declared !== undefined && Number(declared) !== descriptor.bytes) throw new Error('the fixed OpenCode archive size differs');
+    const partial = `${tarball}.${process.pid}.partial`;
+    const output = await open(partial, 'wx', 0o600);
+    let closed = false;
+    try {
+      let size = 0;
+      const digest = createHash('sha512');
+      for await (const chunk of response.body) {
+        check();
+        const bytes = Buffer.from(chunk);
+        size += bytes.length;
+        if (size > descriptor.bytes) throw new Error('the fixed OpenCode archive exceeds its exact size');
+        digest.update(bytes);
+        await writeProfileChunk(output, bytes, check);
+      }
+      check();
+      if (size !== descriptor.bytes || !digest.digest().equals(expected)) throw new Error('the fixed OpenCode archive integrity differs');
+      await output.close();
+      closed = true;
+      renameSync(partial, tarball);
+      fetched = true;
+    } finally {
+      if (!closed) await output.close();
+      rmSync(partial, { force: true });
+    }
+  }
+  check();
+  mkdirSync(toolDir, { recursive: true, mode: 0o700 });
+  const staging = mkdtempSync(join(distDir, 'extract-'));
+  try {
+    if (!await extract(tarball, staging, { signal, deadlineAtMilliseconds, nowMilliseconds })) throw new Error('the fixed OpenCode archive could not be unpacked');
+    check();
+    const binary = join(toolDir, `opencode-${version}-${unscoped(name)}`);
+    rmSync(binary, { force: true });
+    renameSync(join(staging, 'package', 'bin', 'opencode'), binary);
+    chmodSync(binary, 0o755);
+    return { binary, fetched, name };
+  } finally {
+    rmSync(staging, { recursive: true, force: true });
+  }
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const installed = await installOpencode({
@@ -123,7 +245,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       process.stdout.write(`${installed.binary}\n`);
     }
   } catch (error) {
-    console.error(`::warning::OpenCode could not be installed from its verified registry package (${error.message}), so it is installed from npm`);
+    console.error(annotation(`OpenCode could not be installed from its verified registry package (${error.message}), so it is installed from npm`, 'warning'));
     process.exitCode = 1;
   }
 }

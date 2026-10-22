@@ -1,6 +1,6 @@
 /** DEFAULT_SECRET_VARS names the environment values a review must never be able to quote back. */
 const DEFAULT_SECRET_VARS = Object.freeze([
-  'ANTHROPIC_FEDERATED_TOKEN',
+  'KSAI_MODEL_TOKEN',
   'ACTIONS_ID_TOKEN_REQUEST_TOKEN',
   'ACTIONS_RUNTIME_TOKEN',
   'GITHUB_TOKEN',

@@ -1,7 +1,7 @@
 import { setTimeout as delay } from 'node:timers/promises';
+import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
-import { runCommand } from './run.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
 
 const SHA_SHAPE = /^[0-9a-f]{40}$/;
@@ -17,6 +17,25 @@ const API_TIMEOUT_MS = 30_000;
 const API_ATTEMPTS = 3;
 
 const RETRY_DELAY_MS = 2_000;
+
+function runCommand(file, args, { cwd = null, stderr = 'inherit' } = {}) {
+  try {
+    const stdout = execFileSync(file, args, {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', stderr === 'ignore' ? 'ignore' : 'inherit'],
+      timeout: 120_000,
+      maxBuffer: 4 * 1024 * 1024,
+    });
+    return { ok: true, stdout: String(stdout ?? ''), status: 0 };
+  } catch (error) {
+    return {
+      ok: false,
+      stdout: String(error?.stdout ?? ''),
+      status: typeof error?.status === 'number' ? error.status : null,
+    };
+  }
+}
 
 const distance = (value) => (Number.isSafeInteger(value) && value >= 0 ? value : null);
 
