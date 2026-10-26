@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-import { publicKeyOf } from '../lib/link-protocol.mjs';
+import { publicKeyOf } from '../link/link-protocol.mjs';
 import { rendererFor } from './anchors.mjs';
 import shipped from './trust.json' with { type: 'json' };
 import { certificateTrust, keyTrust, verifyStatement } from './render.mjs';

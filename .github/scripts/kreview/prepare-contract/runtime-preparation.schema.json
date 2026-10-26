@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "The immutable preparation profile for one runtime commit",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["api_version", "runner", "opencode", "client", "sandbox", "github_root", "components"],
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["integrity", "bytes"],
+      "properties": {
+        "integrity": {
+          "type": "string",
+          "pattern": "^sha512-[A-Za-z0-9+/]{85}[AQgw]==$"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 536870912
+        }
+      }
+    }
+  },
+  "properties": {
+    "api_version": { "const": "ksai.konghq.com/runtime-preparation/v1alpha1" },
+    "runner": { "const": "linux-glibc-v1" },
+    "opencode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "version", "artifacts"],
+      "properties": {
+        "operation": { "const": "npm-linux-glibc-v1" },
+        "version": { "const": "2.0.29" },
+        "artifacts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["@opencode/cli-linux-x64", "@opencode/cli-linux-x64-baseline", "@opencode/cli-linux-arm64"],
+          "properties": {
+            "@opencode/cli-linux-x64": { "$ref": "#/$defs/artifact" },
+            "@opencode/cli-linux-x64-baseline": { "$ref": "#/$defs/artifact" },
+            "@opencode/cli-linux-arm64": { "$ref": "#/$defs/artifact" }
+          }
+        }
+      }
+    },
+    "client": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["manifest_sha256", "lock_sha256"],
+      "properties": {
+        "manifest_sha256": { "$ref": "#/$defs/digest" },
+        "lock_sha256": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "sandbox": { "const": "pinned-search-userns-v1" },
+    "github_root": { "const": "gh-attestation-github-v1" },
+    "components": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["opencode_installer", "preparation_executor", "sandbox_runtime", "sandbox_tools", "sandbox_installer", "github_anchors"],
+      "properties": {
+        "opencode_installer": { "$ref": "#/$defs/digest" },
+        "preparation_executor": { "$ref": "#/$defs/digest" },
+        "sandbox_runtime": { "$ref": "#/$defs/digest" },
+        "sandbox_tools": { "$ref": "#/$defs/digest" },
+        "sandbox_installer": { "$ref": "#/$defs/digest" },
+        "github_anchors": { "$ref": "#/$defs/digest" }
+      }
+    }
+  }
+}

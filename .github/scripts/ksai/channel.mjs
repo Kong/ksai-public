@@ -1,7 +1,27 @@
-import promptText from '../lib/prompt-text.cjs';
-import { plain } from './progress.mjs';
+const CHANNEL_MARKER = 'ksai run channel';
+const CHANNEL_NONCE_SHAPE = /^[0-9a-f]{8,64}$/;
 
-const { channelHeader, usableNonce } = promptText;
+const channelHeader = (nonce) => `[${CHANNEL_MARKER} ${nonce}]`;
+
+const usableNonce = (nonce) => CHANNEL_NONCE_SHAPE.test(String(nonce ?? ''));
+
+const C0_END = 0x20;
+const C1_START = 0x7F;
+const C1_END = 0x9F;
+const FORMAT_CHARS = /\p{Cf}/u;
+
+const inert = (char) => {
+  const code = char.codePointAt(0);
+  if (code < C0_END || (code >= C1_START && code <= C1_END)) return false;
+  return !FORMAT_CHARS.test(char);
+};
+
+const plain = (value, max) => {
+  const text = typeof value === 'string' ? value : '';
+  const kept = [...text].map((char) => (inert(char) ? char : ' '));
+  const flat = [...kept.join('').replace(/\s+/g, ' ').trim()];
+  return flat.length > max ? `${flat.slice(0, max - 1).join('')}…` : flat.join('');
+};
 
 export const TICK = Object.freeze({ long: 10, short: 5, floor: 5, final: 1 });
 
