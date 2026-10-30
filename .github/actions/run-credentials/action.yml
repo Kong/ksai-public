@@ -1,0 +1,80 @@
+name: Run credentials
+description: >-
+  Read what a caller used to pass as a secret. Every consumer held the Datadog key and the model
+  gateway's URL and passed both into the reusable workflow, so a workflow on any branch of any of
+  those repositories could read them, and rotating either was a pull request in every repository.
+
+  Nothing here is a secret the caller holds. The run is named by a GitHub Actions OIDC token whose
+  repository and run claims are signed by GitHub and cannot be changed from inside the job, and the
+  control plane answers only a run whose dispatch it started.
+
+  The key is masked before it is handed on and never reaches a job output: an output is written to
+  the run's own API record, where it is neither masked nor withheld from anyone who can read the
+  run. A job that needs the key asks for it itself.
+
+  A control plane that answers nothing leaves the run with no key, which is the run it was before
+  anyone configured one. Telemetry is not the work, so nothing here fails a run.
+
+inputs:
+  endpoint:
+    description: Base URL of the control plane, with no trailing path. Empty answers nothing.
+    required: false
+    default: ""
+  audience:
+    description: Audience the OIDC token is minted for.
+    required: false
+    default: ksai-cp
+
+outputs:
+  datadog_key:
+    description: the Datadog API key this run reports its telemetry with, masked, or empty
+    value: ${{ steps.credentials.outputs.datadog_key }}
+  otel_headers:
+    description: >-
+      the OTLP headers carrying that key, or empty where there is none, so a caller passes one value
+      rather than spelling the header itself
+    value: ${{ steps.credentials.outputs.otel_headers }}
+  model_gateway_url:
+    description: the model gateway this run calls, or empty
+    value: ${{ steps.credentials.outputs.model_gateway_url }}
+  model_auth_mode:
+    description: the pinned model authorization mode for this run, or empty for direct calls
+    value: ${{ steps.credentials.outputs.model_auth_mode }}
+  model_origin:
+    description: the broker origin for a token exchange run, or empty
+    value: ${{ steps.credentials.outputs.model_origin }}
+  model_audience:
+    description: the engineering gateway audience for a token exchange run, or empty
+    value: ${{ steps.credentials.outputs.model_audience }}
+  read:
+    description: whether the control plane answered this run's credentials
+    value: ${{ steps.credentials.outputs.read }}
+
+runs:
+  using: composite
+  steps:
+    - name: Read the run's credentials
+      id: credentials
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        CREDENTIALS_ACTION_PATH: ${{ github.action_path }}
+        CREDENTIALS_ENDPOINT: ${{ inputs.endpoint }}
+        CREDENTIALS_AUDIENCE: ${{ inputs.audience }}
+      with:
+        script: |
+          const { readCredentials } = await import(`file://${process.env.CREDENTIALS_ACTION_PATH}/credentials.mjs`);
+          const answer = await readCredentials({
+            endpoint: process.env.CREDENTIALS_ENDPOINT,
+            audience: process.env.CREDENTIALS_AUDIENCE,
+            mint: (audience) => core.getIDToken(audience),
+            secret: (token) => core.setSecret(token),
+            note: (why) => core.info(`ksai read no run credentials: ${why}`),
+          });
+          if (answer.datadog_key !== '') core.setSecret(answer.datadog_key);
+          core.setOutput('datadog_key', answer.datadog_key);
+          core.setOutput('otel_headers', answer.datadog_key === '' ? '' : `dd-api-key=${answer.datadog_key}`);
+          core.setOutput('model_gateway_url', answer.model_gateway_url);
+          core.setOutput('model_auth_mode', answer.model_auth_mode);
+          core.setOutput('model_origin', answer.model_origin);
+          core.setOutput('model_audience', answer.model_audience);
+          core.setOutput('read', answer.read ? 'true' : 'false');
