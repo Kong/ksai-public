@@ -1,0 +1,583 @@
+{
+  "schema": 1,
+  "lockSHA256": "35447406b335dcb54851e90e87e603ce5a14f2f8a5ea27ae3ba05d36761b63aa",
+  "tool": {
+    "name": "esbuild",
+    "version": "0.28.2",
+    "integrity": "sha512-HKVLS8dvII+xoKW9kmqxbRKrnWEXfJJr/FZhhJmiqIB0e053QNYFqOBouTMO/k5sID4MvCiUCvv8b9M4h32wIA==",
+    "resolved": "https://registry.npmjs.org/esbuild/-/esbuild-0.28.2.tgz",
+    "generatorSHA256": "05c5b42046542fd5acc7c66958218bbdccd9df249f7aa6948e32696d6e30d018",
+    "license": {
+      "id": "MIT",
+      "path": "node_modules/esbuild/LICENSE.md",
+      "sha256": "b40ec5baec7bb34fa5b1c09521fa3cd52d5fad7adafed74932a2010d3612a681"
+    }
+  },
+  "options": {
+    "bundle": true,
+    "platform": "node",
+    "format": "cjs",
+    "target": [
+      "node22.22.2"
+    ],
+    "charset": "ascii",
+    "legalComments": "none",
+    "minifyWhitespace": true,
+    "minifySyntax": false,
+    "minifyIdentifiers": false,
+    "treeShaking": false,
+    "sourcemap": false,
+    "write": false,
+    "metafile": true,
+    "logLevel": "silent",
+    "banner": {
+      "js": "/*! Apache-2.0 AND MIT. Sigstore source modules combined by esbuild. See sigstore-licenses.json. */"
+    }
+  },
+  "exports": [
+    "bundleFromJSON",
+    "TrustedRoot",
+    "Verifier",
+    "toSignedEntity",
+    "toTrustMaterial"
+  ],
+  "externals": [
+    "crypto",
+    "util"
+  ],
+  "inputs": [
+    "node_modules/@sigstore/bundle/dist/build.js",
+    "node_modules/@sigstore/bundle/dist/bundle.js",
+    "node_modules/@sigstore/bundle/dist/error.js",
+    "node_modules/@sigstore/bundle/dist/index.js",
+    "node_modules/@sigstore/bundle/dist/serialized.js",
+    "node_modules/@sigstore/bundle/dist/validate.js",
+    "node_modules/@sigstore/core/dist/asn1/error.js",
+    "node_modules/@sigstore/core/dist/asn1/index.js",
+    "node_modules/@sigstore/core/dist/asn1/length.js",
+    "node_modules/@sigstore/core/dist/asn1/obj.js",
+    "node_modules/@sigstore/core/dist/asn1/parse.js",
+    "node_modules/@sigstore/core/dist/asn1/tag.js",
+    "node_modules/@sigstore/core/dist/crypto.js",
+    "node_modules/@sigstore/core/dist/dsse.js",
+    "node_modules/@sigstore/core/dist/encoding.js",
+    "node_modules/@sigstore/core/dist/index.js",
+    "node_modules/@sigstore/core/dist/json.js",
+    "node_modules/@sigstore/core/dist/oid.js",
+    "node_modules/@sigstore/core/dist/pem.js",
+    "node_modules/@sigstore/core/dist/rfc3161/error.js",
+    "node_modules/@sigstore/core/dist/rfc3161/index.js",
+    "node_modules/@sigstore/core/dist/rfc3161/timestamp.js",
+    "node_modules/@sigstore/core/dist/rfc3161/tstinfo.js",
+    "node_modules/@sigstore/core/dist/stream.js",
+    "node_modules/@sigstore/core/dist/x509/cert.js",
+    "node_modules/@sigstore/core/dist/x509/ext.js",
+    "node_modules/@sigstore/core/dist/x509/index.js",
+    "node_modules/@sigstore/core/dist/x509/sct.js",
+    "node_modules/@sigstore/protobuf-specs/dist/__generated__/envelope.js",
+    "node_modules/@sigstore/protobuf-specs/dist/__generated__/google/protobuf/timestamp.js",
+    "node_modules/@sigstore/protobuf-specs/dist/__generated__/rekor/v2/dsse.js",
+    "node_modules/@sigstore/protobuf-specs/dist/__generated__/rekor/v2/entry.js",
+    "node_modules/@sigstore/protobuf-specs/dist/__generated__/rekor/v2/hashedrekord.js",
+    "node_modules/@sigstore/protobuf-specs/dist/__generated__/rekor/v2/verifier.js",
+    "node_modules/@sigstore/protobuf-specs/dist/__generated__/sigstore_bundle.js",
+    "node_modules/@sigstore/protobuf-specs/dist/__generated__/sigstore_common.js",
+    "node_modules/@sigstore/protobuf-specs/dist/__generated__/sigstore_rekor.js",
+    "node_modules/@sigstore/protobuf-specs/dist/__generated__/sigstore_trustroot.js",
+    "node_modules/@sigstore/protobuf-specs/dist/__generated__/sigstore_verification.js",
+    "node_modules/@sigstore/protobuf-specs/dist/index.js",
+    "node_modules/@sigstore/protobuf-specs/dist/rekor/v2/index.js",
+    "node_modules/@sigstore/verify/dist/bundle/dsse.js",
+    "node_modules/@sigstore/verify/dist/bundle/index.js",
+    "node_modules/@sigstore/verify/dist/bundle/message.js",
+    "node_modules/@sigstore/verify/dist/error.js",
+    "node_modules/@sigstore/verify/dist/index.js",
+    "node_modules/@sigstore/verify/dist/key/certificate.js",
+    "node_modules/@sigstore/verify/dist/key/index.js",
+    "node_modules/@sigstore/verify/dist/key/sct.js",
+    "node_modules/@sigstore/verify/dist/policy.js",
+    "node_modules/@sigstore/verify/dist/timestamp/index.js",
+    "node_modules/@sigstore/verify/dist/timestamp/tsa.js",
+    "node_modules/@sigstore/verify/dist/tlog/checkpoint.js",
+    "node_modules/@sigstore/verify/dist/tlog/dsse.js",
+    "node_modules/@sigstore/verify/dist/tlog/hashedrekord.js",
+    "node_modules/@sigstore/verify/dist/tlog/index.js",
+    "node_modules/@sigstore/verify/dist/tlog/intoto.js",
+    "node_modules/@sigstore/verify/dist/tlog/merkle.js",
+    "node_modules/@sigstore/verify/dist/tlog/set.js",
+    "node_modules/@sigstore/verify/dist/trust/filter.js",
+    "node_modules/@sigstore/verify/dist/trust/index.js",
+    "node_modules/@sigstore/verify/dist/verifier.js",
+    "sigstore-entry.cjs"
+  ],
+  "packages": [
+    {
+      "name": "@sigstore/bundle",
+      "version": "5.0.0",
+      "resolved": "https://registry.npmjs.org/@sigstore/bundle/-/bundle-5.0.0.tgz",
+      "integrity": "sha512-wefjygudENbzbQMks1t5u34EP0fFoD0XvaEP7DOUP/sXKvogzEJYFw5E6pegGyp3onGWzVEYKVa3bNZWyTYX+A==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@sigstore/protobuf-specs": "^0.5.0"
+      },
+      "engines": {
+        "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
+      },
+      "packageJSONSHA256": "410d257b34acb53ca90eec9663e626a040de96e1f2e6e069913a32d4287e1e98"
+    },
+    {
+      "name": "@sigstore/core",
+      "version": "4.0.1",
+      "resolved": "https://registry.npmjs.org/@sigstore/core/-/core-4.0.1.tgz",
+      "integrity": "sha512-9v5hRjujn5NXq8o7XFEUgLyAtdr5Iisb4pzM05u3K61IS5q3hP3luWAndk0RkPPLTUFoTbg7Vb84UQ1ZQeajWQ==",
+      "license": "Apache-2.0",
+      "engines": {
+        "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
+      },
+      "packageJSONSHA256": "55d00d9cfae15f310382659245d3829fc9a5a615953bf8691127bbb80d1bd44a"
+    },
+    {
+      "name": "@sigstore/protobuf-specs",
+      "version": "0.5.2",
+      "resolved": "https://registry.npmjs.org/@sigstore/protobuf-specs/-/protobuf-specs-0.5.2.tgz",
+      "integrity": "sha512-SQqvFMt4V78fdjcDdYX6HbiVSOR4QK3ZgwCa2KOsopAgPIHy1rU5UDUmzLl02r5oyyaYcYHR1hpwDRk/yUe+Mw==",
+      "license": "Apache-2.0",
+      "engines": {
+        "node": "^18.17.0 || >=20.5.0"
+      },
+      "packageJSONSHA256": "3d6249a0adc03584f0eddf78622917022098a920f5d4d87d1e5d73a37a22f96d"
+    },
+    {
+      "name": "@sigstore/verify",
+      "version": "4.1.2",
+      "resolved": "https://registry.npmjs.org/@sigstore/verify/-/verify-4.1.2.tgz",
+      "integrity": "sha512-BfD9eLrz3A/DG58aSgfgZYmIR6V9Yw96QVN/frtu2bEH7ctSTk2TDvHU12un3JsDPBTqTNkqkIkucjxljpOFqQ==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@sigstore/bundle": "^5.0.0",
+        "@sigstore/core": "^4.0.1",
+        "@sigstore/protobuf-specs": "^0.5.0"
+      },
+      "engines": {
+        "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
+      },
+      "packageJSONSHA256": "69fbaca3493e35b5fb399a4cd0788af0956e20efbb223d2cdbba3d8e2c5c3743"
+    }
+  ],
+  "sources": [
+    {
+      "path": "node_modules/@sigstore/bundle/dist/build.js",
+      "bytes": 3083,
+      "sha256": "837927ac999d1beb76607f516a7e030388274a8f0eeef77f1604e17d003fa684"
+    },
+    {
+      "path": "node_modules/@sigstore/bundle/dist/bundle.js",
+      "bytes": 1270,
+      "sha256": "07a67e2910a034bae697b28520584f5e6dae1bfd54dfe85c04f9194bbee28353"
+    },
+    {
+      "path": "node_modules/@sigstore/bundle/dist/error.js",
+      "bytes": 869,
+      "sha256": "5e4035bda72c285a2d7f6e721036bf71e6d0b4e1eda5a881f85040549ff3c807"
+    },
+    {
+      "path": "node_modules/@sigstore/bundle/dist/index.js",
+      "bytes": 4154,
+      "sha256": "898210069b039c525273a8d15d7aa055c87f18bcc544a6b04af7ab21353ba430"
+    },
+    {
+      "path": "node_modules/@sigstore/bundle/dist/serialized.js",
+      "bytes": 1814,
+      "sha256": "98edf6005530cb390ecdfa2a0cb56206a716077c6c5d4b8346e9c2f0882aa993"
+    },
+    {
+      "path": "node_modules/@sigstore/bundle/dist/utility.js",
+      "bytes": 77,
+      "sha256": "d43aa81f5bc89faa359e0f97c814ba25155591ff078fbb9bfd40f8c7c9683230"
+    },
+    {
+      "path": "node_modules/@sigstore/bundle/dist/validate.js",
+      "bytes": 8027,
+      "sha256": "8510442c81ecd4ef54cd912ee9e45d72ac455edb8cfc64c91d2264a502a84c43"
+    },
+    {
+      "path": "node_modules/@sigstore/core/dist/asn1/error.js",
+      "bytes": 859,
+      "sha256": "31d1305e0ab546f5a2fedd81f6f157f4102dae3782220fd6e0e7afb50b1a6b95"
+    },
+    {
+      "path": "node_modules/@sigstore/core/dist/asn1/index.js",
+      "bytes": 810,
+      "sha256": "07377c8dc320b991517dd832068c540a86d949a40563b233b07191621d7513d6"
+    },
+    {
+      "path": "node_modules/@sigstore/core/dist/asn1/length.js",
+      "bytes": 2847,
+      "sha256": "5278552c3ef1c365c7d690c3e0c3d412ffe7c7f1e27b04dca93f973a1cfa7f41"
+    },
+    {
+      "path": "node_modules/@sigstore/core/dist/asn1/obj.js",
+      "bytes": 6680,
+      "sha256": "e6b493da367b545c79b5519491d8176699e83bf2f370a1ee321fa8a888cbd749"
+    },
+    {
+      "path": "node_modules/@sigstore/core/dist/asn1/parse.js",
+      "bytes": 5296,
+      "sha256": "3eb3c13d86080bf37cf4194bfe57dd84154b370e7fe592160963849c93980b7f"
+    },
+    {
+      "path": "node_modules/@sigstore/core/dist/asn1/tag.js",
+      "bytes": 2877,
+      "sha256": "71333f71304fd8aa4bb7c64a37535c0ab1f9d17178dcbc15ae70d2670c2e7eaf"
+    },
+    {
+      "path": "node_modules/@sigstore/core/dist/crypto.js",
+      "bytes": 2190,
+      "sha256": "031e2830e1b6d884335ef43366f53e119649c6e97ae931bc59c2e6193ea18713"
+    },
+    {
+      "path": "node_modules/@sigstore/core/dist/dsse.js",
+      "bytes": 1053,
+      "sha256": "f9ed81710343a411eb1035f0c79e654c87cb932cda42dbb7e6150b8e5303bdb4"
+    },
+    {
+      "path": "node_modules/@sigstore/core/dist/encoding.js",
+      "bytes": 986,
+      "sha256": "0cba784e1e688fdb2d03dd89c78fbced64a8542e7210ac19ed6e22586fd8d050"
+    },
+    {
+      "path": "node_modules/@sigstore/core/dist/index.js",
+      "bytes": 3370,
+      "sha256": "047302239dbe0526fbdb4e98583f6f33e6117bba1eebffea9b0ffcbd46776afa"
+    },
+    {
+      "path": "node_modules/@sigstore/core/dist/json.js",
+      "bytes": 1953,
+      "sha256": "eba8aef02dd4f005abeb9cef37b06d49a74d9799f922170a397b3a859be5ecbb"
+    },
+    {
+      "path": "node_modules/@sigstore/core/dist/oid.js",
+      "bytes": 700,
+      "sha256": "5deddcd10af33d07d1fdf2a14df86f6738331db19900ba72e71d78ead2c9fd3d"
+    },
+    {
+      "path": "node_modules/@sigstore/core/dist/pem.js",
+      "bytes": 1573,
+      "sha256": "f520e6b379ec5c763edd7d5bf6a1a1d3991a6c7565ce16dce214790ef7eae0bf"
+    },
+    {
+      "path": "node_modules/@sigstore/core/dist/rfc3161/error.js",
+      "bytes": 834,
+      "sha256": "a9dc1ebc92fa89f11c68cb8f77ad144b1dc33151b747f3389483fca34214f8a5"
+    },
+    {
+      "path": "node_modules/@sigstore/core/dist/rfc3161/index.js",
+      "bytes": 855,
+      "sha256": "97c1ff010c638c997c0b15f218bb908d1b6ecc4161e8f3e112cbe28756e3c709"
+    },
+    {
+      "path": "node_modules/@sigstore/core/dist/rfc3161/timestamp.js",
+      "bytes": 8618,
+      "sha256": "0c728d7c642969de8424e77424f8e5562c84d424fd2474902afee3d23aa9c0a1"
+    },
+    {
+      "path": "node_modules/@sigstore/core/dist/rfc3161/tstinfo.js",
+      "bytes": 2574,
+      "sha256": "edeafa060a2e955dff166b2482b5dfa8e0dec1d083409be0c8ee38b6cc1eb62f"
+    },
+    {
+      "path": "node_modules/@sigstore/core/dist/stream.js",
+      "bytes": 3535,
+      "sha256": "92bf85aaa2b23e840c0b0cb5c3d3b1ae11576643b09fa7d73d881c04ac6e71d5"
+    },
+    {
+      "path": "node_modules/@sigstore/core/dist/x509/cert.js",
+      "bytes": 9784,
+      "sha256": "c2d88613d8e356f77b734caa663002c24b0cfae86fb41e1ebc3da5b564bec538"
+    },
+    {
+      "path": "node_modules/@sigstore/core/dist/x509/ext.js",
+      "bytes": 5591,
+      "sha256": "4799415e915f5f673b341911502c3dcabf2c0e4bf5ff0947d2708a96e3f49378"
+    },
+    {
+      "path": "node_modules/@sigstore/core/dist/x509/index.js",
+      "bytes": 1179,
+      "sha256": "d44814772e0f843d131d4c0b854a382e110607014edde185262bb058f5845500"
+    },
+    {
+      "path": "node_modules/@sigstore/core/dist/x509/sct.js",
+      "bytes": 6161,
+      "sha256": "cdabc11ef8bc6b00a86a3a0ba0a2338165ff3f6e3407969968ec69beb6ca4ed2"
+    },
+    {
+      "path": "node_modules/@sigstore/protobuf-specs/dist/__generated__/envelope.js",
+      "bytes": 1963,
+      "sha256": "3b0e581182f8b0029ff79fd638e631d14f3b0016764e3bbc8d592d252e5e34c9"
+    },
+    {
+      "path": "node_modules/@sigstore/protobuf-specs/dist/__generated__/events.js",
+      "bytes": 6792,
+      "sha256": "a2997037198907e021550099540c552ebdabc1a2817ba69f8a5f07e8443121b7"
+    },
+    {
+      "path": "node_modules/@sigstore/protobuf-specs/dist/__generated__/google/api/field_behavior.js",
+      "bytes": 5986,
+      "sha256": "8c7486b3120460b3399db8a25ea9e165ac01bffb1a57a2f4a98093a591ac9f3c"
+    },
+    {
+      "path": "node_modules/@sigstore/protobuf-specs/dist/__generated__/google/protobuf/any.js",
+      "bytes": 1079,
+      "sha256": "8acb03b24e34b4b0a09b4bcab33875efb130ba0e4f3b9ec59ed3087b2749668d"
+    },
+    {
+      "path": "node_modules/@sigstore/protobuf-specs/dist/__generated__/google/protobuf/descriptor.js",
+      "bytes": 104720,
+      "sha256": "68930a19cfd087710ae42572939b47c1fa13816cad660e448138987066f0513a"
+    },
+    {
+      "path": "node_modules/@sigstore/protobuf-specs/dist/__generated__/google/protobuf/timestamp.js",
+      "bytes": 868,
+      "sha256": "8b1a4779e8b4832e7f54aed8971e3775f785a907ad79260c692b4787108969d7"
+    },
+    {
+      "path": "node_modules/@sigstore/protobuf-specs/dist/__generated__/rekor/v2/dsse.js",
+      "bytes": 2005,
+      "sha256": "c51d2107b9513ad54dbecf78fb3cf4ec4a83a8f5928d8c516751bd5df6ba9760"
+    },
+    {
+      "path": "node_modules/@sigstore/protobuf-specs/dist/__generated__/rekor/v2/entry.js",
+      "bytes": 3058,
+      "sha256": "1113a1048238b5a018bd40fe3915d31256750bc5ae54a59a04b11671959b2ec6"
+    },
+    {
+      "path": "node_modules/@sigstore/protobuf-specs/dist/__generated__/rekor/v2/hashedrekord.js",
+      "bytes": 1995,
+      "sha256": "5b4748d0305e9cdf9e99a4eb5267a2b358fff41ac63f66d4f40f495d2bf1ae41"
+    },
+    {
+      "path": "node_modules/@sigstore/protobuf-specs/dist/__generated__/rekor/v2/verifier.js",
+      "bytes": 2756,
+      "sha256": "c759ec55fe9c0573608105d9d808c97b1f62e4e5b6d0d5c011ae155f1f70ab05"
+    },
+    {
+      "path": "node_modules/@sigstore/protobuf-specs/dist/__generated__/sigstore_bundle.js",
+      "bytes": 4693,
+      "sha256": "9c7670be2a2ae7d061de85482632c8bb0f3c757a2fdb11ec90b5fcfc47da499a"
+    },
+    {
+      "path": "node_modules/@sigstore/protobuf-specs/dist/__generated__/sigstore_common.js",
+      "bytes": 24126,
+      "sha256": "a3b0a14b03aec053c031a51dc92c992c102a0808b27cf9964f9dc467b07ec350"
+    },
+    {
+      "path": "node_modules/@sigstore/protobuf-specs/dist/__generated__/sigstore_monitor.js",
+      "bytes": 1993,
+      "sha256": "41feebe6fd353d4be461149997df68489812dc172a65f20daa9f46841fddf46e"
+    },
+    {
+      "path": "node_modules/@sigstore/protobuf-specs/dist/__generated__/sigstore_rekor.js",
+      "bytes": 5248,
+      "sha256": "1cc00a8bd782a3cc815fd5a79038fa9e7efbaa610fe1c10b2a65947dee1c61d8"
+    },
+    {
+      "path": "node_modules/@sigstore/protobuf-specs/dist/__generated__/sigstore_trustroot.js",
+      "bytes": 12051,
+      "sha256": "99b65bd80ec21ca85ece06a4077d5e77eacc6a03a95ad59578ab2ba0e06f77de"
+    },
+    {
+      "path": "node_modules/@sigstore/protobuf-specs/dist/__generated__/sigstore_verification.js",
+      "bytes": 11566,
+      "sha256": "02ace701cfacff4540cae06b7d74e43047485e438e992e8b6607b82616c59d44"
+    },
+    {
+      "path": "node_modules/@sigstore/protobuf-specs/dist/index.js",
+      "bytes": 1728,
+      "sha256": "3df467c311527639effd4766bfd9e405616549f7d13a43ff0036e9755cc4461a"
+    },
+    {
+      "path": "node_modules/@sigstore/protobuf-specs/dist/rekor/v2/index.js",
+      "bytes": 1614,
+      "sha256": "dda741bbe0857c52486eb7929311f677d617bc69b0772467123c03376d3c5d5a"
+    },
+    {
+      "path": "node_modules/@sigstore/verify/dist/bundle/dsse.js",
+      "bytes": 1919,
+      "sha256": "e7daef1c4e6daa7ed7559082215324e4704e3df15658825d517e95717a342b8a"
+    },
+    {
+      "path": "node_modules/@sigstore/verify/dist/bundle/index.js",
+      "bytes": 2186,
+      "sha256": "125e8124a017db263cbf165d556f43e7316080336fb3756c98eff6af18bc0730"
+    },
+    {
+      "path": "node_modules/@sigstore/verify/dist/bundle/message.js",
+      "bytes": 2397,
+      "sha256": "ffd55fe5cd375c4318fe1a5af7b1a939c3d2ffb4703bbc4fff77e61e32372012"
+    },
+    {
+      "path": "node_modules/@sigstore/verify/dist/error.js",
+      "bytes": 1159,
+      "sha256": "a311acc9849072841c37aa530f85c8e0978c35880b8f64c62e32437502c20adb"
+    },
+    {
+      "path": "node_modules/@sigstore/verify/dist/index.js",
+      "bytes": 1563,
+      "sha256": "1edb0652ccb4bf7490f288a522fc2d9807c7d8780f4a7ff294c37259b0f30f84"
+    },
+    {
+      "path": "node_modules/@sigstore/verify/dist/key/certificate.js",
+      "bytes": 8668,
+      "sha256": "7b9d95a9fcca243e7a52cf1742e961521590de48d26c1d3fbfd5dbcdd5433a88"
+    },
+    {
+      "path": "node_modules/@sigstore/verify/dist/key/index.js",
+      "bytes": 2692,
+      "sha256": "9298103950bc64ca9986e54b968a84a53424395540999e2da215eb214f61e6f8"
+    },
+    {
+      "path": "node_modules/@sigstore/verify/dist/key/sct.js",
+      "bytes": 3294,
+      "sha256": "d45dc2e67ee382746aa6a0442dfca5fd10d74db34c7659e3493632284c1407e4"
+    },
+    {
+      "path": "node_modules/@sigstore/verify/dist/policy.js",
+      "bytes": 2050,
+      "sha256": "fd846e2e575640e2aec33c02267a4141eb7a2f9418b4dae1b82bbb96a2432c02"
+    },
+    {
+      "path": "node_modules/@sigstore/verify/dist/shared.types.js",
+      "bytes": 77,
+      "sha256": "d43aa81f5bc89faa359e0f97c814ba25155591ff078fbb9bfd40f8c7c9683230"
+    },
+    {
+      "path": "node_modules/@sigstore/verify/dist/timestamp/index.js",
+      "bytes": 822,
+      "sha256": "a92bf7a691101c83e9ed42e4aafe367578ceb20b5329a894ab76753493c9a86f"
+    },
+    {
+      "path": "node_modules/@sigstore/verify/dist/timestamp/tsa.js",
+      "bytes": 2544,
+      "sha256": "da992ca078d3ba149cff2e434185ab007c5449ebecb56d3948a10e510960a280"
+    },
+    {
+      "path": "node_modules/@sigstore/verify/dist/tlog/checkpoint.js",
+      "bytes": 7234,
+      "sha256": "b4881c6a219c8ac811972b8ff8e33138cded4b84609b48f87d9c90f4dcda7b6d"
+    },
+    {
+      "path": "node_modules/@sigstore/verify/dist/tlog/dsse.js",
+      "bytes": 4164,
+      "sha256": "5a79efe3de770dc87795d823d447395f5ae6f28dbf6edc0f81421d2f34ac5c5d"
+    },
+    {
+      "path": "node_modules/@sigstore/verify/dist/tlog/hashedrekord.js",
+      "bytes": 3748,
+      "sha256": "4bee01cc9cbfc777df01bc41705f6f01989ace50942a0421c8a2ed0ef0ea3148"
+    },
+    {
+      "path": "node_modules/@sigstore/verify/dist/tlog/index.js",
+      "bytes": 4143,
+      "sha256": "258ee711f825936cd91b9c8161e03f704b150a3ac4650bd616cc3754a17f7d2e"
+    },
+    {
+      "path": "node_modules/@sigstore/verify/dist/tlog/intoto.js",
+      "bytes": 2503,
+      "sha256": "cb68fbf291a74ad0689355b09332ca7c025a094765766fffc7a733de98a835d4"
+    },
+    {
+      "path": "node_modules/@sigstore/verify/dist/tlog/merkle.js",
+      "bytes": 4640,
+      "sha256": "2874340dc1c9285f8475b44b6b4f8004e781143a4873bfa206057be480c76ff3"
+    },
+    {
+      "path": "node_modules/@sigstore/verify/dist/tlog/set.js",
+      "bytes": 2581,
+      "sha256": "a1927245ae0bb1b8f91fead209d16ae884d076f91700335bbe3bd42d992966c5"
+    },
+    {
+      "path": "node_modules/@sigstore/verify/dist/trust/filter.js",
+      "bytes": 1043,
+      "sha256": "38b3126be45b639685ceb7e96c489ecb27bee211e32c468798b9a2e7fbf3a6d0"
+    },
+    {
+      "path": "node_modules/@sigstore/verify/dist/trust/index.js",
+      "bytes": 3815,
+      "sha256": "6f8874d9bc842fb09162621aabfac9d355e015350518b8d8ab134d797d0b4757"
+    },
+    {
+      "path": "node_modules/@sigstore/verify/dist/trust/trust.types.js",
+      "bytes": 77,
+      "sha256": "d43aa81f5bc89faa359e0f97c814ba25155591ff078fbb9bfd40f8c7c9683230"
+    },
+    {
+      "path": "node_modules/@sigstore/verify/dist/verifier.js",
+      "bytes": 6841,
+      "sha256": "7cad6f80cfae8410deb8f34ce1887985b942cf61bfc5d32bd4ded0c58358abe6"
+    }
+  ],
+  "buildInputs": [
+    {
+      "path": "package.json",
+      "bytes": 221,
+      "sha256": "85785636b016f9b96e5e5bd07256e474fc084d238842207687683f078ecf0ad1"
+    },
+    {
+      "path": "package-lock.json",
+      "bytes": 2146,
+      "sha256": "35447406b335dcb54851e90e87e603ce5a14f2f8a5ea27ae3ba05d36761b63aa"
+    },
+    {
+      "path": "sigstore-entry.cjs",
+      "bytes": 294,
+      "sha256": "b9b2162cf4df628f1b0f1d5d172038dd9e701846f6f4b44dce1737b96ed9b7b7"
+    },
+    {
+      "path": "sigstore-license-sources.json",
+      "bytes": 900,
+      "sha256": "1dc2cce32228b1501e33dcd1becfccf6e9c167641b513b3f3f42e863cad30db5"
+    },
+    {
+      "path": "sigstore.d.cts",
+      "bytes": 381,
+      "sha256": "8ea2a198c280875e12f7f35a804ac8e8d57dd5a3be398d98d753bf084498be7a"
+    }
+  ],
+  "files": [
+    {
+      "path": "package-lock.json",
+      "bytes": 2146,
+      "sha256": "35447406b335dcb54851e90e87e603ce5a14f2f8a5ea27ae3ba05d36761b63aa"
+    },
+    {
+      "path": "package.json",
+      "bytes": 221,
+      "sha256": "85785636b016f9b96e5e5bd07256e474fc084d238842207687683f078ecf0ad1"
+    },
+    {
+      "path": "sigstore-entry.cjs",
+      "bytes": 294,
+      "sha256": "b9b2162cf4df628f1b0f1d5d172038dd9e701846f6f4b44dce1737b96ed9b7b7"
+    },
+    {
+      "path": "sigstore-license-sources.json",
+      "bytes": 900,
+      "sha256": "1dc2cce32228b1501e33dcd1becfccf6e9c167641b513b3f3f42e863cad30db5"
+    },
+    {
+      "path": "sigstore-licenses.json",
+      "bytes": 18241,
+      "sha256": "465b56789e363a140edbab7399ef0ff86091ad22e5cd5bd6fee4992f0c6bedd4"
+    },
+    {
+      "path": "sigstore-sbom.cdx.json",
+      "bytes": 4098,
+      "sha256": "63a005223a444a0af63b69e09a388fca7682479d0a10b28d3fef6e3319b39ee2"
+    },
+    {
+      "path": "sigstore.cjs",
+      "bytes": 136455,
+      "sha256": "6669a9f5980314a632c22f5a48f2d281d6bf7d1ee5c169588831c32dcbe501a6"
+    }
+  ]
+}
