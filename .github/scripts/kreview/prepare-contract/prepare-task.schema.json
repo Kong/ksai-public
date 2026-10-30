@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "The closed prepare task argument",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["api_version", "binding_digest", "runtime_commit", "profile_digest", "deadline_at"],
+  "properties": {
+    "api_version": { "const": "ksai.konghq.com/stage-prepare/v1alpha1" },
+    "binding_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "runtime_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "profile_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "deadline_at": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{0,8}[1-9])?Z$"
+    }
+  }
+}
