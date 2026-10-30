@@ -1,0 +1,36 @@
+{
+  "api_version": "ksai.konghq.com/runtime-preparation/v1alpha1",
+  "runner": "linux-glibc-v1",
+  "opencode": {
+    "operation": "npm-linux-glibc-v1",
+    "version": "2.0.29",
+    "artifacts": {
+      "@opencode/cli-linux-x64": {
+        "integrity": "sha512-pdG/T4uBxSC3hjUTOrTlx2pXlZl2VqABlb0AgDlZ8VO/q1pUUOYvooWmN5VeSi+EP8cKGVUsj0GUmMDeB2ympA==",
+        "bytes": 98038683
+      },
+      "@opencode/cli-linux-x64-baseline": {
+        "integrity": "sha512-YvDKgdRVZzBoedL22zNQyOrI38n9bElwdCNqYiZ1CLfE7CS6Ni4TulGi3RZgZe+KwJfhoiEjwNuZ0E55raFqGA==",
+        "bytes": 98038640
+      },
+      "@opencode/cli-linux-arm64": {
+        "integrity": "sha512-EsCnvp5lMJNem0YoQJM9PkXY0KrkiugL55M9J2JlImQzKdQnZ4CKutrPAXOnsa889qHhY5tjRpAnD/ZYFzhkRA==",
+        "bytes": 96807431
+      }
+    }
+  },
+  "client": {
+    "manifest_sha256": "sha256:dc8249e7fd81224b6e44626dafcb6f0df0226dea53eccdcda53fe5ead436fc3b",
+    "lock_sha256": "sha256:8297e99afcc6712f3fdb0277eb94b7194dc2e7811c2ba638c40febdbafb8bfad"
+  },
+  "sandbox": "pinned-search-userns-v1",
+  "github_root": "gh-attestation-github-v1",
+  "components": {
+    "opencode_installer": "sha256:de51f97d88c8c15772113c6dfd1474c3648991d2894716df2fc3c5a872361539",
+    "preparation_executor": "sha256:80a3ac11febe9fcaf10c696b541888447b269bd3a0cb3a251ff029b6b70beb0d",
+    "sandbox_runtime": "sha256:4336c87807f7dda522842cf4193a59300cb26a6ec45e0d411a06bf7dae813dd8",
+    "sandbox_tools": "sha256:00bd8d6a18f71704e3cc9815271595352480e4dbdd556fb2c712c5fb5ab6971e",
+    "sandbox_installer": "sha256:0cf1248070868d21e46b75b68e26d425eada1157fcde253242fd9cec0f316756",
+    "github_anchors": "sha256:978d091b1fad0e8a937ae585c2ecb928abb40d501e6247785c6b334048647ab1"
+  }
+}
