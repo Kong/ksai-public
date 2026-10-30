@@ -22,7 +22,26 @@
       "additionalProperties": false,
       "required": ["counters"],
       "properties": {
-        "counters": { "const": "invocation-calls-v1" }
+        "counters": { "const": "invocation-calls-v1" },
+        "calls": { "description": "The engine takes how many model calls each session and model made, beside their tokens", "const": true }
+      }
+    },
+    "render": {
+      "description": "The render-request extensions this engine and its control plane accept",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_digest"],
+      "properties": {
+        "schema_digest": { "const": true }
+      }
+    },
+    "progress": {
+      "description": "The progress-report extensions this engine and its control plane accept. A host sends a wait on its model provider only when this names it",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["waiting"],
+      "properties": {
+        "waiting": { "const": true }
       }
     },
     "resume": {

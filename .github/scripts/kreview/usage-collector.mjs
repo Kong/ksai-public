@@ -4,9 +4,13 @@ import { ending, openUsage, saved } from './usage-source.mjs';
 
 export const USAGE_ASK = Object.freeze({ 'ksai-link-usage': COUNTERS });
 
+export const USAGE_CALLS_CAPABILITY = 'ksai-usage-calls-v1';
+
 export const SNAPSHOT_EVENTS = 64;
 
 const pairOf = (one) => canonical([one.session, one.model]);
+
+const takesCalls = (welcome) => welcome?.usage?.counters === COUNTERS && welcome.usage.calls === true;
 
 export function usageCollector({ path, scope, send }) {
   let state = openUsage(path, scope);
@@ -15,7 +19,9 @@ export function usageCollector({ path, scope, send }) {
   const unacked = new Set();
   const waiting = new Set();
   let offered = false;
+  let calls = false;
   let refusal = '';
+  const eventOf = (one) => usageEvent(state.source, one, { calls });
   const keep = (next) => {
     try {
       state = saved(path, next);
@@ -43,7 +49,7 @@ export function usageCollector({ path, scope, send }) {
     waiter();
   });
   const undelivered = () => counter.snapshots().some((one) => {
-    const { id } = usageEvent(state.source, one);
+    const { id } = eventOf(one);
     return queued.get(pairOf(one)) !== id || unacked.has(id);
   });
   const ask = () => {
@@ -54,7 +60,7 @@ export function usageCollector({ path, scope, send }) {
     if (refusal || state.mode !== 'cumulative' || !offered) return;
     const snapshots = counter.snapshots();
     if (!keep({ ...state, snapshots })) return;
-    const moved = snapshots.map((one) => [pairOf(one), usageEvent(state.source, one)]).filter(([pair, event]) => queued.get(pair) !== event.id);
+    const moved = snapshots.map((one) => [pairOf(one), eventOf(one)]).filter(([pair, event]) => queued.get(pair) !== event.id);
     for (let at = 0; at < moved.length; at += SNAPSHOT_EVENTS) {
       const batch = moved.slice(at, at + SNAPSHOT_EVENTS);
       send('usage.snapshot', `usage.snapshot/${batch[0][1].id}`, { source: state.source, events: batch.map(([, event]) => ({ id: event.id, usage: event.usage })) });
@@ -66,7 +72,7 @@ export function usageCollector({ path, scope, send }) {
   };
   return {
     counted(session, model, call) {
-      if (refusal || state.mode === 'legacy' || state.mode === 'unavailable') return;
+      if (refusal) return;
       try {
         counter.add(session, model, call);
         keep({ ...state, snapshots: counter.snapshots() });
@@ -84,11 +90,25 @@ export function usageCollector({ path, scope, send }) {
       }
       return refusal;
     },
+    amended(message, welcome) {
+      if (message.kind !== 'usage.snapshot' || takesCalls(welcome) || !message.body.events.some((event) => Object.hasOwn(event.usage, 'calls'))) return message;
+      const events = message.body.events.map((event) => {
+        const { calls: _calls, ...usage } = event.usage;
+        const { id } = usageEvent(message.body.source, usage);
+        if (unacked.delete(event.id)) unacked.add(id);
+        for (const [pair, held] of queued) if (held === event.id) queued.set(pair, id);
+        return { id, usage };
+      });
+      return { ...message, id: `usage.snapshot/${events[0].id}`, body: { ...message.body, events } };
+    },
     welcomed(body) {
       offered = body?.usage?.counters === COUNTERS;
-      if (offered && !refusal) {
-        if (state.mode === 'unregistered' || state.mode === 'ambiguous') ask();
-        flush();
+      calls = takesCalls(body);
+      if (!offered && !refusal) {
+        refusal = `the engine does not support the required ${COUNTERS} usage contract`;
+      } else if (!refusal) {
+        if (state.mode !== 'cumulative') ask();
+        else flush();
       }
       wake();
     },
@@ -100,8 +120,8 @@ export function usageCollector({ path, scope, send }) {
         refusal = `the engine answered source ${body.source} for the intent registered as ${state.source}`;
       } else if (body.outcome === 'registered') {
         if (keep({ ...state, source: body.source, mode: 'cumulative', asking: false })) flush();
-      } else if (body.outcome === 'unavailable' && state.mode !== 'cumulative') {
-        keep({ ...state, mode: 'unavailable', asking: false });
+      } else if (body.outcome === 'unavailable') {
+        refusal = 'the control plane has no cumulative usage receiver for this run';
       }
       wake();
     },
@@ -112,26 +132,20 @@ export function usageCollector({ path, scope, send }) {
     },
     tick: () => flush(),
     ready: () => until(() => {
-      if (!refusal && state.mode === 'cumulative' && !offered) refusal = 'the engine no longer takes this registered run\'s cumulative usage, and a registered run never falls back to the legacy report';
-      if (!refusal && (state.mode === 'ambiguous' || state.asking) && !offered) refusal = 'this run\'s usage source registration may have committed and was never confirmed, and the engine takes no cumulative usage to confirm it';
       if (refusal) throw new Error(refusal);
-      return state.mode === 'cumulative' || state.mode === 'unavailable' || state.mode === 'legacy' || (!offered && state.mode === 'unregistered');
+      return state.mode === 'cumulative';
     }),
     delivered(nudge = () => {}) {
       flush();
-      const kept = () => refusal !== '' || !offered || state.mode !== 'cumulative' || !undelivered();
+      const kept = () => refusal !== '' || state.mode !== 'cumulative' || !undelivered();
       if (!kept()) nudge();
       return until(kept);
     },
-    legacy() {
-      if (refusal || state.mode === 'cumulative' || state.mode === 'ambiguous' || state.asking) return false;
-      return state.mode === 'legacy' || keep({ ...state, mode: 'legacy' });
-    },
     ending() {
-      if (refusal) return { legacy: false, error: refusal };
+      if (refusal) return { error: refusal };
       const settled = ending(state);
       if (state.mode !== 'cumulative') return settled;
-      return undelivered() ? { legacy: false, error: 'the engine never acknowledged this run\'s last cumulative usage, and a registered run never falls back to the legacy report' } : settled;
+      return undelivered() ? { error: 'the engine never acknowledged this run\'s last cumulative usage' } : settled;
     },
     mode: () => state.mode,
   };
