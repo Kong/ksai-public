@@ -41,9 +41,12 @@
       "not": {"required": ["failure"]}
     },
     {
-      "properties": {"status": {"enum": ["failed", "cancelled"]}},
+      "properties": {
+        "status": {"enum": ["failed", "cancelled"]},
+        "artifacts": {"maxItems": 1, "items": {"required": ["id"], "properties": {"id": {"const": "changeset"}}}}
+      },
       "required": ["failure"],
-      "not": {"anyOf": [{"required": ["result_digest"]}, {"required": ["output"]}, {"required": ["artifacts"]}]}
+      "not": {"anyOf": [{"required": ["result_digest"]}, {"required": ["output"]}]}
     }
   ]
 }
