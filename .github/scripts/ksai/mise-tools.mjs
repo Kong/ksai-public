@@ -1,9 +1,8 @@
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, existsSync, lstatSync, mkdirSync, realpathSync, statSync } from 'node:fs';
+import { appendFileSync, existsSync, lstatSync, mkdirSync, realpathSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative } from 'node:path';
-import { pathToFileURL } from 'node:url';
 
-import { writeOutputs } from '../lib/outputs.mjs';
+import { runMain } from '../lib/main.mjs';
 
 export const MISE_CONFIGS = Object.freeze([
   'mise.toml', '.mise.toml', 'mise/config.toml', '.mise/config.toml',
@@ -11,7 +10,8 @@ export const MISE_CONFIGS = Object.freeze([
 ]);
 
 const MISE_LOCKS = Object.freeze(['mise.lock', '.mise.lock']);
-const SYSTEM_PATHS = Object.freeze([
+const DEPENDENCY_FILES = Object.freeze(['go.mod', 'go.sum']);
+export const SYSTEM_PATHS = Object.freeze([
   '/usr', '/bin', '/sbin', '/lib', '/lib64', '/lib32',
   '/etc/ssl', '/etc/ca-certificates', '/etc/pki', '/etc/resolv.conf', '/etc/hosts', '/etc/nsswitch.conf',
   '/etc/passwd', '/etc/group', '/etc/localtime', '/etc/alternatives', '/etc/ld.so.cache', '/etc/ld.so.conf',
@@ -56,6 +56,7 @@ export function fenceArgs({ workspace, files, data, cache, mise }) {
     '--setenv', 'MISE_CACHE_DIR', cache,
     '--setenv', 'MISE_TRUSTED_CONFIG_PATHS', FENCED_TREE,
     '--setenv', 'MISE_YES', '1',
+    '--setenv', 'KSAI_TOOL_PREPARE', '1',
     '--chdir', FENCED_TREE,
     '--cap-drop', 'ALL',
     '--unshare-user',
@@ -82,24 +83,6 @@ export function pinnedConfigs(workspace, exists = treeFile(workspace)) {
   return MISE_CONFIGS.filter((name) => exists(join(workspace, name)));
 }
 
-const regularFile = (at) => {
-  try {
-    return statSync(at).isFile();
-  } catch {
-    return false;
-  }
-};
-
-export function find(env = process.env, exists = null) {
-  const workspace = String(env.WORKSPACE ?? '').trim();
-  const [config] = isAbsolute(workspace) ? pinnedConfigs(workspace, exists ?? regularFile) : [];
-  console.log(config ? `the tree pins tools in ${config}` : 'the tree pins no tools, so its commands get what the runner carries');
-  writeOutputs(env.GITHUB_OUTPUT, {
-    present: config ? 'true' : 'false',
-  });
-  return 0;
-}
-
 export function main(env = process.env, { run = fenced, exists = null, makeDir = mkdirSync, findMise = miseOn } = {}) {
   const workspace = String(env.WORKSPACE ?? '').trim();
   const temp = String(env.RUNNER_TEMP ?? '').trim();
@@ -111,7 +94,7 @@ export function main(env = process.env, { run = fenced, exists = null, makeDir =
   const configs = pinnedConfigs(workspace, inTree);
   const [config] = configs;
   if (!config) {
-    console.log('the tree under work pins no tools, so the model gets what the runner carries');
+    console.log('the tree pins no tools, so the model gets what the runner carries');
     return 0;
   }
 
@@ -123,7 +106,7 @@ export function main(env = process.env, { run = fenced, exists = null, makeDir =
   const data = join(temp, 'ksai-mise', 'data');
   const cache = join(temp, 'ksai-mise', 'cache');
   for (const at of [data, cache]) makeDir(at, { recursive: true });
-  const files = [...configs, ...MISE_LOCKS.filter((name) => inTree(join(workspace, name)))];
+  const files = [...configs, ...[...MISE_LOCKS, ...DEPENDENCY_FILES].filter((name) => inTree(join(workspace, name)))];
   const args = fenceArgs({ workspace, files, data, cache, mise });
 
   try {
@@ -150,6 +133,6 @@ export function main(env = process.env, { run = fenced, exists = null, makeDir =
   return 0;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  process.exitCode = process.argv[2] === '--find' ? find() : main();
-}
+await runMain(import.meta.url, async () => {
+  process.exitCode = main();
+});
