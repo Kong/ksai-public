@@ -1,14 +1,15 @@
+
 import { rendererFor } from './anchors.mjs';
 import { canonical, digest } from './artifacts.mjs';
 import { MAX_CARRIED_TURNS } from './conversation.mjs';
-import { TOOL_PREFIX_V2 } from './release.mjs';
+import { TOOL_PREFIX } from './release.mjs';
 import shipped from './trust.json' with { type: 'json' };
 import { certificateTrust, keyTrust, verifyStatement } from './render.mjs';
 
 export function planToolsDigest(plan) {
   const statics = new Map(plan.statics.map((one) => [one.id, one.body]));
   const tools = [...plan.tools].sort().map((name) => {
-    const body = statics.get(`${TOOL_PREFIX_V2}${name}`);
+    const body = statics.get(`${TOOL_PREFIX}${name}`);
     if (body === undefined) throw new Error(`the plan governs the ${name} tool and carries no definition of it`);
     const tool = JSON.parse(body);
     if (tool.name !== name || !Array.isArray(tool.description_lines)) throw new Error(`the plan's ${name} tool is malformed`);
@@ -43,6 +44,7 @@ function valid(value, test, name) {
 export function verifyResumePermit(bundle, { trust, predicate }, expected, now = new Date()) {
   const statement = verifyStatement(Buffer.from(typeof bundle === 'string' ? bundle : JSON.stringify(bundle)), trust, predicate, now);
   const permit = statement.predicate ?? {};
+  if (Object.hasOwn(permit, 'work_session_id')) throw new Error('the resume permit carries an obsolete task field');
   const kept = permit.export ?? {};
   const exportSha = valid(kept.sha256, (value) => HEX.test(String(value)), 'export.sha256');
   const subjects = Array.isArray(statement.subject) ? statement.subject : [];
@@ -70,7 +72,7 @@ export function verifyResumePermit(bundle, { trust, predicate }, expected, now =
   return {
     checkpoint: valid(permit.checkpoint_id, (value) => HEX.test(String(value)), 'checkpoint_id'),
     modelSession: valid(permit.model_session_id, (value) => SESSION.test(String(value)), 'model_session_id'),
-    workSession: valid(permit.work_session_id, (value) => typeof value === 'string' && value !== '' && value.length <= 256, 'work_session_id'),
+    task: valid(permit.task_id, (value) => typeof value === 'string' && value !== '' && value.length <= 256, 'task_id'),
     export: { sha256: exportSha, bytes: valid(kept.bytes, (value) => Number.isSafeInteger(value) && value > 0, 'export.bytes') },
     carried: {
       history: `sha256:${valid(history.sha256, (value) => HEX.test(String(value)), 'history.sha256')}`,

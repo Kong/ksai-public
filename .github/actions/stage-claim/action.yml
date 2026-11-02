@@ -1,0 +1,64 @@
+name: Stage claim
+description: >-
+  Decide whether the job that started at dispatch carries the package stage. Claim it only when the control plane
+  selected this job's runner, the stage fits this job's time limit, every host the stage needs answers, and a host
+  outside the egress policy does not.
+
+inputs:
+  runner:
+    description: This job's runner labels, as one label or a JSON list.
+    required: true
+  runs_on:
+    description: The runner labels that the control plane selected.
+    required: true
+  egress_endpoints:
+    description: The extra host:port endpoints that the control plane selected for this repository.
+    required: false
+    default: ""
+  job_minutes:
+    description: The job budget, in minutes, from the dispatch record.
+    required: true
+  most_minutes:
+    description: This job's own timeout-minutes.
+    required: true
+  endpoint:
+    description: The bare HTTPS control-plane URL.
+    required: true
+  gateway_url:
+    description: The model gateway origin that the run calls.
+    required: true
+
+outputs:
+  claimed:
+    description: "`true` when this job carries the stage, otherwise `false`."
+    value: ${{ steps.claim.outputs.claimed }}
+
+runs:
+  using: composite
+  steps:
+    - name: Decide whether this job carries the stage
+      id: claim
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        CLAIM_ACTION_PATH: ${{ github.action_path }}
+        CLAIM_RUNNER: ${{ inputs.runner }}
+        CLAIM_RUNS_ON: ${{ inputs.runs_on }}
+        CLAIM_EGRESS: ${{ inputs.egress_endpoints }}
+        CLAIM_JOB_MINUTES: ${{ inputs.job_minutes }}
+        CLAIM_MOST_MINUTES: ${{ inputs.most_minutes }}
+        CLAIM_ENDPOINT: ${{ inputs.endpoint }}
+        CLAIM_GATEWAY: ${{ inputs.gateway_url }}
+      with:
+        script: |
+          const { claimStage } = await import(`file://${process.env.CLAIM_ACTION_PATH}/claim.mjs`);
+          const answer = await claimStage({
+            runner: process.env.CLAIM_RUNNER,
+            runsOn: process.env.CLAIM_RUNS_ON,
+            egressEndpoints: process.env.CLAIM_EGRESS,
+            jobMinutes: process.env.CLAIM_JOB_MINUTES,
+            mostMinutes: process.env.CLAIM_MOST_MINUTES,
+            endpoint: process.env.CLAIM_ENDPOINT,
+            gatewayUrl: process.env.CLAIM_GATEWAY,
+          });
+          core.info(answer.reason);
+          core.setOutput('claimed', String(answer.claimed));

@@ -26,7 +26,8 @@
               "input": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
               "output": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
               "cache_read": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
-              "cache_write": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+              "cache_write": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+              "calls": { "description": "The model calls counted so far, sent only when the welcome takes them", "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
             }
           }
         }
