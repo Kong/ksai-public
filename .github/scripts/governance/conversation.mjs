@@ -25,8 +25,11 @@ const MAX_TOOL_USES = 1024;
 const MAX_MESSAGES = 512;
 
 export const MAX_CARRIED_TURNS = MAX_MESSAGES - 2;
+export const OUTPUT_LIMIT_CONTINUATION = 'Your last response hit the output token limit (stop reason: length). Do not apologize, recap, or repeat yourself. Break the remaining work into smaller pieces.';
+const MAX_OUTPUT_LIMIT_CONTINUATIONS = 2;
 const TERMINAL_REASONS = new Set(['end_turn', 'max_tokens', 'model_context_window_exceeded', 'refusal', 'stop_sequence']);
 const CACHE_BOUNDARY = 'the request moved the provider cache boundary';
+const OUTPUT_LIMIT_TURN = canonical({ role: 'user', content: [{ type: 'text', text: OUTPUT_LIMIT_CONTINUATION }] });
 
 function shape(value, required, optional, name) {
   const object = record(value, name);
@@ -56,7 +59,7 @@ function openBlock(open, event) {
   if (block) return block;
   const named = Number.isSafeInteger(event.index) ? `block ${event.index}` : 'no block';
   const held = open.size ? `the open ${open.size === 1 ? 'block is' : 'blocks are'} ${[...open.keys()].join(', ')}` : 'no block is open';
-  throw new Error(`a content block event names ${named}, and ${held}`);
+  throw new Error(`a ${event.type} names ${named}, and ${held}`);
 }
 
 function nextIndex(event, after) {
@@ -64,6 +67,20 @@ function nextIndex(event, after) {
     throw new Error(`a content block starts at index ${JSON.stringify(event.index)} after block ${after}, and content block indices do not increase`);
   }
   return event.index;
+}
+
+export function streamFrame(lines) {
+  let name = '';
+  const data = [];
+  for (const line of lines) {
+    if (!line || line.startsWith(':')) continue;
+    const at = line.indexOf(':');
+    const field = at < 0 ? line : line.slice(0, at);
+    const value = at < 0 ? '' : line.slice(line[at + 1] === ' ' ? at + 2 : at + 1);
+    if (field === 'event') name = value;
+    else if (field === 'data') data.push(value);
+  }
+  return data.length ? { name: name || 'message', data: data.join('\n') } : null;
 }
 
 function frames(bytes) {
@@ -76,20 +93,55 @@ function frames(bytes) {
   }
   const normalized = decoded.includes('\r') ? decoded.replaceAll('\r\n', '\n') : decoded;
   if (normalized.includes('\r') || !normalized.endsWith('\n\n')) throw new IncompleteAnswer('the response stream is incomplete');
-  const events = normalized.slice(0, -2).split('\n\n');
-  if (!events.length || events.length > MAX_EVENTS || events.some((frame) => !frame)) {
-    throw new Error('the response has an invalid event count');
-  }
-  return events.map((frame) => {
-    const lines = frame.split('\n');
-    if (lines.length !== 2 || !lines[0].startsWith('event: ') || !lines[1].startsWith('data: ')) {
-      throw new Error('the response has an unsupported event frame');
+  const events = [];
+  let lines = [];
+  for (const line of normalized.split('\n')) {
+    if (line) {
+      lines.push(line);
+      continue;
     }
-    const name = identifier(lines[0].slice(7), 'the response event name');
-    const event = record(JSON.parse(lines[1].slice(6)), 'the response event');
+    const frame = streamFrame(lines);
+    lines = [];
+    if (!frame) continue;
+    if (events.length === MAX_EVENTS) throw new Error('the response has an invalid event count');
+    const name = identifier(frame.name, 'the response event name');
+    const event = record(JSON.parse(frame.data), 'the response event');
     if (event.type !== name) throw new Error('the response event name does not match its data');
-    return event;
-  });
+    events.push(event);
+  }
+  if (!events.length) throw new Error('the response has an invalid event count');
+  return events;
+}
+
+const MERGED_DELTAS = Object.freeze({ text_delta: 'text', thinking_delta: 'thinking', input_json_delta: 'partial_json' });
+
+function mergedField(event) {
+  if (event.type !== 'content_block_delta' || Object.keys(event).length !== 3 || typeof event.delta?.type !== 'string' || !Object.hasOwn(MERGED_DELTAS, event.delta.type)) return '';
+  const field = MERGED_DELTAS[event.delta.type];
+  return Object.keys(event.delta).length === 2 && typeof event.delta[field] === 'string' ? field : '';
+}
+
+export function coalesced(bytes) {
+  const kept = [];
+  const held = new Map();
+  const stopped = new Set();
+  for (const event of frames(bytes)) {
+    if (event.type === 'ping') continue;
+    if (event.type === 'content_block_stop') {
+      held.delete(event.index);
+      stopped.add(event.index);
+    }
+    const field = stopped.has(event.index) ? '' : mergedField(event);
+    const run = held.get(event.index);
+    if (field && run?.delta.type === event.delta.type) {
+      run.delta[field] += event.delta[field];
+      continue;
+    }
+    if (field) held.set(event.index, event);
+    else if (event.type === 'content_block_delta') held.delete(event.index);
+    kept.push(event);
+  }
+  return new TextEncoder().encode(kept.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''));
 }
 
 function messageStart(event, model) {
@@ -116,7 +168,7 @@ function messageStart(event, model) {
   }
 }
 
-function startBlock(event, tools) {
+function startBlock(event, tools, strays) {
   shape(event, ['type', 'index', 'content_block'], [], 'content_block_start');
   const block = record(event.content_block, 'the content block');
   if (block.type === 'text') {
@@ -136,7 +188,7 @@ function startBlock(event, tools) {
     const caller = block.caller === undefined ? undefined : shape(block.caller, ['type'], [], 'the tool_use caller');
     const input = record(block.input, 'the tool_use input');
     const at = JSON.stringify(event.index);
-    if (!tools.includes(name)) throw new Error(`the tool_use block ${at} names ${JSON.stringify(name)}, outside the governed tools`);
+    if (!tools.includes(name)) strays.push(`the tool_use block ${at} names ${JSON.stringify(name)}, outside the governed tools`);
     if ((caller !== undefined && caller.type !== 'direct') || (block.toolset_name ?? null) !== null) {
       throw new Error(`the tool_use block ${at} calls ${JSON.stringify(name)} through a caller or toolset no governed tool has`);
     }
@@ -146,10 +198,11 @@ function startBlock(event, tools) {
   throw new Error(`content block ${String(block.type)} is unsupported`);
 }
 
-function appendDelta(event, open) {
+function appendDelta(event, open, stopped) {
   shape(event, ['type', 'index', 'delta'], [], 'content_block_delta');
-  const block = openBlock(open, event);
   const delta = record(event.delta, 'the content block delta');
+  if (stopped.has(event.index)) return;
+  const block = openBlock(open, event);
   if (block.type === 'text') {
     shape(delta, ['type', 'text'], [], 'the text delta');
     if (delta.type !== 'text_delta') throw new Error('the text block received another delta');
@@ -203,12 +256,16 @@ export class UpstreamFailure extends Error {}
 
 export class IncompleteAnswer extends Error {}
 
+export class StrayToolCall extends IncompleteAnswer {}
+
 export class GivenUp extends Error {}
 
 function parseResponse(bytes, model, tools) {
   const started = [];
   const open = new Map();
   const finished = new Map();
+  const stopped = new Set();
+  const strays = [];
   let lastIndex = -1;
   let stop = '';
   let state = 'initial';
@@ -225,7 +282,7 @@ function parseResponse(bytes, model, tools) {
         break;
       case 'content_block_start': {
         if (state !== 'content' || started.length >= MAX_BLOCKS) throw new Error('content_block_start is out of sequence');
-        const block = startBlock(event, tools);
+        const block = startBlock(event, tools, strays);
         lastIndex = nextIndex(event, lastIndex);
         started.push(block);
         open.set(lastIndex, block);
@@ -233,14 +290,16 @@ function parseResponse(bytes, model, tools) {
       }
       case 'content_block_delta':
         if (state !== 'content') throw new Error('content_block_delta is out of sequence');
-        appendDelta(event, open);
+        appendDelta(event, open, stopped);
         break;
       case 'content_block_stop': {
         shape(event, ['type', 'index'], [], 'content_block_stop');
         if (state !== 'content') throw new Error('content_block_stop is out of sequence');
+        if (stopped.has(event.index)) break;
         const block = openBlock(open, event);
         finished.set(block, finishBlock(block));
         open.delete(event.index);
+        stopped.add(event.index);
         break;
       }
       case 'message_delta':
@@ -264,12 +323,19 @@ function parseResponse(bytes, model, tools) {
   if (state !== 'stopped' || open.size || !stop || !started.length) throw new IncompleteAnswer('the response did not complete one message');
   const blocks = started.map((block) => finished.get(block));
   const toolUseIDs = blocks.flatMap((block) => ('id' in block ? [block.id] : []));
-  if (toolUseIDs.length > MAX_TOOL_USES || new Set(toolUseIDs).size !== toolUseIDs.length || (stop === 'tool_use') !== (toolUseIDs.length > 0)) {
+  if (
+    toolUseIDs.length > MAX_TOOL_USES ||
+    new Set(toolUseIDs).size !== toolUseIDs.length ||
+    (stop === 'tool_use' && toolUseIDs.length === 0) ||
+    (toolUseIDs.length > 0 && stop !== 'tool_use' && stop !== 'max_tokens')
+  ) {
     throw new Error('the response has an invalid tool_use completion');
   }
+  if (strays.length) throw new StrayToolCall(strays[0]);
   return {
     assistant: { role: 'assistant', content: blocks },
-    terminal: stop !== 'tool_use',
+    stop,
+    terminal: stop !== 'tool_use' && stop !== 'max_tokens',
     toolUseIDs,
   };
 }
@@ -308,14 +374,21 @@ function asReplayed(message) {
     : message;
 }
 
+function toolOutput(value) {
+  if (typeof value !== 'string' || value.length > MAX_RESPONSE_BYTES) throw new Error('a tool_result text is invalid');
+}
+
 function toolContent(value) {
-  if (typeof value === 'string') return;
+  if (typeof value === 'string') {
+    toolOutput(value);
+    return;
+  }
   if (!Array.isArray(value) || !value.length) throw new Error('the tool_result content is invalid');
   for (const item of value) {
     const block = record(item, 'a tool_result content block');
     if (block.type === 'text') {
       shape(block, ['type', 'text'], [], 'a tool_result text block');
-      text(block.text, 'a tool_result text');
+      toolOutput(block.text);
       continue;
     }
     shape(block, ['type', 'source'], [], 'a tool_result image block');
@@ -381,7 +454,7 @@ function carriedHistory(normalized, carried, opening, used) {
   const prior = normalized.slice(0, carried.turns);
   if (!openedOn(prior[0], carried.original)) throw new CarryRefused('the continuation does not open on the render its history was governed by');
   if (carried.earlier) {
-    const went = prior.slice(1).filter((message) => message?.role === 'user' && !answers(message));
+    const went = prior.slice(1).filter((message) => message?.role === 'user' && !answers(message) && canonical(message) !== OUTPUT_LIMIT_TURN);
     if (went.length !== carried.earlier.length || went.some((message, index) => !openedOn(message, carried.earlier[index]))) {
       throw new CarryRefused('the continuation does not carry exactly the renders its history went on with, in their order');
     }
@@ -410,6 +483,8 @@ export function conversation(prompt, model, tools, limit = null, carried = null)
   let awaiting = false;
   let asked = 0;
   let terminal = false;
+  let outputLimited = false;
+  let outputLimitResponses = 0;
   let pending = [];
   let taken = 0;
   let settled = null;
@@ -418,6 +493,9 @@ export function conversation(prompt, model, tools, limit = null, carried = null)
   return {
     request(messages) {
       if (terminal) throw new Error("a request followed the model's final answer");
+      if (outputLimited && outputLimitResponses > MAX_OUTPUT_LIMIT_CONTINUATIONS) {
+        throw new Error('a request followed two output token limit continuations');
+      }
       if (awaiting) throw new Error('requests overlapped');
       if (!Array.isArray(messages) || messages.length > MAX_MESSAGES) throw new Error('the request changed the message history');
       const normalized = reminded(withoutCacheBoundary(messages), limit, taken).map((message) => asReplayed(message));
@@ -430,7 +508,11 @@ export function conversation(prompt, model, tools, limit = null, carried = null)
         throw new Error('the request changed the message history');
       }
       if (pending.length) resultIDs(normalized, history.length, pending);
-      else if (normalized.length !== history.length) throw new Error('the request added a turn the model did not take');
+      else if (outputLimited) {
+        if (normalized.length !== history.length + 1 || canonical(normalized.at(-1)) !== OUTPUT_LIMIT_TURN) {
+          throw new Error('the request did not add the exact output token limit continuation');
+        }
+      } else if (normalized.length !== history.length) throw new Error('the request added a turn the model did not take');
       answered = history;
       history = normalized.map((message, index) => history[index] ?? canonical(message));
       awaiting = true;
@@ -454,6 +536,8 @@ export function conversation(prompt, model, tools, limit = null, carried = null)
       history = [...history, canonical(asReplayed(reply.assistant))];
       taken += 1;
       awaiting = false;
+      outputLimited = reply.stop === 'max_tokens';
+      outputLimitResponses = outputLimited ? outputLimitResponses + 1 : 0;
       terminal = reply.terminal;
       pending = [...reply.toolUseIDs];
       if (terminal) {
