@@ -1,10 +1,16 @@
 {
-  "releaseSigner": "",
-  "releaseIssuer": "",
-  "renderPredicate": "",
-  "linkPredicate": "",
-  "resumePredicate": "",
-  "minimum": "",
-  "revoked": [],
-  "renderers": {}
+  "releaseSigner": "https://github.com/kong-konnect/ksai-cp/.github/workflows/release.yml@refs/heads/main",
+  "releaseIssuer": "https://token.actions.githubusercontent.com",
+  "renderPredicate": "https://ksai.konghq.com/prompts/render/v1",
+  "linkPredicate": "https://ksai.konghq.com/link/v1",
+  "resumePredicate": "https://ksai.konghq.com/resume/v1",
+  "minimum": "v0.2.167",
+  "revoked": [
+    "v0.2.166"
+  ],
+  "renderers": {
+    "https://ksai.kongcloud.io": {
+      "renderKey": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE8UMcAJN3DjYc+aD742WeN/nBZh8X\nA967NDoHC3f1E23n6tIs1IESzvhONyPmIjWmVtbCn3zmiJYotEsdi071NA==\n-----END PUBLIC KEY-----\n"
+    }
+  }
 }
