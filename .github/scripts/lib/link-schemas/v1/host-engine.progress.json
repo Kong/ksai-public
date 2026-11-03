@@ -51,6 +51,16 @@
         "stage": { "type": "string", "maxLength": 32 },
         "update": { "type": "string", "maxLength": 2000 }
       }
+    },
+    "waiting": {
+      "description": "Set while the session waits on a model request its provider refused, as the newest retry it scheduled, until the model answers again. A retried request that starts keeps the wait. A report without it says the session is not waiting",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason", "attempt"],
+      "properties": {
+        "reason": { "description": "rate-limit when the provider said the session sent too much, provider for any other refusal", "enum": ["rate-limit", "provider"] },
+        "attempt": { "description": "The attempt the retry makes, the first request being attempt 1", "type": "integer", "minimum": 2, "maximum": 1000 }
+      }
     }
   }
 }
