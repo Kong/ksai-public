@@ -161,24 +161,23 @@ const allowedSpan = (span, allowed) => !allowed || allowed.has(span?.name);
 const withoutWire = (span, allowed) =>
   allowed ? { ...span, attributes: asArray(span?.attributes).filter((one) => !WIRE_ATTRIBUTE.test(String(one?.key ?? ''))) } : span;
 
+const scopes = (groups, key) => asArray(groups).flatMap((group) => asArray(group?.[key]));
+
+const records = (payload) =>
+  scopes(payload.resourceSpans, 'scopeSpans').reduce((sum, scope) => sum + asArray(scope?.spans).length, 0)
+  + scopes(payload.resourceLogs, 'scopeLogs').reduce((sum, scope) => sum + asArray(scope?.logRecords).length, 0);
+
 export function bounded(payload, allowed = null) {
   if (elements(payload) > MAX_ELEMENTS) return null;
-  let kept = 0;
-  for (const group of asArray(payload.resourceSpans)) {
-    for (const scope of asArray(group?.scopeSpans)) {
-      scope.spans = asArray(scope?.spans)
-        .filter((span) => !storeSpan(span) && allowedSpan(span, allowed))
-        .map((span) => withoutWire(span, allowed));
-      kept += scope.spans.length;
-    }
+  for (const scope of scopes(payload.resourceSpans, 'scopeSpans')) {
+    scope.spans = asArray(scope?.spans)
+      .filter((span) => !storeSpan(span) && allowedSpan(span, allowed))
+      .map((span) => withoutWire(span, allowed));
   }
-  for (const group of asArray(payload.resourceLogs)) {
-    for (const scope of asArray(group?.scopeLogs)) {
-      scope.logRecords = asArray(scope?.logRecords).filter((record) => severityOf(record) >= INFO);
-      kept += scope.logRecords.length;
-    }
+  for (const scope of scopes(payload.resourceLogs, 'scopeLogs')) {
+    scope.logRecords = asArray(scope?.logRecords).filter((record) => severityOf(record) >= INFO);
   }
-  return kept > 0 && kept <= MAX_RECORDS ? payload : null;
+  return records(payload) <= MAX_RECORDS ? payload : null;
 }
 
 /**
@@ -226,7 +225,7 @@ export function preparedPayload({ body, named, secrets, allowed = null }) {
 
 export function prepared({ signal, body, named, secrets }) {
   const payload = preparedPayload({ body, named, secrets });
-  return payload ? encoded(signal, payload, MAX_VALUE_BYTES) : null;
+  return payload && records(payload) > 0 ? encoded(signal, payload, MAX_VALUE_BYTES) : null;
 }
 
 /**
@@ -245,7 +244,7 @@ export async function startRelay({ env = process.env, fetchImpl = fetch, observe
   if (!where && typeof observe !== 'function') return null;
   const secrets = collectSecrets(env);
   const named = runAttributes(env);
-  const counts = { forwarded: 0, dropped: 0, refused: 0, bytes: 0, sent: 0, posts: 0 };
+  const counts = { forwarded: 0, filtered: 0, dropped: 0, refused: 0, bytes: 0, sent: 0, posts: 0 };
   const observation = { bytes: 0, posts: 0 };
   const flight = new Set();
 
@@ -326,6 +325,10 @@ export async function startRelay({ env = process.env, fetchImpl = fetch, observe
         const payload = preparedPayload({ body: text, named, secrets, allowed });
         if (!payload) {
           counts.dropped += 1;
+          return;
+        }
+        if (records(payload) === 0) {
+          counts.filtered += 1;
           return;
         }
         if (mayObserve) {
@@ -409,7 +412,7 @@ export async function startRelay({ env = process.env, fetchImpl = fetch, observe
     }
     if (where) {
       say(
-        `telemetry: forwarded=${counts.forwarded} dropped=${counts.dropped} refused=${counts.refused} in-flight=${flight.size}`,
+        `telemetry: forwarded=${counts.forwarded} filtered=${counts.filtered} dropped=${counts.dropped} refused=${counts.refused} in-flight=${flight.size}`,
       );
     }
     return { ...counts, in_flight: flight.size };
