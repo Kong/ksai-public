@@ -8,16 +8,14 @@ export const ATTRIBUTION = Object.freeze([
   { name: 'X-Initiated-By', of: () => 'KSAI' },
   { name: 'X-Ksai-Repo', of: ({ repository = '' } = {}) => repository },
   { name: 'X-Ksai-Team', of: ({ team = '' } = {}) => team },
-  { name: 'X-Ksai-Federation-Rule', of: ({ federationRule = '' } = {}) => federationRule },
-  { name: 'X-Ksai-Service-Account', of: ({ serviceAccount = '' } = {}) => serviceAccount },
   { name: 'X-Ksai-Workflow', of: ({ workflow = '' } = {}) => workflow },
   { name: 'X-Ksai-Run-Id', of: ({ runId = '' } = {}) => runId },
   { name: 'X-Ksai-Actor', of: ({ actor = '' } = {}) => actor },
   { name: 'X-Ksai-Action', of: ({ action = '' } = {}) => action },
   { name: 'X-Ksai-Model', of: ({ model = '' } = {}) => model },
   { name: 'X-Ksai-Effort', of: ({ effort = '' } = {}) => effort },
-  { name: 'Ai-Cost-Repository', of: ({ repository = '' } = {}) => repository },
-  { name: 'Ai-Cost-Initiated-By', of: () => 'KSAI' },
+  { name: 'Ai-Cost-Scm-Repository', of: ({ repository = '' } = {}) => repository },
+  { name: 'Ai-Cost-Agent-Name', of: () => 'KSAI' },
 ]);
 
 export function attributionOf(call = {}) {
@@ -39,8 +37,6 @@ export function callOf(env = {}) {
   return {
     repository: env.REPO,
     team: env.TEAM,
-    federationRule: env.FEDERATION_RULE,
-    serviceAccount: env.SERVICE_ACCOUNT,
     workflow: env.WORKFLOW,
     runId: env.RUN_ID,
     actor: env.ACTOR,

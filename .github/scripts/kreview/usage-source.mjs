@@ -7,7 +7,7 @@ import { COUNTERS, savedSnapshot } from './usage-counter.mjs';
 
 const HEX64 = /^[0-9a-f]{64}$/;
 
-const MODES = new Set(['unregistered', 'ambiguous', 'unavailable', 'legacy', 'cumulative']);
+const MODES = new Set(['unregistered', 'ambiguous', 'cumulative']);
 
 const SCOPE = Object.freeze(['link', 'job', 'flow']);
 
@@ -60,7 +60,6 @@ export function openUsage(path, scope, intent = () => randomBytes(32).toString('
 export const saved = (path, state) => written(path, state);
 
 export function ending(state) {
-  if (state.mode === 'cumulative') return { legacy: false, error: '' };
-  if (state.mode === 'unavailable' || state.mode === 'legacy' || (state.mode === 'unregistered' && !state.asking)) return { legacy: true, error: '' };
-  return { legacy: false, error: 'the usage source registration may have committed and was never confirmed, so this run reports no usage it could count twice' };
+  if (state.mode === 'cumulative') return { error: '' };
+  return { error: 'the usage source registration did not complete, so this run has no usage record' };
 }
