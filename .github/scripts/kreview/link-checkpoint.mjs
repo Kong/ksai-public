@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import stage from '../ksai/stage.cjs';
 import trustedGit from '../ksai/trusted-git.cjs';
 import controlPlane from '../lib/control-plane.cjs';
-import { OPENCODE_V2_VERSION } from '../lib/opencode-v2.mjs';
+import { OPENCODE_V2_VERSION } from './opencode-v2.mjs';
 import { scrub, withEscaped } from './secrets.cjs';
 
 export const PART_MOST = 8 * 1024 * 1024;

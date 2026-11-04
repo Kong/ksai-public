@@ -1,7 +1,7 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 
 import controlPlane from '../lib/control-plane.cjs';
-import { rootSessions, sessionOf } from '../lib/opencode-v2.mjs';
+import { rootSessions, sessionOf } from './opencode-v2.mjs';
 import { scrub, withEscaped } from './secrets.cjs';
 
 export const LINE_BYTES = 500;
@@ -11,8 +11,6 @@ export const SESSION_LINES = 200;
 const LINE_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/;
 const SESSION = /^ses_[A-Za-z0-9]{1,64}$/;
 const CALL_MS = 30_000;
-const CONFLICT_TRIES = 3;
-const CONFLICT_WAIT_MS = 2_000;
 const encoder = new TextEncoder();
 
 export function pieces(text, most = LINE_BYTES) {
@@ -75,13 +73,9 @@ export async function transcriptSent({ endpoint, fetch, token, link, job, flow, 
   const kept = lines.slice(-SESSION_LINES);
   const base = { job, link, flow, model_session_id: session };
   for (const held of batches(kept, base)) {
-    for (let tried = 1; ; tried += 1) {
-      const said = await controlPlane.answered(fetch, `${endpoint}/v1/run/tasks/transcript`, { token, body: JSON.stringify({ ...base, lines: held }), timeout: CALL_MS });
-      if (!said.why) break;
-      if (said.status === 404) return { sent: 0, left: 0, unserved: true };
-      if (said.status !== 409 || tried >= CONFLICT_TRIES) throw new Error(`the control plane did not keep the transcript: ${said.why}`);
-      await wait(CONFLICT_WAIT_MS * tried);
-    }
+    const said = await controlPlane.reportKept(fetch, `${endpoint}/v1/run/tasks/transcript`, { token, body: JSON.stringify({ ...base, lines: held }), timeout: CALL_MS }, wait);
+    if (said.status === 404) return { sent: 0, left: 0, unserved: true };
+    if (said.why) throw new Error(`the control plane did not keep the transcript: ${said.why}`);
   }
   return { sent: kept.length, left: lines.length - kept.length };
 }
