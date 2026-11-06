@@ -31,7 +31,7 @@ function reported(usage, where) {
 function* framesOf(bytes) {
   if (bytes.length > MAX_RESPONSE_BYTES) throw new Error('the answer is oversized');
   const raw = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const held = raw.includes('\r\n') ? Buffer.from(raw.toString('latin1').replaceAll('\r\n', '\n'), 'latin1') : raw;
+  const held = raw.includes('\r') ? Buffer.from(raw.toString('latin1').replace(/\r\n?/g, '\n'), 'latin1') : raw;
   let from = 0;
   for (let at = held.indexOf('\n\n'); at >= 0; at = held.indexOf('\n\n', from)) {
     yield held.subarray(from, at);

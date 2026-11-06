@@ -83,16 +83,27 @@ export function streamFrame(lines) {
   return data.length ? { name: name || 'message', data: data.join('\n') } : null;
 }
 
+function utf8(bytes, cut) {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes, { stream: cut });
+  } catch {
+    return null;
+  }
+}
+
+const withLineFeeds = (said) => (said.includes('\r') ? said.replace(/\r\n?/g, '\n') : said);
+
 function frames(bytes) {
   if (!bytes.length || bytes.length > MAX_RESPONSE_BYTES) throw new IncompleteAnswer('the response is empty or oversized');
   let decoded;
   try {
     decoded = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
   } catch (error) {
-    throw new IncompleteAnswer('the response is not UTF-8', { cause: error });
+    if (utf8(bytes, true) === null) throw new Error('the response is not UTF-8', { cause: error });
+    throw new IncompleteAnswer('the response stream is incomplete', { cause: error });
   }
-  const normalized = decoded.includes('\r') ? decoded.replaceAll('\r\n', '\n') : decoded;
-  if (normalized.includes('\r') || !normalized.endsWith('\n\n')) throw new IncompleteAnswer('the response stream is incomplete');
+  const normalized = withLineFeeds(decoded);
+  if (!normalized.endsWith('\n\n')) throw new IncompleteAnswer('the response stream is incomplete');
   const events = [];
   let lines = [];
   for (const line of normalized.split('\n')) {
@@ -260,6 +271,27 @@ export class StrayToolCall extends IncompleteAnswer {}
 
 export class GivenUp extends Error {}
 
+export const retryable = (error) =>
+  error instanceof UpstreamFailure || (error instanceof IncompleteAnswer && !(error instanceof StrayToolCall));
+
+function refusedIn(bytes, model, tools, used) {
+  const decoded = utf8(bytes, true);
+  if (decoded === null) return 'the response is not UTF-8';
+  const said = withLineFeeds(decoded);
+  const whole = Buffer.from(said.slice(0, said.lastIndexOf('\n\n') + 2));
+  if (!/^data:/m.test(whole.toString('utf8'))) return '';
+  let ids = [];
+  try {
+    ids = frames(whole).flatMap((event) => (event.type === 'content_block_start' && event.content_block?.type === 'tool_use' ? [event.content_block.id] : []));
+    parseResponse(whole, model, tools);
+  } catch (error) {
+    if (!retryable(error)) return error.message;
+  }
+  if (new Set(ids).size !== ids.length) return 'the response repeats a tool_use id';
+  if (ids.some((id) => used.has(id))) return 'the model replayed a tool_use id';
+  return '';
+}
+
 function parseResponse(bytes, model, tools) {
   const started = [];
   const open = new Map();
@@ -269,7 +301,9 @@ function parseResponse(bytes, model, tools) {
   let lastIndex = -1;
   let stop = '';
   let state = 'initial';
+  let failed = null;
   for (const event of frames(bytes)) {
+    if (failed) throw new Error(`the response goes on after the upstream error ${failed.message}`);
     switch (event.type) {
       case 'ping':
         shape(event, ['type'], [], 'ping');
@@ -314,13 +348,17 @@ function parseResponse(bytes, model, tools) {
         break;
       case 'error': {
         const failure = record(shape(event, ['type', 'error'], [], 'error').error, 'the upstream error');
-        throw new UpstreamFailure(`${text(failure.type, 'the upstream error type', 64)}: ${text(failure.message ?? '', 'the upstream error message', 512)}`);
+        failed = new UpstreamFailure(`${text(failure.type, 'the upstream error type', 64)}: ${text(failure.message ?? '', 'the upstream error message', 512)}`);
+        break;
       }
       default:
         throw new Error(`response event ${String(event.type)} is unsupported`);
     }
   }
-  if (state !== 'stopped' || open.size || !stop || !started.length) throw new IncompleteAnswer('the response did not complete one message');
+  if (failed || state !== 'stopped' || open.size || !stop || !started.length) {
+    if (strays.length) throw new StrayToolCall(strays[0]);
+    throw failed ?? new IncompleteAnswer('the response did not complete one message');
+  }
   const blocks = started.map((block) => finished.get(block));
   const toolUseIDs = blocks.flatMap((block) => ('id' in block ? [block.id] : []));
   if (
@@ -520,6 +558,7 @@ export function conversation(prompt, model, tools, limit = null, carried = null)
       return Boolean(limit) && taken + 1 === limit.steps;
     },
     ticket: () => (awaiting ? asked : 0),
+    refusedIn: (bytes) => refusedIn(bytes, model, tools, used),
     failed(ticket = asked) {
       if (!awaiting || ticket !== asked) return;
       history = answered;

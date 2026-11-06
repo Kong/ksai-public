@@ -6,7 +6,9 @@ import { join } from 'node:path';
 import { authHeaders, bearer } from './opencode-token.mjs';
 import { ARTIFACTS } from './cp-prompts.mjs';
 import { canonical, digest, record as objectOf } from '../governance/artifacts.mjs';
-import { boundedSteps, CarryRefused, carriedOf, conversation, MAX_RESPONSE_BYTES, reminderText } from '../governance/conversation.mjs';
+import {
+  boundedSteps, CarryRefused, carriedOf, conversation, IncompleteAnswer, MAX_RESPONSE_BYTES, reminderText, retryable,
+} from '../governance/conversation.mjs';
 import { Errand, governRequest } from '../governance/provider.mjs';
 import { originProblem } from './gateway-token.mjs';
 
@@ -154,7 +156,13 @@ async function finishGovernedResponse(response, talk, answered = (_bytes) => {},
   };
   try {
     for (;;) {
-      const { done, value } = await reader.read();
+      let read;
+      try {
+        read = await reader.read();
+      } catch (error) {
+        throw new IncompleteAnswer('the response stream broke', { cause: error });
+      }
+      const { done, value } = read;
       if (done) break;
       size += value.length;
       if (size > MAX_RESPONSE_BYTES) throw new Error('the provider response exceeds the governed limit');
@@ -173,7 +181,9 @@ async function finishGovernedResponse(response, talk, answered = (_bytes) => {},
     responseMeasurements.get(response)?.();
     tally();
     talk.failed();
-    throw error;
+    if (!retryable(error)) throw error;
+    const refused = talk.refusedIn(Buffer.concat(chunks));
+    if (refused) throw new Error(refused, { cause: error });
   } finally {
     reader.releaseLock();
   }
@@ -322,9 +332,9 @@ export function streamProgress(contentType, ceilingMs = REASONING_MOST_MS, now =
   let head = '';
   let answering = false;
   return (chunk) => {
-    const lines = (head + decoder.decode(chunk, { stream: true })).split('\n');
+    const lines = (head + decoder.decode(chunk, { stream: true })).split(/\r\n?|\n/);
     head = lines.pop().slice(0, HEAD);
-    const said = lines.map((line) => line.replace(/\r$/, '')).filter((line) => !QUIET.test(line));
+    const said = lines.filter((line) => !QUIET.test(line));
     const waited = !answering && now() - began < ceilingMs;
     answering ||= said.some((line) => BLOCK.test(line));
     return waited || said.length > 0;
