@@ -52,6 +52,8 @@ const WHY_STATUS = Object.freeze({
 
 const NO_RECORD = Object.freeze({ read: false });
 
+const NONE_HELD = Object.freeze({ read: false, none: true });
+
 const shaped = (value, shape) => typeof value === 'string' && shape.test(value);
 
 const stopped = (why) => new Error(`${why} - so this run starts nothing`);
@@ -352,7 +354,7 @@ export async function readRecord({
     const elapsed = now() - started;
     if (elapsed >= budget) throw stopped(`the ${Math.round(budget / 1000)}s allowed to read the record ran out`);
     const outcome = await attempt({ ...asked, timeout: Math.max(1, Math.min(timeout, budget - elapsed)) });
-    if ('none' in outcome) return NO_RECORD;
+    if ('none' in outcome) return NONE_HELD;
     if ('served' in outcome) return recordFrom(outcome.served, now());
     if (left.length === 0) {
       throw stopped(`${outcome.retry}, on the last of ${delays.length + 1} attempts`);

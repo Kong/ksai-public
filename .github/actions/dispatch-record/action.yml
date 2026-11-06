@@ -156,6 +156,12 @@ runs:
           ]) {
             core.setOutput(name, answer[held] ?? '');
           }
+          if (!answer.read) {
+            if ('none' in answer) {
+              core.notice('ksai holds no record for this run, as after a re-run of a finished stage, so this attempt runs nothing');
+            }
+            return;
+          }
           const file = path.join(process.env.RUNNER_TEMP, `ksai-steering-${answer.recordId}.json`);
           fs.writeFileSync(file, answer.workflowSteering, { encoding: 'utf8', mode: 0o600 });
           core.setOutput('workflow_steering_file', file);
