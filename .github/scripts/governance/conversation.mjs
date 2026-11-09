@@ -190,8 +190,8 @@ function startBlock(event, tools, strays) {
     return { type: 'text', text: text(block.text, 'the text block') };
   }
   if (block.type === 'thinking') {
-    shape(block, ['type', 'thinking', 'signature'], [], 'the thinking block');
-    return { type: 'thinking', thinking: text(block.thinking, 'the thinking block'), signature: text(block.signature, 'the thinking signature', 65_536), signed: false };
+    shape(block, ['type', 'thinking'], ['signature'], 'the thinking block');
+    return { type: 'thinking', thinking: text(block.thinking, 'the thinking block'), signature: text(block.signature === undefined ? '' : block.signature, 'the thinking signature', 65_536), signed: false, keyed: block.signature !== undefined };
   }
   if (block.type === 'tool_use') {
     shape(block, ['type', 'id', 'name', 'input'], ['caller', 'toolset_name'], 'the tool_use block');
@@ -243,6 +243,7 @@ function appendDelta(event, open, stopped) {
 function finishBlock(block) {
   if (block.type === 'text') return { type: 'text', text: block.text };
   if (block.type === 'thinking') {
+    if (!block.keyed && !block.signed) return { type: 'thinking', thinking: block.thinking };
     if (!block.signed || !block.signature) throw new Error('the thinking block has no complete signature');
     return { type: 'thinking', thinking: block.thinking, signature: block.signature };
   }
@@ -407,9 +408,12 @@ function withoutCacheBoundary(messages) {
 const blank = (block) => block?.type === 'text' && typeof block.text === 'string' && block.text.trim() === '';
 
 function asReplayed(message) {
-  return message?.role === 'assistant' && Array.isArray(message.content) && message.content.some(blank)
-    ? { ...message, content: message.content.filter((block) => !blank(block)) }
-    : message;
+  if (message?.role !== 'assistant' || !Array.isArray(message.content)) return message;
+  return { ...message, content: message.content.filter((block) => !blank(block)).map((block) => {
+    if (block?.type !== 'thinking' || block.signature !== '') return block;
+    const { signature, ...rest } = block;
+    return rest;
+  }) };
 }
 
 function toolOutput(value) {
