@@ -66,7 +66,8 @@ const pausing = (ms, signal) => new Promise((resolve) => {
   signal?.addEventListener('abort', done, { once: true });
 });
 
-const minter = ({ env, fetch, signal, now = Date.now, held = tokens, holds, pause = pausing, answer = MINT_ANSWER_MS }) => async (audience) => {
+const minter = ({ env, fetch, signal: given, now = Date.now, held = tokens, holds, pause = pausing, answer = MINT_ANSWER_MS, tries = MINT_TRIES }) => async (audience, cancel) => {
+  const signal = cancel ? AbortSignal.any([given, cancel].filter(Boolean)) : given;
   const asking = [audience, env.ACTIONS_ID_TOKEN_REQUEST_URL, env.ACTIONS_ID_TOKEN_REQUEST_TOKEN].join('\n');
   const was = held.get(asking);
   const stated = Number.isFinite(holds) && holds >= 0;
@@ -75,7 +76,7 @@ const minter = ({ env, fetch, signal, now = Date.now, held = tokens, holds, paus
   let seen = '';
   for (let attempt = 1; ; attempt += 1) {
     if (signal?.aborted === true) throw new MintFailed(gaveUp(seen));
-    const last = attempt >= MINT_TRIES;
+    const last = attempt >= tries;
     const stalled = new AbortController();
     const timer = setTimeout(() => stalled.abort(), answer);
     let response;
@@ -170,12 +171,12 @@ async function gatewayHandover({ env, mint, secret }) {
   return minted.token ? { [HANDOVER_HEADER]: minted.token } : {};
 }
 
-async function reachedFor({ env, fetch, timeout, secret, holds = timeout, audience = 'ksai-cp', endpoint = env.KSAI_CP_ENDPOINT, pause = pausing }) {
+async function reachedFor({ env, fetch, timeout, secret, holds = timeout, audience = 'ksai-cp', endpoint = env.KSAI_CP_ENDPOINT, pause = pausing, tries = MINT_TRIES }) {
   const named = String(endpoint ?? '').trim();
   if (named === '') return { why: 'no control plane serves this repository' };
   if (!(timeout > 0)) return { why: 'the control plane did not answer in time' };
   const signal = AbortSignal.timeout(timeout);
-  const mint = minter({ env, fetch, signal, holds, pause });
+  const mint = minter({ env, fetch, signal, holds, pause, tries });
   const reached = await reachControlPlane({ endpoint: named, audience, env, mint, secret });
   return reached.failure ? { why: reached.failure } : { base: reached.base, token: reached.token, signal };
 }

@@ -19,6 +19,8 @@ const MAX_FAILURE_BYTES = COMPLETION_SCHEMA.properties.failure.maxLength;
 const TOO_LARGE = 413;
 const MALFORMED = 400;
 const TIMEOUT_MS = 30_000;
+const COMPLETION_MINT_MS = 300_000;
+const JOB_END_RESERVE_MS = 60_000;
 
 const CANDIDATE_VERSION = 'ksai.konghq.com/stage-candidate/v1alpha1';
 
@@ -196,6 +198,14 @@ export async function withChangeset(completion, stage, env, {
   }
 }
 
+export function completionWait(env, now = Date.now()) {
+  const minutes = Number(said(env.JOB_TIMEOUT_MINUTES));
+  if (!Number.isSafeInteger(minutes) || minutes < 1) return COMPLETION_MINT_MS;
+  const started = Number(env.KSAI_JOB_STARTED_AT_MS) || now;
+  const left = minutes * 60_000 - Math.max(0, now - started) - JOB_END_RESERVE_MS - holdsFor(TIMEOUT_MS);
+  return Math.min(COMPLETION_MINT_MS, Math.max(TIMEOUT_MS, left));
+}
+
 function executionOf(at) {
   try {
     return readFileSync(said(at), 'utf8');
@@ -214,7 +224,9 @@ export async function main(env = process.env, { fetch = globalThis.fetch, secret
     model: env.MODEL_STEP,
     tools: env.TOOLS_STEP,
   });
-  const reached = await reachedFor({ env, fetch, timeout: TIMEOUT_MS, holds: holdsFor(TIMEOUT_MS), secret });
+  const reached = await reachedFor({
+    env, fetch, timeout: completionWait(env), tries: Infinity, holds: holdsFor(TIMEOUT_MS), secret, pause,
+  });
   if (reached.why) throw new Error(`the stage's completion could not be sent: ${reached.why}`);
   completion = await withChangeset(completion, stage, env, { reached, fetch, pause });
   const send = (body) => answeredRetrying(fetch, `${reached.base}/run/complete`, {

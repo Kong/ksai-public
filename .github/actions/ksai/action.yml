@@ -562,6 +562,8 @@ runs:
         WORKFLOW_INSTANCE: ${{ steps.dispatch_record.outputs.workflow_instance }}
         WORKFLOW_ATTEMPT: ${{ steps.dispatch_record.outputs.workflow_attempt }}
         WORKFLOW_LEASE: ${{ steps.dispatch_record.outputs.workflow_lease }}
+        JOB_TIMEOUT_MINUTES: ${{ steps.dispatch_record.outputs.stage_job_minutes || inputs.job_timeout_minutes }}
+        KSAI_JOB_STARTED_AT_MS: ${{ steps.runtime_ref.outputs.started_at_ms }}
         CONCLUSION: ${{ steps.cancellation.outputs.cancelled == 'true' && 'cancelled' || steps.governed_held.outcome ==
           'success' && steps.concluded.outputs.conclusion || steps.steering.outputs.complete == 'true' && 'success' ||
           'failure' }}

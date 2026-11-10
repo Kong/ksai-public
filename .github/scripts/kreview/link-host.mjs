@@ -837,7 +837,7 @@ async function linkHost(env, root, { launch, mintFor, startProvider, startTeleme
     attempt: env.GITHUB_RUN_ATTEMPT,
     job,
     transports: { websocket: websocketTransport(reach, { asks: USAGE_ASK }), poll: pollTransport(reach, job, { fetch, asks: USAGE_ASK }) },
-    mint: () => mint('ksai-cp'),
+    mint: (signal) => mint('ksai-cp', signal),
     verifyCertificate: (cert, expected) => {
       const verified = verifyLinkCertificate(cert, linkTrust(endpoint, pinned), expected);
       certificate = cert;

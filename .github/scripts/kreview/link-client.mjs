@@ -185,7 +185,7 @@ export function pollTransport(endpoint, job, { fetch = globalThis.fetch, holdMs 
         while (!stopped.signal.aborted) {
           try {
             const { after, plugin_after: pluginAfter } = cursors();
-            const bearer = await within(fresh(), stopped.signal);
+            const bearer = await within(fresh(stopped.signal), stopped.signal);
             if (stopped.signal.aborted) return;
             const answered = await post(`/receive${query({ after: String(after), plugin_after: String(pluginAfter) })}`, bearer, proof, AbortSignal.any([stopped.signal, AbortSignal.timeout(holdMs)]));
             if (!answered.ok) {
@@ -202,7 +202,7 @@ export function pollTransport(endpoint, job, { fetch = globalThis.fetch, holdMs 
       const sendOne = async (frame) => {
         if (stopped.signal.aborted) throw reasonOf(stopped.signal);
         try {
-          const bearer = await within(fresh(), stopped.signal);
+          const bearer = await within(fresh(stopped.signal), stopped.signal);
           if (stopped.signal.aborted) throw reasonOf(stopped.signal);
           const answered = await post(`/send${query({})}`, bearer, frame, AbortSignal.any([stopped.signal, AbortSignal.timeout(holdMs)]));
           if (!answered.ok) {
@@ -316,12 +316,30 @@ export function linkClient({
   let stopped = false;
   let welcomed = false;
   let token = '';
+  let spare = '';
+  let stocking = null;
   let dialing = null;
   let farewell = null;
+  const minting = new AbortController();
 
-  const fresh = async () => {
-    if (token === '' || expiryOf(token) - TOKEN_MARGIN_MS < wall()) token = await mint();
+  const lasting = (held) => held !== '' && expiryOf(held) - TOKEN_MARGIN_MS > wall();
+
+  const fresh = async (signal) => {
+    if (!lasting(token)) token = await mint(signal);
     return token;
+  };
+
+  const stock = () => {
+    if (stopped || stocking || lasting(spare)) return;
+    stocking = mint(minting.signal).then((minted) => (spare = minted), () => '').finally(() => {
+      stocking = null;
+    });
+  };
+
+  const opener = (signal) => {
+    const held = spare;
+    spare = '';
+    return lasting(held) ? Promise.resolve(held) : within(mint(signal), signal);
   };
 
   const signed = (message) => sign(key, { v: VERSION, link, job, from: 'host', to: 'engine', ack: 0, ...message });
@@ -397,6 +415,7 @@ export function linkClient({
       lagMs = Math.max(0, Math.round(now - last - pingEvery));
       last = now;
       pingOn(connection, now);
+      stock();
       onTick();
     });
   };
@@ -412,11 +431,12 @@ export function linkClient({
     const giving = new AbortController();
     dialing = giving;
     if (farewell) farewell.sent = false;
-    const deadline = setTimeout(() => giving.abort(new Closed(1006, `the ${transport.name} handshake did not finish in ${handshakeMs} ms`)), handshakeMs);
+    let deadline;
     let connection = null;
     let stop = () => {};
     try {
-      token = await within(mint(), giving.signal);
+      token = await opener(giving.signal);
+      deadline = setTimeout(() => giving.abort(new Closed(1006, `the ${transport.name} handshake did not finish in ${handshakeMs} ms`)), handshakeMs);
       const opening = transport.open({
         token, hello, fresh, signal: giving.signal, cursors: () => ({ after: hostCursor.last, plugin_after: pluginCursor.last }),
       });
@@ -433,6 +453,7 @@ export function linkClient({
       await within(replayed, giving.signal);
       reached();
       log(`linked over ${transport.name} on epoch ${epoch}`);
+      stock();
       stop = pinging(connection);
       for (;;) {
         const next = await within(connection.next(), giving.signal);
@@ -520,6 +541,7 @@ export function linkClient({
       }
     } finally {
       unwatch();
+      minting.abort();
     }
   };
 
