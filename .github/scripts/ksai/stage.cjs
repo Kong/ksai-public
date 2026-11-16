@@ -54,7 +54,7 @@ function stageCandidates(git, excludedPaths) {
   );
   const paths = [...new Set([...keptTracked, ...splitZ(untracked.stdout)])].filter((entry) => !omitted.has(entry));
   const checked = checkStagePaths(git, paths);
-  return checked.ok ? { ok: true, omitted, paths, tracked: keptTracked } : checked;
+  return checked.ok ? { ok: true, paths } : checked;
 }
 
 function checkStagePaths(git, paths) {
@@ -85,16 +85,6 @@ function checkStagePaths(git, paths) {
   return { ok: true, reason: '' };
 }
 
-function stagePaths(git, paths) {
-  const checked = checkStagePaths(git, paths);
-  if (!checked.ok) return checked;
-  const reset = runPathBatches(git, ['reset', '--quiet', 'HEAD'], paths);
-  if (!reset) return deny('git could not rebuild the requested index entries safely');
-  if (!rebuildTrackedPathBatches(git, paths)) return deny('git could not normalize the requested index entries safely');
-  const staged = runPathBatches(git, ['add'], paths);
-  return staged ? { ok: true, reason: '' } : deny('git could not stage the requested paths safely');
-}
-
 function stageAll(git, excludedPaths = []) {
   const candidates = stageCandidates(git, excludedPaths);
   if (!candidates.ok) return candidates;
@@ -103,64 +93,8 @@ function stageAll(git, excludedPaths = []) {
   if (!rebuildTrackedPathBatches(git, candidates.paths)) {
     return deny('git could not normalize the rebuilt index safely, so nothing was pushed');
   }
-  const staged = runPathBatches(git, ['add', '--all'], candidates.paths);
+  const staged = runPathBatches(git, ['add', '--all', '--force'], candidates.paths);
   return staged ? { ok: true, reason: '' } : deny('git could not stage the working tree safely');
-}
-
-function stageMerge(git, excludedPaths = []) {
-  const candidates = stageCandidates(git, excludedPaths);
-  if (!candidates.ok) return candidates;
-  const reset = runPathBatches(git, ['reset', '--quiet', '--no-refresh', 'HEAD'], candidates.tracked);
-  if (!reset) return deny('git could not rebuild the merge index safely, so nothing was pushed');
-  if (!rebuildTrackedPathBatches(git, candidates.paths)) {
-    return deny('git could not normalize the rebuilt merge index safely, so nothing was pushed');
-  }
-  const staged = runPathBatches(git, ['add', '--all'], candidates.paths);
-  return staged ? { ok: true, reason: '' } : deny('git could not stage the merged tree safely');
-}
-
-function stageAllowed(git, exclusionPathspecs = []) {
-  if (!git?.policy?.ok) return deny(git?.policy?.reason || 'git filter configuration could not be read safely');
-  const pathspec = [':(top)', ...exclusionPathspecs];
-  const cached = git([
-    'ls-files',
-    '--cached',
-    '-z',
-    '--',
-    ...pathspec,
-  ]);
-  const others = git([
-    'ls-files',
-    '--others',
-    '--exclude-standard',
-    '-z',
-    '--',
-    ...pathspec,
-  ]);
-  const deleted = git([
-    'diff',
-    '--cached',
-    '--no-ext-diff',
-    '--no-renames',
-    '--name-only',
-    '--diff-filter=D',
-    '-z',
-    'HEAD',
-    '--',
-    ...pathspec,
-  ]);
-  if (!cached?.ok || !others?.ok || !deleted?.ok) {
-    return deny('the recoverable working tree could not be listed safely');
-  }
-  const tracked = [...new Set([...splitZ(cached.stdout), ...splitZ(deleted.stdout)])];
-  const paths = [...new Set([...tracked, ...splitZ(others.stdout)])];
-  const checked = checkStagePaths(git, paths);
-  if (!checked.ok) return checked;
-  const reset = runPathBatches(git, ['reset', '--quiet', '--no-refresh', 'HEAD'], paths);
-  if (!reset) return deny('git could not rebuild the recoverable index safely');
-  if (!rebuildTrackedPathBatches(git, paths)) return deny('git could not normalize the recoverable index safely');
-  const staged = runPathBatches(git, ['add', '--all'], paths);
-  return staged ? { ok: true, reason: '' } : deny('git could not stage the recoverable tree safely');
 }
 
 function workTree(git, base, index, excludedPaths = []) {
@@ -173,4 +107,4 @@ function workTree(git, base, index, excludedPaths = []) {
   return written?.ok && /^[0-9a-f]{40}$/.test(tree) ? { ok: true, reason: '', tree } : deny('the working tree could not be written as a tree');
 }
 
-module.exports = { checkStagePaths, stageAll, stageAllowed, stageMerge, stagePaths, workTree };
+module.exports = { workTree };
