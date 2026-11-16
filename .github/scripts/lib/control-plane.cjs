@@ -279,7 +279,7 @@ function unanswered(error) {
 }
 
 module.exports = {
-  DEFAULT_TIMEOUT, OUTCOME_HEADER, minter, mask, mintedId, pausing, reachControlPlane, reachedFor,
+  DEFAULT_TIMEOUT, OUTCOME_HEADER, controlPlaneBase, minter, mask, mintedId, pausing, reachControlPlane, reachedFor,
   gatewayHandover, answered, answeredRetrying, gotFrom, held, holdsFor, postTo, released, unreached, unanswered,
   reportKept, REPORT_TRIES,
 };

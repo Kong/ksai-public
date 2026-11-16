@@ -3,7 +3,6 @@ import { createHash } from 'node:crypto';
 import { appendFileSync, chmodSync, closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { dirname, join } from 'node:path';
-import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 
 import { deliveriesAt } from '../governance/anchors.mjs';
@@ -18,7 +17,7 @@ import controlPlane from '../lib/control-plane.cjs';
 import { ARTIFACTS, deliveriesUnder, digestOf, lockedOf } from './cp-prompts.mjs';
 import { exitedOn } from './execution-log.mjs';
 import { acknowledging } from './link-acknowledged.mjs';
-import { jobOf, linkId } from '../link/link-protocol.mjs';
+import { MAX_FRAME, jobOf, linkId } from '../link/link-protocol.mjs';
 import { linkClient, pollTransport, websocketTransport } from './link-client.mjs';
 import taskRequest from '../lib/task-request.cjs';
 import { isolatedToolPhase, parsed, PROVIDER_TIMEOUTS, totals, UNCONTINUED } from './opencode.mjs';
@@ -76,6 +75,8 @@ export const MODEL_SPAN = 'http.client POST';
 export const SPANS = Object.freeze([MODEL_SPAN, 'ServerProcess.start', 'PluginSupervisor.activate', 'SessionRunner.drain', 'SessionRunner.runStep', 'SessionStep.attempt', 'Tool.execute']);
 
 const PROBE_TIMEOUT_MS = 60_000;
+export const PLUGIN_LINE_MOST = MAX_FRAME + (64 << 10);
+export const PLUGIN_SOCKETS_MOST = 64;
 const linkScript = (env) => join(String(env.SCRIPTS ?? ''), 'kreview/opencode-v2-link.mjs');
 const driverScript = (env) => join(String(env.SCRIPTS ?? ''), 'kreview/opencode-v2-driver.mjs');
 const preserveScript = (env) => join(String(env.SCRIPTS ?? ''), 'kreview/link-preserve.mjs');
@@ -608,34 +609,70 @@ export function readOn(file, held) {
 
 export const conclusionOf =(code, killed) => (killed ? 'killed' : code === 0 ? 'succeeded' : code === 143 ? 'interrupted' : 'failed');
 
-function listening(path) {
+function boundedLines(socket, most, onLine) {
+  let held = [];
+  let size = 0;
+  socket.on('data', (chunk) => {
+    let start = 0;
+    for (let end = chunk.indexOf(10); end >= 0; end = chunk.indexOf(10, start)) {
+      size += end - start;
+      if (size > most) {
+        socket.destroy();
+        return;
+      }
+      held.push(chunk.subarray(start, end));
+      const line = Buffer.concat(held).toString('utf8');
+      held = [];
+      size = 0;
+      start = end + 1;
+      onLine(line);
+      if (socket.destroyed) return;
+    }
+    size += chunk.length - start;
+    if (size > most) {
+      socket.destroy();
+      return;
+    }
+    held.push(chunk.subarray(start));
+  });
+}
+
+export function listening(path) {
   const plugins = new Map();
   const arrivals = [];
   const server = createServer((socket) => {
-    const lines = createInterface({ input: socket });
-    lines.once('line', (said) => {
-      let hello;
+    socket.on('error', () => socket.destroy());
+    let plugin = null;
+    boundedLines(socket, PLUGIN_LINE_MOST, (said) => {
+      let message;
       try {
-        hello = JSON.parse(said);
+        message = JSON.parse(said);
       } catch {
-        socket.destroy();
+        if (!plugin) socket.destroy();
         return;
       }
-      if (hello?.type !== 'hello' || typeof hello.session !== 'string' || typeof hello.key !== 'string') {
-        socket.destroy();
-        return;
-      }
-      const plugin = { socket, session: hello.session, key: Buffer.from(hello.key, 'base64'), listeners: [] };
-      plugins.set(hello.session, plugin);
-      lines.on('line', (next) => {
+      if (plugin) {
         try {
-          const message = JSON.parse(next);
           for (const listener of plugin.listeners) listener(message);
-        } catch {}
+        } catch {
+          socket.destroy();
+        }
+        return;
+      }
+      if (message?.type !== 'hello' || typeof message.session !== 'string' || typeof message.key !== 'string' || plugins.has(message.session)) {
+        socket.destroy();
+        return;
+      }
+      const held = { socket, session: message.session, key: Buffer.from(message.key, 'base64'), listeners: [] };
+      plugin = held;
+      plugins.set(held.session, held);
+      socket.once('close', () => {
+        if (plugins.get(held.session) === held) plugins.delete(held.session);
       });
-      for (const arrived of arrivals.splice(0)) arrived(plugin);
+      for (const arrived of arrivals.splice(0)) arrived(held);
     });
   });
+  server.maxConnections = PLUGIN_SOCKETS_MOST;
   return new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(path, () => {
@@ -689,6 +726,11 @@ async function linkHost(env, root, { launch, mintFor, startProvider, startTeleme
   const execution = String(env.EXECUTION_FILE ?? '');
   if (!runnerTemp || !endpoint || !governedDir || !events || !execution) {
     console.log('::error::a linked run needs RUNNER_TEMP, KSAI_CP_ENDPOINT, KSAI_GOVERNED_DIR, EVENTS_FILE and EXECUTION_FILE');
+    return 1;
+  }
+  const { failure: unsafeEndpoint } = controlPlane.controlPlaneBase(endpoint);
+  if (unsafeEndpoint) {
+    console.log(annotation(`${unsafeEndpoint}, so the link would carry this job's token in the clear`));
     return 1;
   }
   let job;

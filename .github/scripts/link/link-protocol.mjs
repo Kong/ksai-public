@@ -220,7 +220,8 @@ export function open(frame, want) {
   }
   const [signature] = envelope.signatures;
   only(signature, ['keyid', 'sig'], 'the signature');
-  const signer = want.signers?.[signature.keyid];
+  const known = typeof signature.keyid === 'string' && want.signers != null && Object.hasOwn(want.signers, signature.keyid);
+  const signer = known ? want.signers[signature.keyid] : null;
   if (!signer) throw refused(`the envelope is signed by ${JSON.stringify(signature.keyid)}, which this link does not know`);
   const payload = decodedBase64(envelope.payload, 'the payload');
   const sig = decodedBase64(signature.sig, 'the signature');
