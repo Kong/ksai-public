@@ -18,7 +18,7 @@ import {
 } from './opencode.mjs';
 import { V2_MASKED_HOMES } from './opencode-v2.mjs';
 import { attributionSummary } from './opencode-runtime.mjs';
-import { npmCachePayload, pinnedToolRoot, TOOL_INJECTION_ENV } from './opencode-tool-sandbox.mjs';
+import { npmCachePayload, pinnedToolRoot, TOOL_INJECTION_ENV, toolProcCapability } from './opencode-tool-sandbox.mjs';
 
 export { listed };
 
@@ -234,6 +234,7 @@ export function sandboxArgs(
   kind = (at) => statSync(at),
   real = realpathSync,
   sockets = join(String(env.RUNNER_TEMP ?? ''), 'ksai-relays'),
+  uid = process.getuid?.(),
 ) {
   const home = String(env.HOME ?? '');
   const workspace = String(env.GITHUB_WORKSPACE ?? '');
@@ -362,6 +363,7 @@ export function sandboxArgs(
     '--setenv',
     'OPENCODE_CONFIG_DIR',
     providerPolicyDirectory(opencodeHome),
+    ...toolProcCapability(uid),
     '--unshare-user',
     '--unshare-pid',
     '--unshare-net',

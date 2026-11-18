@@ -1,6 +1,92 @@
+import { createHash } from 'node:crypto';
+
 const EXPORT_TIMEOUT_MS = 10_000;
 
 const SERVICE = 'ksai';
+
+const RUN_DOMAIN = 'ksai-cp/workflow-run/';
+
+const ATTEMPT_DOMAIN = '/attempt/';
+
+const RUN_ID = /^[1-9]\d*$/;
+
+const MAX_ATTEMPT = 100;
+
+const SPAN_ID = /^[0-9a-f]{16}$/;
+
+const ZERO_SPAN_ID = '0'.repeat(16);
+
+const sha256 = (text) => createHash('sha256').update(text).digest();
+
+/**
+ * runTrace answers the trace the control plane gives this run, and the span of this attempt in it.
+ *
+ * The control plane derives both from the run ID alone (`tracing.TraceForRun`), so the runner lands
+ * its spans under the attempt the control plane records without either side storing anything.
+ */
+export function runTrace(env = process.env) {
+  const run = String(env.GITHUB_RUN_ID ?? '').trim();
+  if (!RUN_ID.test(run)) return null;
+  const attempt = Math.max(Number.parseInt(String(env.GITHUB_RUN_ATTEMPT ?? ''), 10) || 1, 1);
+  const runSum = sha256(RUN_DOMAIN + run);
+  const attemptSpanId = (n) => sha256(`${RUN_DOMAIN}${run}${ATTEMPT_DOMAIN}${n}`).subarray(24, 32).toString('hex');
+  const rootSpanId = runSum.subarray(16, 24).toString('hex');
+  return {
+    traceId: runSum.subarray(0, 16).toString('hex'),
+    attemptSpanId: attemptSpanId(attempt),
+    controlPlaneSpanIds: new Set([rootSpanId, attemptSpanId(attempt), ...Array.from({ length: MAX_ATTEMPT }, (_, at) => attemptSpanId(at + 1))]),
+  };
+}
+
+/**
+ * traceparent answers the W3C header a call to Kong carries inside the run's trace, or '' outside a run.
+ *
+ * A caller's own `traceparent` keeps its parent span and loses its trace, because the relay moves
+ * every span the runner exports into the run's trace.
+ */
+export function traceparent(env = process.env, carried = '', trace = runTrace(env)) {
+  if (!trace) return '';
+  const parent = String(carried ?? '').trim().toLowerCase().split('-')[2] ?? '';
+  const span = SPAN_ID.test(parent) && parent !== ZERO_SPAN_ID && !trace.controlPlaneSpanIds.has(parent) ? parent : trace.attemptSpanId;
+  return `00-${trace.traceId}-${span}-01`;
+}
+
+const originOf = (url) => {
+  try {
+    return new URL(String(url)).origin;
+  } catch {
+    return '';
+  }
+};
+
+const TRACE_HEADER = /^trace(?:parent|state)$/i;
+
+const traced = (given, env, trace) => {
+  if (given instanceof Headers || Array.isArray(given)) {
+    const headers = new Headers(given);
+    headers.set('traceparent', traceparent(env, headers.get('traceparent'), trace));
+    headers.delete('tracestate');
+    return headers;
+  }
+  const entries = Object.entries(given ?? {});
+  const carried = entries.find(([name]) => name.toLowerCase() === 'traceparent')?.[1];
+  return { ...Object.fromEntries(entries.filter(([name]) => !TRACE_HEADER.test(name))), traceparent: traceparent(env, carried, trace) };
+};
+
+/**
+ * tracedFetch answers a fetch that sends the run's `traceparent` with every call to `endpoint`'s
+ * origin and with no other call, so a GitHub or token request never carries it.
+ */
+export function tracedFetch(fetchImpl, env, endpoint) {
+  const origin = originOf(endpoint);
+  const trace = runTrace(env);
+  if (!origin || !trace) return fetchImpl;
+  return (input, init = {}) => {
+    const request = input instanceof Request ? input : null;
+    if (originOf(request ? request.url : input) !== origin) return fetchImpl(input, init);
+    return fetchImpl(input, { ...init, headers: traced(init.headers ?? request?.headers, env, trace) });
+  };
+}
 
 /**
  * PER_RUN names the attributes that identify one run rather than a class of them.
