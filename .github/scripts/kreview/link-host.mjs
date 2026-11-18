@@ -39,6 +39,7 @@ import { monitorProcess, runtimeSummary, sandboxArgs, since } from './opencode-r
 import { invocationIdentity, mcpServerCount, runtimeAttribution, traceObserver } from './opencode-runtime.mjs';
 import { RESTORED_EXPORT, Unapplied, checkpointBaseOf, checkpointSaved, checkpointUpload, restoredFrom } from './link-checkpoint.mjs';
 import { outcomeExpected } from './link-expect.mjs';
+import { traceparent, tracedFetch } from './otlp.mjs';
 import { transcriptOf, transcriptSent } from './link-transcript.mjs';
 import { toolIsolationProbe } from './opencode-tool-sandbox.mjs';
 import { compactions, streamFailure, toolTiming } from './opencode-v2-review.mjs';
@@ -706,19 +707,20 @@ export function childRunner(launch, env, scratch) {
 
 export async function main(env = process.env, {
   launch = spawn, mintFor = controlPlane.minter, startProvider = startProviderRelay, startTelemetry = startRelay,
-  pinned = shipped, dial = '', fetch = globalThis.fetch, monitor = monitorProcess, probe = sandboxProblem, cancelled = new AbortController().signal,
+  pinned = shipped, dial = '', fetch = globalThis.fetch, connect = (url, init) => new WebSocket(url, init), monitor = monitorProcess, probe = sandboxProblem, cancelled = new AbortController().signal,
   socketRoot = SOCKET_ROOT,
 } = {}) {
   const root = mkdtempSync(socketRoot);
   chmodSync(root, 0o700);
   try {
-    return await linkHost(env, root, { launch, mintFor, startProvider, startTelemetry, pinned, dial, fetch, monitor, probe, cancelled });
+    const traced = tracedFetch(fetch, env, String(env.KSAI_CP_ENDPOINT ?? '').trim());
+    return await linkHost(env, root, { launch, mintFor, startProvider, startTelemetry, pinned, dial, fetch: traced, connect, monitor, probe, cancelled });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 }
 
-async function linkHost(env, root, { launch, mintFor, startProvider, startTelemetry, pinned, dial, fetch, monitor, probe, cancelled }) {
+async function linkHost(env, root, { launch, mintFor, startProvider, startTelemetry, pinned, dial, fetch, connect, monitor, probe, cancelled }) {
   const runnerTemp = String(env.RUNNER_TEMP ?? '');
   const endpoint = String(env.KSAI_CP_ENDPOINT ?? '').trim();
   const governedDir = String(env.KSAI_GOVERNED_DIR ?? '').trim();
@@ -791,6 +793,7 @@ async function linkHost(env, root, { launch, mintFor, startProvider, startTeleme
   try {
     provider = await startProvider({
       env: relayEnv, socket: join(sockets, 'provider.sock'), stallMs: PROVIDER_TIMEOUTS.headerTimeout, queries: ['', '?beta=true'],
+      fetchImpl: tracedFetch(fetch, env, String(env.ANTHROPIC_BASE_URL ?? '').trim()),
       measure: attribution.measure,
       counted: (session, model, relayed) => usage?.counted(session, model, callUsage({ ...relayed, model })),
       admit: (session, model) => usage?.admit(session, model) ?? '',
@@ -845,6 +848,7 @@ async function linkHost(env, root, { launch, mintFor, startProvider, startTeleme
   };
 
   const reach = dial || endpoint;
+  const runParent = traceparent(env);
   const sessions = new Map();
   const probed = new Map();
   let certificate = null;
@@ -878,7 +882,7 @@ async function linkHost(env, root, { launch, mintFor, startProvider, startTeleme
     runId: env.GITHUB_RUN_ID,
     attempt: env.GITHUB_RUN_ATTEMPT,
     job,
-    transports: { websocket: websocketTransport(reach, { asks: USAGE_ASK }), poll: pollTransport(reach, job, { fetch, asks: USAGE_ASK }) },
+    transports: { websocket: websocketTransport(reach, { connect, asks: { ...USAGE_ASK, ...(runParent && { traceparent: runParent }) } }), poll: pollTransport(reach, job, { fetch, asks: USAGE_ASK }) },
     mint: (signal) => mint('ksai-cp', signal),
     verifyCertificate: (cert, expected) => {
       const verified = verifyLinkCertificate(cert, linkTrust(endpoint, pinned), expected);

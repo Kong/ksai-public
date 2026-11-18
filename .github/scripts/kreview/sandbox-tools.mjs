@@ -4,6 +4,8 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { toolProcCapability } from './opencode-tool-sandbox.mjs';
+
 export const RIPGREP = Object.freeze({
   version: '15.2.0',
   builds: Object.freeze({
@@ -27,6 +29,7 @@ const APT_SOURCES = Object.freeze(['/etc/apt/sources.list.d/ubuntu.sources', '/e
 const SUDO = Object.freeze(['/usr/bin/sudo', '-n', '--']);
 export const NESTED_SANDBOX_PROBE = Object.freeze([
   '/usr/bin/bwrap', '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp', '--tmpfs', '/run',
+  ...toolProcCapability(),
   '--unshare-user', '--unshare-pid', '--unshare-net', '--new-session', '--die-with-parent',
   '--', '/bin/bash', fileURLToPath(new URL('./opencode-proc.sh', import.meta.url)),
   '/usr/bin/bwrap', '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc',

@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { gunzipSync, inflateSync } from 'node:zlib';
 
 import { collectSecrets, scrub } from './opencode.mjs';
-import { attributes, pairs, post, runAttributes } from './otlp.mjs';
+import { attributes, pairs, post, runAttributes, runTrace } from './otlp.mjs';
 import { annotation } from '../lib/text.cjs';
 import { encoded } from './otlp-protobuf.mjs';
 
@@ -43,6 +43,10 @@ const SEVERITIES = Object.freeze({
 });
 
 const STORE_SPAN = 'db.system.name';
+
+const SPAN_ID = /^[0-9a-f]{16}$/i;
+
+const claimsRunSpan = (span, trace) => trace.controlPlaneSpanIds.has(String(span?.spanId ?? '').toLowerCase());
 
 const DRAIN_MS = 10_000;
 
@@ -153,6 +157,9 @@ const severityOf = (record) => {
  * The agent's own store is not the review either: a trivial session emitted 512 spans of which all
  * but a handful were its SQLite, which answers nothing anybody asks after a slow review and is
  * volume Datadog bills for.
+ *
+ * A kept span whose parent is dropped hangs from its nearest kept ancestor in the same export, so a
+ * filtered span leaves no gap in the trace.
  */
 const WIRE_ATTRIBUTE = /^(?:http\.(?:request|response)\.header\.|url\.(?:full|query)$|user_agent\.)/;
 
@@ -167,12 +174,28 @@ const records = (payload) =>
   scopes(payload.resourceSpans, 'scopeSpans').reduce((sum, scope) => sum + asArray(scope?.spans).length, 0)
   + scopes(payload.resourceLogs, 'scopeLogs').reduce((sum, scope) => sum + asArray(scope?.logRecords).length, 0);
 
+const spanKey = (id) => String(id ?? '').toLowerCase();
+
 export function bounded(payload, allowed = null) {
   if (elements(payload) > MAX_ELEMENTS) return null;
+  const dropped = new Map();
   for (const scope of scopes(payload.resourceSpans, 'scopeSpans')) {
     scope.spans = asArray(scope?.spans)
-      .filter((span) => !storeSpan(span) && allowedSpan(span, allowed))
+      .filter((span) => {
+        const kept = !storeSpan(span) && allowedSpan(span, allowed);
+        const id = spanKey(span?.spanId);
+        if (!kept && SPAN_ID.test(id) && !/^0+$/.test(id)) dropped.set(id, span?.parentSpanId);
+        return kept;
+      })
       .map((span) => withoutWire(span, allowed));
+  }
+  for (const span of scopes(payload.resourceSpans, 'scopeSpans').flatMap((scope) => scope.spans)) {
+    if (!span || typeof span !== 'object') continue;
+    const walked = new Set();
+    while (dropped.has(spanKey(span.parentSpanId)) && !walked.has(spanKey(span.parentSpanId))) {
+      walked.add(spanKey(span.parentSpanId));
+      span.parentSpanId = dropped.get(spanKey(span.parentSpanId));
+    }
   }
   for (const scope of scopes(payload.resourceLogs, 'scopeLogs')) {
     scope.logRecords = asArray(scope?.logRecords).filter((record) => severityOf(record) >= INFO);
@@ -211,11 +234,47 @@ export function read(chunks, encoding, ceiling = MAX_BODY_BYTES) {
   return '';
 }
 
-export function preparedPayload({ body, named, secrets, allowed = null }) {
+/**
+ * joined answers the payload with every span and log line moved into the run's trace.
+ *
+ * The agent starts traces of its own, so without this the control plane's run, the agent's work and
+ * the model calls it made are separate traces joined only by the `run` attribute. A root span, and
+ * one that names the run's root or an attempt as its parent, hangs from this attempt's span, and a
+ * span that names any other parent keeps it. Every trace ID is replaced rather
+ * than only the agent's, because on `flow: test` the reviewed code can post to this relay too, and
+ * a span claiming the ID of the run's root or of an attempt is dropped, because those are the
+ * control plane's spans and a second one would stand beside them in the same trace. Links and trace
+ * state are dropped, because they belong to a trace this relay moved away, and a link could point at
+ * any other trace.
+ */
+export function joined(payload, trace) {
+  if (!trace || !payload) return payload;
+  for (const scope of scopes(payload.resourceSpans, 'scopeSpans')) {
+    scope.spans = asArray(scope?.spans).filter((span) => !claimsRunSpan(span, trace));
+    for (const span of scope.spans) {
+      if (!span || typeof span !== 'object') continue;
+      span.traceId = trace.traceId;
+      delete span.traceState;
+      delete span.links;
+      const parent = String(span.parentSpanId ?? '').toLowerCase();
+      if (!SPAN_ID.test(parent) || /^0+$/.test(parent) || trace.controlPlaneSpanIds.has(parent)) span.parentSpanId = trace.attemptSpanId;
+    }
+  }
+  for (const scope of scopes(payload.resourceLogs, 'scopeLogs')) {
+    for (const record of asArray(scope?.logRecords)) {
+      if (!record || typeof record !== 'object') continue;
+      record.traceId = trace.traceId;
+      if (!SPAN_ID.test(String(record.spanId ?? '')) || /^0+$/.test(record.spanId)) record.spanId = trace.attemptSpanId;
+    }
+  }
+  return payload;
+}
+
+export function preparedPayload({ body, named, secrets, allowed = null, trace = null }) {
   try {
     const stampedPayload = stamped(body, named);
     if (!stampedPayload) return null;
-    const payload = bounded(stampedPayload, allowed);
+    const payload = joined(bounded(stampedPayload, allowed), trace);
     if (!payload) return null;
     return JSON.parse(scrub(JSON.stringify(payload), secrets));
   } catch {
@@ -223,8 +282,8 @@ export function preparedPayload({ body, named, secrets, allowed = null }) {
   }
 }
 
-export function prepared({ signal, body, named, secrets }) {
-  const payload = preparedPayload({ body, named, secrets });
+export function prepared({ signal, body, named, secrets, trace = null }) {
+  const payload = preparedPayload({ body, named, secrets, trace });
   return payload && records(payload) > 0 ? encoded(signal, payload, MAX_VALUE_BYTES) : null;
 }
 
@@ -244,6 +303,7 @@ export async function startRelay({ env = process.env, fetchImpl = fetch, observe
   if (!where && typeof observe !== 'function') return null;
   const secrets = collectSecrets(env);
   const named = runAttributes(env);
+  const trace = runTrace(env);
   const counts = { forwarded: 0, filtered: 0, dropped: 0, refused: 0, bytes: 0, sent: 0, posts: 0 };
   const observation = { bytes: 0, posts: 0 };
   const flight = new Set();
@@ -322,7 +382,7 @@ export async function startRelay({ env = process.env, fetchImpl = fetch, observe
           counts.dropped += 1;
           return;
         }
-        const payload = preparedPayload({ body: text, named, secrets, allowed });
+        const payload = preparedPayload({ body: text, named, secrets, allowed, trace });
         if (!payload) {
           counts.dropped += 1;
           return;

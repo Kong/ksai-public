@@ -28,9 +28,9 @@
   "components": {
     "opencode_installer": "sha256:de51f97d88c8c15772113c6dfd1474c3648991d2894716df2fc3c5a872361539",
     "preparation_executor": "sha256:e2ad5febfbb92aa10a2d598a9e8e28494c194c261e09120f98c93b6b35f4c706",
-    "sandbox_runtime": "sha256:4336c87807f7dda522842cf4193a59300cb26a6ec45e0d411a06bf7dae813dd8",
-    "sandbox_tools": "sha256:d856dec03daa44c34ccfe98096e25050911314acaacf3af92344ace81c065873",
-    "sandbox_installer": "sha256:5d4327be2d49d7f800273cfedecd9150d108c4ec245b6165b9ec8d9d38fa14b5",
+    "sandbox_runtime": "sha256:d5bbe90a8c22a9b03fd4cbb592a1e944e4e8608f80b88c75f1eda4ad788ee0b1",
+    "sandbox_tools": "sha256:3b438693716dace32288fea5f35a4752c0d7d0bf7bc001e2ff668e07620d2580",
+    "sandbox_installer": "sha256:59b91e2e6a61435dcb46344f5a498251f86059f24f101af79e283f8a578dde4e",
     "github_anchors": "sha256:978d091b1fad0e8a937ae585c2ecb928abb40d501e6247785c6b334048647ab1"
   }
 }

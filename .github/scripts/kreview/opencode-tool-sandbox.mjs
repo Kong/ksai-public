@@ -108,6 +108,10 @@ export function pinnedToolRoot(env = process.env) {
   return isAbsolute(root) ? root : '';
 }
 
+export function toolProcCapability(uid = process.getuid?.()) {
+  return uid === 0 ? ['--cap-add', 'CAP_SYS_ADMIN'] : [];
+}
+
 export function npmCachePayload(env) {
   const root = String(env.KSAI_NPM_CACHE ?? '').trim();
   return isAbsolute(root) && !root.includes(':') ? join(root, '_cacache') : '';
