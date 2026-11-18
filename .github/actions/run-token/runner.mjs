@@ -16,7 +16,7 @@ export function secret(value, write = (line) => process.stdout.write(line)) {
 }
 
 function keyed(file, name, value) {
-  if (!file) throw new Error(`the runner gave this step nowhere to keep ${name}`);
+  if (!file) throw new Error(`runner provided no file to store ${name}`);
   const fence = `ksai_${randomUUID()}`;
   appendFileSync(file, `${name}<<${fence}\n${value}\n${fence}\n`);
 }

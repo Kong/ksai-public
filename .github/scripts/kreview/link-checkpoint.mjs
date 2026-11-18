@@ -15,10 +15,10 @@ export const RESTORED_EXPORT = 'restored.export.json';
 export const PATCH_FORMAT = 'exact-v1';
 export const PATCH_FORMAT_HEADER = 'X-KSAI-Checkpoint-Patch-Format';
 export const CONTINUATION_HEADER = 'X-KSAI-Checkpoint-Continuation-Render';
-export const INEXACT = 'the checkpoint names no exact patch, so a restore could lay down work the run never wrote';
+export const INEXACT = 'checkpoint names no exact patch';
 const CALL_MS = 120_000;
 const REASON_MOST = 200;
-export const UNSAID = 'the checkpoint was not restored, and nothing said why';
+export const UNSAID = 'checkpoint not restored, no reason given';
 const COMMIT = /^[0-9a-f]{40}$/;
 const CHECKPOINT = /^[0-9a-f]{64}$/;
 const SESSION = /^ses_[A-Za-z0-9]{1,64}$/;
@@ -53,7 +53,7 @@ function mergingOf(git) {
 export function snapshot(git, scratch, started = '') {
   const head = headOf(git);
   const from = started || head;
-  if (!COMMIT.test(from)) throw new Error('the run names no commit it started from to save the checkpoint against');
+  if (!COMMIT.test(from)) throw new Error('run names no start commit to save the checkpoint against');
   const written = stage.workTree(git, head, join(scratch, 'index'));
   if (!written.ok) throw new Error(written.reason);
   const diff = git(['diff', '--binary', '--full-index', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', from, written.tree], { base64: true });
@@ -113,15 +113,15 @@ export function checkpointUpload({ exported, patch, head, base, parent, promptVe
   try {
     utf8.decode(patch);
   } catch {
-    throw new Error('the work holds a file that is not UTF-8 text, and a checkpoint keeps its patch as text');
+    throw new Error('work has a file that is not UTF-8 text, a checkpoint keeps its patch as text');
   }
   const hidden = withEscaped(secrets);
   const kept = Buffer.from(scrub(exported.toString('utf8'), hidden), 'utf8');
   if (!Buffer.from(scrub(patch.toString('utf8'), hidden), 'utf8').equals(patch)) {
-    throw new Error('the work holds a secret the runner has, and a restore must apply the patch byte for byte, so no checkpoint is kept');
+    throw new Error('work holds a runner secret, a restore must apply the patch byte for byte, so no checkpoint is kept');
   }
-  if (kept.length > PART_MOST) throw new Error(`the export is ${kept.length} bytes, and a checkpoint keeps at most ${PART_MOST}`);
-  if (patch.length > PART_MOST) throw new Error(`the patch is ${patch.length} bytes, and a checkpoint keeps at most ${PART_MOST}`);
+  if (kept.length > PART_MOST) throw new Error(`export is ${kept.length} bytes, a checkpoint keeps at most ${PART_MOST}`);
+  if (patch.length > PART_MOST) throw new Error(`patch is ${patch.length} bytes, a checkpoint keeps at most ${PART_MOST}`);
   return {
     job, link, flow, model_session_id: session, base_sha: base, head_sha: head, engine_version: OPENCODE_V2_VERSION,
     prompt_version: promptVersion, ...(parent ? { parent_id: parent } : {}), export: kept.toString('base64'), patch: patch.toString('base64'),
@@ -133,7 +133,7 @@ export const uploadHeaders = (upload, continuation = '') => ({
   [PATCH_FORMAT_HEADER]: PATCH_FORMAT, ...(continuation && upload.conversation?.resumable ? { [CONTINUATION_HEADER]: continuation } : {}),
 });
 
-export const UNCARRIED = "the control plane refused the conversation this checkpoint carries, so the work is kept without it and the next run goes on from the control plane's handoff";
+export const UNCARRIED = "control plane refused the checkpoint conversation, keeping the work without it";
 
 const unsaid = (said) => said;
 
@@ -156,8 +156,8 @@ export async function checkpointSaved({ endpoint, fetch, token, upload, continua
   const said = bare.why ? first : bare;
   if (said.why) throw new Error(unkept(upload, said));
   const id = String(said.answer?.id ?? '');
-  if (!CHECKPOINT.test(id)) throw new Error('the control plane kept the checkpoint under no id');
-  if (said.answer?.patch_format !== PATCH_FORMAT) throw new Error(`the control plane kept the checkpoint without the ${PATCH_FORMAT} patch format this runner sent, so no restore could trust it`);
+  if (!CHECKPOINT.test(id)) throw new Error('control plane kept the checkpoint with no id');
+  if (said.answer?.patch_format !== PATCH_FORMAT) throw new Error(`control plane kept the checkpoint without the ${PATCH_FORMAT} patch format this runner sent, a restore cannot trust it`);
   if (refused) note(UNCARRIED);
   return id;
 }
@@ -191,9 +191,9 @@ export async function restoredFrom({ endpoint, fetch, token, link, job, flow, pr
       token: bearer, body: JSON.stringify({ job, link, flow, engine_version: OPENCODE_V2_VERSION, prompt_version: promptVersion }), timeout: CALL_MS, said: true,
     });
   } catch (error) {
-    return fellBack(`the control plane did not answer the restore: ${error?.message ?? error}`);
+    return fellBack(`restore request failed: ${error?.message ?? error}`);
   }
-  if (said.why) return fellBack(`the control plane did not answer the restore: ${said.why}`);
+  if (said.why) return fellBack(`restore request failed: ${said.why}`);
   const answer = said.answer ?? {};
   if (answer.status === 'fallback') {
     const parent = typeof answer.parent_id === 'string' && CHECKPOINT.test(answer.parent_id) ? answer.parent_id : undefined;
@@ -208,18 +208,18 @@ export async function restoredFrom({ endpoint, fetch, token, link, job, flow, pr
     const exported = Buffer.from(String(answer.export ?? ''), 'base64');
     const patch = Buffer.from(String(answer.patch ?? ''), 'base64');
     if (!offered || !COMMIT.test(String(saved.head_sha)) || !SESSION.test(String(saved.model_session_id))) {
-      throw new Error('the control plane offered a checkpoint that does not name itself');
+      throw new Error('offered checkpoint has an invalid id, head commit or OpenCode session id');
     }
-    if (!COMMIT.test(String(saved.base_sha)) || saved.base_sha !== base) throw new Error('the checkpoint names another or unknown base commit');
-    if (sha256(exported) !== saved.export_sha256 || exported.length !== saved.export_bytes) throw new Error('the offered export is not the one the checkpoint names');
-    if (sha256(patch) !== saved.patch_sha256 || patch.length !== saved.patch_bytes) throw new Error('the offered patch is not the one the checkpoint names');
+    if (!COMMIT.test(String(saved.base_sha)) || saved.base_sha !== base) throw new Error('checkpoint names a different or unknown base commit');
+    if (sha256(exported) !== saved.export_sha256 || exported.length !== saved.export_bytes) throw new Error('offered export does not match the checkpoint');
+    if (sha256(patch) !== saved.patch_sha256 || patch.length !== saved.patch_bytes) throw new Error('offered patch does not match the checkpoint');
     let session;
     try {
       session = JSON.parse(exported.toString('utf8'))?.info?.id;
     } catch {
       session = '';
     }
-    if (session !== saved.model_session_id) throw new Error('the offered export is of another OpenCode session');
+    if (session !== saved.model_session_id) throw new Error('offered export is from a different OpenCode session');
     await keep(exported);
     kept = true;
     await apply(patch, saved.head_sha);

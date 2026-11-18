@@ -61,5 +61,5 @@ export const saved = (path, state) => written(path, state);
 
 export function ending(state) {
   if (state.mode === 'cumulative') return { error: '' };
-  return { error: 'the usage source registration did not complete, so this run has no usage record' };
+  return { error: 'usage source registration failed, no usage recorded' };
 }

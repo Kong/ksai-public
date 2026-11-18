@@ -156,7 +156,7 @@ jobs:
           case "${OPENCODE_VERSION}" in
             2.*) ;;
             *)
-              echo "::error::opencode_version: ${OPENCODE_VERSION} is not an OpenCode 2 build, and v5 runs only OpenCode 2"
+              echo "::error::opencode_version ${OPENCODE_VERSION} is not an OpenCode 2 build. v5 runs only OpenCode 2."
               exit 1 ;;
           esac
       - name: Read this run's credentials

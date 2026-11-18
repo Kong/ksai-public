@@ -77,12 +77,12 @@ export async function fetchReviewBase({
   sleep = delay,
 } = {}) {
   if (!REPO_SHAPE.test(repo) || !NUMBER_SHAPE.test(String(number))) {
-    throw new Error('the review names no pull request this step can read its base from');
+    throw new Error('review has no pull request to read the base from');
   }
   const api = String(apiUrl).replace(/\/+$/, '');
   const pull = await getJson(fetchImpl, `${api}/repos/${repo}/pulls/${number}`, token, sleep);
   const ref = String(pull?.base?.ref ?? '');
-  if (!REF_SHAPE.test(ref) || ref.includes('..')) throw new Error('the pull request names a base branch this step will not fetch');
+  if (!REF_SHAPE.test(ref) || ref.includes('..')) throw new Error('refusing to fetch the pull request base branch');
 
   const git = (args) => run('git', args, { cwd, stderr: 'ignore' });
   const head = String(git(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']).stdout ?? '').trim();
@@ -101,7 +101,7 @@ export async function fetchReviewBase({
     const segments = ref.split('/').map((segment) => encodeURIComponent(segment)).join('/');
     compare = await getJson(fetchImpl, `${api}/repos/${repo}/compare/${segments}...${head}?per_page=1`, token, sleep);
   } catch (error) {
-    log(`::notice::the merge base could not be read (${error.message}), so the review fetches full history`);
+    log(`::notice::reading the merge base failed (${error.message}). The review fetches full history.`);
   }
   const behind = distance(compare?.behind_by);
   const ahead = distance(compare?.ahead_by);
@@ -114,7 +114,7 @@ export async function fetchReviewBase({
       log(`The review fetched ${ahead} commits of the pull request and ${behind} of ${ref} back to their merge base`);
       return { ref, depth: 'merge-base' };
     }
-    log('::notice::the shallow fetch did not reach the merge base, so the review fetches full history');
+    log('::notice::the shallow fetch did not reach the merge base. The review fetches full history.');
   }
   if (!git(['fetch', '--no-tags', '--unshallow', url, baseSpec]).ok) git(['fetch', '--no-tags', url, baseSpec]);
   return { ref, depth: 'full' };

@@ -115,7 +115,7 @@ export function usageCollector({ path, scope, send }) {
     answered(body) {
       if (body?.intent !== state.intent || refusal) return;
       if (body.outcome === 'refused') {
-        refusal = `the control plane refused this run's usage source (${body.reason}), so its usage cannot be counted`;
+        refusal = `control plane refused the usage source (${body.reason})`;
       } else if (body.outcome === 'registered' && state.source !== null && state.source !== body.source) {
         refusal = `the engine answered source ${body.source} for the intent registered as ${state.source}`;
       } else if (body.outcome === 'registered') {

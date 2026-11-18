@@ -27,10 +27,10 @@ export function refusals(env) {
 
 export function governed(env, kept = delivered(env)) {
   if (kept === 0 && env.STOPPED === 'true' && env.MODEL_NEVER_ASKED === 'true') {
-    return 'the run was stopped before its model asked the provider anything, so it answered nothing';
+    return 'the run stopped before its model sent a provider request';
   }
   if (kept === 0) {
-    throw new Error('this run answered without the governor seeing one request, so nothing held it to the prompt the control plane signed');
+    throw new Error('run answered without the governor seeing a request, nothing held it to the signed prompt');
   }
   return `the governor saw ${counted(kept, 'request')} this run`;
 }

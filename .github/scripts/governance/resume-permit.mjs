@@ -22,7 +22,7 @@ export const bare = (sealed) => String(sealed).replace(/^sha256:/, '');
 
 export function resumeTrust(endpoint, pinned = shipped) {
   if (typeof pinned.resumePredicate !== 'string' || pinned.resumePredicate === '') {
-    throw new Error('this KSAI release pins no resume permit type, so no carried conversation can be verified');
+    throw new Error('this KSAI release pins no resume permit type, cannot verify carried conversations');
   }
   const renderer = rendererFor(endpoint, pinned);
   const trust = renderer.renderKey ? keyTrust(renderer.renderKey) : certificateTrust(renderer.renderAuthority, renderer.renderSigner);
@@ -59,7 +59,7 @@ export function verifyResumePermit(bundle, { trust, predicate }, expected, now =
   for (const [name, value] of Object.entries(named)) {
     const [head, tail] = name.split('.');
     const said = tail ? permit[head]?.[tail] : permit[head];
-    if (said !== value) throw new Error(`the resume permit names ${name} ${JSON.stringify(said)}, and this session's is ${JSON.stringify(value)}`);
+    if (said !== value) throw new Error(`resume permit names ${name} ${JSON.stringify(said)}, this session's is ${JSON.stringify(value)}`);
   }
   const notAfter = new Date(permit.not_after);
   if (!(notAfter.getTime() > now.getTime())) throw new Error(`the resume permit expired at ${permit.not_after}`);

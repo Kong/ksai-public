@@ -10,7 +10,7 @@ function lineReader(most, done) {
     const part = end < 0 ? chunk : chunk.subarray(0, end);
     size += part.length;
     if (size > most) {
-      done(null, 'the line passes its bound');
+      done(null, 'line exceeds its bound');
       return;
     }
     chunks.push(part);
@@ -68,7 +68,7 @@ export function serveBounded(path, handle, { requestMost, answerMost, within, re
       clearTimeout(timer);
       if (answered) return;
       answered = true;
-      refused('the asker went away before its answer');
+      refused('asker disconnected before it received an answer');
     });
     socket.on('data', lineReader(requestMost, (asked, why) => {
       clearTimeout(timer);

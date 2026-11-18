@@ -80,7 +80,7 @@ function bounded(promise, milliseconds, { signal = null, schedule = scheduleTime
 export function assertPreparationKernel(platform, kernelRelease) {
   if (platform !== 'linux' || typeof kernelRelease !== 'string' || kernelRelease.length > 128 || kernelRelease.trim() !== kernelRelease
     || (!/^6\.(?:8|14|17)\.(?:0|[1-9][0-9]*)(?:[-.+][A-Za-z0-9._+-]+)?$/.test(kernelRelease)
-      && kernelRelease !== '7.0.0-1017-azure' && kernelRelease !== '7.0.0-1019-azure')) throw refused();
+      && kernelRelease !== '7.0.0-1017-azure' && kernelRelease !== '7.0.0-1019-azure' && kernelRelease !== '7.0.0-1020-azure')) throw refused();
   return kernelRelease;
 }
 

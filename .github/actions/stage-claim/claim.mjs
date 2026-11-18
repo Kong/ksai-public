@@ -46,10 +46,10 @@ const refused = (reason) => Object.freeze({ claimed: false, reason });
 export async function claimStage({
   runner, runsOn, egressEndpoints = '', jobMinutes, mostMinutes, endpoint, gatewayUrl, fetchImpl = fetch, timeoutMs = REACH_MS,
 }) {
-  if (!sameRunner(runsOn, runner)) return refused(`the control plane selected ${runsOn || 'no runner'}, so the gated job carries this stage`);
+  if (!sameRunner(runsOn, runner)) return refused(`control plane selected ${runsOn || 'no runner'}, not this gated job`);
   const minutes = Number(jobMinutes);
   if (!Number.isInteger(minutes) || minutes < 1 || minutes > Number(mostMinutes)) {
-    return refused(`the stage asks for ${jobMinutes || 'no'} job minutes, more than the ${mostMinutes} this job holds`);
+    return refused(`stage asks for ${jobMinutes || 'no'} job minutes, this job holds ${mostMinutes}`);
   }
   const extra = String(egressEndpoints).split(/\s+/).filter(Boolean);
   const urls = [endpoint, gatewayUrl, ...extra.map((one) => endpointUrl(one))];
@@ -57,6 +57,6 @@ export async function claimStage({
   const answered = await Promise.all([...urls, BLOCKED_PROBE].map((url) => reaches(url, fetchImpl, timeoutMs)));
   const unreachable = urls.filter((_, index) => !answered[index]);
   if (unreachable.length) return refused(`the egress policy does not reach ${unreachable.join(', ')}`);
-  if (answered.at(-1)) return refused(`${BLOCKED_PROBE} answered, so the egress block is not in force`);
+  if (answered.at(-1)) return refused(`${BLOCKED_PROBE} answered, egress block is not in force`);
   return Object.freeze({ claimed: true, reason: 'this job carries the package stage' });
 }

@@ -44,7 +44,7 @@ function finalResult(raw) {
   }
   if (!Array.isArray(log)) return { result: null, why: 'run wrote no message list' };
   const result = log.findLast((entry) => entry?.type === 'result') ?? null;
-  return result ? { result, why: '' } : { result: null, why: 'run wrote no result, so it did not finish' };
+  return result ? { result, why: '' } : { result: null, why: 'run wrote no result' };
 }
 
 function candidateEnvelope(candidate) {
@@ -79,7 +79,7 @@ export function stageOf(env) {
     attempt: Number(said(env.WORKFLOW_ATTEMPT)), lease: said(env.WORKFLOW_LEASE),
   };
   if (!stage.job || !stage.instance || !Number.isSafeInteger(stage.attempt) || stage.attempt < 1 || !stage.lease) {
-    throw new Error('the dispatch record names no whole package stage attempt to complete');
+    throw new Error('dispatch record does not name a package stage attempt to complete');
   }
   return stage;
 }
@@ -97,7 +97,7 @@ function answeredCandidate(text) {
     const read = parsedTail(text.slice(at).trim());
     if (read) return read.candidate;
   }
-  throw new Error('the stage answered no JSON stage candidate');
+  throw new Error('stage answer is not a JSON stage candidate');
 }
 
 export function outputOf(answer) {
@@ -116,7 +116,7 @@ export function outputOf(answer) {
     enveloped = false;
   }
   if (!enveloped || !object(candidate.output) || candidate.artifacts.length) {
-    throw new Error('the stage answered something other than one stage candidate with no artifacts');
+    throw new Error('stage answer is not a single stage candidate without artifacts');
   }
   return candidate.output;
 }
@@ -124,19 +124,19 @@ export function outputOf(answer) {
 function ended(stage, status, reason) {
   return {
     apiVersion: COMPLETION_VERSION, ...stage, status,
-    failure: withinBytes(said(reason).replace(/\s+/g, ' ') || 'the stage ended without saying why', MAX_FAILURE_BYTES),
+    failure: withinBytes(said(reason).replace(/\s+/g, ' ') || 'no failure reason given', MAX_FAILURE_BYTES),
   };
 }
 
 function beforeModel(model, tools) {
   if (said(model) !== 'skipped') return '';
-  return said(tools) === 'failure' ? 'the stage tools could not be installed, so the model never ran' : 'the stage stopped before its model ran';
+  return said(tools) === 'failure' ? 'stage tools install failed, the model did not run' : 'the stage stopped before its model ran';
 }
 
 export function completionOf(stage, { conclusion, execution, notice, unmerged = '', model = '', tools = '' }) {
   const failed = (reason) => ended(stage, 'failed', reason);
   if (said(conclusion) === 'cancelled') return ended(stage, 'cancelled', 'the run executing the stage was cancelled');
-  if (said(unmerged) !== '') return failed(`the base was not merged into the checkout: ${said(unmerged)}`);
+  if (said(unmerged) !== '') return failed(`merging the base into the checkout failed: ${said(unmerged)}`);
   if (said(notice) !== '') {
     const output = { status: 'skipped', summary: said(notice) };
     return {
@@ -174,7 +174,7 @@ export async function withChangeset(completion, stage, env, {
   const keeping = completion.status !== 'succeeded' && kept(env);
   if (completion.status !== 'succeeded' && !keeping) return completion;
   try {
-    if (!said(env.RUNNER_TEMP) || !said(env.GITHUB_WORKSPACE)) throw new Error('the runner names no checkout or temporary directory');
+    if (!said(env.RUNNER_TEMP) || !said(env.GITHUB_WORKSPACE)) throw new Error('checkout or temporary directory is not set');
     const { body } = capture({
       git: git ?? trustedGit.directGit(said(env.GITHUB_WORKSPACE)),
       base: said(env.BOUND_HEAD_SHA),
@@ -191,10 +191,10 @@ export async function withChangeset(completion, stage, env, {
     return { ...completion, artifacts: [artifact] };
   } catch (error) {
     if (keeping) {
-      warn(`the stopped stage's unfinished change was not handed back, so nothing of it is kept: ${error.message}`);
+      warn(`unfinished change of the stopped stage was not saved: ${error.message}`);
       return completion;
     }
-    return ended(stage, 'failed', `the stage's change was not kept: ${error.message}`);
+    return ended(stage, 'failed', `saving the stage change failed: ${error.message}`);
   }
 }
 
@@ -227,13 +227,13 @@ export async function main(env = process.env, { fetch = globalThis.fetch, secret
   const reached = await reachedFor({
     env, fetch, timeout: completionWait(env), tries: Infinity, holds: holdsFor(TIMEOUT_MS), secret, pause,
   });
-  if (reached.why) throw new Error(`the stage's completion could not be sent: ${reached.why}`);
+  if (reached.why) throw new Error(`sending the stage completion failed: ${reached.why}`);
   completion = await withChangeset(completion, stage, env, { reached, fetch, pause });
   const send = (body) => answeredRetrying(fetch, `${reached.base}/run/complete`, {
     token: reached.token, body: canonicalJson(body), timeout: TIMEOUT_MS,
   }, pause);
   const { taken, sent } = await delivered(completion, stage, send);
-  if (sent.why) throw new Error(`the control plane did not take the stage's completion: ${sent.why}`);
+  if (sent.why) throw new Error(`control plane did not accept the stage completion: ${sent.why}`);
   return taken;
 }
 
@@ -245,7 +245,7 @@ export async function delivered(completion, stage, send, warn = unkeptWarning) {
     sent = await send(taken);
   }
   if (sent.why && taken.status !== 'succeeded' && taken.artifacts && sent.status === MALFORMED) {
-    warn(`the control plane refused the stopped stage's unfinished change, so nothing of it is kept: ${sent.why}`);
+    warn(`control plane refused the unfinished change of the stopped stage, not keeping it: ${sent.why}`);
     const { artifacts: _refused, ...unkept } = taken;
     taken = unkept;
     sent = await send(taken);

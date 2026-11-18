@@ -126,7 +126,7 @@ export const linkId = ({ repository, runId, attempt, job }) =>
 export function jobOf(env) {
   const index = String(env.KSAI_JOB_INDEX ?? '').trim();
   const job = `${String(env.GITHUB_JOB ?? '').trim()}${index && index !== '0' ? `-${index}` : ''}`;
-  if (!JOB.test(job)) throw new Error(`this job is named ${JSON.stringify(job)}, which names no link`);
+  if (!JOB.test(job)) throw new Error(`job ${JSON.stringify(job)} has no link`);
   return job;
 }
 

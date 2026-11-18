@@ -48,7 +48,7 @@ export function verifyRelease(attestation, lock, policy) {
     const version = LOCK_SUBJECT.exec(subject.name)?.[1];
     return version && sameDigest(`sha256:${subject.digest?.sha256}`, lockDigest) ? [version] : [];
   });
-  if (named.length !== 1) throw new Error('the release attestation vouches for no lock with these bytes');
+  if (named.length !== 1) throw new Error('release attestation does not cover a lock with these bytes');
   const version = named[0];
   if (policy.minimum && compareVersions(version, policy.minimum) < 0) {
     throw new Error(`prompt release ${version} is older than the minimum ${policy.minimum} this runner admits`);

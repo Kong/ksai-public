@@ -134,7 +134,7 @@ runs:
         case "${OPENCODE_VERSION}" in
           2.*) ;;
           *)
-            echo "::error::opencode_version: ${OPENCODE_VERSION} names no OpenCode line this action runs - pin a 2.x release"
+            echo "::error::opencode_version ${OPENCODE_VERSION} is not supported. Pin a 2.x release."
             exit 1
             ;;
         esac
@@ -186,7 +186,7 @@ runs:
         set -euo pipefail
         git_dir="${GITHUB_WORKSPACE}/.git"
         if [[ ! -d "${git_dir}" || -L "${git_dir}" || -L "${git_dir}/info" ]]; then
-          echo "The workspace root is not a repository, so no commit of the caller's can stage _ksai"
+          echo "The workspace root is not a repository, so no commit can stage _ksai"
           exit 0
         fi
         mkdir -p "${git_dir}/info"
@@ -210,13 +210,13 @@ runs:
         set -euo pipefail
 
         if [[ ! "${ANTHROPIC_BASE_URL}" =~ ^https:// ]]; then
-          echo "::error::anthropic_base_url must start with https:// - every model call this action makes and its OIDC exchange go to it, whichever engine runs, and empty takes the run off Kong AI Gateway rather than falling back to Anthropic, got: ${ANTHROPIC_BASE_URL}"
+          echo "::error::Set anthropic_base_url to the Kong AI Gateway HTTPS origin. KSAI uses it for all model calls and the OIDC exchange. Got: ${ANTHROPIC_BASE_URL}"
           exit 1
         fi
 
 
         if [[ "${ANTHROPIC_BASE_URL}" =~ /v1/*$ ]]; then
-          echo "::error::anthropic_base_url names an endpoint rather than an origin - the version segment is appended by every caller, so this would be called at it again. Drop the /v1, got: ${ANTHROPIC_BASE_URL}"
+          echo "::error::Remove /v1 from anthropic_base_url. The runtime adds /v1 to the gateway origin. Got: ${ANTHROPIC_BASE_URL}"
           exit 1
         fi
     - name: Read the dispatch record
@@ -420,6 +420,7 @@ runs:
         STAGE_STEPS_FILE: ${{ steps.dispatch_record.outputs.stage_steps_file }}
         BOUND_HEAD_SHA: ${{ steps.dispatch_record.outputs.source_revision }}
         KSAI_SECRET_NPM_TOKEN: ${{ inputs.npm_token }}
+        KSAI_CP_ENDPOINT: ${{ inputs.control_plane_endpoint }}
         GH_TOKEN: ""
         GITHUB_TOKEN: ""
         OTEL_EXPORTER_OTLP_HEADERS: ""
@@ -543,6 +544,7 @@ runs:
         STAGE_STEPS_FILE: ${{ steps.dispatch_record.outputs.stage_steps_file }}
         BOUND_HEAD_SHA: ${{ steps.dispatch_record.outputs.source_revision }}
         KSAI_SECRET_NPM_TOKEN: ${{ inputs.npm_token }}
+        KSAI_CP_ENDPOINT: ${{ inputs.control_plane_endpoint }}
         GH_TOKEN: ""
         GITHUB_TOKEN: ""
         OTEL_EXPORTER_OTLP_HEADERS: ""
@@ -601,7 +603,7 @@ runs:
         case "$real_ancestor" in
           "$root" | "$root"/*) ;;
           *)
-            echo "::error::${AT} resolves to ${real_ancestor}, outside the workspace, so this action was not put back"
+            echo "::error::${AT} resolves to ${real_ancestor}, outside the workspace. The action was not put back."
             exit 1
             ;;
         esac
@@ -610,10 +612,24 @@ runs:
         case "$real" in
           "$root" | "$root"/*) ;;
           *)
-            echo "::error::${AT} resolves to ${real}, outside the workspace, so this action was not put back"
+            echo "::error::${AT} resolves to ${real}, outside the workspace. The action was not put back."
             exit 1
             ;;
         esac
         rm -f -- "${real}/action.yml"
         cp "${STASH}/action.yml" "${real}/action.yml"
+    - name: Send the run's files to the control plane
+      if: ${{ always() && steps.staged_scripts.outcome == 'success' }}
+      continue-on-error: true
+      shell: bash
+      env:
+        EVENTS_FILE: ${{ runner.temp }}/opencode-events.jsonl
+        EXECUTION_FILE: ${{ runner.temp }}/opencode-execution.json
+        KSAI_CP_ENDPOINT: ${{ inputs.control_plane_endpoint }}
+        KSAI_MODEL_TOKEN: ${{ steps.mint.outputs.token }}
+        OTEL_EXPORTER_OTLP_HEADERS: ${{ inputs.otel_headers }}
+        JOB_TIMEOUT_MINUTES: ${{ steps.dispatch_record.outputs.stage_job_minutes || inputs.job_timeout_minutes }}
+        KSAI_JOB_STARTED_AT_MS: ${{ steps.runtime_ref.outputs.started_at_ms }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      run: node "${SCRIPTS}/ksai/run-files.mjs"
 

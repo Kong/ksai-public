@@ -43,7 +43,7 @@ function sameRun(receipt, env) {
 function moduleOf(one) {
   const name = one.id.startsWith(GOVERNED_ID) ? one.id.slice(GOVERNED_ID.length) : '';
   if (!MODULE.test(name) || one.destination !== `${GOVERNED_UNDER}${name}.mjs`) {
-    throw new Error(`${one.id} is laid at ${String(one.destination ?? 'no destination')}, which is not where the governed plugin module of that name goes`);
+    throw new Error(`${one.id} is laid at ${String(one.destination ?? 'no destination')}, which is not the governed plugin module path for that name`);
   }
   return { name: `${name}.mjs`, body: one.body };
 }
@@ -66,7 +66,7 @@ function modulesOf(plan, version, locked) {
     }
     if (isGoverned(one)) modules.push(moduleOf(one));
   }
-  if (!modules.some((one) => one.name === PLUGIN_ENTRY)) throw new Error(`the plan carries no ${GOVERNED_UNDER}${PLUGIN_ENTRY}, so no governed plugin could run the session`);
+  if (!modules.some((one) => one.name === PLUGIN_ENTRY)) throw new Error(`plan carries no ${GOVERNED_UNDER}${PLUGIN_ENTRY}, no governed plugin can run the session`);
   return modules;
 }
 
@@ -175,7 +175,7 @@ export function deliveryReport(root, verified = null) {
     try {
       appendFileSync(deliveriesAt(root), `${JSON.stringify({ outcome, ...said, ...(why ? { reason: clipped(why) } : {}) })}\n`, { mode: 0o600 });
     } catch (error) {
-      console.log(`::warning::a ${outcome} prompt delivery could not be kept for the run to report: ${clipped(error?.message ?? error)}`);
+      console.log(`::warning::keeping a ${outcome} prompt delivery for the run report failed: ${clipped(error?.message ?? error)}`);
     }
   };
 }

@@ -6,8 +6,8 @@ const token = String(process.env.STATE_token ?? '');
 if (token !== '') {
   try {
     await revoke({ token });
-    command('notice', 'ksai revoked the token the control plane served this step');
+    command('notice', 'token revoked');
   } catch (unrevoked) {
-    command('warning', `ksai could not revoke the token the control plane served this step, so it lapses on its own: ${messageOf(unrevoked)}`);
+    command('warning', `revoking the token failed, it expires on its own: ${messageOf(unrevoked)}`);
   }
 }

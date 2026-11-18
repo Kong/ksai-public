@@ -56,7 +56,7 @@ const NONE_HELD = Object.freeze({ read: false, none: true });
 
 const shaped = (value, shape) => typeof value === 'string' && shape.test(value);
 
-const stopped = (why) => new Error(`${why} - so this run starts nothing`);
+const stopped = (why) => new Error(`${why}, nothing runs`);
 
 const policyStopped = (why) => Object.assign(stopped(why), { code: 'security_policy_refused' });
 
@@ -70,9 +70,9 @@ const pullOf = (subject) =>
 function budgetOf(deadline, at) {
   if (deadline === undefined) return { stageMinutes: '', stageJobMinutes: '' };
   const due = typeof deadline === 'string' && DEADLINE.test(deadline) ? Date.parse(deadline) : Number.NaN;
-  if (!Number.isFinite(due)) throw policyStopped('the record names a stage deadline that is not a UTC time');
+  if (!Number.isFinite(due)) throw policyStopped('record stage deadline is not a UTC time');
   const left = Math.floor((due - at) / MINUTE);
-  if (left < 5) throw stopped(`the stage's attempt is reaped in ${Math.max(0, left)} minutes, too few to run it`);
+  if (left < 5) throw stopped(`stage attempt ends in ${Math.max(0, left)} minutes, too few to run it`);
   return { stageMinutes: String(left - 3), stageJobMinutes: String(left - 1) };
 }
 
@@ -80,9 +80,9 @@ function preparationOf(prepare, profile) {
   if (prepare === undefined) return { prepareTools: '', prepareDependencies: '' };
   const named = typeof prepare === 'string' ? prepare.split(',') : [];
   if (named.length === 0 || named.some((one) => !PREPARABLE.includes(one)) || new Set(named).size !== named.length) {
-    throw policyStopped('the record names something to prepare that a stage cannot prepare');
+    throw policyStopped('record prepare value is not tools, dependencies or both');
   }
-  if (profile !== WRITE_PROFILE) throw policyStopped('the record names something to prepare for a stage that does not write');
+  if (profile !== WRITE_PROFILE) throw policyStopped('record asks to prepare a stage that does not write');
   return {
     prepareTools: named.includes('tools') ? 'true' : '',
     prepareDependencies: named.includes('dependencies') ? 'true' : '',
@@ -91,14 +91,14 @@ function preparationOf(prepare, profile) {
 
 function mergeOf(base, profile) {
   if (base === undefined) return '';
-  if (!shaped(base, COMMIT)) throw policyStopped('the record names a merge base that is not a whole commit');
-  if (profile !== WRITE_PROFILE) throw policyStopped('the record names a merge base for a stage that does not write');
+  if (!shaped(base, COMMIT)) throw policyStopped('record merge base is not a full commit id');
+  if (profile !== WRITE_PROFILE) throw policyStopped('record has a merge base for a stage that does not write');
   return base;
 }
 
 function recordFrom(served, at) {
   if (served === null || typeof served !== 'object' || Array.isArray(served)) {
-    throw policyStopped('the control plane answered something other than a record');
+    throw policyStopped('control plane answer is not a record');
   }
 
   const {
@@ -124,27 +124,27 @@ function recordFrom(served, at) {
   } = /** @type {Record<string, unknown>} */ (served);
   if (stageSteps !== undefined) {
     if (typeof stageSteps !== 'string' || stageSteps === '' || Buffer.byteLength(stageSteps, 'utf8') > STEPS_MAX) {
-      throw policyStopped('the record names stage steps that are no bounded text');
+      throw policyStopped('record stage steps are not bounded text');
     }
-    if (profile !== WRITE_PROFILE) throw policyStopped('the record names stage steps for a stage that does not write');
+    if (profile !== WRITE_PROFILE) throw policyStopped('record has stage steps for a stage that does not write');
   }
   for (const bound of [changesetMaxBytes, changesetMaxFiles]) {
     if (bound !== undefined && (!shaped(bound, COUNT) || !Number.isSafeInteger(Number(bound)))) {
-      throw policyStopped('the record bounds a stage\'s change with something other than a count');
+      throw policyStopped('record change limit is not a count');
     }
   }
   const preparation = preparationOf(prepare, profile);
   const merging = mergeOf(mergeBase, profile);
 
   if (!shaped(recordId, RECORD_ID)) {
-    throw policyStopped('the record does not name the control-plane decision that started this run');
+    throw policyStopped('record names no control-plane decision for this run');
   }
   if (execution !== STAGE_EXECUTION) {
     throw policyStopped('the record does not dispatch a package stage');
   }
   if (!shaped(job, STAGE_JOB) || !shaped(instance, STAGE_INSTANCE) || !shaped(lease, STAGE_LEASE)
     || !shaped(tried, COUNT) || !Number.isSafeInteger(Number(tried))) {
-    throw policyStopped('the record dispatches a package stage it does not fully name');
+    throw policyStopped('record package stage is not fully named');
   }
 
   let record;
@@ -155,12 +155,12 @@ function recordFrom(served, at) {
   }
   const revision = record?.job?.sourceRevision;
   if (record?.apiVersion !== STAGE_RECORD_VERSION || typeof revision !== 'string' || !REVISION.test(revision)) {
-    throw policyStopped('the record dispatches a package stage its stage record does not describe');
+    throw policyStopped('stage record does not describe the dispatched package stage');
   }
   const hasSteering = typeof workflowSteering === 'string' && workflowSteering !== '';
   const hasSteeringDigest = typeof workflowSteeringDigest === 'string' && workflowSteeringDigest !== '';
   if (!hasSteering || !hasSteeringDigest) {
-    throw policyStopped('the record carries an incomplete workflow steering decision');
+    throw policyStopped('record workflow steering decision is incomplete');
   }
   const bytes = Buffer.from(workflowSteering, 'utf8');
   const digest = `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
@@ -172,7 +172,7 @@ function recordFrom(served, at) {
   }
   if (bytes.length > STEERING_MAX || envelope === null || typeof envelope !== 'object' || Array.isArray(envelope)
     || !STEERING_DIGEST.test(workflowSteeringDigest) || digest !== workflowSteeringDigest) {
-    throw policyStopped('the record carries workflow steering bytes that do not match their digest');
+    throw policyStopped('workflow steering bytes do not match their digest');
   }
 
   let reviewAdmission;
@@ -218,7 +218,7 @@ const told = (answer) =>
   Promise.resolve()
     .then(() => answer.text())
     .then((said) => (typeof said === 'string' ? said : '').replace(/\s+/g, ' ').trim().slice(0, TOLD_MAX), () => '')
-    .then((said) => said || 'it said nothing');
+    .then((said) => said || 'empty response body');
 
 function baseOf(endpoint) {
   let url;
@@ -242,7 +242,7 @@ function because(thrown) {
   const coded = /** @type {{ code?: unknown }} */ (cause ?? {}).code;
   const said = (typeof coded === 'string' && coded) || cause?.message
     || (thrown instanceof Error ? thrown.message : '');
-  return said || 'it said nothing';
+  return said || 'no error message';
 }
 
 async function attempt({ url, audience, mint, secret, fetch, timeout, named = false }) {
@@ -250,10 +250,10 @@ async function attempt({ url, audience, mint, secret, fetch, timeout, named = fa
   try {
     token = await mint(audience);
   } catch (refused) {
-    return { retry: `the OIDC token could not be minted: ${because(refused)}`, asked: null };
+    return { retry: `OIDC token request failed: ${because(refused)}`, asked: null };
   }
   if (typeof token !== 'string' || token === '') {
-    return { retry: 'the OIDC token endpoint answered with no token', asked: null };
+    return { retry: 'OIDC token response has no token', asked: null };
   }
   secret(token);
 
@@ -288,7 +288,7 @@ async function attempt({ url, audience, mint, secret, fetch, timeout, named = fa
   try {
     return { served: await answer.json() };
   } catch (unparsed) {
-    return { retry: `the control plane answered with a body that did not parse: ${because(unparsed)}`, asked: null };
+    return { retry: `control plane response is not valid JSON: ${because(unparsed)}`, asked: null };
   }
 }
 
@@ -344,7 +344,7 @@ export async function readRecord({
   const base = baseOf(endpoint);
   if (base === '') throw stopped('the control plane endpoint is not a bare https URL');
   if (!env.ACTIONS_ID_TOKEN_REQUEST_URL || !env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) {
-    throw stopped('this job holds no id-token: write, so it cannot say which run it is');
+    throw stopped('job lacks the id-token: write permission, cannot identify the run');
   }
 
   const asked = { url: `${base}/v1/run`, audience, mint, secret, fetch, named };
@@ -352,16 +352,16 @@ export async function readRecord({
   const started = now();
   const tries = async (left) => {
     const elapsed = now() - started;
-    if (elapsed >= budget) throw stopped(`the ${Math.round(budget / 1000)}s allowed to read the record ran out`);
+    if (elapsed >= budget) throw stopped(`record read timed out after ${Math.round(budget / 1000)}s`);
     const outcome = await attempt({ ...asked, timeout: Math.max(1, Math.min(timeout, budget - elapsed)) });
     if ('none' in outcome) return NONE_HELD;
     if ('served' in outcome) return recordFrom(outcome.served, now());
     if (left.length === 0) {
-      throw stopped(`${outcome.retry}, on the last of ${delays.length + 1} attempts`);
+      throw stopped(`${outcome.retry}, after ${delays.length + 1} attempts`);
     }
     const wait = Math.min(Math.max(left[0], outcome.asked ?? 0), longest);
     if (now() - started + wait >= budget) {
-      throw stopped(`${outcome.retry}, and the ${Math.round(budget / 1000)}s allowed to read the record ran out`);
+      throw stopped(`${outcome.retry}, record read timed out after ${Math.round(budget / 1000)}s`);
     }
     note(outcome.retry, wait);
     await sleep(wait);
