@@ -103,14 +103,14 @@ export function commandsOf(file, secrets = []) {
 
 function listed(git, base, tree) {
   const diff = git(['diff-tree', '-r', '-z', '--no-renames', '--no-ext-diff', '--no-textconv', base, tree]);
-  if (!diff.ok) throw new Error('the change could not be listed against the commit the stage was bound to');
+  if (!diff.ok) throw new Error('listing the change against the bound commit failed');
   const parts = String(diff.stdout ?? '').split('\0');
   if (parts.at(-1) === '') parts.pop();
-  if (parts.length % 2 !== 0) throw new Error('git listed the change in a shape this runtime does not read');
+  if (parts.length % 2 !== 0) throw new Error('git change list has an unexpected format');
   const changed = [];
   for (let at = 0; at < parts.length; at += 2) {
     const line = LISTED.exec(parts[at]);
-    if (!line) throw new Error('git listed the change in a shape this runtime does not read');
+    if (!line) throw new Error('git change list has an unexpected format');
     changed.push({ path: parts[at + 1], mode: line[2], blob: line[4], status: line[5] });
   }
   return changed;
@@ -135,7 +135,7 @@ function heldSecret(contents, secrets) {
 }
 
 function mergeOf(git, base, mergeBase, maxFiles) {
-  if (mergeBase && !COMMIT.test(mergeBase)) throw new Error('the control plane named a merge base that is not a whole commit');
+  if (mergeBase && !COMMIT.test(mergeBase)) throw new Error('merge base from the control plane is not a full commit sha');
   const merging = git(['rev-parse', '--verify', '--quiet', 'MERGE_HEAD^{commit}']);
   const parent = merging.ok ? String(merging.stdout ?? '').trim() : '';
   if (parent !== mergeBase) {
@@ -146,22 +146,22 @@ function mergeOf(git, base, mergeBase, maxFiles) {
   const replayed = git(['merge-tree', '--write-tree', '--name-only', '-z', base, mergeBase]);
   const [tree, ...rest] = String(replayed.stdout ?? '').split('\0');
   if ((!replayed.ok && replayed.status !== 1) || !COMMIT.test(tree)) {
-    throw new Error('git could not replay the merge, so what the stage resolved cannot be told apart from what the merge carried');
+    throw new Error('replaying the merge in git failed');
   }
   const end = rest.indexOf('');
   const conflicted = [...new Set(end < 0 ? rest : rest.slice(0, end))].map((path) => checkedPath(path)).sort(byPathBytes);
   if (conflicted.length > maxFiles) {
-    throw new Error(`the merge conflicts in ${conflicted.length} files, and the control plane takes at most ${maxFiles}`);
+    throw new Error(`merge conflicts in ${conflicted.length} files, over the control plane limit of ${maxFiles}`);
   }
   return { parent, tree, conflicted };
 }
 
 function decidedIn(git, merge, tree, maxFiles) {
   const diff = git(['diff-tree', '-r', '-z', '--no-renames', '--name-only', merge.tree, tree]);
-  if (!diff.ok) throw new Error('git could not list what the stage decided in the merge');
+  if (!diff.ok) throw new Error('listing the stage merge resolution in git failed');
   const decided = [...new Set([...merge.conflicted, ...String(diff.stdout ?? '').split('\0').filter(Boolean)])];
   if (decided.length > maxFiles) {
-    throw new Error(`the stage decided ${decided.length} files in the merge, and the control plane takes at most ${maxFiles}`);
+    throw new Error(`stage resolved ${decided.length} files in the merge, over the control plane limit of ${maxFiles}`);
   }
   return decided.map((path) => checkedPath(path)).sort(byPathBytes);
 }
@@ -172,39 +172,39 @@ export function stepOutputsOf(text, maxFiles) {
   try {
     parsed = JSON.parse(text);
   } catch {
-    throw new Error('the steps after the model attested what they wrote in no readable form');
+    throw new Error('step outputs attested after the model are not readable');
   }
-  if (!Array.isArray(parsed) || parsed.length > maxFiles) throw new Error('the steps after the model attested what they wrote in no bounded list');
+  if (!Array.isArray(parsed) || parsed.length > maxFiles) throw new Error('step outputs attested after the model are not a list within the size limit');
   const outputs = parsed.map((one) => {
     const texts = one && typeof one === 'object' && Object.keys(one).length === 3
       && [one.step, one.path, one.sha256].every((value) => typeof value === 'string');
     if (!texts || !STEP_ID.test(one.step) || !STEP_PATH.test(one.path) || !SHA256.test(one.sha256)) {
-      throw new Error('a step after the model attested an output with no step, no path in the tree or no sha256');
+      throw new Error('an attested step output has no step, tree path or sha256');
     }
     return { step: one.step, path: one.path, sha256: one.sha256 };
   });
   outputs.sort((left, right) => byBytes(left, right) || byPathBytes(left.step, right.step));
   if (outputs.some((one, at) => at > 0 && one.path === outputs[at - 1].path && one.step === outputs[at - 1].step)) {
-    throw new Error('a step after the model attested one output twice');
+    throw new Error('a step output was attested twice');
   }
   return outputs;
 }
 
 export function captureChangeset({ git, base, mergeBase = '', index, stageAttempt, maxBytes, maxFiles, secrets = [], events = '', stepOutputs = [] }) {
-  if (!COMMIT.test(base)) throw new Error('the stage names no commit it was bound to, so its change cannot be captured');
+  if (!COMMIT.test(base)) throw new Error('stage has no bound commit, cannot capture its change');
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || !Number.isSafeInteger(maxFiles) || maxFiles < 1) {
-    throw new Error('the control plane named no bounds for the stage\'s change');
+    throw new Error('control plane sent no limits for the stage change');
   }
   const head = git(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
   if (!head.ok || String(head.stdout ?? '').trim() !== base) {
-    throw new Error('the checkout is no longer at the commit the stage was bound to');
+    throw new Error('checkout moved off the bound commit');
   }
   const merge = mergeOf(git, base, mergeBase, maxFiles);
   const written = stage.workTree(git, base, index);
   if (!written.ok) throw new Error(written.reason);
   const changed = listed(git, base, written.tree);
   if (changed.length > maxFiles) {
-    throw new Error(`the stage changed ${changed.length} files, and the control plane takes at most ${maxFiles}`);
+    throw new Error(`stage changed ${changed.length} files, over the control plane limit of ${maxFiles}`);
   }
   const decided = merge ? decidedIn(git, merge, written.tree, maxFiles) : [];
   const hidden = withEscaped(secrets);
@@ -218,17 +218,17 @@ export function captureChangeset({ git, base, mergeBase = '', index, stageAttemp
       size += path.length;
       continue;
     }
-    if (one.mode === SUBMODULE) throw new Error(`the stage changed the submodule at ${path}, and a change carries no submodule`);
+    if (one.mode === SUBMODULE) throw new Error(`stage changed the submodule at ${path}, which a change cannot carry`);
     if (!MODES.has(one.mode)) throw new Error(`the stage left ${path} with mode ${one.mode}, which a change cannot carry`);
     const read = git(['cat-file', 'blob', one.blob], { base64: true });
-    if (!read.ok) throw new Error(`the stage's change to ${path} could not be read`);
+    if (!read.ok) throw new Error(`reading the stage change to ${path} failed`);
     const encoded = String(read.stdout ?? '').trim();
     size += encoded.length + path.length;
-    if (size > maxBytes) throw new Error(`the stage's change is over the ${maxBytes} bytes the control plane takes`);
+    if (size > maxBytes) throw new Error(`stage change is over the control plane limit of ${maxBytes} bytes`);
     const contents = Buffer.from(encoded, 'base64');
     if (one.mode === '120000') checkedLink(path, contents);
     const secret = heldSecret(contents, hidden);
-    if (secret) throw new Error(`the stage's change to ${path} holds ${secret}, a secret this runner has, so nothing is sent`);
+    if (secret) throw new Error(`stage change to ${path} contains ${secret}, a runner secret, so nothing is sent`);
     additions.push({ path, mode: one.mode, contents: encoded });
   }
   additions.sort(byBytes);
@@ -239,17 +239,17 @@ export function captureChangeset({ git, base, mergeBase = '', index, stageAttemp
     ...(stepOutputs.length > 0 ? { stepOutputs } : {}),
   });
   if (Buffer.byteLength(body, 'utf8') > maxBytes) {
-    throw new Error(`the stage's change is over the ${maxBytes} bytes the control plane takes`);
+    throw new Error(`stage change is over the control plane limit of ${maxBytes} bytes`);
   }
   return { body, files: additions.length + deletions.length };
 }
 
 export async function uploadChangeset({ fetch, base, token, body, pause = held }) {
   const sent = await answeredRetrying(fetch, `${base}/run/changeset`, { token, body, timeout: TIMEOUT_MS }, pause);
-  if (sent.why) throw new Error(`the control plane did not take the stage's change: ${sent.why}`);
+  if (sent.why) throw new Error(`control plane did not accept the stage change: ${sent.why}`);
   const artifact = sent.answer?.artifact;
   if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact)) {
-    throw new Error('the control plane took the stage\'s change and named no artifact for it');
+    throw new Error('control plane accepted the stage change but returned no artifact');
   }
   return artifact;
 }

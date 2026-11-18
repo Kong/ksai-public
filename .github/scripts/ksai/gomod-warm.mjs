@@ -43,6 +43,7 @@ const PUBLIC_FETCH = Object.freeze({
   ...NO_AMBIENT_GIT,
 });
 
+/** @type {(message: string, detail?: { phase: string, modules: string[] }) => unknown} */
 const warn = (message) => process.stdout.write(`::warning::${message}\n`);
 
 const depth = (dir) => (dir === '.' ? 0 : dir.split('/').length);
@@ -105,11 +106,11 @@ export function detect(env = process.env, { list = trackedModules } = {}) {
   try {
     found = moduleDirs(list(workspace));
   } catch (error) {
-    warn(`the working tree could not be listed, so no Go module was looked for: ${error.message}`);
+    warn(`listing the working tree failed, skipping Go modules: ${error.message}`);
   }
   const dirs = found.filter((one) => !/[\r\n]/.test(one));
   if (dirs.length !== found.length) {
-    warn(`${found.length - dirs.length} Go module path holds a line break and is left out, since no step output can carry one`);
+    warn(`${found.length - dirs.length} Go module paths contain a line break and are skipped`);
   }
   if (dirs.length === 0) {
     writeOutputs(env.GITHUB_OUTPUT, { mod: '', list: '' });
@@ -202,18 +203,18 @@ export function main(
 
   const version = toolchain(workspace);
   if (version === '') {
-    say('no `go` is on the path after setting one up, so nothing warmed the module cache');
+    say('`go` not found after setup, module cache not warmed');
     return done();
   }
   let dirs = [];
   try {
     dirs = readFileSync(String(env.LIST ?? ''), 'utf8').split('\n').filter((one) => one !== '');
   } catch (error) {
-    say(`the Go module list could not be read, so nothing warmed the module cache: ${error.message}`);
+    say(`reading the Go module list failed, module cache not warmed: ${error.message}`);
     return done();
   }
   if (dirs.length === 0) {
-    say('the Go module list named no directory, so nothing warmed the module cache');
+    say('Go module list has no directory, module cache not warmed');
     return done();
   }
 
@@ -242,13 +243,13 @@ export function main(
   const untidied = unfinished(tidy);
   const ungraphed = unfinished(graph);
   if (untidied.length > 0) {
-    say(`go mod tidy did not finish for ${untidied.join(', ')}. Their builds have what they read, but a tidy inside the sandbox can fail on a module only tidy loads`);
+    say(`go mod tidy did not finish for ${untidied.join(', ')}. Running tidy in the sandbox can fail on modules only tidy loads.`, { phase: 'tidy', modules: untidied });
   }
   if (ungraphed.length > 0) {
-    say(`the module graph did not finish downloading for ${ungraphed.join(', ')}. Their builds have what they read, but a check reading every module, such as go list -m all, can fail inside the sandbox`);
+    say(`the module graph did not finish downloading for ${ungraphed.join(', ')}. A check that reads every module, such as go list -m all, can fail in the sandbox.`, { phase: 'graph', modules: ungraphed });
   }
   if (failed.length > 0) {
-    say(`the module cache is incomplete for ${failed.join(', ')}. The sandbox has no network, so a build reading a module that did not download here fails inside it`);
+    say(`the module cache is incomplete for ${failed.join(', ')}. The sandbox has no network, so a build that needs a missing module fails.`, { phase: 'download', modules: failed });
   } else {
     console.log(`warmed the module cache of ${version} for ${dirs.join(', ')}`);
   }

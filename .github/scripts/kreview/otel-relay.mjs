@@ -429,7 +429,7 @@ export async function startRelay({ env = process.env, fetchImpl = fetch, observe
     else server.listen(0, '127.0.0.1', listening);
   });
   server.on('error', (error) => {
-    say(annotation(`the telemetry relay stopped (${error?.message}), so later records are unavailable`, 'warning'));
+    say(annotation(`the telemetry relay stopped (${error?.message}), later records are unavailable`, 'warning'));
     server.close();
     server.closeAllConnections?.();
   });
@@ -438,7 +438,7 @@ export async function startRelay({ env = process.env, fetchImpl = fetch, observe
   const port = bound && typeof bound === 'object' ? bound.port : 0;
   if (!socket && !port) {
     server.close();
-    say('::warning::the telemetry relay took no port, so this run exports no trace and no log line');
+    say('::warning::the telemetry relay got no port. The run exports no trace or log.');
     return null;
   }
   const url = socket ? '' : `http://127.0.0.1:${port}`;
@@ -466,7 +466,7 @@ export async function startRelay({ env = process.env, fetchImpl = fetch, observe
     const lost = counts.dropped + counts.refused + flight.size;
     if (where && lost > 0) {
       say(annotation(
-        `${lost} of this run's telemetry exports did not reach ${where.endpoint}, which changes nothing about the review or what it reports spending`,
+        `${lost} of the telemetry exports did not reach ${where.endpoint}. The review and its reported spend are not affected.`,
         'warning',
       ));
     }

@@ -43,7 +43,7 @@ const ranOn = (variant) => (variant === '' || variant === undefined || variant =
 
 export function carriedSession(env, plan, binding, dir, now = new Date()) {
   const original = plan.resume?.original;
-  if (typeof original?.text !== 'string' || !original.text) throw new Error('the plan carries no original render to go on from');
+  if (typeof original?.text !== 'string' || !original.text) throw new Error('plan has no original render to continue from');
   const permit = verifyResumePermit(plan.resume.permit, resumeTrust(env.KSAI_CP_ENDPOINT, pinsOf(env)), {
     repository: env.GITHUB_REPOSITORY, runId: env.GITHUB_RUN_ID, attempt: env.GITHUB_RUN_ATTEMPT, job: binding.job, link: binding.link,
     model: plan.model.id, variant: plan.variant ?? '', toolsDigest: planToolsDigest(plan),
@@ -51,16 +51,16 @@ export function carriedSession(env, plan, binding, dir, now = new Date()) {
   }, now);
   const bytes = readFileSync(join(dir, RESUME_EXPORT));
   if (bytes.length !== permit.export.bytes || createHash('sha256').update(bytes).digest('hex') !== permit.export.sha256) {
-    throw new Error('the carried export is not the one the permit names');
+    throw new Error('carried export does not match the permit');
   }
   const held = JSON.parse(bytes.toString('utf8'));
-  if (held?.info?.id !== permit.modelSession) throw new Error('the carried export is of another OpenCode session');
+  if (held?.info?.id !== permit.modelSession) throw new Error('carried export is from a different OpenCode session');
   const ran = held.info.model ?? {};
-  if (ran.id !== plan.model.id || ranOn(ran.variant) !== ranOn(plan.variant)) throw new Error('the carried session ran another model');
+  if (ran.id !== plan.model.id || ranOn(ran.variant) !== ranOn(plan.variant)) throw new Error('carried session used a different model');
   const messages = Array.isArray(held.messages) ? held.messages : [];
   const answered = messages.findLast((one) => one?.type === 'assistant');
   if (messages.at(-1)?.type !== 'idle' || messages.at(-1)?.outcome !== 'succeeded' || answered?.finish !== 'stop') {
-    throw new Error('the carried session did not end on a finished answer');
+    throw new Error('carried session did not end with a final answer');
   }
   return { permit, exported: held };
 }
@@ -95,18 +95,18 @@ export function laidPlugin(entry, plan, { read = readFileSync, exists = existsSy
   const at = dirname(entry);
   const modules = plan.statics.filter((one) => String(one.destination ?? '').startsWith(GOVERNED_UNDER));
   if (!entry || !modules.some((one) => one.destination === `${GOVERNED_UNDER}${PLUGIN_ENTRY}`) || join(at, PLUGIN_ENTRY) !== entry) {
-    throw new Error('the plan carries no governed plugin for the path the OpenCode config loads it from');
+    throw new Error('plan has no governed plugin for the path in the OpenCode config');
   }
   for (const one of modules) {
     let held;
     try {
       held = read(join(at, one.destination.slice(GOVERNED_UNDER.length)), 'utf8');
     } catch {
-      throw new Error(`the host laid no ${one.destination}, so OpenCode would load a plugin the plan does not carry`);
+      throw new Error(`host wrote no ${one.destination}, OpenCode would load a plugin not in the plan`);
     }
-    if (held !== one.body) throw new Error(`the laid ${one.destination} is not the one the plan carries`);
+    if (held !== one.body) throw new Error(`written ${one.destination} does not match the plan`);
   }
-  if (!exists(join(dirname(at), GOVERNED_FILE))) throw new Error('the host laid no governed session for the plugin to read');
+  if (!exists(join(dirname(at), GOVERNED_FILE))) throw new Error('host wrote no governed session for the plugin');
 }
 
 export function writeDirective(dir, message) {
@@ -165,13 +165,13 @@ export const driverError = (error) => ({
   type: 'ksai.error', created: Date.now(), data: { error: { type: 'ksai.driver', message: [...String(error?.message ?? error)].slice(0, 500).join('') } },
 });
 
-export const feedEnded = (error) => driverError(`the OpenCode event stream ended before the session did${error ? `: ${error?.message ?? error}` : ''}`);
+export const feedEnded = (error) => driverError(`OpenCode event stream ended before the session finished${error ? `: ${error?.message ?? error}` : ''}`);
 
 export async function linked(env = process.env, {
   connect = createConnection, output = process.stdout, signals = process, openRelays = relays, connectModel = connected,
 } = {}) {
   const asks = String(env.KSAI_LINK_ASKS ?? '');
-  if (!isAbsolute(asks)) throw new Error(`the host named no absolute directory for the session asks (KSAI_LINK_ASKS is ${JSON.stringify(asks)}), so the session listens on no ask socket`);
+  if (!isAbsolute(asks)) throw new Error(`KSAI_LINK_ASKS is ${JSON.stringify(asks)}, not an absolute directory, so the session has no ask socket`);
   const socket = connect(String(env.KSAI_LINK_SOCKET ?? ''));
   await new Promise((resolve, reject) => {
     socket.once('connect', resolve);

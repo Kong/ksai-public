@@ -7,7 +7,7 @@ import { stageOf } from './workflow/stage.mjs';
 
 const required = (env, name) => {
   const value = String(env[name] ?? '');
-  if (!value) throw new Error(`${name.toLowerCase()}: the control-plane stage plan omits this value`);
+  if (!value) throw new Error(`${name.toLowerCase()} is missing from the stage plan`);
   return value;
 };
 
@@ -42,7 +42,7 @@ export function runRequest(plan, env = {}) {
 }
 
 export function main(env = process.env) {
-  if (!String(env.GITHUB_OUTPUT ?? '')) throw new Error('GITHUB_OUTPUT names no file, so the plan would reach no step');
+  if (!String(env.GITHUB_OUTPUT ?? '')) throw new Error('GITHUB_OUTPUT is not set');
   const plan = runPlan(env);
   const requestFile = join(String(env.RUNNER_TEMP ?? ''), 'ksai-run.request.json');
   writeFileSync(requestFile, JSON.stringify(runRequest(plan, env)), { mode: 0o600 });

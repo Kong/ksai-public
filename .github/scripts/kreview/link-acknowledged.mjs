@@ -21,7 +21,7 @@ export function acknowledging(runnerTemp, warn = (line) => console.log(line)) {
     try {
       appendFileSync(log, lines, { mode: 0o600 });
     } catch (error) {
-      if (!warned) warn(annotation(`the acknowledgement log could not be written: ${error?.message ?? error}`, 'warning'));
+      if (!warned) warn(annotation(`writing the acknowledgement log failed: ${error?.message ?? error}`, 'warning'));
       warned = true;
     }
   };

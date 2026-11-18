@@ -47,23 +47,21 @@ export function reduce(env, raw, read = readFileSync) {
   const kind = stream?.kind;
   const relayed = kind === 'gateway-unavailable' ? relayRefusal(events, stream.session_id) : null;
   if (relayed !== null) {
-    notes.push(annotation(`the runner's provider relay answered the last server error with its own reason: ${scrub(relayed, secrets)}`, 'warning'));
+    notes.push(annotation(`the runner's provider relay answered the last server error itself: ${scrub(relayed, secrets)}`, 'warning'));
   } else if (kind === 'gateway-unavailable') {
-    notes.push(
-      "::warning::the endpoint answered a server error before anything was sent, which is the gateway or what it proxies to rather than the model: no tokens were spent, and the reason is in the gateway's own logs",
-    );
+    notes.push('::warning::the provider request failed with a server error. Check the gateway logs for details.');
   }
   if (kind === 'empty-turn') {
-    notes.push('::warning::the last model turn spent output tokens and delivered no text and no tool call, which is the response lost between the model and opencode rather than the model finishing');
+    notes.push('::warning::the last model turn spent output tokens, but OpenCode received no text or tool call. The response was likely lost between the model and OpenCode.');
   }
-  if (result === null || result === '') notes.push(`::${level}::${counted(events.length, 'opencode event')} carried no text, so this stage returns no result`);
+  if (result === null || result === '') notes.push(`::${level}::${counted(events.length, 'opencode event')} carried no text. This stage returns no result.`);
   notes.push(`opencode: ${counted(events.length, 'event')}, ${counted(log[0].num_turns, 'step')}, ${counted(log[0].usage.output_tokens, 'output token')} -> ${env.OPENCODE_EXECUTION_FILE}`);
   return { log, notes };
 }
 
 export function main(env = process.env) {
   if (!env.OPENCODE_EXECUTION_FILE) {
-    console.log('::error::OPENCODE_EXECUTION_FILE names no path, so this run would report nothing it spent');
+    console.log('::error::Set OPENCODE_EXECUTION_FILE to the path for the execution log.');
     return 1;
   }
   let raw = '';

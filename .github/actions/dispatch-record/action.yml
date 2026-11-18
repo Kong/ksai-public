@@ -158,7 +158,7 @@ runs:
           }
           if (!answer.read) {
             if ('none' in answer) {
-              core.notice('ksai holds no record for this run, as after a re-run of a finished stage, so this attempt runs nothing');
+              core.notice('KSAI holds no record for this run. This can occur when you rerun a finished stage. This attempt runs nothing.');
             }
             return;
           }

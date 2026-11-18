@@ -58,20 +58,20 @@ export function guardOptions(env, workspace) {
 export function v2Config(env, { exists = existsSync, real = realpathSync } = {}) {
   const notes = [];
   const refuse = (error) => ({ error, notes });
-  if (!env.OPENCODE_CONFIG) return refuse('OPENCODE_CONFIG names no path, so the review would run on a config it discovered itself');
+  if (!env.OPENCODE_CONFIG) return refuse('OPENCODE_CONFIG is empty');
   try {
     validateV2Version(env.OPENCODE_VERSION);
   } catch (error) {
     return refuse(error.message);
   }
   const home = String(env.OPENCODE_HOME ?? '').trim();
-  if (!home) return refuse('OPENCODE_HOME names no path for the trusted provider policy');
+  if (!home) return refuse('OPENCODE_HOME is empty');
   const origin = originProblem(env.ANTHROPIC_BASE_URL);
   if (origin) {
-    return refuse(`anthropic_base_url ${origin} - the provider relay forwards every model call to it, and empty takes the review off Kong AI Gateway rather than falling back to Anthropic`);
+    return refuse(`anthropic_base_url ${origin}. The provider relay sends every model call to it.`);
   }
   const model = String(env.OPENCODE_MODEL ?? '').trim();
-  if (!model) return refuse('OPENCODE_MODEL names no model, and an OpenCode 2 run configures only the model it was dispatched with');
+  if (!model) return refuse('OPENCODE_MODEL is empty');
 
   const phase = String(env.OPENCODE_PHASE ?? '').trim();
   const linked = String(env.KSAI_LINK_DIR ?? '').trim();
@@ -91,7 +91,7 @@ export function v2Config(env, { exists = existsSync, real = realpathSync } = {})
   if (!stated) return refuse('the control plane supplied no allowed tool policy');
   const policy = { allowed: stated, disallowed: env.OPENCODE_DISALLOWED };
   for (const { name, key, granted } of mergedDenials(policy)) {
-    notes.push(annotation(`${name} is denied and ${granted.join(' and ')} granted, and OpenCode gates them all behind one ${key} permission - so the denial is dropped and ${name} is reachable here where the shared policy refuses it`, 'warning'));
+    notes.push(annotation(`${name} is denied and ${granted.join(' and ')} is granted. OpenCode uses one ${key} permission for both. It drops the denial and permits ${name}, which the shared policy denies.`, 'warning'));
   }
   const scopes = v2SandboxScopes(env, exists, real);
   const reachable = [...scopes.allow, ...scopes.deny];
@@ -126,15 +126,15 @@ export function v2Config(env, { exists = existsSync, real = realpathSync } = {})
     defaultAgent: '',
     compacting: false,
   });
-  notes.push(`this run is governed: it sends the model only the prompt ${governance.from} names, with its governed tools`);
+  notes.push(`governed run: the model gets only the prompt ${governance.from} names and the governed tools`);
   if (!Object.keys(config.providers.anthropic.headers).length) {
-    notes.push('::warning::this review carries no cost-attribution headers, so the gateway attributes its spend to nothing');
+    notes.push('::warning::the review has no cost-attribution headers. The gateway cannot attribute its spend.');
   }
-  for (const at of scopes.masked) notes.push(annotation(`the sandbox scope ${at} names a masked credential store, so it is refused rather than bound back`, 'warning'));
+  for (const at of scopes.masked) notes.push(annotation(`Sandbox scope ${at} is a masked credential store. It is refused.`, 'warning'));
   notes.push(
     `opencode ${env.OPENCODE_VERSION} runtime config written to ${env.OPENCODE_CONFIG}`,
     `model calls go through the provider relay to ${String(env.ANTHROPIC_BASE_URL).trim()}, authenticated by GitHub OIDC`,
-    `this run works under the tool list its caller named${skills.length ? `, with skills from ${skills.join(', ')}` : ' and no skills'}`,
+    `using the caller's tool list${skills.length ? `, with skills from ${skills.join(', ')}` : ' and no skills'}`,
   );
   return { config, policy: V2_PROVIDER_POLICY_CONFIG, policyFile: providerPolicyFile(home), notes };
 }

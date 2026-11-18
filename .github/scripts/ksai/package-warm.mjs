@@ -125,7 +125,7 @@ export function main(env = process.env, { run = execute, detect = packageOf } = 
   const workspace = env.WORKSPACE || process.cwd();
   const found = detect(workspace);
   if (!found) {
-    console.log('the tree holds no root package.json with a tracked lockfile and an ignored node_modules, so no Node dependencies were warmed');
+    console.log('no root package.json with a tracked lockfile and an ignored node_modules, Node dependencies not warmed');
     return 0;
   }
 

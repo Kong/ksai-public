@@ -64,7 +64,7 @@ function openBlock(open, event) {
 
 function nextIndex(event, after) {
   if (!Number.isSafeInteger(event.index) || event.index <= after) {
-    throw new Error(`a content block starts at index ${JSON.stringify(event.index)} after block ${after}, and content block indices do not increase`);
+    throw new Error(`content block starts at index ${JSON.stringify(event.index)} after block ${after}, indices must increase`);
   }
   return event.index;
 }

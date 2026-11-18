@@ -27,7 +27,7 @@ export function attributionOf(call = {}) {
 export function headerBlock(call = {}) {
   return Object.entries(attributionOf(call))
     .map(([name, value]) => {
-      if (/[\r\n]/.test(value)) throw new Error(`${name} carries a line break, which would start a header of its own`);
+      if (/[\r\n]/.test(value)) throw new Error(`${name} contains a line break`);
       return `${name}: ${value}\n`;
     })
     .join('');
@@ -48,7 +48,7 @@ export function callOf(env = {}) {
 
 export function main(env = process.env) {
   const output = String(env.GITHUB_OUTPUT ?? '');
-  if (!output) throw new Error('GITHUB_OUTPUT names no file, so the headers would reach no step');
+  if (!output) throw new Error('GITHUB_OUTPUT is not set');
   appendFileSync(output, `value<<${DELIMITER}\n${headerBlock(callOf(env))}${DELIMITER}\n`);
 }
 
@@ -56,7 +56,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   try {
     main();
   } catch (error) {
-    console.log(`::error::the cost-attribution headers were not written: ${error.message}`);
+    console.log(`::error::writing the cost-attribution headers failed: ${error.message}`);
     process.exitCode = 1;
   }
 }
