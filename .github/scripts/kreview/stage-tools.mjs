@@ -52,9 +52,9 @@ export async function installStageOpencode({ version, runnerTemp, run = runComma
   try {
     selected = (await install({ version, distDir: join(runnerTemp, 'ksai-opencode-dist'), toolDir: toolBin }))?.binary ?? '';
     if (selected) log(`Installed OpenCode ${version} from its verified registry package`);
-    else log('this runner is not Linux x64 or arm64 with glibc, so OpenCode is installed from npm');
+    else log('runner is not Linux x64 or arm64 with glibc, installing OpenCode from npm');
   } catch (error) {
-    log(annotation(`OpenCode could not be installed from its verified registry package (${error.message}), so it is installed from npm`, 'warning'));
+    log(annotation(`OpenCode registry install failed (${error.message}), installing from npm`, 'warning'));
   }
   if (!selected) {
     await run(['npm', 'install', '--global', '--allow-scripts=@opencode/cli', `@opencode/cli@${version}`], 300_000);
@@ -65,7 +65,7 @@ export async function installStageOpencode({ version, runnerTemp, run = runComma
   rmSync(link, { force: true });
   symlinkSync(selected, link);
   const actual = reportedVersion(await run([link, '--version']));
-  if (actual !== version) throw new Error(`opencode reports ${actual}, and this run pinned ${version} - two builds of one reviewer are not one reviewer`);
+  if (actual !== version) throw new Error(`opencode reports ${actual}, but this run pinned ${version}`);
   return Object.freeze({ version: actual, toolBin });
 }
 

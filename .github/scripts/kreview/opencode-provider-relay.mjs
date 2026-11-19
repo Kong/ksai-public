@@ -280,7 +280,7 @@ export async function relayProviderRequest(request, env, fetchImpl = fetch, toke
     }
     const pinned = { session: state?.session ?? '', model: state?.held?.governed.model };
     const unadmitted = talk ? (state?.admit?.(pinned.session, pinned.model) ?? '') : '';
-    if (unadmitted) throw new Error(`the provider call was not made, because its usage could not be counted: ${unadmitted}`);
+    if (unadmitted) throw new Error(`provider call not made, counting its usage failed: ${unadmitted}`);
     const completed = record?.(body, env, talk ? state?.held?.governed : null);
     const finishResponse = measure(state, 'upstream_response');
     const finishHeaders = measure(state, 'upstream_headers');

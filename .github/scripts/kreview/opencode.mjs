@@ -168,7 +168,7 @@ export function mergedDenials(policy) {
 
 export const PROVIDER_TIMEOUTS = Object.freeze({ headerTimeout: 120_000, chunkTimeout: 120_000 });
 
-export const UNCONTINUED = 'this rework found the conversation export its planning session left, which no control plane verified, so the governed run does not continue it and starts from the context the control plane renders. The plan and its export are kept as they are; a conversation the control plane verified is carried instead as a checkpoint it restores';
+export const UNCONTINUED = 'KSAI could not verify the conversation export from the planning session. The run starts from control plane context. The plan and export stay in place. Use a verified checkpoint to continue a conversation.';
 
 export const PROVIDER_POLICY = Object.freeze([
   Object.freeze({ effect: 'deny', action: 'provider.use', resource: '*' }),
@@ -179,7 +179,7 @@ export const PROVIDER_POLICY_GITIGNORE = 'node_modules\npackage.json\npackage-lo
 
 export function providerPolicyDirectory(home) {
   const root = String(home ?? '').trim();
-  if (!root) throw new Error('OPENCODE_HOME names no path for the trusted provider policy');
+  if (!root) throw new Error('OPENCODE_HOME is empty');
   return join(root, 'config', 'opencode');
 }
 

@@ -56,7 +56,7 @@ const ENGINE_STOP_MS = 45_000;
 const KILLED_EXIT = 137;
 const CANCELLING = Object.freeze(['SIGINT', 'SIGTERM']);
 const SOCKET_ROOT = '/tmp/ksai-';
-const CANCELLED = 'the job was cancelled, so the run stopped itself and the engine was told it was not lost';
+const CANCELLED = 'job was cancelled, the run stopped itself and told the engine it was not lost';
 const { MAX_CEILING_MINUTES, SALVAGE_MARGIN_MINUTES, ceilingMinutes, wholeNumber } = watchdogLimits;
 const SESSION_ENV = Object.freeze(['KSAI_SESSION_PLUGIN']);
 const PLUGIN_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -132,7 +132,7 @@ async function hostListener(listen = createServer) {
 
 export async function sandboxProblem(env, sandbox, run = spawned) {
   const version = await run('bwrap', [...sandbox, 'opencode', '--version'], { env });
-  if (version.status !== 0) return `opencode cannot start inside the sandbox on runner ${env.RUNNER_NAME ?? 'unknown'}, so no session was started: ${printed(version)}`;
+  if (version.status !== 0) return `opencode cannot start inside the sandbox on runner ${env.RUNNER_NAME ?? 'unknown'}, no session started: ${printed(version)}`;
   try {
     validateV2Version(reportedVersion(version.stdout));
   } catch (error) {
@@ -143,7 +143,7 @@ export async function sandboxProblem(env, sandbox, run = spawned) {
     try {
       isolated = toolIsolationProbe(env);
     } catch (error) {
-      return `tool isolation could not be described: ${error.message}`;
+      return `describing tool isolation failed: ${error.message}`;
     }
   }
   const host = await hostListener();
@@ -152,7 +152,7 @@ export async function sandboxProblem(env, sandbox, run = spawned) {
       run('bwrap', [...sandbox, process.execPath, driverScript(env), 'probe', String(host.port)], { env }),
       isolated ? run('bwrap', [...sandbox, isolated.command, ...isolated.args], { env }) : null,
     ]);
-    if (network.status !== 0) return `the OpenCode 2 sandbox is not the private network it must be: ${printed(network)}`;
+    if (network.status !== 0) return `OpenCode 2 sandbox is not a private network: ${printed(network)}`;
     return nested === null || nested.status === 0 ? '' : `write-phase tools cannot enter their credential-free network namespace: ${printed(nested)}`;
   } finally {
     await host.close();
@@ -175,7 +175,7 @@ function deadlineOf(env, now) {
     if (left <= 0) throw new Error('the bounded review has no model time before its stop and cleanup reserve');
     const halt = Number(env.KSAI_CHANNEL_KILL_AT) || 0;
     const bounded = halt > 0 ? Math.min(left, Math.max(0, halt - now)) : left;
-    if (bounded <= 0) throw new Error('the bounded review was stopped before this session could start');
+    if (bounded <= 0) throw new Error('bounded review stopped before this session could start');
     return bounded;
   }
   const killAt = Number(env.KSAI_CHANNEL_KILL_AT) || 0;
@@ -183,7 +183,7 @@ function deadlineOf(env, now) {
   const given = Number(env.KSAI_DEADLINE_MS) || 0;
   if (given > 0) return given;
   const ceiling = ceilingOf(env);
-  if (ceiling === null) throw new Error(`job_timeout_minutes ${String(env.JOB_TIMEOUT_MINUTES ?? '').trim()} names no ceiling this job can run under`);
+  if (ceiling === null) throw new Error(`job_timeout_minutes ${String(env.JOB_TIMEOUT_MINUTES ?? '').trim()} is not a ceiling this job can run under`);
   const started = Number(env.KSAI_JOB_STARTED_AT_MS) || now;
   return (ceiling - SALVAGE_MARGIN_MINUTES) * 60_000 - ENGINE_STOP_MS - Math.max(0, now - started);
 }
@@ -194,7 +194,7 @@ function breakersOf(env) {
   const repeats = wholeNumber(String(env.MAX_REPEATED_CALLS ?? '').trim() || '0');
   if (repeats === null) throw new Error(`max_repeated_tool_calls must be a non-negative integer, got '${env.MAX_REPEATED_CALLS}'`);
   if (repeats === 1) {
-    throw new Error('max_repeated_tool_calls of 1 would stop every run at its first tool call, since one call is already a run of one. Use 0 to turn the check off, or 2 or more');
+    throw new Error('max_repeated_tool_calls of 1 would stop every run at its first tool call. Use 0 to turn the check off, or 2 or more');
   }
   return { failures, repeats };
 }
@@ -232,12 +232,12 @@ export function factsAnswer(asked, known, { warn = (said) => console.log(said) }
   const missing = [];
   for (const name of asked) {
     try {
-      if (!Object.hasOwn(known, name)) throw new Error('this host holds no such fact');
+      if (!Object.hasOwn(known, name)) throw new Error('this host has no such fact');
       const value = known[name]();
-      if (value === null || value === undefined) throw new Error('this host holds no value for the fact');
+      if (value === null || value === undefined) throw new Error('this host has no value for the fact');
       facts.push({ name, value });
     } catch (error) {
-      warn(annotation(`the ${name} fact could not be given: ${error?.message ?? error}`, 'warning'));
+      warn(annotation(`fact ${name} could not be given: ${error?.message ?? error}`, 'warning'));
       missing.push(name);
     }
   }
@@ -248,13 +248,13 @@ const COMMIT = /^[0-9a-f]{40}$/;
 
 export function checkoutFact(env, run = spawnSync) {
   const at = String(env.GITHUB_WORKSPACE ?? '').trim();
-  if (!at) throw new Error('a linked run names no workspace, so it cannot say which commit it works at');
+  if (!at) throw new Error('linked run names no workspace, cannot tell which commit it works at');
   const said = run('git', ['-C', at, 'rev-parse', '--verify', 'HEAD^{commit}'], { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
   const head = String(said.stdout ?? '').trim();
-  if (said.status !== 0 || !COMMIT.test(head)) throw new Error(`the workspace checkout has no commit git can name, so this run cannot say which commit it works at (git exited ${said.status ?? said.signal})`);
+  if (said.status !== 0 || !COMMIT.test(head)) throw new Error(`workspace checkout has no commit git can name (git exited ${said.status ?? said.signal})`);
   const started = String(env.COMMIT_ID ?? '').trim();
-  if (started !== '' && !COMMIT.test(started)) throw new Error('this run was started for a commit that is not a full lowercase commit id, so its checkout cannot be checked against it');
-  if (started !== '' && started !== head) throw new Error(`the workspace checkout is at ${head}, and this run was started for ${started}, so it does not run on another commit than it names`);
+  if (started !== '' && !COMMIT.test(started)) throw new Error('run was started for a commit id that is not a full lowercase commit id');
+  if (started !== '' && started !== head) throw new Error(`workspace checkout is at ${head}, run was started for ${started}`);
   return JSON.stringify({ head_sha: head });
 }
 
@@ -276,7 +276,7 @@ export function freshObservations(env, observed, warn = (line) => console.log(li
       status: one.status, request_bytes: one.request_bytes, ...(one.continuation_digest ? { continuation_digest: one.continuation_digest } : {}),
     };
     if (body.length > OBSERVED_MOST) {
-      warn(annotation(`provider observation ${one.id} is ${body.length} bytes, past the ${OBSERVED_MOST} the control plane takes, so the run cannot succeed`, 'warning'));
+      warn(annotation(`provider observation ${one.id} is ${body.length} bytes, over the ${OBSERVED_MOST} the control plane accepts, the run cannot succeed`, 'warning'));
       said.push({ ...record, body: '', body_bytes: body.length, withheld: true });
       continue;
     }
@@ -389,7 +389,7 @@ export function capableRunner(runner) {
 
 export function renderFact(env) {
   const at = String(env.REQUEST_FILE ?? '').trim();
-  if (!at) throw new Error('a linked run was started with no render request');
+  if (!at) throw new Error('linked run started with no render request');
   return rendering(readFileSync(at, 'utf8'));
 }
 
@@ -419,7 +419,7 @@ export const skillsOf = (workspace, plugin) => join(workspace, PLUGINS_UNDER, 'p
 
 function unlinkedTo(workspace, at) {
   for (let dir = dirname(at); dir.startsWith(join(workspace, PLUGINS_UNDER)); dir = dirname(dir)) {
-    if (existsSync(dir) && lstatSync(dir).isSymbolicLink()) throw new Error(`the plan's plugin files would be laid through the link at ${dir}`);
+    if (existsSync(dir) && lstatSync(dir).isSymbolicLink()) throw new Error(`plan plugin files would be laid through the link at ${dir}`);
   }
 }
 
@@ -432,10 +432,10 @@ function layPlugin(workspace, plan, plugin) {
     const entry = locked.get(one.id);
     const governs = PLUGIN_NAME.test(plugin) && one.destination.startsWith(`plugins/${plugin}/`) && !one.destination.split('/').includes('..');
     if (!governs || !entry || entry.dynamic || entry.body_digest !== digestOf(one.body) || !(entry.destinations ?? []).includes(one.destination)) {
-      throw new Error(`the plan lays ${one.destination} down, which prompt release ${version} does not record for the ${plugin || 'no'} plugin`);
+      throw new Error(`plan lays ${one.destination}, which prompt release ${version} does not record for the ${plugin || 'no'} plugin`);
     }
   }
-  if (!workspace) throw new Error(`the plan lays the ${plugin} plugin down, and the run names no workspace to lay it in`);
+  if (!workspace) throw new Error(`plan lays the ${plugin} plugin and the run names no workspace to lay it in`);
   for (const one of files) {
     const at = join(workspace, PLUGINS_UNDER, one.destination);
     unlinkedTo(workspace, at);
@@ -536,8 +536,8 @@ export function refusedResumeIn(dir) {
 
 export function carriedPlan(plan, { resumes, restored, endpoint, pinned, env, job, link }) {
   if (!plan.resume && !resumes) return null;
-  if (!plan.resume) throw new ResumeRefused('the engine started this session to resume a checkpoint and sent a plan that carries no permit');
-  if (!resumes) throw new ResumeRefused('the plan carries a permit to resume, and the engine started this session to resume nothing');
+  if (!plan.resume) throw new ResumeRefused('engine started this session to resume a checkpoint but the plan has no permit');
+  if (!resumes) throw new ResumeRefused('plan has a permit to resume but the engine started this session to resume nothing');
   let verified;
   try {
     verified = verifyResumePermit(plan.resume.permit, resumeTrust(endpoint, pinned), {
@@ -548,7 +548,7 @@ export function carriedPlan(plan, { resumes, restored, endpoint, pinned, env, jo
   } catch (error) {
     throw new ResumeRefused(error.message);
   }
-  if (verified.checkpoint !== resumes) throw new ResumeRefused('the permit names another checkpoint than the one this session resumes');
+  if (verified.checkpoint !== resumes) throw new ResumeRefused('permit names a different checkpoint than the one this session resumes');
   let bytes;
   try {
     bytes = readFileSync(restored);
@@ -556,7 +556,7 @@ export function carriedPlan(plan, { resumes, restored, endpoint, pinned, env, jo
     throw new ResumeRefused(`the restored export could not be read: ${error.code ?? error.message}`);
   }
   if (bytes.length !== verified.export.bytes || createHash('sha256').update(bytes).digest('hex') !== verified.export.sha256) {
-    throw new ResumeRefused('the restored export is not the one the permit names');
+    throw new ResumeRefused('restored export does not match the permit');
   }
   return verified;
 }
@@ -732,7 +732,7 @@ async function linkHost(env, root, { launch, mintFor, startProvider, startTeleme
   }
   const { failure: unsafeEndpoint } = controlPlane.controlPlaneBase(endpoint);
   if (unsafeEndpoint) {
-    console.log(annotation(`${unsafeEndpoint}, so the link would carry this job's token in the clear`));
+    console.log(annotation(`${unsafeEndpoint}, the link would send this job's token in clear text`));
     return 1;
   }
   let job;
@@ -753,7 +753,7 @@ async function linkHost(env, root, { launch, mintFor, startProvider, startTeleme
   try {
     usage = usageCollector({ path: usageFileOf(runnerTemp, link), scope: { link, job, flow: run.flow }, send: (kind, id, body) => client.send(kind, id, body) });
   } catch (error) {
-    console.log(annotation(`this run's usage counter could not be opened, so it does not link: ${error?.message ?? error}`));
+    console.log(annotation(`usage counter could not be opened, run not linked: ${error?.message ?? error}`));
     return 1;
   }
   let checkout;
@@ -767,7 +767,7 @@ async function linkHost(env, root, { launch, mintFor, startProvider, startTeleme
   const checkpointBase = checkpointBaseOf(env, startedAt);
   writeFileSync(events, '');
   writeOutputs(env.GITHUB_OUTPUT, { execution_file: execution });
-  if (String(env.OPENCODE_RESUME_SESSION ?? '').trim()) console.log(`::warning::${UNCONTINUED}.`);
+  if (String(env.OPENCODE_RESUME_SESSION ?? '').trim()) console.log(`::warning::${UNCONTINUED}`);
 
   const scratch = mkdtempSync(join(runnerTemp, 'ksai-link-'));
   chmodSync(scratch, 0o700);
@@ -788,7 +788,7 @@ async function linkHost(env, root, { launch, mintFor, startProvider, startTeleme
       },
     });
   } catch (error) {
-    console.log(annotation(`runtime telemetry could not start (${error?.message}), so span timings are unavailable`, 'warning'));
+    console.log(annotation(`runtime telemetry could not start (${error?.message}), span timings unavailable`, 'warning'));
   }
   try {
     provider = await startProvider({
@@ -912,7 +912,7 @@ async function linkHost(env, root, { launch, mintFor, startProvider, startTeleme
       }
       if (live) reportKept(live, true);
     },
-    onLapse: () => resolveDone({ conclusion: 'failure', outputs: [{ name: 'error', value: 'the link to the engine lapsed, so the run stopped itself' }], reason: 'lease' }),
+    onLapse: () => resolveDone({ conclusion: 'failure', outputs: [{ name: 'error', value: 'link to the engine lapsed, run stopped itself' }], reason: 'lease' }),
     onEnded: (error) => resolveDone({ conclusion: 'failure', outputs: [{ name: 'error', value: error.message }], reason: 'failed' }),
     onPlugin: (session, frame, message) => {
       const held = sessions.get(session);
@@ -943,10 +943,10 @@ async function linkHost(env, root, { launch, mintFor, startProvider, startTeleme
           held.continuation = continuedBy(plan, permit);
         } catch (error) {
           if (error instanceof ResumeRefused) {
-            console.log(annotation(`session ${session} will not go on in its carried conversation, so the control plane starts it afresh: ${error.message}`, 'warning'));
+            console.log(annotation(`session ${session} cannot continue its carried conversation, control plane starts it afresh: ${error.message}`, 'warning'));
             held.resumeError = resumeError(error);
           } else {
-            console.log(annotation(`session ${session} was handed a plan this host will not lay down: ${error.message}`));
+            console.log(annotation(`session ${session} got a plan this host will not lay down: ${error.message}`));
             deliveryReport(governedDir)('refused', error.message);
           }
           held.killed = true;
@@ -962,7 +962,7 @@ async function linkHost(env, root, { launch, mintFor, startProvider, startTeleme
     },
     onMessage: (message) => {
       handle(message).catch((error) => {
-        console.log(annotation(`${message.kind} could not be handled: ${error?.message ?? error}`, 'warning'));
+        console.log(annotation(`${message.kind} message failed: ${error?.message ?? error}`, 'warning'));
         if (message.kind === 'task') client.send('task.result', message.id, { ok: false, outputs: [], error: clipped(error?.message ?? error, 4000) });
       });
     },
@@ -976,12 +976,12 @@ async function linkHost(env, root, { launch, mintFor, startProvider, startTeleme
     try {
       for (const receipt of freshDeliveries(governedDir, delivered, live)) client.send('receipt', undefined, receipt);
     } catch (error) {
-      if (!live) say(annotation(`the prompts session ${session} was delivered could not be read: ${error?.message ?? error}`, 'warning'));
+      if (!live) say(annotation(`reading the prompts delivered to session ${session} failed: ${error?.message ?? error}`, 'warning'));
     }
     try {
       for (const seen of freshObservations(env, observed, say, live)) client.send('observation', undefined, seen);
     } catch (error) {
-      if (!live) say(annotation(`what session ${session} sent the provider could not be read: ${error?.message ?? error}`, 'warning'));
+      if (!live) say(annotation(`reading what session ${session} sent the provider failed: ${error?.message ?? error}`, 'warning'));
     }
   };
   const reportRecords = (session) => {
@@ -1004,9 +1004,9 @@ async function linkHost(env, root, { launch, mintFor, startProvider, startTeleme
     try {
       const { left, unserved } = await transcriptSent({ endpoint, fetch, token: await mint('ksai-cp'), link: client.link, job, flow: run.flow, session: model, lines });
       if (unserved) console.log(annotation(`the control plane keeps no transcript of session ${session}`, 'notice'));
-      if (left) console.log(annotation(`session ${session} said ${left} more lines than a transcript keeps, so only its last ones were kept`, 'notice'));
+      if (left) console.log(annotation(`session ${session} sent ${left} more lines than a transcript keeps, only the last lines were kept`, 'notice'));
     } catch (error) {
-      console.log(annotation(`the transcript of session ${session} was not kept: ${error?.message ?? error}`, 'warning'));
+      console.log(annotation(`transcript of session ${session} not kept: ${error?.message ?? error}`, 'warning'));
     }
   };
 
@@ -1051,7 +1051,7 @@ async function linkHost(env, root, { launch, mintFor, startProvider, startTeleme
         copyFileSync(join(governedDir, 'link', RESTORED_EXPORT), join(dir, RESUME_EXPORT));
         chmodSync(join(dir, RESUME_EXPORT), 0o600);
       } catch (error) {
-        throw new ResumeRefused(`the restored export could not be bound into the session: ${error.code ?? error.message}`);
+        throw new ResumeRefused(`binding the restored export into the session failed: ${error.code ?? error.message}`);
       }
     }
     const config = join(dir, 'opencode.json');
@@ -1077,7 +1077,7 @@ async function linkHost(env, root, { launch, mintFor, startProvider, startTeleme
       KSAI_OTEL_RELAY: '',
     });
     policyTimeLeft(policy, Date.now(), ENGINE_STOP_MS);
-    if (writeConfig(sessionEnv) !== 0) throw new Error(`the OpenCode config for session ${session} could not be written`);
+    if (writeConfig(sessionEnv) !== 0) throw new Error(`writing the OpenCode config for session ${session} failed`);
     configuredMcp = mcpServerCount(JSON.parse(readFileSync(config, 'utf8')));
     const sandbox = sandboxArgs(sessionEnv, undefined, undefined, undefined, sockets);
     const isolation = isolatedToolPhase(phase);
@@ -1133,7 +1133,7 @@ async function linkHost(env, root, { launch, mintFor, startProvider, startTeleme
       if (replayed) appendFileSync(events, `${JSON.stringify({ type: 'ksai.error', created: Date.now(), data: { error: { type: 'ksai.resume', message: refused } } })}\n`);
       const unaccounted = usage.ending().error;
       if (unaccounted) {
-        console.log(annotation(`session ${session} ended with usage the control plane cannot take: ${unaccounted}`));
+        console.log(annotation(`session ${session} ended with usage the control plane cannot accept: ${unaccounted}`));
         appendFileSync(events, `${JSON.stringify({ type: 'ksai.error', created: Date.now(), data: { error: { type: 'ksai.usage', message: clipped(unaccounted, 500) } } })}\n`);
       }
       const ending = sessionEnd({ exit, killed, refused, unaccounted });
@@ -1190,7 +1190,7 @@ async function linkHost(env, root, { launch, mintFor, startProvider, startTeleme
       const session = arg('session');
       const exported = readFileSync(join(linkDirOf(governedDir, session), EXPORT_FILE));
       const { exit, said } = await childSaid(checkpointScript(env), { CHECKPOINT_MODE: 'snapshot', CHECKPOINT_HEAD: startedAt }, 'checkpoint.json');
-      if (exit !== 0 || !said || said.error) throw new Error(`the work could not be read: ${said?.error ?? `the checkpoint task exited ${exit}`}`);
+      if (exit !== 0 || !said || said.error) throw new Error(`reading the work failed: ${said?.error ?? `the checkpoint task exited ${exit}`}`);
       const upload = checkpointUpload({
         exported, patch: Buffer.from(said.patch, 'base64'), head: said.head, base: checkpointBase, parent: arg('parent'),
         promptVersion: arg('prompt_version'), link: client.link, job, flow: run.flow, secrets: collectSecrets(env),
@@ -1210,7 +1210,7 @@ async function linkHost(env, root, { launch, mintFor, startProvider, startTeleme
           writeFileSync(patchFile, patch, { mode: 0o600 });
           const { exit, said } = await childSaid(checkpointScript(env), { CHECKPOINT_MODE: 'apply', CHECKPOINT_PATCH: patchFile, CHECKPOINT_HEAD: head }, 'restore.json');
           if (exit === 0 && said?.unapplied) throw new Unapplied(said.error);
-          if (exit !== 0 || !said || said.error) throw new Error(`the checkpoint could not be restored: ${said?.error ?? `the restore task exited ${exit}`}`);
+          if (exit !== 0 || !said || said.error) throw new Error(`restoring the checkpoint failed: ${said?.error ?? `the restore task exited ${exit}`}`);
         },
         keep: (exported) => {
           const at = join(governedDir, 'link', RESTORED_EXPORT);
@@ -1230,7 +1230,7 @@ async function linkHost(env, root, { launch, mintFor, startProvider, startTeleme
     if (kind === 'task' && body.name === 'preserve') {
       const { exit, said: kept } = await childSaid(preserveScript(env), { PRESERVE_STOPPED: arg('stopped'), PRESERVE_HARD: arg('hard'), PRESERVE_KILLED: arg('killed') }, 'preserve.json', 'PRESERVE_OUT');
       if (exit !== 0 || !kept) {
-        client.send('task.result', id, { ok: false, outputs: [], error: `the stopped run's work could not be kept: the preserve task exited ${exit}` });
+        client.send('task.result', id, { ok: false, outputs: [], error: `keeping the stopped run's work failed, the preserve task exited ${exit}` });
         return;
       }
       client.send('task.result', id, {
@@ -1239,7 +1239,7 @@ async function linkHost(env, root, { launch, mintFor, startProvider, startTeleme
       return;
     }
     if (kind === 'task') {
-      client.send('task.result', id, { ok: false, outputs: [], error: `this host runs no ${body.name} task` });
+      client.send('task.result', id, { ok: false, outputs: [], error: `this host has no ${body.name} task` });
       return;
     }
     if (kind === 'kill') {

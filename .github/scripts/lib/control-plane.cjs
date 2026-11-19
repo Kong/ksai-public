@@ -260,7 +260,7 @@ async function reportKept(call, url, options, wait = held) {
 function postTo(call, url, { token, body, timeout, signal = AbortSignal.timeout(timeout), headers = {} }) {
   return call(url, {
     method: 'POST',
-    headers: { ...headers, authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...headers, authorization: `Bearer ${token}` },
     body,
     signal,
   });

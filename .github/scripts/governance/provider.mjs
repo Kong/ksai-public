@@ -32,7 +32,7 @@ function governedSettings(request) {
   if (request.output_config !== undefined) {
     const output = record(request.output_config, 'the output config');
     if (!onlyKeys(output, ['effort']) || (output.effort !== undefined && !EFFORTS.has(output.effort))) {
-      throw new Error('the output config carries something nothing governs');
+      throw new Error('output config has an unsupported field or value');
     }
   }
   if (request.thinking !== undefined) {
@@ -44,7 +44,7 @@ function governedSettings(request) {
       (thinking.display !== undefined && !THINKING_DISPLAYS.has(thinking.display)) ||
       (budget !== undefined && !Number.isSafeInteger(budget))
     ) {
-      throw new Error('the thinking config carries something nothing governs');
+      throw new Error('thinking config has an unsupported field or value');
     }
   }
 }
@@ -67,7 +67,7 @@ function governedTools(tools, governed) {
   const seen = new Set();
   return tools.map((entry) => {
     const tool = record(entry, 'a requested tool');
-    if (Object.keys(tool).some((key) => !TOOL_KEYS.has(key))) throw new Error(`the ${String(tool.name)} tool carries fields nothing governs`);
+    if (Object.keys(tool).some((key) => !TOOL_KEYS.has(key))) throw new Error(`${String(tool.name)} tool has unsupported fields`);
     const known = governed.get(String(tool.name));
     if (!known) throw new Error(`the ${String(tool.name)} tool is not governed`);
     if (seen.has(known.name)) throw new Error(`the ${known.name} tool is offered twice`);
@@ -83,18 +83,18 @@ export function governRequest(body, governed, talk, parsed = null) {
   if (Buffer.byteLength(body) > MAX_RESPONSE_BYTES) throw new Error('the provider request is oversized');
   const request = parsed ?? record(JSON.parse(body), 'the provider request');
   const unknown = Object.keys(request).filter((key) => !REQUEST_KEYS.has(key));
-  if (unknown.length) throw new Error(`the provider request carries ${unknown.join(', ')}, which nothing governs`);
+  if (unknown.length) throw new Error(`provider request has unsupported field ${unknown.join(', ')}`);
   if (request.model !== governed.model) throw new Errand(`the request asks ${String(request.model)}, and the render was for ${governed.model}`);
-  if (request.stream !== true) throw new Error('the provider request does not stream, so its answer cannot be followed');
-  if (!emptySystem(request.system)) throw new Error('the provider request carries a system prompt nothing governs');
+  if (request.stream !== true) throw new Error('provider request does not stream, cannot follow its answer');
+  if (!emptySystem(request.system)) throw new Error('provider request has an unsupported system prompt');
   if (request.stop_sequences !== undefined && (!Array.isArray(request.stop_sequences) || request.stop_sequences.length)) {
-    throw new Error('the provider request carries stop sequences nothing governs');
+    throw new Error('provider request has unsupported stop sequences');
   }
   governedSettings(request);
   if (request.tool_choice !== undefined) {
     const choice = record(request.tool_choice, 'the tool choice');
     if (Object.keys(choice).some((key) => key !== 'type') || !TOOL_CHOICES.has(choice.type)) {
-      throw new Error('the tool choice names something nothing governs');
+      throw new Error('tool choice is not governed');
     }
   }
   if (!Array.isArray(request.messages) || !request.messages.length || !governedPrompt(request.messages[0], governed.opens ?? governed.prompt)) {

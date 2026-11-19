@@ -88,20 +88,20 @@ export function main(env = process.env, { run = fenced, exists = null, makeDir =
   const workspace = String(env.WORKSPACE ?? '').trim();
   const temp = String(env.RUNNER_TEMP ?? '').trim();
   if (!isAbsolute(workspace) || !isAbsolute(temp) || !env.GITHUB_ENV) {
-    console.log('no workspace, runner temp or job environment was named, so no pinned tools were installed');
+    console.log('workspace, runner temp or job environment is not set, no pinned tools installed');
     return 0;
   }
   const inTree = exists ?? treeFile(workspace);
   const configs = pinnedConfigs(workspace, inTree);
   const [config] = configs;
   if (!config) {
-    console.log('the tree pins no tools, so the model gets what the runner carries');
+    console.log('tree pins no tools, using the runner tools');
     return 0;
   }
 
   const mise = findMise(env.PATH);
   if (!mise) {
-    console.log('::warning::no mise is on the path, so the model gets what the runner carries');
+    console.log('::warning::mise is not on the path. The model uses the runner tools.');
     return 0;
   }
   const data = join(temp, 'ksai-mise', 'data');
@@ -113,18 +113,18 @@ export function main(env = process.env, { run = fenced, exists = null, makeDir =
   try {
     run([...args, 'mise', 'install'], INSTALL_TIMEOUT_MS);
   } catch (error) {
-    console.log(`::warning::not every tool ${config} pins could be installed, so the model gets the ones that were: ${error.message}`);
+    console.log(`::warning::mise install failed for ${config} (${error.message}).`);
   }
   let listed;
   try {
     listed = run([...args, 'mise', 'bin-paths'], LIST_TIMEOUT_MS);
   } catch (error) {
-    console.log(`::warning::mise could not list what it installed, so the model gets what the runner carries: ${error.message}`);
+    console.log(`::warning::mise could not list the installed tools (${error.message}). The model uses the runner tools.`);
     return 0;
   }
   const path = toolPath(listed, data);
   if (path === '') {
-    console.log('::warning::mise named no tool directory, or one outside the one it installed into, so none is handed to the model');
+    console.log('::warning::mise reported no usable tool directory. The model uses the runner tools.');
     return 0;
   }
   const pinnedGo = path.split(':').find((at) => PINNED_GO.test(at));

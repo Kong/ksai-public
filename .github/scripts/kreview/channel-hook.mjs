@@ -194,7 +194,7 @@ export function main(argv = process.argv.slice(2), read = () => readFileSync(0, 
   const event = String(input?.hook_event_name ?? '');
   if (event === '') return '';
   if (!usableNonce(nonce)) {
-    note(stateDir, 'no note was read: this run drew no usable token, so nothing may be published under one');
+    note(stateDir, 'no note read, this run has no usable token');
     return '';
   }
   openRunDir(stateDir);

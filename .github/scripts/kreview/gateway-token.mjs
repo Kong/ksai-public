@@ -19,7 +19,7 @@ export function originProblem(said) {
   const trimmed = String(said ?? '').trim().replace(/\/+$/, '');
   if (!trimmed.startsWith('https://')) return `must start with https://, got: ${trimmed || '(empty)'}`;
   if (/\/v1$/i.test(trimmed)) {
-    return `names an endpoint rather than an origin - the version segment is appended for you, so this would be called at ${trimmed}/v1. Drop the /v1, got: ${trimmed}`;
+    return `must use an origin without /v1. The runtime adds /v1 and would call ${trimmed}/v1. Remove /v1. Got: ${trimmed}`;
   }
   return null;
 }
@@ -43,7 +43,7 @@ export function identityAudience(env) {
  */
 export async function requestIdentity({ env, fetchImpl = fetch, mask = () => {}, pause = controlPlane.pausing }) {
   if (!env.ACTIONS_ID_TOKEN_REQUEST_URL || !env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) {
-    throw new Error('no OIDC endpoint on this job, so it is missing permissions: id-token: write');
+    throw new Error('no OIDC endpoint on this job, add the permission id-token: write');
   }
   let value;
   try {
@@ -94,7 +94,7 @@ export async function mint({ env, fetchImpl = fetch, mask = () => {}, pause = co
     `ksai: holding a gateway identity token for ${audience} jti=${claims?.jti ?? 'none'} exp=${claims?.exp ?? 'none'} (${left === null ? '?' : `${left}s`} left)`,
   );
   if (left !== null && left <= 0) {
-    throw new Error(`the runner answered an identity token that expired ${-left}s ago, which the gateway will not accept`);
+    throw new Error(`identity token from the runner expired ${-left}s ago, the gateway rejects it`);
   }
   return { accessToken: assertion, expiresIn: left ?? OIDC_ASSUMED_SECONDS, requestId: claims?.jti ?? 'none' };
 }

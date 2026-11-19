@@ -199,7 +199,7 @@ function targetOf(env) {
   const issue = Number(String(env.STAGE_ISSUE ?? ''));
   const work = String(env.STAGE_WORK_REF ?? '');
   const targets = Number(Number.isSafeInteger(pull) && pull > 0) + Number(Number.isSafeInteger(issue) && issue > 0) + Number(work !== '');
-  if (targets !== 1) throw new SteeringRefused('the write task does not have one control-plane subject');
+  if (targets !== 1) throw new SteeringRefused('write task does not have exactly one control-plane subject');
   return {
     pull_request: Number.isSafeInteger(pull) && pull > 0 ? pull : 0,
     issue_number: Number.isSafeInteger(issue) && issue > 0 ? issue : 0,
@@ -448,7 +448,7 @@ export async function resolveSteering({
 
 export async function main(env = process.env) {
   if (!String(env.GITHUB_OUTPUT ?? '') || !String(env.RUNNER_TEMP ?? '')) {
-    throw new SteeringRefused('the runner names no output or temporary directory');
+    throw new SteeringRefused('output or temporary directory is not set');
   }
   const answer = await resolveSteering({ env });
   const file = join(env.RUNNER_TEMP, 'ksai-run-steering.json');

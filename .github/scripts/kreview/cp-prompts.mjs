@@ -79,12 +79,12 @@ function renderedOf(answer, request) {
   record(rendered.bundle, 'a signed render');
   record(rendered.receipt, 'a receipt');
   if (!VERSION.test(String(catalog.version ?? ''))) {
-    throw new Error(`the control plane rendered from ${catalog.version || 'no release'}, and a run renders only from an attested release`);
+    throw new Error(`prompt release version ${JSON.stringify(catalog.version ?? '')} must have the form vMAJOR.MINOR.PATCH`);
   }
   if (catalog.attested !== true) throw new Error(`no release workflow attested prompt release ${catalog.version}`);
   if (!DIGEST.test(String(catalog.lock_digest ?? ''))) throw new Error('the control plane named no catalog digest');
   if (digestOf(rendered.prompt) !== rendered.receipt.final_digest) {
-    throw new Error('the control plane answered a prompt its receipt does not describe');
+    throw new Error('prompt does not match its receipt');
   }
   const receipt = rendered.receipt;
   if (receipt.prompt_id !== request.prompt_id || receipt.sink !== request.sink || (receipt.model ?? '') !== (request.model ?? '')) {
@@ -121,7 +121,7 @@ function staticOf(answer, version, lockDigest, locked) {
     const entry = locked.get(one.id);
     if (!entry || entry.dynamic || entry.body_digest !== one.body_digest || entry.version !== one.version ||
       entry.classification !== one.classification || !(entry.destinations ?? []).includes(one.destination)) {
-      throw new Error(`static prompt ${one.id} is not the body the attested lock of ${version} records for ${one.destination}`);
+      throw new Error(`static prompt ${one.id} does not match the attested lock of ${version} for ${one.destination}`);
     }
     return { id: one.id, version: one.version, destination: one.destination, classification: one.classification, digest: one.body_digest, body };
   });
@@ -149,7 +149,7 @@ function covering(files, locked, version) {
   }
   for (const entry of locked.values()) {
     const missing = entry?.dynamic ? undefined : (entry?.destinations ?? []).find((destination) => !served.has(destination));
-    if (missing) throw new Error(`the control plane listed no static prompt for ${missing}, which prompt release ${version} carries`);
+    if (missing) throw new Error(`control plane listed no static prompt for ${missing} from prompt release ${version}`);
   }
   return [...served.values()];
 }
@@ -278,7 +278,7 @@ function kept(files, read, whole) {
       try {
         return [onlyDelivery(record(JSON.parse(line), 'a kept delivery'))];
       } catch {
-        console.log('::warning::a delivery line no governor wrote is dropped');
+        console.log('::warning::dropped a delivery line the governor did not write');
         return [];
       }
     });
@@ -339,7 +339,7 @@ export async function reportDeliveries({
   const { written, deliveries } = deliveriesUnder({ files, root, read, list });
   if (written.length !== deliveries.length) {
     const stray = written.length - deliveries.length;
-    console.log(`::warning::${counted(stray, 'delivery line')} ${plural(stray, 'names', 'name')} no render this job made, so ${plural(stray, 'it is', 'they are')} not reported`);
+    console.log(`::warning::${counted(stray, 'delivery line')} ${plural(stray, 'names', 'name')} no render this job made, ${plural(stray, 'it is', 'they are')} not reported`);
   }
   if (deliveries.length === 0) return { reported: 0 };
   const reached = await reachedFor({ env, fetch, timeout, secret });

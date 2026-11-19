@@ -177,9 +177,9 @@ async function renewing(env, now, fetchImpl, clock, sleep) {
       retryAfter = failedAt + wait;
       const alive = held === null ? null : held.expiresAt - failedAt;
       console.error(
-        `::warning::the Anthropic token could not be renewed (${error.message}); ${
+        `::warning::renewing the Anthropic token failed (${error.message}). ${
           alive !== null && alive <= 0
-            ? `the held one expired ${Math.round(-alive / 1000)}s ago, so this waits ${Math.round(wait / 1000)}s and mints again`
+            ? `the held one expired ${Math.round(-alive / 1000)}s ago, minting a new one in ${Math.round(wait / 1000)}s`
             : `holding the current one for ${Math.round(wait / 1000)}s`
         }`,
       );

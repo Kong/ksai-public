@@ -10,7 +10,7 @@ try {
     endpoint: input('endpoint'),
     audience: input('audience') || 'ksai-cp',
     secret,
-    note: (why, wait) => command('notice', `ksai could not get its token yet, trying again in ${Math.round(wait / 1000)}s: ${why}`),
+    note: (why, wait) => command('notice', `token request failed, retrying in ${Math.round(wait / 1000)}s: ${why}`),
     notice: (said) => command('notice', said),
   });
   secret(answer.token);

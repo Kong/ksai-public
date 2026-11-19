@@ -48,7 +48,7 @@ export async function readCredentials({
     return NONE;
   }
   if (!env.ACTIONS_ID_TOKEN_REQUEST_URL || !env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) {
-    note('this job holds no id-token: write, so it cannot say which run it is');
+    note('job lacks the id-token: write permission, cannot identify the run');
     return NONE;
   }
 
@@ -56,7 +56,7 @@ export async function readCredentials({
   try {
     token = await mint(audience);
   } catch {
-    note('the OIDC token could not be minted');
+    note('OIDC token request failed');
     return NONE;
   }
   if (typeof token !== 'string' || token === '') return NONE;

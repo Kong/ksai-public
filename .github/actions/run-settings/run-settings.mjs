@@ -147,13 +147,13 @@ export async function readRunSettings({
   timeout = 10000,
 }, wait = pause) {
   const fail = (why) => {
-    throw new Error(`The control plane did not return valid run settings. Reason: ${why}.`);
+    throw new Error(`Could not load run settings (${why}).`);
   };
 
   if (endpoint === '') return fail('the control plane endpoint is empty');
   if (!bare(endpoint)) return fail('the control plane endpoint is not a bare https URL');
   if (!env.ACTIONS_ID_TOKEN_REQUEST_URL || !env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) {
-    return fail('this job holds no id-token: write, so it cannot say which repository it is');
+    return fail('job lacks the id-token: write permission, cannot identify the repository');
   }
 
   let token = '';
@@ -162,11 +162,11 @@ export async function readRunSettings({
       token = await mint(audience);
       break;
     } catch (error) {
-      if (attempt === ATTEMPTS) return fail(`the OIDC token could not be minted after ${ATTEMPTS} attempts: ${reasonOf(error)}`);
+      if (attempt === ATTEMPTS) return fail(`OIDC token request failed after ${ATTEMPTS} attempts: ${reasonOf(error)}`);
       await wait(DELAY_MS * (2 ** (attempt - 1)));
     }
   }
-  if (typeof token !== 'string' || token === '') return fail('the OIDC token endpoint answered with no token');
+  if (typeof token !== 'string' || token === '') return fail('OIDC token response has no token');
   secret(token);
 
   const url = `${endpoint.replace(/\/+$/, '')}/v1/run/settings`;
@@ -198,16 +198,16 @@ export async function readRunSettings({
     }
     if (attempt === ATTEMPTS) {
       return fail(pending
-        ? `the settings stayed pending after ${ATTEMPTS} attempts`
+        ? `run settings still pending after ${ATTEMPTS} attempts`
         : `the control plane did not answer with run settings after ${ATTEMPTS} attempts: ${[status > 0 && `HTTP ${status}`, problem].filter(Boolean).join(': ')}`);
     }
     await wait(DELAY_MS * (2 ** (attempt - 1)));
   }
-  if (!record(served)) return fail('the control plane answered something other than settings');
+  if (!record(served)) return fail('control plane response is not run settings');
 
   const { refused, settings } = settingsOf(served);
   if (refused.length > 0) {
-    return fail(`the control plane served invalid or incomplete fields: ${[...new Set(refused)].join(', ')}`);
+    return fail(`control plane run settings have invalid or missing fields: ${[...new Set(refused)].join(', ')}`);
   }
   return { settings };
 }

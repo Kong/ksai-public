@@ -1,4 +1,4 @@
-export const GRANTS = Object.freeze(['source', 'read', 'write', 'modules']);
+export const GRANTS = Object.freeze(['source', 'read', 'write', 'modules', 'step']);
 
 export const TIMEOUT = 10000;
 
@@ -17,6 +17,10 @@ const OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 const JOB = /^[A-Za-z0-9][A-Za-z0-9_. -]{0,99}$/;
 
 const APP_SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+const STEP = /^[a-z][a-z0-9-]{0,63}$/;
+
+const CREDENTIAL = /^[A-Z_][A-Z0-9_]{0,63}$/;
 
 const TOLD_MAX = 300;
 
@@ -41,7 +45,7 @@ async function told(answer) {
   } catch {
     said = '';
   }
-  return said || 'it said nothing';
+  return said || 'empty response body';
 }
 
 export class Refused extends Error {}
@@ -72,11 +76,11 @@ export function because(thrown) {
   const cause = thrown instanceof Error && thrown.cause instanceof Error ? thrown.cause : null;
   const coded = cause && 'code' in cause ? cause.code : undefined;
   const said = (typeof coded === 'string' && coded) || cause?.message || (thrown instanceof Error ? thrown.message : '');
-  return said || 'it said nothing';
+  return said || 'no error message';
 }
 
 export function checkedJob(job) {
-  if (job !== '' && !JOB.test(job)) throw new Refused(`job is ${JSON.stringify(job)}, which is not a job name`);
+  if (job !== '' && !JOB.test(job)) throw new Refused(`invalid job name: ${JSON.stringify(job)}`);
   return job;
 }
 
@@ -102,10 +106,10 @@ async function attempt({ url, path, body, audience, mint, secret, fetch, timeout
   try {
     token = await mint(audience);
   } catch (refused) {
-    return { retry: `the OIDC token could not be minted: ${because(refused)}`, asked: null };
+    return { retry: `OIDC token request failed: ${because(refused)}`, asked: null };
   }
   if (typeof token !== 'string' || token === '') {
-    return { retry: 'the OIDC token endpoint answered with no token', asked: null };
+    return { retry: 'OIDC token response has no token', asked: null };
   }
   secret(token);
 
@@ -130,7 +134,7 @@ async function attempt({ url, path, body, audience, mint, secret, fetch, timeout
   }
   if (path === '/run/no-work' && answer.status !== 204) {
     await release(answer);
-    throw new Refused(`the control plane answered ${answer.status} without the terminal 204 required for no work`);
+    throw new Refused(`control plane answered ${answer.status}, expected 204 for no work`);
   }
   if (answer.status === 204) {
     await release(answer);
@@ -139,7 +143,7 @@ async function attempt({ url, path, body, audience, mint, secret, fetch, timeout
   try {
     return { served: await answer.json() };
   } catch (unparsed) {
-    return { retry: `the control plane answered with a body that did not parse: ${because(unparsed)}`, asked: null };
+    return { retry: `control plane response is not valid JSON: ${because(unparsed)}`, asked: null };
   }
 }
 
@@ -162,7 +166,7 @@ export async function ask({
   if (endpoint === '') throw new Refused('this workflow names no control plane endpoint');
   if (!bare(endpoint)) throw new Refused('the control plane endpoint is not a bare https URL');
   if (!env.ACTIONS_ID_TOKEN_REQUEST_URL || !env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) {
-    throw new Refused('this job holds no id-token: write, so it cannot say which run it is');
+    throw new Refused('job lacks the id-token: write permission, cannot identify the run');
   }
 
   const asked = { url: `${endpoint.replace(/\/+$/, '')}${path}`, path, body, audience, mint, secret, fetch };
@@ -172,11 +176,11 @@ export async function ask({
     const outcome = await attempt({ ...asked, timeout: Math.max(1, Math.min(timeout, budget - (now() - started))) });
     if ('served' in outcome) return outcome.served;
     if (tried === delays.length) {
-      throw new Unreached(`${outcome.retry}, on the last of ${delays.length + 1} attempts`);
+      throw new Unreached(`${outcome.retry}, after ${delays.length + 1} attempts`);
     }
     const wait = Math.min(Math.max(delays[tried], outcome.asked ?? 0), longest);
     if (now() - started + wait >= budget) {
-      throw new Unreached(`${outcome.retry}, and the ${Math.round(budget / 1000)}s allowed to ask ran out`);
+      throw new Unreached(`${outcome.retry}, request timed out after ${Math.round(budget / 1000)}s`);
     }
     note(outcome.retry, wait);
     await sleep(wait);
@@ -185,27 +189,32 @@ export async function ask({
 
 function mintedFrom(served) {
   if (served === null || typeof served !== 'object' || Array.isArray(served)) {
-    throw new Error('the control plane answered something other than a token');
+    throw new Error('control plane response is not a token object');
   }
   const token = text(served.token);
   const appSlug = text(served.app_slug);
-  if (token === '' || /\s/.test(token)) throw new Error('the control plane answered with no token');
-  if (!APP_SLUG.test(appSlug)) throw new Error('the control plane answered with no App it minted the token as');
+  if (token === '' || /\s/.test(token)) throw new Error('control plane response has no token');
+  if (!APP_SLUG.test(appSlug)) throw new Error('control plane response has no app slug');
   return { token, appSlug };
 }
 
-export function checkedAsk({ grant, owner = '', job = '' }) {
-  if (!GRANTS.includes(grant)) throw new Refused(`grant is ${JSON.stringify(grant)}, and a run asks for one of ${GRANTS.join(', ')}`);
+export function checkedAsk({ grant, owner = '', job = '', step = '', credential = '' }) {
+  if (!GRANTS.includes(grant)) throw new Refused(`invalid grant ${JSON.stringify(grant)}, expected one of ${GRANTS.join(', ')}`);
   if (grant === 'modules' && !OWNER.test(owner)) {
-    throw new Refused(`a modules token names the owner whose repositories it reads, and ${JSON.stringify(owner)} is not one`);
+    throw new Refused(`invalid owner ${JSON.stringify(owner)} for a modules token`);
   }
-  if (grant !== 'modules' && owner !== '') throw new Refused('only a modules token names an owner');
+  if (grant !== 'modules' && owner !== '') throw new Refused('owner is only valid for a modules token');
+  if (grant === 'step' && (!STEP.test(step) || !CREDENTIAL.test(credential))) {
+    throw new Refused('a step token needs a valid step id and credential name');
+  }
+  if (grant !== 'step' && (step !== '' || credential !== '')) throw new Refused('step and credential are only valid for a step token');
   checkedJob(job);
-  return grant === 'modules' ? { grant, owner, job } : { grant, job };
+  if (grant === 'modules') return { grant, owner, job };
+  return grant === 'step' ? { grant, step, credential, job } : { grant, job };
 }
 
-export async function mintRun({ grant, owner = '', job = '', secret = (_token) => {}, ...asking }) {
-  const body = checkedAsk({ grant, owner, job });
+export async function mintRun({ grant, owner = '', job = '', step = '', credential = '', secret = (_token) => {}, ...asking }) {
+  const body = checkedAsk({ grant, owner, job, step, credential });
   const minted = mintedFrom(await ask({ ...asking, secret, path: '/run/token', body }));
   secret(minted.token);
   return minted;
@@ -219,7 +228,7 @@ export async function revoke({ token, api = API, fetch = globalThis.fetch, timeo
   });
   await release(answer);
   if (answer.status !== 204 && answer.status !== 401) {
-    throw new Error(`GitHub answered ${answer.status} to revoking the token`);
+    throw new Error(`revoking the token failed, GitHub answered ${answer.status}`);
   }
 }
 

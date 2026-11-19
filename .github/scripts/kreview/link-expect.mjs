@@ -10,6 +10,6 @@ export async function outcomeExpected({ endpoint, fetch, token, job, link, flow,
   const body = JSON.stringify({ job, link, flow, event: { id: `outcome-expected/${link}`, kind: OUTCOME_EXPECTED } });
   const said = await controlPlane.reportKept(fetch, `${endpoint}/v1/run/tasks`, { token, body, timeout: CALL_MS }, wait);
   if (said.why) {
-    throw new Error(`the control plane holds no expectation of this run's outcome: ${said.why}${said.tried > 1 ? ` after ${said.tried} tries` : ''}`);
+    throw new Error(`control plane has no expected outcome for this run: ${said.why}${said.tried > 1 ? ` after ${said.tried} tries` : ''}`);
   }
 }
