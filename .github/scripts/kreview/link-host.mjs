@@ -41,7 +41,7 @@ import { RESTORED_EXPORT, Unapplied, checkpointBaseOf, checkpointSaved, checkpoi
 import { outcomeExpected } from './link-expect.mjs';
 import { traceparent, tracedFetch } from './otlp.mjs';
 import { transcriptOf, transcriptSent } from './link-transcript.mjs';
-import { toolIsolationProbe } from './opencode-tool-sandbox.mjs';
+import { buildScratch, prepareBuildScratch, toolIsolationProbe } from './opencode-tool-sandbox.mjs';
 import { compactions, streamFailure, toolTiming } from './opencode-v2-review.mjs';
 import { EXPORT_FILE, RESUME_ERROR, RESUME_EXPORT, SESSION_FILE, resumeError } from './opencode-v2-link.mjs';
 import { main as writeConfig } from './opencode-v2-config.mjs';
@@ -1079,6 +1079,9 @@ async function linkHost(env, root, { launch, mintFor, startProvider, startTeleme
     policyTimeLeft(policy, Date.now(), ENGINE_STOP_MS);
     if (writeConfig(sessionEnv) !== 0) throw new Error(`writing the OpenCode config for session ${session} failed`);
     configuredMcp = mcpServerCount(JSON.parse(readFileSync(config, 'utf8')));
+    if (buildScratch(sessionEnv) && !prepareBuildScratch(sessionEnv)) {
+      console.log(annotation(`the build directory for session ${session} could not be made, so its tool calls build in the in-memory /tmp`, 'warning'));
+    }
     const sandbox = sandboxArgs(sessionEnv, undefined, undefined, undefined, sockets);
     const isolation = isolatedToolPhase(phase);
     if (!probed.has(isolation)) probed.set(isolation, probe(sessionEnv, sandbox));

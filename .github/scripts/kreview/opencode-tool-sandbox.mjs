@@ -1,7 +1,8 @@
-import { existsSync, realpathSync, statSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 import { listed, sandboxScopes } from './opencode.mjs';
+import { CACHE_ROOT, carriedSandbox, SANDBOX_ENV, sandboxBinds, sandboxPath } from '../lib/step-sandbox.mjs';
 
 export const TOOL_DENIED_ENV = Object.freeze([
   'ACTIONS_ID_TOKEN_REQUEST_TOKEN',
@@ -60,6 +61,7 @@ export const TOOL_WRAPPER_ENV = Object.freeze([
   'KSAI_GOROOT',
   'KSAI_GO_MODULE_CACHE',
   'KSAI_NPM_CACHE',
+  'KSAI_STEP_SANDBOX',
   'KSAI_TOOL_PATH',
   'KSAI_TOOL_ROOT',
   'OPENCODE_CONFIG',
@@ -112,6 +114,31 @@ export function toolProcCapability(uid = process.getuid?.()) {
   return uid === 0 ? ['--cap-add', 'CAP_SYS_ADMIN'] : [];
 }
 
+export const BUILD_DIR = 'ksai-build';
+export const BUILD_ROOT = '/tmp/ksai-build';
+const BUILD_PARTS = Object.freeze({ GOCACHE: 'go-build', GOTMPDIR: 'tmp' });
+
+export function buildScratch(env = process.env) {
+  const temp = String(env.RUNNER_TEMP ?? '').trim();
+  return isAbsolute(temp) && !temp.includes(':') ? join(temp, BUILD_DIR) : '';
+}
+
+export function prepareBuildScratch(env = process.env, make = mkdirSync) {
+  const at = buildScratch(env);
+  if (!at) return '';
+  try {
+    for (const path of [at, ...Object.values(BUILD_PARTS).map((part) => join(at, part))]) {
+      const held = lstatSync(path, { throwIfNoEntry: false });
+      if (held && !held.isDirectory()) rmSync(path, { recursive: true, force: true });
+      make(path, { recursive: true, mode: 0o700 });
+      chmodSync(path, 0o700);
+    }
+    return at;
+  } catch {
+    return '';
+  }
+}
+
 export function npmCachePayload(env) {
   const root = String(env.KSAI_NPM_CACHE ?? '').trim();
   return isAbsolute(root) && !root.includes(':') ? join(root, '_cacache') : '';
@@ -136,6 +163,10 @@ export function toolChildEnvironment(env = process.env) {
     const at = String(env[from] ?? '').trim();
     if (isAbsolute(at) && !at.includes(':')) child[name] = at;
   }
+  const carried = carriedSandbox(env[SANDBOX_ENV]);
+  const denied = new Set(callerDeniedEnvironment(env));
+  for (const [name, value] of Object.entries(carried.env)) if (!denied.has(name)) child[name] = value;
+  child.PATH = [...sandboxPath(carried), child.PATH].join(':');
   child.HOME = '/tmp/ksai-home';
   child.TMPDIR = '/tmp';
   child.GOPROXY = 'off';
@@ -190,6 +221,7 @@ export function toolSandboxArgs(
     '--tmpfs', '/tmp',
     '--dir', '/tmp/ksai-home',
     '--tmpfs', '/run',
+    ...sandboxBinds(carriedSandbox(env[SANDBOX_ENV])),
   ];
   const runnerTemp = String(env.RUNNER_TEMP ?? '').trim();
   if (runnerTemp && isAbsolute(runnerTemp) && exists(runnerTemp) && !inside(runnerTemp, '/tmp')) {
@@ -220,8 +252,19 @@ export function toolSandboxArgs(
     const content = join(npmCache, 'content-v2');
     if (exists(content)) args.push('--ro-bind', content, '/tmp/ksai-npm-cache/_cacache/content-v2');
   }
+  const build = buildScratch(env);
+  const built = Boolean(build) && Object.values(BUILD_PARTS).every((part) => exists(join(build, part)));
+  if (built) args.push('--bind', build, BUILD_ROOT);
   args.push('--clearenv');
-  for (const [name, value] of Object.entries(toolChildEnvironment(env))) args.push('--setenv', name, value);
+  const child = toolChildEnvironment(env);
+  for (const [name, value] of Object.entries(child)) args.push('--setenv', name, value);
+  const carried = carriedSandbox(env[SANDBOX_ENV]);
+  const writable = (carried.writable ?? []).map((name) => `${CACHE_ROOT}/${name}`);
+  const moved = (name) => Object.hasOwn(carried.env, name) && child[name] === carried.env[name]
+    && writable.some((root) => child[name] === root || child[name].startsWith(`${root}/`));
+  for (const [name, part] of built ? Object.entries(BUILD_PARTS) : []) {
+    if (!moved(name)) args.push('--setenv', name, `${BUILD_ROOT}/${part}`);
+  }
   args.push(
     '--cap-drop', 'ALL',
     '--unshare-user',

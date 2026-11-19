@@ -425,6 +425,35 @@ runs:
         GITHUB_TOKEN: ""
         OTEL_EXPORTER_OTLP_HEADERS: ""
       run: node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/ksai/stage-steps.mjs" before
+    - name: Restore the cache the control plane keeps across runs
+      id: keep_restore
+      if: ${{ steps.steps_before.outputs.keep_path != '' }}
+      continue-on-error: true
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.steps_before.outputs.keep_path }}
+        key: ${{ steps.steps_before.outputs.keep_key || steps.steps_before.outputs.keep_restore }}
+        restore-keys: ${{ steps.steps_before.outputs.keep_restore }}
+    - name: Prepare the model's sandbox with the control plane's offline steps
+      id: steps_prepare
+      if: ${{ steps.steps_before.outcome == 'success' }}
+      continue-on-error: true
+      shell: bash
+      env:
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+        STAGE_STEPS_FILE: ${{ steps.dispatch_record.outputs.stage_steps_file }}
+        GH_TOKEN: ""
+        GITHUB_TOKEN: ""
+        OTEL_EXPORTER_OTLP_HEADERS: ""
+      run: node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/kreview/stage-prepare.mjs"
+    - name: Save the kept cache before the model can write to it
+      if: ${{ steps.steps_prepare.outputs.keep_ready == 'true' && steps.steps_before.outputs.keep_key != '' &&
+        steps.keep_restore.outputs.cache-hit != 'true' }}
+      continue-on-error: true
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.steps_before.outputs.keep_path }}
+        key: ${{ steps.steps_before.outputs.keep_key }}
     - name: Mint the bearer this review starts on
       id: mint
       if: ${{ steps.opencode_install.outcome == 'success' }}
@@ -446,6 +475,7 @@ runs:
         OPENCODE_HOME: ${{ runner.temp }}/opencode-home
         OPENCODE_VERSION: ${{ steps.opencode_install.outputs.version }}
         KSAI_GOVERNED_DIR: ${{ steps.governance_prepare.outputs.dir }}
+        KSAI_STEP_SANDBOX_MANIFEST: ${{ steps.steps_prepare.outputs.sandbox_manifest || steps.steps_before.outputs.sandbox_manifest }}
         ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
         KSAI_MODEL_TOKEN: ${{ steps.mint.outputs.token }}
         KSAI_MODEL_TOKEN_EXPIRES_AT: ${{ steps.mint.outputs.expires_at }}
@@ -543,6 +573,7 @@ runs:
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
         STAGE_STEPS_FILE: ${{ steps.dispatch_record.outputs.stage_steps_file }}
         BOUND_HEAD_SHA: ${{ steps.dispatch_record.outputs.source_revision }}
+        STEP_OUTPUTS_BEFORE: ${{ steps.steps_before.outputs.step_outputs }}
         KSAI_SECRET_NPM_TOKEN: ${{ inputs.npm_token }}
         KSAI_CP_ENDPOINT: ${{ inputs.control_plane_endpoint }}
         GH_TOKEN: ""
@@ -580,6 +611,7 @@ runs:
         CHANGESET_MAX_BYTES: ${{ steps.dispatch_record.outputs.changeset_max_bytes }}
         CHANGESET_MAX_FILES: ${{ steps.dispatch_record.outputs.changeset_max_files }}
         EVENTS_FILE: ${{ steps.opencode.outputs.events_file }}
+        STEP_OUTPUTS_BEFORE: ${{ steps.steps_before.outputs.step_outputs }}
         STEP_OUTPUTS: ${{ steps.steps_after.outputs.step_outputs }}
         KSAI_GIT_FILEMODE: "true"
         KSAI_CP_ENDPOINT: ${{ inputs.control_plane_endpoint }}
