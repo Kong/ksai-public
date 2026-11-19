@@ -2,6 +2,7 @@ import { existsSync, realpathSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 import { listed, sandboxScopes } from './opencode.mjs';
+import { carriedSandbox, SANDBOX_ENV, sandboxBinds, sandboxPath } from '../lib/step-sandbox.mjs';
 
 export const TOOL_DENIED_ENV = Object.freeze([
   'ACTIONS_ID_TOKEN_REQUEST_TOKEN',
@@ -60,6 +61,7 @@ export const TOOL_WRAPPER_ENV = Object.freeze([
   'KSAI_GOROOT',
   'KSAI_GO_MODULE_CACHE',
   'KSAI_NPM_CACHE',
+  'KSAI_STEP_SANDBOX',
   'KSAI_TOOL_PATH',
   'KSAI_TOOL_ROOT',
   'OPENCODE_CONFIG',
@@ -136,6 +138,10 @@ export function toolChildEnvironment(env = process.env) {
     const at = String(env[from] ?? '').trim();
     if (isAbsolute(at) && !at.includes(':')) child[name] = at;
   }
+  const carried = carriedSandbox(env[SANDBOX_ENV]);
+  const denied = new Set(callerDeniedEnvironment(env));
+  for (const [name, value] of Object.entries(carried.env)) if (!denied.has(name)) child[name] = value;
+  child.PATH = [...sandboxPath(carried), child.PATH].join(':');
   child.HOME = '/tmp/ksai-home';
   child.TMPDIR = '/tmp';
   child.GOPROXY = 'off';
@@ -190,6 +196,7 @@ export function toolSandboxArgs(
     '--tmpfs', '/tmp',
     '--dir', '/tmp/ksai-home',
     '--tmpfs', '/run',
+    ...sandboxBinds(carriedSandbox(env[SANDBOX_ENV])),
   ];
   const runnerTemp = String(env.RUNNER_TEMP ?? '').trim();
   if (runnerTemp && isAbsolute(runnerTemp) && exists(runnerTemp) && !inside(runnerTemp, '/tmp')) {

@@ -19,6 +19,7 @@ import {
 import { V2_MASKED_HOMES } from './opencode-v2.mjs';
 import { attributionSummary } from './opencode-runtime.mjs';
 import { npmCachePayload, pinnedToolRoot, TOOL_INJECTION_ENV, toolProcCapability } from './opencode-tool-sandbox.mjs';
+import { MANIFEST, MANIFEST_ENV, publishedSandbox, SANDBOX_ENV } from '../lib/step-sandbox.mjs';
 
 export { listed };
 
@@ -263,6 +264,12 @@ export function sandboxArgs(
     if (pinned && exists(pinned)) args.push('--ro-bind', pinned, pinned);
     const governed = String(env.KSAI_GOVERNED_DIR ?? '');
     if (governed && exists(governed)) args.push('--ro-bind', governed, governed);
+    const { binds, carried, refused } = String(env[MANIFEST_ENV] ?? '') === join(temp, MANIFEST)
+      ? publishedSandbox(temp, { exists, denied: listed(env.SANDBOX_DENY_ENV) })
+      : { binds: [], carried: {}, refused: '' };
+    if (refused) console.log(`::warning::${refused}, so the model's sandbox gets no step cache`);
+    for (const [from, to] of binds) args.push('--ro-bind', from, to);
+    if (binds.length > 0) args.push('--setenv', SANDBOX_ENV, JSON.stringify(carried));
   }
 
   const linkDir = String(env.KSAI_LINK_DIR ?? '');
