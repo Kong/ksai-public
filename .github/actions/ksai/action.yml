@@ -446,6 +446,7 @@ runs:
         OPENCODE_HOME: ${{ runner.temp }}/opencode-home
         OPENCODE_VERSION: ${{ steps.opencode_install.outputs.version }}
         KSAI_GOVERNED_DIR: ${{ steps.governance_prepare.outputs.dir }}
+        KSAI_STEP_SANDBOX_MANIFEST: ${{ steps.steps_before.outputs.sandbox_manifest }}
         ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
         KSAI_MODEL_TOKEN: ${{ steps.mint.outputs.token }}
         KSAI_MODEL_TOKEN_EXPIRES_AT: ${{ steps.mint.outputs.expires_at }}
@@ -580,6 +581,7 @@ runs:
         CHANGESET_MAX_BYTES: ${{ steps.dispatch_record.outputs.changeset_max_bytes }}
         CHANGESET_MAX_FILES: ${{ steps.dispatch_record.outputs.changeset_max_files }}
         EVENTS_FILE: ${{ steps.opencode.outputs.events_file }}
+        STEP_OUTPUTS_BEFORE: ${{ steps.steps_before.outputs.step_outputs }}
         STEP_OUTPUTS: ${{ steps.steps_after.outputs.step_outputs }}
         KSAI_GIT_FILEMODE: "true"
         KSAI_CP_ENDPOINT: ${{ inputs.control_plane_endpoint }}
