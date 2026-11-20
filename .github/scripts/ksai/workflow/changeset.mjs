@@ -166,15 +166,19 @@ function decidedIn(git, merge, tree, maxFiles) {
   return decided.map((path) => checkedPath(path)).sort(byPathBytes);
 }
 
-export function stepOutputsOf(text, maxFiles) {
-  if (!text) return [];
-  let parsed;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new Error('step outputs attested after the model are not readable');
+export function stepOutputsOf(attested, maxFiles) {
+  const parsed = [];
+  for (const text of [attested].flat().filter(Boolean)) {
+    let one;
+    try {
+      one = JSON.parse(text);
+    } catch {
+      throw new Error('step outputs attested by a step are not readable');
+    }
+    if (!Array.isArray(one)) throw new Error('step outputs attested by a step are not a list within the size limit');
+    parsed.push(...one);
   }
-  if (!Array.isArray(parsed) || parsed.length > maxFiles) throw new Error('step outputs attested after the model are not a list within the size limit');
+  if (!Array.isArray(parsed) || parsed.length > maxFiles) throw new Error('step outputs attested by a step are not a list within the size limit');
   const outputs = parsed.map((one) => {
     const texts = one && typeof one === 'object' && Object.keys(one).length === 3
       && [one.step, one.path, one.sha256].every((value) => typeof value === 'string');
