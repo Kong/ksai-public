@@ -1,4 +1,5 @@
-import { join } from 'node:path';
+import { existsSync, realpathSync, statSync } from 'node:fs';
+import { isAbsolute, join } from 'node:path';
 
 import { killedBySignal, resultRecord, stopReason } from './execution-log.mjs';
 import {
@@ -36,6 +37,19 @@ export function validateV2Version(version) {
 export const V2_MASKED_HOMES = Object.freeze([...MASKED_HOMES, '.agents']);
 
 export const v2SandboxScopes = (env, exists, real) => sandboxScopes(env, exists, real, V2_MASKED_HOMES);
+
+export function maskedHomeArgs(home, { exists = existsSync, kind = (at) => statSync(at), real = realpathSync } = {}) {
+  if (!isAbsolute(home)) return [];
+  return V2_MASKED_HOMES.map((name) => join(home, name)).filter((at) => exists(at)).flatMap((at) => {
+    let target = at;
+    try {
+      target = String(real(at));
+    } catch {
+      target = at;
+    }
+    return kind(target).isDirectory() ? ['--tmpfs', target] : ['--ro-bind', '/dev/null', target];
+  });
+}
 
 const OPENCODE_TOOL = Object.assign(Object.create(null), {
   Bash: 'shell',

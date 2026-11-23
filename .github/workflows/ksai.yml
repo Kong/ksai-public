@@ -194,12 +194,23 @@ jobs:
         env:
           RECORD_READ: ${{ steps.record.outputs.read }}
           WORKFLOW_JOB: ${{ steps.record.outputs.workflow_job }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          STARTED_BY: ${{ github.actor }}
         run: |-
           set -euo pipefail
-          if [[ "${RECORD_READ}" != "true" || -z "${WORKFLOW_JOB}" ]]; then
-            echo "::error::The control plane did not admit a package stage"
-            exit 1
+          if [[ "${RECORD_READ}" == "true" && -n "${WORKFLOW_JOB}" ]]; then
+            exit 0
           fi
+          why="The control plane did not admit a package stage."
+          if [[ "${RECORD_READ}" != "true" && "${STARTED_BY}" != *"[bot]" ]]; then
+            why="${STARTED_BY} started this run outside KSAI. KSAI runs only the work that it starts."
+          elif [[ "${RECORD_READ}" != "true" && "${RUN_ATTEMPT}" != "1" ]]; then
+            why="This run is a rerun, and KSAI holds no record for it."
+          fi
+          fix="To run KSAI, comment /ksai on a pull request."
+          echo "::error::${why} ${fix}"
+          printf '%s\n\n%s\n' "${why}" "${fix}" >>"${GITHUB_STEP_SUMMARY}"
+          exit 1
   run:
     needs:
       - gate
