@@ -13,6 +13,7 @@ const WATCH_MS = 1000;
 const TOKEN_MARGIN_MS = 60_000;
 const HANDSHAKE_MS = 30_000;
 const CLOSE_GRACE_MS = 1000;
+const SILENT_PINGS = 2;
 
 export class LinkEnded extends Error {
   constructor(code, reason) {
@@ -308,6 +309,7 @@ export function linkClient({
   let epoch = 0;
   let signers = null;
   let conn = null;
+  let heard = null;
   let leaseUntil = 0;
   let pingEvery = 20_000;
   let pingN = 0;
@@ -451,6 +453,7 @@ export function linkClient({
       const replayed = adopt(welcome);
       if (farewell) bid(connection);
       await within(replayed, giving.signal);
+      heard = clock();
       reached();
       log(`linked over ${transport.name} on epoch ${epoch}`);
       stock();
@@ -458,6 +461,7 @@ export function linkClient({
       for (;;) {
         const next = await within(connection.next(), giving.signal);
         if (next.closed) throw new Closed(next.closed.code, next.closed.reason);
+        heard = clock();
         try {
           received(next.frame);
         } catch (error) {
@@ -472,6 +476,7 @@ export function linkClient({
       clearTimeout(deadline);
       stop();
       conn = null;
+      heard = null;
       dialing = null;
       connection?.close(CLOSED.normal, 'the host is done with this connection');
     }
@@ -495,7 +500,9 @@ export function linkClient({
     const unwatch = every(WATCH_MS, () => {
       if (stopped) return;
       if (lapsed()) giveUp('lease');
-      else if (!welcomed && clock() - began > bootstrapMs) giveUp('bootstrap');
+      else if (heard !== null && !farewell?.sent && clock() - heard > pingEvery * SILENT_PINGS) {
+        dialing?.abort(new Closed(1006, `the engine sent nothing for ${Math.round(clock() - heard)} ms`));
+      } else if (!welcomed && clock() - began > bootstrapMs) giveUp('bootstrap');
     });
     try {
       while (!stopped) {

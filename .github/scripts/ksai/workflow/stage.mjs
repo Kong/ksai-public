@@ -185,7 +185,7 @@ export async function withChangeset(completion, stage, env, {
       maxFiles: Number(said(env.CHANGESET_MAX_FILES)),
       secrets: collectSecrets(env),
       events: said(env.EVENTS_FILE),
-      stepOutputs: stepOutputsOf(said(env.STEP_OUTPUTS), Number(said(env.CHANGESET_MAX_FILES))),
+      stepOutputs: stepOutputsOf([said(env.STEP_OUTPUTS_BEFORE), said(env.STEP_OUTPUTS)], Number(said(env.CHANGESET_MAX_FILES))),
     });
     const artifact = await upload({ fetch, base: reached.base, token: reached.token, body, pause });
     return { ...completion, artifacts: [artifact] };

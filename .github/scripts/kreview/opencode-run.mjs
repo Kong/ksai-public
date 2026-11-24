@@ -12,15 +12,13 @@ import { isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
-  listed,
   providerPolicyDirectory,
   sandboxScopes,
 } from './opencode.mjs';
-import { V2_MASKED_HOMES } from './opencode-v2.mjs';
+import { V2_MASKED_HOMES, maskedHomeArgs } from './opencode-v2.mjs';
 import { attributionSummary } from './opencode-runtime.mjs';
-import { npmCachePayload, pinnedToolRoot, TOOL_INJECTION_ENV, toolProcCapability } from './opencode-tool-sandbox.mjs';
-
-export { listed };
+import { buildScratch, npmCachePayload, pinnedToolRoot, TOOL_INJECTION_ENV, toolProcCapability } from './opencode-tool-sandbox.mjs';
+import { MANIFEST, MANIFEST_ENV, listed, publishedSandbox, SANDBOX_ENV } from '../lib/step-sandbox.mjs';
 
 /**
  * DENIED_CREDENTIALS names what a tool call may not read, and it is a declaration rather than a copy.
@@ -257,12 +255,20 @@ export function sandboxArgs(
   ];
   if (temp) {
     args.push('--tmpfs', temp);
+    const build = buildScratch(env);
+    if (build && exists(build)) args.push('--bind', build, build);
     const tools = join(temp, 'ksai-opencode', 'bin');
     if (exists(tools)) args.push('--ro-bind', tools, tools);
     const pinned = pinnedToolRoot(env);
     if (pinned && exists(pinned)) args.push('--ro-bind', pinned, pinned);
     const governed = String(env.KSAI_GOVERNED_DIR ?? '');
     if (governed && exists(governed)) args.push('--ro-bind', governed, governed);
+    const { binds, carried, refused } = String(env[MANIFEST_ENV] ?? '') === join(temp, MANIFEST)
+      ? publishedSandbox(temp, { exists, denied: listed(env.SANDBOX_DENY_ENV) })
+      : { binds: [], carried: {}, refused: '' };
+    if (refused) console.log(`::warning::${refused}, so the model's sandbox gets no step cache`);
+    for (const [from, to, writable] of binds) args.push(writable ? '--bind' : '--ro-bind', from, to);
+    if (binds.length > 0) args.push('--setenv', SANDBOX_ENV, JSON.stringify(carried));
   }
 
   const linkDir = String(env.KSAI_LINK_DIR ?? '');
@@ -272,19 +278,19 @@ export function sandboxArgs(
     if (!isAbsolute(asks) || !exists(asks)) throw new Error(`the session asks directory ${JSON.stringify(asks)} is not an absolute directory that exists, so the sandbox cannot bind it`);
     args.push('--bind', asks, asks);
   }
-  for (const name of V2_MASKED_HOMES) {
-    const at = join(home, name);
-    if (!exists(at)) continue;
-    if (kind(at).isDirectory()) args.push('--tmpfs', at);
-    else args.push('--ro-bind', '/dev/null', at);
-  }
-
   const config = String(env.OPENCODE_CONFIG ?? '');
   const scripts = String(env.SCRIPTS ?? '');
   args.push('--bind', workspace, workspace);
   const trusted = join(workspace, '_ksai');
   if (exists(trusted)) args.push('--ro-bind', trusted, trusted);
+  if (HISTORY_KEPT_ON.includes(String(env.FLOW ?? ''))) {
+    for (const name of READ_ONLY_ON_TEST) {
+      const at = join(workspace, name);
+      if (exists(at)) args.push('--ro-bind', at, at);
+    }
+  }
   args.push(
+    ...maskedHomeArgs(home, { exists, kind, real }),
     '--ro-bind',
     config,
     config,
@@ -302,13 +308,6 @@ export function sandboxArgs(
   const channel = String(env.KSAI_CHANNEL_DIR ?? '');
   if (channel && exists(channel)) {
     args.push('--ro-bind', channel, channel, '--bind', join(channel, 'run'), join(channel, 'run'));
-  }
-
-  if (HISTORY_KEPT_ON.includes(String(env.FLOW ?? ''))) {
-    for (const name of READ_ONLY_ON_TEST) {
-      const at = join(workspace, name);
-      if (exists(at)) args.push('--ro-bind', at, at);
-    }
   }
 
   args.push(

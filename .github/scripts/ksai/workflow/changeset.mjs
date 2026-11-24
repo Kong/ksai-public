@@ -18,11 +18,14 @@ const STEP_ID = /^[a-z][a-z0-9-]{0,63}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 const STEP_PATH = /^(?!\.git(?:\/|$))(?!.*(?:^|\/)\.{1,2}(?:\/|$))[A-Za-z0-9._@+-]+(?:\/[A-Za-z0-9._@+-]+){0,15}$/;
 const LISTED = /^:(\d{6}) (\d{6}) ([0-9a-f]{40}) ([0-9a-f]{40}) ([ADMT])$/;
+const HELD = /^(\d{6}) (blob|tree|commit) ([0-9a-f]{40})\t([^]*)$/;
+const STAGED = /^(\d{6}) ([0-9a-f]{40}) ([123])\t([^]*)$/;
 const PRINTABLE = /^[ -~]+$/;
 const PATH_MOST = 4096;
 const TIMEOUT_MS = 60_000;
 const MODES = new Set(['100644', '100755', '120000']);
 const SUBMODULE = '160000';
+const MERGE_CARRIED = new Set(['go.mod', 'go.sum']);
 const COMMAND_REDACTED = '<command redacted>';
 const ARGUMENTS_REDACTED = '<arguments redacted>';
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=(?:"(?:\\.|[^"\\])*"|'[^']*'|[^\s;&|()<>`\\]+)\s+/;
@@ -101,8 +104,8 @@ export function commandsOf(file, secrets = []) {
   };
 }
 
-function listed(git, base, tree) {
-  const diff = git(['diff-tree', '-r', '-z', '--no-renames', '--no-ext-diff', '--no-textconv', base, tree]);
+function listed(git, base, tree, only = [], paths = []) {
+  const diff = git(['diff-tree', '-r', '-z', '--no-renames', '--no-ext-diff', '--no-textconv', ...only, base, tree, ...paths]);
   if (!diff.ok) throw new Error('listing the change against the bound commit failed');
   const parts = String(diff.stdout ?? '').split('\0');
   if (parts.at(-1) === '') parts.pop();
@@ -111,9 +114,38 @@ function listed(git, base, tree) {
   for (let at = 0; at < parts.length; at += 2) {
     const line = LISTED.exec(parts[at]);
     if (!line) throw new Error('git change list has an unexpected format');
-    changed.push({ path: parts[at + 1], mode: line[2], blob: line[4], status: line[5] });
+    changed.push({ path: parts[at + 1], mode: line[2], was: line[3], blob: line[4], status: line[5] });
   }
   return changed;
+}
+
+function listedAt(git, base, tree, paths) {
+  const changed = new Map();
+  for (let at = 0; at < paths.length; at += stage.PATH_BATCH_SIZE) {
+    const batch = paths.slice(at, at + stage.PATH_BATCH_SIZE).map((path) => `:(literal)${path}`);
+    for (const one of listed(git, base, tree, [], ['--', ...batch])) changed.set(one.path, one);
+  }
+  return [...changed.values()];
+}
+
+function entriesAt(git, tree, paths) {
+  const entries = new Map();
+  for (let at = 0; at < paths.length; at += stage.PATH_BATCH_SIZE) {
+    const batch = paths.slice(at, at + stage.PATH_BATCH_SIZE).map((path) => `:(literal)${path}`);
+    const read = git(['ls-tree', '-r', '-z', '--full-tree', tree, '--', ...batch]);
+    if (!read.ok) throw new Error('listing a tree of the merge in git failed');
+    for (const line of String(read.stdout ?? '').split('\0').filter(Boolean)) {
+      const entry = HELD.exec(line);
+      if (!entry) throw new Error('git tree list has an unexpected format');
+      entries.set(entry[4], { mode: entry[1], blob: entry[3] });
+    }
+  }
+  return entries;
+}
+
+function heldIn(git, tree, paths) {
+  const entries = entriesAt(git, tree, paths);
+  return paths.map((path) => (entries.has(path) ? { path, ...entries.get(path), status: 'M' } : { path, status: 'D' }));
 }
 
 function checkedPath(path) {
@@ -143,38 +175,114 @@ function mergeOf(git, base, mergeBase, maxFiles) {
     throw new Error(parent ? `the checkout is merging ${parent}, not the base ${mergeBase} the control plane named` : 'the checkout holds no merge of the base the control plane named');
   }
   if (!mergeBase) return null;
-  const replayed = git(['merge-tree', '--write-tree', '--name-only', '-z', base, mergeBase]);
+  const replayed = git(['merge-tree', '--write-tree', '-z', base, mergeBase]);
   const [tree, ...rest] = String(replayed.stdout ?? '').split('\0');
   if ((!replayed.ok && replayed.status !== 1) || !COMMIT.test(tree)) {
     throw new Error('replaying the merge in git failed');
   }
   const end = rest.indexOf('');
-  const conflicted = [...new Set(end < 0 ? rest : rest.slice(0, end))].map((path) => checkedPath(path)).sort(byPathBytes);
-  if (conflicted.length > maxFiles) {
-    throw new Error(`merge conflicts in ${conflicted.length} files, over the control plane limit of ${maxFiles}`);
+  const named = [];
+  const ancestors = [];
+  for (const line of end < 0 ? rest : rest.slice(0, end)) {
+    const entry = STAGED.exec(line);
+    if (!entry) throw new Error('git merge conflicts have an unexpected format');
+    named.push(entry[4]);
+    if (entry[3] === '1') ancestors.push({ path: entry[4], blob: entry[2] });
   }
-  return { parent, tree, conflicted };
+  const messages = end < 0 ? [] : rest.slice(end + 1);
+  for (let at = 0; at < messages.length && messages[at] !== ''; ) {
+    const count = Number(messages[at]);
+    const kind = messages[at + count + 1];
+    if (!Number.isSafeInteger(count) || count < 1 || kind === undefined) throw new Error('git merge messages have an unexpected format');
+    if (kind.startsWith('CONFLICT')) named.push(...messages.slice(at + 1, at + count + 1));
+    at += count + 3;
+  }
+  named.push(...renamedFrom(git, base, mergeBase, ancestors, new Set(named)));
+  const unique = new Set(named);
+  const real = heldOn(git, [base, mergeBase], [...unique]);
+  const under = filesUnder(git, base, [...unique]).filter((path) => !unique.has(path));
+  return { parent, tree, named: [...unique].filter((path) => real.has(path)), under, maxFiles };
 }
 
-function decidedIn(git, merge, tree, maxFiles) {
+function conflictsOf(git, merge, stageTree) {
+  const kept = heldOn(git, [merge.tree, stageTree], merge.under);
+  const conflicted = [...merge.named, ...merge.under.filter((path) => kept.has(path))].map((path) => checkedPath(path)).sort(byPathBytes);
+  if (conflicted.length > merge.maxFiles) {
+    throw new Error(`merge conflicts in ${conflicted.length} files, over the control plane limit of ${merge.maxFiles}`);
+  }
+  return conflicted;
+}
+
+function renamedFrom(git, base, mergeBase, ancestors, named) {
+  if (ancestors.length === 0) return [];
+  const ancestor = git(['merge-base', base, mergeBase]);
+  const from = String(ancestor.stdout ?? '').trim();
+  if (!ancestor.ok || !COMMIT.test(from)) throw new Error('finding where the merge sides part in git failed');
+  const parted = entriesAt(git, from, ancestors.map(({ path }) => path));
+  const moved = new Set(ancestors.filter(({ path, blob }) => parted.get(path)?.blob !== blob).map(({ blob }) => blob));
+  if (moved.size === 0) return [];
+  const gone = [base, mergeBase].flatMap((side) => listed(git, from, side, ['--diff-filter=D']));
+  const sources = new Map(gone.filter(({ path, was }) => moved.has(was) && !named.has(path)).map(({ path, was }) => [path, was]));
+  if (sources.size === 0) return [];
+  const [onBase, onMerged] = [entriesAt(git, base, [...sources.keys()]), entriesAt(git, mergeBase, [...sources.keys()])];
+  return [...sources].filter(([path, was]) => {
+    const [ours, theirs] = [onBase.get(path)?.blob, onMerged.get(path)?.blob];
+    return ours !== was && theirs !== was;
+  }).map(([path]) => path);
+}
+
+function filesUnder(git, tree, paths) {
+  const files = [];
+  for (let at = 0; at < paths.length; at += stage.PATH_BATCH_SIZE) {
+    const batch = paths.slice(at, at + stage.PATH_BATCH_SIZE).map((path) => `:(literal)${path}`);
+    const read = git(['ls-tree', '-r', '-z', '--name-only', '--full-tree', tree, '--', ...batch]);
+    if (!read.ok) throw new Error('listing the conflicted paths of the merge in git failed');
+    files.push(...String(read.stdout ?? '').split('\0').filter(Boolean));
+  }
+  return files;
+}
+
+function heldOn(git, trees, paths) {
+  const asked = new Set(paths);
+  const present = new Set();
+  for (const tree of trees) {
+    for (let at = 0; at < paths.length; at += stage.PATH_BATCH_SIZE) {
+      const batch = paths.slice(at, at + stage.PATH_BATCH_SIZE).map((path) => `:(literal)${path}`);
+      const read = git(['ls-tree', '-r', '-t', '-z', '--name-only', '--full-tree', tree, '--', ...batch]);
+      if (!read.ok) throw new Error('listing the paths of the merge in git failed');
+      for (const path of String(read.stdout ?? '').split('\0').filter(Boolean)) {
+        if (asked.has(path)) present.add(path);
+      }
+    }
+  }
+  return present;
+}
+
+function decidedIn(git, merge, base, tree, maxFiles) {
   const diff = git(['diff-tree', '-r', '-z', '--no-renames', '--name-only', merge.tree, tree]);
   if (!diff.ok) throw new Error('listing the stage merge resolution in git failed');
-  const decided = [...new Set([...merge.conflicted, ...String(diff.stdout ?? '').split('\0').filter(Boolean)])];
+  const changed = String(diff.stdout ?? '').split('\0').filter(Boolean);
+  const real = heldOn(git, [base, merge.parent, tree], changed);
+  const decided = [...new Set([...merge.conflicted, ...changed.filter((path) => real.has(path))])];
   if (decided.length > maxFiles) {
     throw new Error(`stage resolved ${decided.length} files in the merge, over the control plane limit of ${maxFiles}`);
   }
   return decided.map((path) => checkedPath(path)).sort(byPathBytes);
 }
 
-export function stepOutputsOf(text, maxFiles) {
-  if (!text) return [];
-  let parsed;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new Error('step outputs attested after the model are not readable');
+export function stepOutputsOf(attested, maxFiles) {
+  const parsed = [];
+  for (const text of [attested].flat().filter(Boolean)) {
+    let one;
+    try {
+      one = JSON.parse(text);
+    } catch {
+      throw new Error('step outputs attested by a step are not readable');
+    }
+    if (!Array.isArray(one)) throw new Error('step outputs attested by a step are not a list within the size limit');
+    parsed.push(...one);
   }
-  if (!Array.isArray(parsed) || parsed.length > maxFiles) throw new Error('step outputs attested after the model are not a list within the size limit');
+  if (!Array.isArray(parsed) || parsed.length > maxFiles) throw new Error('step outputs attested by a step are not a list within the size limit');
   const outputs = parsed.map((one) => {
     const texts = one && typeof one === 'object' && Object.keys(one).length === 3
       && [one.step, one.path, one.sha256].every((value) => typeof value === 'string');
@@ -199,14 +307,18 @@ export function captureChangeset({ git, base, mergeBase = '', index, stageAttemp
   if (!head.ok || String(head.stdout ?? '').trim() !== base) {
     throw new Error('checkout moved off the bound commit');
   }
-  const merge = mergeOf(git, base, mergeBase, maxFiles);
-  const written = stage.workTree(git, base, index);
+  const replayed = mergeOf(git, base, mergeBase, maxFiles);
+  const written = stage.workTree(git, replayed?.tree ?? base, index);
   if (!written.ok) throw new Error(written.reason);
-  const changed = listed(git, base, written.tree);
+  const merge = replayed && { parent: replayed.parent, tree: replayed.tree, conflicted: conflictsOf(git, replayed, written.tree) };
+  const decided = merge ? decidedIn(git, merge, base, written.tree, maxFiles) : [];
+  const sent = new Set([...decided, ...MERGE_CARRIED]);
+  const changed = merge ? listedAt(git, base, written.tree, [...sent]).filter(({ path }) => sent.has(path)) : listed(git, base, written.tree);
+  const listedPaths = new Set(changed.map(({ path }) => path));
+  changed.push(...heldIn(git, written.tree, decided.filter((path) => !listedPaths.has(path))).filter(({ mode }) => mode !== SUBMODULE));
   if (changed.length > maxFiles) {
     throw new Error(`stage changed ${changed.length} files, over the control plane limit of ${maxFiles}`);
   }
-  const decided = merge ? decidedIn(git, merge, written.tree, maxFiles) : [];
   const hidden = withEscaped(secrets);
   const additions = [];
   const deletions = [];
@@ -235,7 +347,7 @@ export function captureChangeset({ git, base, mergeBase = '', index, stageAttemp
   deletions.sort(byBytes);
   const body = JSON.stringify({
     apiVersion: CHANGESET_VERSION, ...stageAttempt, base, additions, deletions, commands: commandsOf(events, secrets),
-    ...(merge ? { merge: { parent: merge.parent, conflicted: merge.conflicted, decided } } : {}),
+    ...(merge ? { merge: { parent: merge.parent, conflicted: merge.conflicted, decided, tree: written.tree } } : {}),
     ...(stepOutputs.length > 0 ? { stepOutputs } : {}),
   });
   if (Buffer.byteLength(body, 'utf8') > maxBytes) {

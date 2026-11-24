@@ -352,39 +352,6 @@ runs:
         GITHUB_TOKEN: ""
         OTEL_EXPORTER_OTLP_HEADERS: ""
       run: node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/ksai/package-warm.mjs"
-    - name: Look for the Go modules the tree under work holds
-      id: go_detect
-      if: ${{ steps.opencode_install.outcome == 'success' && steps.governed_run.outcome == 'success' &&
-        steps.dispatch_record.outputs.prepare_dependencies == 'true' }}
-      continue-on-error: true
-      shell: bash
-      env:
-        WORKSPACE: ${{ github.workspace }}
-        SCRIPTS: ${{ runner.temp }}/ksai-scripts
-      run: node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/ksai/gomod-warm.mjs" detect
-    - name: Set up the Go the tree under work pins
-      id: go_setup
-      if: ${{ steps.go_detect.outputs.mod != '' }}
-      continue-on-error: true
-      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-      env:
-        GOTOOLCHAIN: local
-      with:
-        go-version-file: ${{ steps.go_detect.outputs.mod }}
-        cache: false
-    - name: Warm the Go module cache while there is still a network
-      id: go_warm
-      if: ${{ steps.go_detect.outputs.mod != '' }}
-      continue-on-error: true
-      shell: bash
-      env:
-        WORKSPACE: ${{ github.workspace }}
-        LIST: ${{ steps.go_detect.outputs.list }}
-        SCRIPTS: ${{ runner.temp }}/ksai-scripts
-        GH_TOKEN: ""
-        GITHUB_TOKEN: ""
-        OTEL_EXPORTER_OTLP_HEADERS: ""
-      run: node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/ksai/gomod-warm.mjs"
     - name: Set up mise for the tools the tree under work pins
       id: mise_setup
       if: ${{ steps.opencode_install.outcome == 'success' && steps.governed_run.outcome == 'success' &&
@@ -425,6 +392,77 @@ runs:
         GITHUB_TOKEN: ""
         OTEL_EXPORTER_OTLP_HEADERS: ""
       run: node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/ksai/stage-steps.mjs" before
+    - name: Look for the Go modules the tree under work holds
+      id: go_detect
+      if: ${{ steps.opencode_install.outcome == 'success' && steps.governed_run.outcome == 'success' &&
+        steps.dispatch_record.outputs.prepare_dependencies == 'true' }}
+      continue-on-error: true
+      shell: bash
+      env:
+        WORKSPACE: ${{ github.workspace }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      run: node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/ksai/gomod-warm.mjs" detect
+    - name: Set up the Go the tree under work pins
+      id: go_setup
+      if: ${{ steps.go_detect.outputs.mod != '' }}
+      continue-on-error: true
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      env:
+        GOTOOLCHAIN: local
+      with:
+        go-version-file: ${{ steps.go_detect.outputs.mod }}
+        cache: false
+    - name: Warm the Go module cache while there is still a network
+      id: go_warm
+      if: ${{ steps.go_detect.outputs.mod != '' }}
+      continue-on-error: true
+      shell: bash
+      env:
+        WORKSPACE: ${{ github.workspace }}
+        LIST: ${{ steps.go_detect.outputs.list }}
+        SANDBOX_MANIFEST: ${{ steps.steps_before.outputs.sandbox_manifest }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+        GH_TOKEN: ""
+        GITHUB_TOKEN: ""
+        OTEL_EXPORTER_OTLP_HEADERS: ""
+      run: node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/ksai/gomod-warm.mjs"
+    - name: Check the runner disk has room to restore the kept cache
+      id: keep_room
+      if: ${{ steps.steps_before.outputs.keep_path != '' }}
+      continue-on-error: true
+      shell: bash
+      env:
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      run: node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/kreview/stage-prepare.mjs" room
+    - name: Restore the cache the control plane keeps across runs
+      id: keep_restore
+      if: ${{ steps.steps_before.outputs.keep_path != '' && steps.keep_room.outputs.room == 'true' }}
+      continue-on-error: true
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.steps_before.outputs.keep_path }}
+        key: ${{ steps.steps_before.outputs.keep_key || steps.steps_before.outputs.keep_restore }}
+        restore-keys: ${{ steps.steps_before.outputs.keep_restore }}
+    - name: Prepare the model's sandbox with the control plane's offline steps
+      id: steps_prepare
+      if: ${{ steps.steps_before.outcome == 'success' }}
+      continue-on-error: true
+      shell: bash
+      env:
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+        STAGE_STEPS_FILE: ${{ steps.dispatch_record.outputs.stage_steps_file }}
+        GH_TOKEN: ""
+        GITHUB_TOKEN: ""
+        OTEL_EXPORTER_OTLP_HEADERS: ""
+      run: node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/kreview/stage-prepare.mjs"
+    - name: Save the kept cache before the model can write to it
+      if: ${{ steps.steps_prepare.outputs.keep_ready == 'true' && steps.steps_before.outputs.keep_key != '' &&
+        steps.keep_restore.outputs.cache-hit != 'true' }}
+      continue-on-error: true
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.steps_before.outputs.keep_path }}
+        key: ${{ steps.steps_before.outputs.keep_key }}
     - name: Mint the bearer this review starts on
       id: mint
       if: ${{ steps.opencode_install.outcome == 'success' }}
@@ -446,6 +484,7 @@ runs:
         OPENCODE_HOME: ${{ runner.temp }}/opencode-home
         OPENCODE_VERSION: ${{ steps.opencode_install.outputs.version }}
         KSAI_GOVERNED_DIR: ${{ steps.governance_prepare.outputs.dir }}
+        KSAI_STEP_SANDBOX_MANIFEST: ${{ steps.steps_prepare.outputs.sandbox_manifest || steps.steps_before.outputs.sandbox_manifest }}
         ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
         KSAI_MODEL_TOKEN: ${{ steps.mint.outputs.token }}
         KSAI_MODEL_TOKEN_EXPIRES_AT: ${{ steps.mint.outputs.expires_at }}
@@ -543,6 +582,8 @@ runs:
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
         STAGE_STEPS_FILE: ${{ steps.dispatch_record.outputs.stage_steps_file }}
         BOUND_HEAD_SHA: ${{ steps.dispatch_record.outputs.source_revision }}
+        MERGE_BASE: ${{ steps.dispatch_record.outputs.merge_base }}
+        STEP_OUTPUTS_BEFORE: ${{ steps.steps_before.outputs.step_outputs }}
         KSAI_SECRET_NPM_TOKEN: ${{ inputs.npm_token }}
         KSAI_CP_ENDPOINT: ${{ inputs.control_plane_endpoint }}
         GH_TOKEN: ""
@@ -580,6 +621,7 @@ runs:
         CHANGESET_MAX_BYTES: ${{ steps.dispatch_record.outputs.changeset_max_bytes }}
         CHANGESET_MAX_FILES: ${{ steps.dispatch_record.outputs.changeset_max_files }}
         EVENTS_FILE: ${{ steps.opencode.outputs.events_file }}
+        STEP_OUTPUTS_BEFORE: ${{ steps.steps_before.outputs.step_outputs }}
         STEP_OUTPUTS: ${{ steps.steps_after.outputs.step_outputs }}
         KSAI_GIT_FILEMODE: "true"
         KSAI_CP_ENDPOINT: ${{ inputs.control_plane_endpoint }}
