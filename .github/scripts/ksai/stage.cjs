@@ -31,7 +31,19 @@ function rebuildTrackedPathBatches(git, paths) {
   return true;
 }
 
-function stageCandidates(git, excludedPaths) {
+function ignoredOf(git, paths) {
+  const ignored = [];
+  for (let at = 0; at < paths.length; at += PATH_BATCH_SIZE) {
+    const batch = paths.slice(at, at + PATH_BATCH_SIZE).map((entry) => literal(entry));
+    const listed = git(['ls-files', '--others', '--ignored', '--exclude-standard', '-z', '--', ...batch]);
+    if (!listed?.ok) return null;
+    const asked = new Set(paths.slice(at, at + PATH_BATCH_SIZE));
+    ignored.push(...splitZ(listed.stdout).filter((entry) => asked.has(entry)));
+  }
+  return ignored;
+}
+
+function stageCandidates(git, base, excludedPaths) {
   if (!git?.policy?.ok) return deny(git?.policy?.reason || 'git filter configuration could not be read safely');
   const tracked = git(['ls-files', '-z']);
   const untracked = git(['ls-files', '--others', '--exclude-standard', '-z']);
@@ -43,18 +55,28 @@ function stageCandidates(git, excludedPaths) {
     '--name-only',
     '--diff-filter=D',
     '-z',
-    'HEAD',
+    base,
   ]);
-  if (!tracked?.ok || !untracked?.ok || !deleted?.ok) {
+  const atHead = git(['ls-tree', '-r', '-z', '--name-only', '--full-tree', 'HEAD']);
+  if (!tracked?.ok || !untracked?.ok || !deleted?.ok || !atHead?.ok) {
     return deny('the working tree could not be listed safely, so nothing was staged');
   }
+  const indexed = new Set(splitZ(tracked.stdout));
+  const restored = ignoredOf(git, splitZ(atHead.stdout).filter((entry) => !indexed.has(entry)));
+  if (!restored) return deny('the working tree could not be listed safely, so nothing was staged');
   const omitted = new Set(excludedPaths.map((entry) => String(entry ?? '')).filter(Boolean));
-  const keptTracked = [...new Set([...splitZ(tracked.stdout), ...splitZ(deleted.stdout)])].filter(
+  const keptTracked = [...new Set([...indexed, ...splitZ(deleted.stdout), ...restored])].filter(
     (entry) => !omitted.has(entry),
   );
   const paths = [...new Set([...keptTracked, ...splitZ(untracked.stdout)])].filter((entry) => !omitted.has(entry));
   const checked = checkStagePaths(git, paths);
-  return checked.ok ? { ok: true, paths } : checked;
+  return checked.ok ? { ok: true, paths, tracked: new Set(keptTracked) } : checked;
+}
+
+function unstageStrays(git, tracked) {
+  const ignored = git(['ls-files', '--cached', '--ignored', '--exclude-standard', '-z']);
+  if (!ignored?.ok) return false;
+  return runPathBatches(git, ['rm', '--cached', '--quiet', '--ignore-unmatch'], splitZ(ignored.stdout).filter((entry) => !tracked.has(entry)));
 }
 
 function checkStagePaths(git, paths) {
@@ -85,26 +107,26 @@ function checkStagePaths(git, paths) {
   return { ok: true, reason: '' };
 }
 
-function stageAll(git, excludedPaths = []) {
-  const candidates = stageCandidates(git, excludedPaths);
+function stageAll(git, base, excludedPaths) {
+  const candidates = stageCandidates(git, base, excludedPaths);
   if (!candidates.ok) return candidates;
-  const reset = git(['reset', '--mixed', '--no-refresh', '--quiet', 'HEAD']);
+  const reset = git(['read-tree', base]);
   if (!reset?.ok) return deny('git could not rebuild the index safely, so nothing was pushed');
   if (!rebuildTrackedPathBatches(git, candidates.paths)) {
     return deny('git could not normalize the rebuilt index safely, so nothing was pushed');
   }
-  const staged = runPathBatches(git, ['add', '--all', '--force'], candidates.paths);
+  const staged = runPathBatches(git, ['add', '--all', '--force'], candidates.paths) && unstageStrays(git, candidates.tracked);
   return staged ? { ok: true, reason: '' } : deny('git could not stage the working tree safely');
 }
 
 function workTree(git, base, index, excludedPaths = []) {
   const indexed = Object.assign((args, options = {}) => git(args, { ...options, index }), { policy: git.policy });
   if (!indexed(['read-tree', base])?.ok) return deny('the checkout could not be read into an index of its own');
-  const staged = stageAll(indexed, excludedPaths);
+  const staged = stageAll(indexed, base, excludedPaths);
   if (!staged.ok) return staged;
   const written = indexed(['write-tree']);
   const tree = String(written?.stdout ?? '').trim();
   return written?.ok && /^[0-9a-f]{40}$/.test(tree) ? { ok: true, reason: '', tree } : deny('the working tree could not be written as a tree');
 }
 
-module.exports = { workTree };
+module.exports = { workTree, PATH_BATCH_SIZE };
