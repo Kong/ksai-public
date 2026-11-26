@@ -123,9 +123,11 @@ export const keyId = (raw) => createHash('sha256').update(raw).digest('hex');
 export const linkId = ({ repository, runId, attempt, job }) =>
   `link-${createHash('sha256').update(`${String(repository).toLowerCase()}/${runId}/${attempt}/${job}`).digest('hex').slice(0, 24)}`;
 
+export const jobNameOf = (env) => String(env.KSAI_JOB ?? '').trim() || String(env.GITHUB_JOB ?? '').trim();
+
 export function jobOf(env) {
   const index = String(env.KSAI_JOB_INDEX ?? '').trim();
-  const job = `${String(env.GITHUB_JOB ?? '').trim()}${index && index !== '0' ? `-${index}` : ''}`;
+  const job = `${jobNameOf(env)}${index && index !== '0' ? `-${index}` : ''}`;
   if (!JOB.test(job)) throw new Error(`job ${JSON.stringify(job)} has no link`);
   return job;
 }

@@ -89,6 +89,7 @@ function runsOnOf(value) {
 function settingsOf(served) {
   const dependencyEgress = served.egress === undefined ? '' : egressOf(served.egress);
   const egressHosts = served.egress_hosts === undefined ? [] : egressHostsOf(served.egress_hosts);
+  const runtimeEgress = served.runtime_egress_hosts === undefined ? [] : egressHostsOf(served.runtime_egress_hosts);
   const settings = {
     runs_on: runsOnOf(served.runs_on),
     denied_paths: typeof served.denied_paths === 'string' && DENIED_PATHS.test(served.denied_paths)
@@ -102,15 +103,16 @@ function settingsOf(served) {
       && Number(served.max_repeated_tool_calls) !== 1 ? served.max_repeated_tool_calls : '',
     egress_endpoints: '',
   };
-  if (dependencyEgress !== null && egressHosts !== null) {
+  if (dependencyEgress !== null && egressHosts !== null && runtimeEgress !== null) {
     const endpoints = dependencyEgress === '' ? [] : dependencyEgress.split(' ');
-    settings.egress_endpoints = [...new Set([...endpoints, ...egressHosts])].join(' ');
+    settings.egress_endpoints = [...new Set([...endpoints, ...egressHosts, ...runtimeEgress])].join(' ');
   }
   const refused = Object.entries(settings)
     .filter(([name, value]) => name !== 'egress_endpoints' && value === '')
     .map(([name]) => name);
   if (dependencyEgress === null) refused.push('egress');
   if (egressHosts === null) refused.push('egress_hosts');
+  if (runtimeEgress === null) refused.push('runtime_egress_hosts');
   return { refused, settings };
 }
 
@@ -146,8 +148,8 @@ export async function readRunSettings({
   fetch = globalThis.fetch,
   timeout = 10000,
 }, wait = pause) {
-  const fail = (why) => {
-    throw new Error(`Could not load run settings (${why}).`);
+  const fail = (why, fields = {}) => {
+    throw Object.assign(new Error(`Could not load run settings (${why}).`), fields);
   };
 
   if (endpoint === '') return fail('the control plane endpoint is empty');
@@ -207,7 +209,8 @@ export async function readRunSettings({
 
   const { refused, settings } = settingsOf(served);
   if (refused.length > 0) {
-    return fail(`control plane run settings have invalid or missing fields: ${[...new Set(refused)].join(', ')}`);
+    const fields = [...new Set(refused)];
+    return fail(`control plane run settings have invalid or missing fields: ${fields.join(', ')}`, { refused: fields });
   }
   return { settings };
 }

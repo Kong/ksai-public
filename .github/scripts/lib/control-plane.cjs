@@ -36,6 +36,13 @@ const OIDC = 'GitHub\'s OIDC token endpoint';
 
 const passing = (status) => status === 408 || status === 429 || status >= 500;
 
+function requestTime(deadline, maximum, pause = 0) {
+  if (!deadline) return maximum;
+  const left = deadline.at - deadline.now() - pause;
+  if (left < deadline.minimum) return 0;
+  return Math.min(maximum, Math.floor(left * (deadline.share ?? 1)));
+}
+
 class MintFailed extends Error {}
 
 const NATIVE_ERRORS = new Set(['AbortError', 'TimeoutError', 'TypeError', 'Error']);
@@ -66,7 +73,8 @@ const pausing = (ms, signal) => new Promise((resolve) => {
   signal?.addEventListener('abort', done, { once: true });
 });
 
-const minter = ({ env, fetch, signal: given, now = Date.now, held = tokens, holds, pause = pausing, answer = MINT_ANSWER_MS, tries = MINT_TRIES }) => async (audience, cancel) => {
+const minter = ({ env, fetch, signal: given, now = Date.now, held = tokens, holds, pause = pausing, answer = MINT_ANSWER_MS,
+  tries = MINT_TRIES, deadline = null }) => async (audience, cancel) => {
   const signal = cancel ? AbortSignal.any([given, cancel].filter(Boolean)) : given;
   const asking = [audience, env.ACTIONS_ID_TOKEN_REQUEST_URL, env.ACTIONS_ID_TOKEN_REQUEST_TOKEN].join('\n');
   const was = held.get(asking);
@@ -75,10 +83,11 @@ const minter = ({ env, fetch, signal: given, now = Date.now, held = tokens, hold
 
   let seen = '';
   for (let attempt = 1; ; attempt += 1) {
-    if (signal?.aborted === true) throw new MintFailed(gaveUp(seen));
+    const allowed = requestTime(deadline, answer);
+    if (signal?.aborted === true || allowed <= 0) throw new MintFailed(gaveUp(seen));
     const last = attempt >= tries;
     const stalled = new AbortController();
-    const timer = setTimeout(() => stalled.abort(), answer);
+    const timer = setTimeout(() => stalled.abort(), allowed);
     let response;
     let body;
     try {
@@ -93,10 +102,12 @@ const minter = ({ env, fetch, signal: given, now = Date.now, held = tokens, hold
       if (response?.ok === true && !stalled.signal.aborted) {
         throw new MintFailed(`${OIDC} answered ${response.status} with a body that is not JSON`, { cause: error });
       }
-      const why = stalled.signal.aborted ? stalledAfter(answer) : unminted(error);
+      const why = stalled.signal.aborted ? stalledAfter(allowed) : unminted(error);
       if (last) throw new MintFailed(why, { cause: error });
       seen = why;
-      await pause(mintPause(attempt), signal);
+      const delay = mintPause(attempt);
+      if (!requestTime(deadline, answer, delay)) throw new MintFailed(gaveUp(seen));
+      await pause(delay, signal);
       continue;
     } finally {
       clearTimeout(timer);
@@ -104,7 +115,9 @@ const minter = ({ env, fetch, signal: given, now = Date.now, held = tokens, hold
     if (!response.ok) {
       if (passing(response.status) && !last) {
         seen = `${OIDC} answered ${response.status}`;
-        await pause(mintPause(attempt), signal);
+        const delay = mintPause(attempt);
+        if (!requestTime(deadline, answer, delay)) throw new MintFailed(gaveUp(seen));
+        await pause(delay, signal);
         continue;
       }
       throw new MintFailed(`${OIDC} answered ${response.status}`);
@@ -171,12 +184,14 @@ async function gatewayHandover({ env, mint, secret }) {
   return minted.token ? { [HANDOVER_HEADER]: minted.token } : {};
 }
 
-async function reachedFor({ env, fetch, timeout, secret, holds = timeout, audience = 'ksai-cp', endpoint = env.KSAI_CP_ENDPOINT, pause = pausing, tries = MINT_TRIES }) {
+async function reachedFor({ env, fetch, timeout, secret, holds = timeout, audience = 'ksai-cp', endpoint = env.KSAI_CP_ENDPOINT,
+  pause = pausing, tries = MINT_TRIES, deadline = null }) {
   const named = String(endpoint ?? '').trim();
   if (named === '') return { why: 'no control plane serves this repository' };
-  if (!(timeout > 0)) return { why: 'the control plane did not answer in time' };
-  const signal = AbortSignal.timeout(timeout);
-  const mint = minter({ env, fetch, signal, holds, pause, tries });
+  const available = deadline ? deadline.at - deadline.now() : timeout;
+  if (!(available > 0) || !requestTime(deadline, timeout)) return { why: 'the control plane did not answer in time' };
+  const signal = AbortSignal.timeout(available);
+  const mint = minter({ env, fetch, signal, holds, pause, tries, deadline, answer: deadline ? timeout : MINT_ANSWER_MS });
   const reached = await reachControlPlane({ endpoint: named, audience, env, mint, secret });
   return reached.failure ? { why: reached.failure } : { base: reached.base, token: reached.token, signal };
 }
@@ -235,13 +250,21 @@ const holdsFor = (timeout) => Array.from({ length: ATTEMPTS }, (_, tries) => tim
 const held = (ms) => new Promise((done) => { setTimeout(done, ms); });
 
 async function answeredRetrying(call, url, options, pause = held) {
-  for (let tries = 0; ; tries += 1) {
-    if (tries > 0) await pause(backoffFor(tries));
-    const said = await answered(call, url, options);
+  const { deadline, timeout } = options;
+  let last = { why: 'the control plane did not answer in time', unavailable: true };
+  for (let tries = 0; tries < (deadline?.tries ?? ATTEMPTS); tries += 1) {
+    const delay = tries > 0 ? backoffFor(tries) : 0;
+    if (deadline && !requestTime(deadline, timeout, delay)) break;
+    if (delay) await pause(delay);
+    const allowed = requestTime(deadline, timeout);
+    if (deadline && !allowed) break;
+    const said = await answered(call, url, { ...options, timeout: allowed });
     if (!said.why) return said;
     const unavailable = said.status === undefined || said.status >= 500 || said.status === 429;
-    if (!unavailable || tries + 1 >= ATTEMPTS) return { ...said, unavailable };
+    last = { ...said, why: said.why, unavailable };
+    if (!unavailable) break;
   }
+  return last;
 }
 
 const REPORT_TRIES = 6;

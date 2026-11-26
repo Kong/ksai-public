@@ -1,5 +1,8 @@
 import { createHash } from 'node:crypto';
 
+import {
+  BASE_SHA_FIELD, PLAN_FIELD, PROFILE as HARNESS_PROFILE, RUNNER_FIELD, validatePlan,
+} from '../../scripts/ksai/harness/contract.mjs';
 import { admitReviewDeadline, reviewMinuteBudget } from '../../scripts/lib/review-deadline.mjs';
 
 const RECORD_ID = /^[0-9a-f]{32}$/;
@@ -29,6 +32,7 @@ const COUNT = /^[1-9][0-9]{0,18}$/;
 const DEADLINE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
 
 const MINUTE = 60_000;
+const LATE_COMPLETION_RESERVE = 15_000;
 
 const TOLD_MAX = 300;
 
@@ -40,6 +44,8 @@ const STEERING_DIGEST = /^sha256:[0-9a-f]{64}$/;
 const NO_RECORD_HEADER = 'Ksai-No-Record';
 
 const WRITE_PROFILE = 'workflow-write';
+
+const RUNNER_LABEL = /^[A-Za-z0-9._-]{1,64}$/;
 
 const PREPARABLE = Object.freeze(['tools', 'dependencies']);
 
@@ -67,13 +73,31 @@ const pullOf = (subject) =>
     ? String(subject.number)
     : '');
 
-function budgetOf(deadline, at) {
+function budgetOf(deadline, at, profile) {
   if (deadline === undefined) return { stageMinutes: '', stageJobMinutes: '' };
   const due = typeof deadline === 'string' && DEADLINE.test(deadline) ? Date.parse(deadline) : Number.NaN;
-  if (!Number.isFinite(due)) throw policyStopped('record stage deadline is not a UTC time');
+  if (!Number.isFinite(due) || new Date(due).toISOString() !== deadline.replace('Z', '.000Z')) {
+    throw policyStopped('record stage deadline is not a UTC time');
+  }
   const left = Math.floor((due - at) / MINUTE);
-  if (left < 5) throw stopped(`stage attempt ends in ${Math.max(0, left)} minutes, too few to run it`);
-  return { stageMinutes: String(left - 3), stageJobMinutes: String(left - 1) };
+  if (left >= 5) {
+    const jobMinutes = left - 1;
+    return {
+      stageMinutes: String(left - 3),
+      stageJobMinutes: String(jobMinutes),
+      jobDeadlineAt: String(at + jobMinutes * MINUTE),
+    };
+  }
+  if (profile !== HARNESS_PROFILE) {
+    throw stopped(`stage attempt ends in ${Math.max(0, left)} minutes, too few to run it`);
+  }
+  const jobMinutes = Math.max(left - 1, 1);
+  return {
+    stageLate: 'true',
+    stageMinutes: '1',
+    stageJobMinutes: String(jobMinutes),
+    jobDeadlineAt: String(Math.min(due - LATE_COMPLETION_RESERVE, at + jobMinutes * MINUTE)),
+  };
 }
 
 function preparationOf(prepare, profile) {
@@ -94,6 +118,25 @@ function mergeOf(base, profile) {
   if (!shaped(base, COMMIT)) throw policyStopped('record merge base is not a full commit id');
   if (profile !== WRITE_PROFILE) throw policyStopped('record has a merge base for a stage that does not write');
   return base;
+}
+
+function harnessOf(profile, plan, base, runner) {
+  if (profile !== HARNESS_PROFILE) {
+    if (plan !== undefined || base !== undefined || runner !== undefined) {
+      throw policyStopped('record has harness fields for another stage profile');
+    }
+    return {};
+  }
+  if (!shaped(base, COMMIT) || !shaped(runner, RUNNER_LABEL)) {
+    throw policyStopped('record does not name a harness base commit and runner label');
+  }
+  if (typeof plan !== 'string') throw policyStopped('record harness plan is not text');
+  try {
+    validatePlan(plan);
+  } catch (error) {
+    throw policyStopped(error.message);
+  }
+  return { harnessPlan: plan, harnessBaseSHA: base, harnessRunner: runner };
 }
 
 function recordFrom(served, at) {
@@ -121,6 +164,9 @@ function recordFrom(served, at) {
     profile,
     merge_base: mergeBase,
     stage_steps: stageSteps,
+    [PLAN_FIELD]: harnessPlan,
+    [BASE_SHA_FIELD]: harnessBaseSHA,
+    [RUNNER_FIELD]: harnessRunner,
   } = /** @type {Record<string, unknown>} */ (served);
   if (stageSteps !== undefined) {
     if (typeof stageSteps !== 'string' || stageSteps === '' || Buffer.byteLength(stageSteps, 'utf8') > STEPS_MAX) {
@@ -135,6 +181,7 @@ function recordFrom(served, at) {
   }
   const preparation = preparationOf(prepare, profile);
   const merging = mergeOf(mergeBase, profile);
+  const harness = harnessOf(profile, harnessPlan, harnessBaseSHA, harnessRunner);
 
   if (!shaped(recordId, RECORD_ID)) {
     throw policyStopped('record names no control-plane decision for this run');
@@ -198,13 +245,15 @@ function recordFrom(served, at) {
     planPath: typeof planPath === 'string' ? planPath : '',
     changesetMaxBytes: changesetMaxBytes ?? '',
     changesetMaxFiles: changesetMaxFiles ?? '',
+    profile: typeof profile === 'string' ? profile : '',
     mergeBase: merging,
     stageSteps: stageSteps ?? '',
     ...preparation,
+    ...harness,
     ...(reviewAdmission ? {
       reviewAdmission: JSON.stringify(reviewAdmission),
       ...reviewMinuteBudget(reviewAdmission, at),
-    } : budgetOf(deadline, at)),
+    } : budgetOf(deadline, at, profile)),
   };
 }
 
