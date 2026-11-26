@@ -6,6 +6,7 @@ import path from 'node:path';
 
 import { runMain } from '../lib/main.mjs';
 import { writeOutputs } from '../lib/outputs.mjs';
+import { MANIFEST, listed, publishedSandbox } from '../lib/step-sandbox.mjs';
 import { withoutCredentials } from './package-warm.mjs';
 
 const require = createRequire(import.meta.url);
@@ -150,11 +151,11 @@ function tidyIn(cwd, child, timeout) {
 
 export function graphIn(cwd, child, timeout, run = spawnSync) {
   const deadline = Date.now() + timeout;
-  const listed = run('go', ['list', '-mod=readonly', '-m', '-f', GRAPH_FORMAT, 'all'], {
+  const graph = run('go', ['list', '-mod=readonly', '-m', '-f', GRAPH_FORMAT, 'all'], {
     cwd, env: child, encoding: 'utf8', maxBuffer: MAX_GIT_OUTPUT, stdio: ['ignore', 'pipe', 'inherit'], timeout,
   });
-  if (listed.error || listed.status !== 0) return false;
-  const lines = listed.stdout.split('\n').filter((one) => one !== '');
+  if (graph.error || graph.status !== 0) return false;
+  const lines = graph.stdout.split('\n').filter((one) => one !== '');
   const modules = lines.filter((one) => !one.startsWith(LOCAL_ORIGINAL));
   const locals = lines.filter((one) => one.startsWith(LOCAL_ORIGINAL)).map((one) => one.slice(LOCAL_ORIGINAL.length));
   if (lines.length === 0) return true;
@@ -176,6 +177,15 @@ export function graphIn(cwd, child, timeout, run = spawnSync) {
   }
 }
 
+export function handedModules(env, { sandbox = publishedSandbox } = {}) {
+  const temp = String(env.RUNNER_TEMP ?? '');
+  if (!path.isAbsolute(temp) || String(env.SANDBOX_MANIFEST ?? '') !== path.join(temp, MANIFEST)) return false;
+  const { carried, refused } = sandbox(temp, { denied: listed(env.SANDBOX_DENY_ENV) });
+  return !refused && Object.hasOwn(carried.env, 'GOMODCACHE');
+}
+
+const quoted = (dirs) => dirs.map((dir) => `\`${dir}\``).join(', ');
+
 export function main(
   env = process.env,
   {
@@ -187,15 +197,17 @@ export function main(
     moduleCache = goEnvOf('GOMODCACHE'),
     goRoot = goEnvOf('GOROOT'),
     cacheExists = existsSync,
+    handed = handedModules,
     say = warn,
   } = {},
 ) {
   const workspace = env.WORKSPACE || process.cwd();
-  const done = (version = '') => {
+  const done = (version = '', warmed = true) => {
     if (!env.GITHUB_ENV) return 0;
     appendFileSync(env.GITHUB_ENV, 'GOPROXY=off\nGOTOOLCHAIN=local\n');
     if (version === '') return 0;
-    for (const [name, at] of [['KSAI_GO_MODULE_CACHE', moduleCache(workspace)], ['KSAI_GOROOT', goRoot(workspace)]]) {
+    const named = [...(warmed ? [['KSAI_GO_MODULE_CACHE', moduleCache(workspace)]] : []), ['KSAI_GOROOT', goRoot(workspace)]];
+    for (const [name, at] of named) {
       if (at !== '' && !at.includes('\n') && cacheExists(at)) appendFileSync(env.GITHUB_ENV, `${name}=${at}\n`);
     }
     return 0;
@@ -205,6 +217,10 @@ export function main(
   if (version === '') {
     say('`go` not found after setup, module cache not warmed');
     return done();
+  }
+  if (handed(env)) {
+    console.log('the control plane hands the sandbox its Go module cache, so the runtime downloads no modules');
+    return done(version, false);
   }
   let dirs = [];
   try {
@@ -243,13 +259,13 @@ export function main(
   const untidied = unfinished(tidy);
   const ungraphed = unfinished(graph);
   if (untidied.length > 0) {
-    say(`go mod tidy did not finish for ${untidied.join(', ')}. Running tidy in the sandbox can fail on modules only tidy loads.`, { phase: 'tidy', modules: untidied });
+    say(`go mod tidy did not finish for ${quoted(untidied)}. Running tidy in the sandbox can fail on modules only tidy loads.`, { phase: 'tidy', modules: untidied });
   }
   if (ungraphed.length > 0) {
-    say(`the module graph did not finish downloading for ${ungraphed.join(', ')}. A check that reads every module, such as go list -m all, can fail in the sandbox.`, { phase: 'graph', modules: ungraphed });
+    say(`the module graph did not finish downloading for ${quoted(ungraphed)}. A check that reads every module, such as go list -m all, can fail in the sandbox.`, { phase: 'graph', modules: ungraphed });
   }
   if (failed.length > 0) {
-    say(`the module cache is incomplete for ${failed.join(', ')}. The sandbox has no network, so a build that needs a missing module fails.`, { phase: 'download', modules: failed });
+    say(`the module cache is incomplete for ${quoted(failed)}. The sandbox has no network, so a build that needs a missing module fails.`, { phase: 'download', modules: failed });
   } else {
     console.log(`warmed the module cache of ${version} for ${dirs.join(', ')}`);
   }

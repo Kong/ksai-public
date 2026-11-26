@@ -8,6 +8,7 @@ import { pathToFileURL } from 'node:url';
 import taskRequest from '../lib/task-request.cjs';
 import controlPlane from '../lib/control-plane.cjs';
 import { writeOutputs } from '../lib/outputs.mjs';
+import { PHASE as HARNESS_PHASE, PROFILE as HARNESS_PROFILE } from './harness/contract.mjs';
 
 const API_VERSION = 'ksai.konghq.com/run-steering/v1alpha1';
 const SUBJECT_VERSION = 'ksai.konghq.com/steering-subject-map/v1alpha1';
@@ -16,6 +17,7 @@ const PACKAGE_STAGE = 'package-stage';
 const PACKAGE_PHASES = Object.freeze({
   [PACKAGE_STAGE]: Object.freeze({ packageProfile: 'read', profile: 'workflow-read' }),
   'package-write': Object.freeze({ packageProfile: 'mutate', profile: 'workflow-write' }),
+  [HARNESS_PHASE]: Object.freeze({ packageProfile: undefined, profile: HARNESS_PROFILE }),
 });
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const RECORD_ID = /^[0-9a-f]{32}$/;
@@ -286,7 +288,7 @@ function validatePlan(execute, advanced, which = 'later') {
   const executionModel = advanced.route.executionModel;
   if (!SAFE_NAME.test(model.id) || !SAFE_NAME.test(model.effort) || runtime.engine !== 'opencode-2'
     || !SAFE_NAME.test(policy.profile) || !Array.isArray(policy.allowedTools) || !Array.isArray(policy.deniedTools)
-    || !SAFE_NAME.test(policy.packageProfile) || !DIGEST.test(policy.policyDigest)
+    || typeof policy.packageProfile !== 'string' || !SAFE_NAME.test(policy.packageProfile) || !DIGEST.test(policy.policyDigest)
     || policy.allowedTools.length === 0 || policy.deniedTools.length === 0
     || policy.allowedTools.some((tool) => typeof tool !== 'string' || tool === '')
     || policy.deniedTools.some((tool) => typeof tool !== 'string' || tool === '')
@@ -391,7 +393,7 @@ function packageStagePlan(current) {
   }
   const plan = validatePlan(execute, current, 'current');
   const { packageProfile, profile } = PACKAGE_PHASES[execute.phase.name];
-  if (execute.policy.packageProfile !== packageProfile || plan.profile !== profile) {
+  if (plan.profile !== profile || (packageProfile !== undefined && execute.policy.packageProfile !== packageProfile)) {
     throw new SteeringRefused(`the current envelope runs a ${execute.phase.name} phase under another profile`);
   }
   return plan;

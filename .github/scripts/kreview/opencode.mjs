@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { isAbsolute, join, resolve } from 'node:path';
 
 import { DEFAULT_SECRET_VARS, collectSecrets, scrub } from './secrets.cjs';
+import { listed } from '../lib/step-sandbox.mjs';
 
 const OPENCODE_TOOL = Object.assign(Object.create(null), {
   Bash: 'bash',
@@ -16,19 +17,6 @@ const OPENCODE_TOOL = Object.assign(Object.create(null), {
   WebFetch: 'webfetch',
   WebSearch: 'websearch',
 });
-
-/**
- * listed answers the entries of a comma- or newline-separated input, which is how a caller writes a list.
- *
- * @param {string | undefined} value
- * @returns {string[]}
- */
-export function listed(value) {
-  return String(value ?? '')
-    .split(/[,\n]/)
-    .map((one) => one.trim())
-    .filter(Boolean);
-}
 
 /**
  * expandHome answers a path with a leading `~` or `$HOME` resolved, which a shell does and a script does not.
