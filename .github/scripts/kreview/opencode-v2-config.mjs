@@ -27,10 +27,10 @@ import { GOVERNED_FILE, PLUGIN_DIR, PLUGIN_ENTRY } from './link-governed.mjs';
 import {
   TOOL_DENIED_ENV,
   TOOL_INJECTION_ENV,
-  TOOL_WRAPPER_ENV,
   callerDeniedEnvironment,
   toolPathRoots,
   toolProtectedPaths,
+  toolWrapperKeys,
 } from './opencode-tool-sandbox.mjs';
 
 const TOOL_SHELL = fileURLToPath(new URL('./opencode-tool-shell.mjs', import.meta.url));
@@ -48,7 +48,7 @@ export function governedSessionOf(env) {
 
 export function guardOptions(env, workspace) {
   return {
-    keep: [...TOOL_WRAPPER_ENV],
+    keep: [...toolWrapperKeys(env)],
     blank: [...new Set([...TOOL_DENIED_ENV, ...TOOL_INJECTION_ENV, ...callerDeniedEnvironment(env)])],
     roots: toolPathRoots(env, workspace),
     protected: toolProtectedPaths(env),

@@ -53,6 +53,10 @@ inputs:
       0 to disable the watchdog entirely. It cannot help a `cancel-in-progress` cancellation, which GitHub delivers with
       no warning."
     required: true
+  job_deadline_at:
+    description: The absolute job deadline in epoch milliseconds.
+    required: false
+    default: ""
   max_consecutive_tool_failures:
     description: "how many tool calls may fail in a row before the watchdog stops the run. The number is high because
       `is_error` means the shell exited non-zero rather than that the call failed: a search matching nothing exits 1,
@@ -195,7 +199,7 @@ runs:
         fi
     - name: Start installing the stage tools
       id: stage_tools
-      if: ${{ steps.staged_scripts.outcome == 'success' }}
+      if: ${{ steps.staged_scripts.outcome == 'success' && github.job != 'run_harness' }}
       shell: bash
       env:
         OPENCODE_VERSION: ${{ inputs.opencode_version }}
@@ -226,9 +230,58 @@ runs:
       with:
         endpoint: ${{ inputs.control_plane_endpoint }}
         record_id: ${{ inputs.record_id }}
+    - name: Record cancellation before late harness completion
+      id: harness_late_cancelled
+      if: cancelled()
+      shell: bash
+      run: echo 'cancelled=true' >> "$GITHUB_OUTPUT"
+    - name: Complete a late harness stage
+      id: harness_late_complete
+      if: ${{ always() && steps.dispatch_record.outputs.stage_late == 'true' }}
+      shell: bash
+      env:
+        WORKFLOW_JOB: ${{ steps.dispatch_record.outputs.workflow_job }}
+        WORKFLOW_INSTANCE: ${{ steps.dispatch_record.outputs.workflow_instance }}
+        WORKFLOW_ATTEMPT: ${{ steps.dispatch_record.outputs.workflow_attempt }}
+        WORKFLOW_LEASE: ${{ steps.dispatch_record.outputs.workflow_lease }}
+        STAGE_PROFILE: ${{ steps.dispatch_record.outputs.profile }}
+        STAGE_LATE: ${{ steps.dispatch_record.outputs.stage_late }}
+        JOB_DEADLINE_AT: ${{ steps.deadlines.outputs.job_deadline_at }}
+        JOB_TIMEOUT_MINUTES: ${{ steps.dispatch_record.outputs.stage_job_minutes || inputs.job_timeout_minutes }}
+        KSAI_JOB_STARTED_AT_MS: ${{ steps.runtime_ref.outputs.started_at_ms }}
+        KSAI_CP_ENDPOINT: ${{ inputs.control_plane_endpoint }}
+        GATE_JOB_DEADLINE_AT: ${{ inputs.job_deadline_at }}
+        RECORD_JOB_DEADLINE_AT: ${{ steps.dispatch_record.outputs.job_deadline_at }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+        CONCLUSION: ${{ steps.harness_late_cancelled.outputs.cancelled == 'true' && 'cancelled' || 'failure' }}
+      run: node "${SCRIPTS}/ksai/workflow/stage.mjs"
+    - name: Set the harness deadlines
+      id: deadlines
+      if: ${{ steps.dispatch_record.outputs.profile == 'workflow-harness' && steps.dispatch_record.outputs.stage_late != 'true' }}
+      shell: bash
+      env:
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+        HARNESS_PLAN_FILE: ${{ steps.dispatch_record.outputs.harness_plan_file }}
+        GATE_JOB_DEADLINE_AT: ${{ inputs.job_deadline_at }}
+        RECORD_JOB_DEADLINE_AT: ${{ steps.dispatch_record.outputs.job_deadline_at }}
+      run: node "${SCRIPTS}/ksai/workflow/stage.mjs" deadlines || { code=$?; echo "exit_code=$code" >> "$GITHUB_OUTPUT"; exit "$code"; }
+    - name: Restore the harness base files
+      id: harness_restore
+      if: ${{ steps.deadlines.outcome == 'success' && steps.dispatch_record.outputs.stage_late != 'true' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.source_org_github_token }}
+        HARNESS_BASE_SHA: ${{ steps.dispatch_record.outputs.harness_base_sha }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+        HARNESS_PLAN_FILE: ${{ steps.dispatch_record.outputs.harness_plan_file }}
+        KSAI_STEP_DEADLINE_AT: ${{ steps.deadlines.outputs.setup_deadline_at }}
+      run: |
+        node "${SCRIPTS}/ksai/workflow/stage.mjs" harness-input restore |
+          node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/ksai/harness/restore.mjs" || { code=$?; echo "exit_code=$code" >> "$GITHUB_OUTPUT"; exit "$code"; }
     - name: Fetch the base of the pull request a package stage reads
       id: review_base
-      if: ${{ steps.dispatch_record.outcome == 'success' && steps.dispatch_record.outputs.stage_pull != '' }}
+      if: ${{ steps.dispatch_record.outcome == 'success' && steps.dispatch_record.outputs.stage_pull != '' &&
+        steps.dispatch_record.outputs.profile != 'workflow-harness' }}
       continue-on-error: true
       shell: bash
       env:
@@ -239,9 +292,10 @@ runs:
       run: node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/ksai/review-base.mjs"
     - name: Collect facts for the control-plane run plan
       id: steering
-      if: ${{ steps.dispatch_record.outputs.workflow_job != '' }}
+      if: ${{ steps.dispatch_record.outputs.workflow_job != '' && steps.dispatch_record.outputs.stage_late != 'true' }}
       shell: bash
       env:
+        KSAI_STEP_DEADLINE_AT: ${{ steps.deadlines.outputs.setup_deadline_at }}
         CONTROL_PLANE_ENDPOINT: ${{ inputs.control_plane_endpoint }}
         RECORD_ID: ${{ steps.dispatch_record.outputs.record_id }}
         SOURCE_REVISION: ${{ steps.dispatch_record.outputs.source_revision }}
@@ -257,12 +311,13 @@ runs:
         PLAN_PATH: ${{ steps.dispatch_record.outputs.plan_path }}
         REVIEW_BASE_REF: ${{ steps.review_base.outputs.ref }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
-      run: node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/ksai/steering.mjs"
+      run: node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/ksai/steering.mjs" || { code=$?; echo "exit_code=$code" >> "$GITHUB_OUTPUT"; exit "$code"; }
     - name: Resolve what the caller's prompt may touch
       id: build_run
       if: ${{ steps.steering.outputs.run == 'true' }}
       shell: bash
       env:
+        KSAI_STEP_DEADLINE_AT: ${{ steps.deadlines.outputs.setup_deadline_at }}
         MODEL: ${{ steps.steering.outputs.model }}
         EFFORT: ${{ steps.steering.outputs.effort }}
         PROMPT_ID: ${{ steps.steering.outputs.prompt_id }}
@@ -276,11 +331,20 @@ runs:
         WORKFLOW_ATTEMPT: ${{ steps.dispatch_record.outputs.workflow_attempt }}
         WORKFLOW_LEASE: ${{ steps.dispatch_record.outputs.workflow_lease }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
-      run: node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/ksai/run-flow.mjs"
+      run: node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/ksai/run-flow.mjs" || { code=$?; echo "exit_code=$code" >> "$GITHUB_OUTPUT"; exit "$code"; }
     - name: Keep the trusted checkout out of the tree a package stage reads
+      id: cleanup
       if: ${{ steps.steering.outcome == 'success' }}
       shell: bash
-      run: rm -rf -- "${GITHUB_WORKSPACE}/_ksai"
+      env:
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+        KSAI_STEP_DEADLINE_AT: ${{ steps.deadlines.outputs.setup_deadline_at }}
+      run: |
+        if [[ -z "${KSAI_STEP_DEADLINE_AT}" ]]; then
+          rm -rf -- "${GITHUB_WORKSPACE}/_ksai"
+        else
+          node "${SCRIPTS}/ksai/deadline-command.mjs" -- rm -rf -- "${GITHUB_WORKSPACE}/_ksai" || { code=$?; echo "exit_code=$code" >> "$GITHUB_OUTPUT"; exit "$code"; }
+        fi
     - name: Merge the base the control plane named, uncommitted, for the stage to resolve
       id: merge_base
       if: ${{ steps.build_run.outcome == 'success' && steps.dispatch_record.outputs.merge_base != '' }}
@@ -295,9 +359,10 @@ runs:
       run: node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/ksai/workflow/merge.mjs"
     - name: Render the package stage prompt through the control plane
       id: governed_run
-      if: ${{ steps.build_run.outcome == 'success' }}
+      if: ${{ steps.build_run.outcome == 'success' && steps.dispatch_record.outputs.stage_late != 'true' }}
       shell: bash
       env:
+        KSAI_STEP_DEADLINE_AT: ${{ steps.deadlines.outputs.setup_deadline_at }}
         REQUEST_FILE: ${{ steps.build_run.outputs.request_file }}
         GOVERNED_NAME: run
         OPENCODE_ALLOWED: ${{ steps.build_run.outputs.allowed_tools }}
@@ -306,20 +371,22 @@ runs:
         OPENCODE_VERSION: ${{ inputs.opencode_version }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: |
-        node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/kreview/governed-request.mjs" flow
+        node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/kreview/governed-request.mjs" flow || { code=$?; echo "exit_code=$code" >> "$GITHUB_OUTPUT"; exit "$code"; }
     - name: Wait for the stage tools
       id: opencode_install
-      if: ${{ steps.build_run.outcome == 'success' }}
+      if: ${{ steps.build_run.outcome == 'success' && steps.dispatch_record.outputs.stage_late != 'true' }}
       shell: bash
       env:
+        KSAI_STEP_DEADLINE_AT: ${{ steps.deadlines.outputs.setup_deadline_at }}
         OPENCODE_VERSION: ${{ inputs.opencode_version }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
-      run: node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/kreview/stage-tools.mjs" wait
+      run: node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/kreview/stage-tools.mjs" wait || { code=$?; echo "exit_code=$code" >> "$GITHUB_OUTPUT"; exit "$code"; }
     - name: Compute model cost-attribution headers
       id: model_headers
       if: ${{ steps.build_run.outcome == 'success' }}
       shell: bash
       env:
+        KSAI_STEP_DEADLINE_AT: ${{ steps.deadlines.outputs.setup_deadline_at }}
         REPO: ${{ github.repository }}
         WORKFLOW: ${{ github.workflow }}
         RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
@@ -330,15 +397,17 @@ runs:
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       run: |
         set -euo pipefail
-        node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/ksai/attribution.mjs"
+        node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/ksai/attribution.mjs" || { code=$?; echo "exit_code=$code" >> "$GITHUB_OUTPUT"; exit "$code"; }
     - name: Prepare what a governed prompt is verified with
       id: governance_prepare
       if: ${{ steps.governed_run.outcome == 'success' }}
       shell: bash
       env:
+        KSAI_STEP_DEADLINE_AT: ${{ steps.deadlines.outputs.setup_deadline_at }}
         GH_TOKEN: ${{ github.token }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
-      run: node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/governance/prepare.mjs"
+      run: |
+        node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/governance/prepare.mjs" || { code=$?; if [[ -n "${KSAI_STEP_DEADLINE_AT:-}" ]]; then echo "exit_code=$code" >> "$GITHUB_OUTPUT"; fi; exit "$code"; }
     - name: Warm the locked Node dependencies while there is still a network
       id: package_warm
       if: ${{ steps.opencode_install.outcome == 'success' && steps.governed_run.outcome == 'success' &&
@@ -352,39 +421,6 @@ runs:
         GITHUB_TOKEN: ""
         OTEL_EXPORTER_OTLP_HEADERS: ""
       run: node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/ksai/package-warm.mjs"
-    - name: Look for the Go modules the tree under work holds
-      id: go_detect
-      if: ${{ steps.opencode_install.outcome == 'success' && steps.governed_run.outcome == 'success' &&
-        steps.dispatch_record.outputs.prepare_dependencies == 'true' }}
-      continue-on-error: true
-      shell: bash
-      env:
-        WORKSPACE: ${{ github.workspace }}
-        SCRIPTS: ${{ runner.temp }}/ksai-scripts
-      run: node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/ksai/gomod-warm.mjs" detect
-    - name: Set up the Go the tree under work pins
-      id: go_setup
-      if: ${{ steps.go_detect.outputs.mod != '' }}
-      continue-on-error: true
-      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-      env:
-        GOTOOLCHAIN: local
-      with:
-        go-version-file: ${{ steps.go_detect.outputs.mod }}
-        cache: false
-    - name: Warm the Go module cache while there is still a network
-      id: go_warm
-      if: ${{ steps.go_detect.outputs.mod != '' }}
-      continue-on-error: true
-      shell: bash
-      env:
-        WORKSPACE: ${{ github.workspace }}
-        LIST: ${{ steps.go_detect.outputs.list }}
-        SCRIPTS: ${{ runner.temp }}/ksai-scripts
-        GH_TOKEN: ""
-        GITHUB_TOKEN: ""
-        OTEL_EXPORTER_OTLP_HEADERS: ""
-      run: node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/ksai/gomod-warm.mjs"
     - name: Set up mise for the tools the tree under work pins
       id: mise_setup
       if: ${{ steps.opencode_install.outcome == 'success' && steps.governed_run.outcome == 'success' &&
@@ -425,27 +461,150 @@ runs:
         GITHUB_TOKEN: ""
         OTEL_EXPORTER_OTLP_HEADERS: ""
       run: node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/ksai/stage-steps.mjs" before
-    - name: Mint the bearer this review starts on
-      id: mint
-      if: ${{ steps.opencode_install.outcome == 'success' }}
+    - name: Look for the Go modules the tree under work holds
+      id: go_detect
+      if: ${{ steps.opencode_install.outcome == 'success' && steps.governed_run.outcome == 'success' &&
+        steps.dispatch_record.outputs.prepare_dependencies == 'true' }}
+      continue-on-error: true
       shell: bash
       env:
+        WORKSPACE: ${{ github.workspace }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      run: node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/ksai/gomod-warm.mjs" detect
+    - name: Set up the Go the tree under work pins
+      id: go_setup
+      if: ${{ steps.go_detect.outputs.mod != '' }}
+      continue-on-error: true
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      env:
+        GOTOOLCHAIN: local
+      with:
+        go-version-file: ${{ steps.go_detect.outputs.mod }}
+        cache: false
+    - name: Warm the Go module cache while there is still a network
+      id: go_warm
+      if: ${{ steps.go_detect.outputs.mod != '' }}
+      continue-on-error: true
+      shell: bash
+      env:
+        WORKSPACE: ${{ github.workspace }}
+        LIST: ${{ steps.go_detect.outputs.list }}
+        SANDBOX_MANIFEST: ${{ steps.steps_before.outputs.sandbox_manifest }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+        GH_TOKEN: ""
+        GITHUB_TOKEN: ""
+        OTEL_EXPORTER_OTLP_HEADERS: ""
+      run: node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/ksai/gomod-warm.mjs"
+    - name: Check the runner disk has room to restore the kept cache
+      id: keep_room
+      if: ${{ steps.steps_before.outputs.keep_path != '' }}
+      continue-on-error: true
+      shell: bash
+      env:
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+      run: node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/kreview/stage-prepare.mjs" room
+    - name: Restore the cache the control plane keeps across runs
+      id: keep_restore
+      if: ${{ steps.steps_before.outputs.keep_path != '' && steps.keep_room.outputs.room == 'true' }}
+      continue-on-error: true
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.steps_before.outputs.keep_path }}
+        key: ${{ steps.steps_before.outputs.keep_key || steps.steps_before.outputs.keep_restore }}
+        restore-keys: ${{ steps.steps_before.outputs.keep_restore }}
+    - name: Prepare the model's sandbox with the control plane's offline steps
+      id: steps_prepare
+      if: ${{ steps.steps_before.outcome == 'success' }}
+      continue-on-error: true
+      shell: bash
+      env:
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+        STAGE_STEPS_FILE: ${{ steps.dispatch_record.outputs.stage_steps_file }}
+        GH_TOKEN: ""
+        GITHUB_TOKEN: ""
+        OTEL_EXPORTER_OTLP_HEADERS: ""
+      run: node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/kreview/stage-prepare.mjs"
+    - name: Save the kept cache before the model can write to it
+      if: ${{ steps.steps_prepare.outputs.keep_ready == 'true' && steps.steps_before.outputs.keep_key != '' &&
+        steps.keep_restore.outputs.cache-hit != 'true' }}
+      continue-on-error: true
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.steps_before.outputs.keep_path }}
+        key: ${{ steps.steps_before.outputs.keep_key }}
+    - name: Copy the harness tree and write the plan files
+      id: harness_files
+      if: ${{ steps.deadlines.outcome == 'success' && steps.cleanup.outcome == 'success' && steps.opencode_install.outcome == 'success' && steps.governance_prepare.outcome == 'success' && steps.model_headers.outcome == 'success' && steps.dispatch_record.outputs.stage_late != 'true' }}
+      shell: bash
+      env:
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+        HARNESS_PLAN_FILE: ${{ steps.dispatch_record.outputs.harness_plan_file }}
+        KSAI_STEP_DEADLINE_AT: ${{ steps.deadlines.outputs.setup_deadline_at }}
+      run: |
+        node "${SCRIPTS}/ksai/workflow/stage.mjs" harness-input files |
+          node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/ksai/harness/files.mjs" || { code=$?; echo "exit_code=$code" >> "$GITHUB_OUTPUT"; exit "$code"; }
+    - name: Set up the harness
+      id: harness_setup
+      if: ${{ steps.harness_files.outcome == 'success' && steps.dispatch_record.outputs.stage_late != 'true' }}
+      shell: bash
+      env:
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+        HARNESS_PLAN_FILE: ${{ steps.dispatch_record.outputs.harness_plan_file }}
+        KSAI_STEP_DEADLINE_AT: ${{ steps.deadlines.outputs.setup_deadline_at }}
+        JOB_DEADLINE_AT: ${{ steps.deadlines.outputs.job_deadline_at }}
+      run: |
+        node "${SCRIPTS}/ksai/workflow/stage.mjs" harness-input up |
+          node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/ksai/harness/steps.mjs" up || { code=$?; echo "exit_code=$code" >> "$GITHUB_OUTPUT"; exit "$code"; }
+    - name: Set the harness model cutoff
+      id: harness_cutoff
+      if: ${{ steps.harness_setup.outcome == 'success' }}
+      shell: bash
+      env:
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+        HARNESS_PLAN_FILE: ${{ steps.dispatch_record.outputs.harness_plan_file }}
+        JOB_DEADLINE_AT: ${{ steps.deadlines.outputs.job_deadline_at }}
+        KSAI_JOB_STARTED_AT_MS: ${{ steps.runtime_ref.outputs.started_at_ms }}
+      run: node "${SCRIPTS}/ksai/workflow/stage.mjs" harness-cutoff || { code=$?; echo "exit_code=$code" >> "$GITHUB_OUTPUT"; exit "$code"; }
+    - name: Start the harness relay
+      id: harness_relay
+      if: ${{ steps.harness_cutoff.outcome == 'success' }}
+      shell: bash
+      env:
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+        HARNESS_PLAN_FILE: ${{ steps.dispatch_record.outputs.harness_plan_file }}
+        KSAI_STEP_DEADLINE_AT: ${{ steps.deadlines.outputs.relay_deadline_at }}
+        KSAI_CHANNEL_KILL_AT: ${{ steps.harness_cutoff.outputs.kill_at }}
+      run: |
+        node "${SCRIPTS}/ksai/workflow/stage.mjs" harness-input relay |
+          node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/kreview/harness-relay.mjs" start || { code=$?; echo "exit_code=$code" >> "$GITHUB_OUTPUT"; exit "$code"; }
+    - name: Mint the bearer this review starts on
+      id: mint
+      if: ${{ steps.opencode_install.outcome == 'success' && (steps.dispatch_record.outputs.profile != 'workflow-harness' || steps.harness_relay.outcome == 'success') }}
+      shell: bash
+      env:
+        KSAI_STEP_DEADLINE_AT: ${{ steps.deadlines.outputs.relay_deadline_at }}
         ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
       working-directory: ${{ runner.temp }}
-      run: node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/kreview/gateway-token.mjs"
+      run: node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/kreview/gateway-token.mjs" || { code=$?; echo "exit_code=$code" >> "$GITHUB_OUTPUT"; exit "$code"; }
     - name: Run opencode
       id: opencode
-      if: ${{ steps.mint.outcome == 'success' && steps.governed_run.outcome == 'success' }}
+      if: ${{ steps.mint.outcome == 'success' && steps.governed_run.outcome == 'success' &&
+        steps.dispatch_record.outputs.stage_late != 'true' }}
       shell: bash
       env:
         PROMPT_FILE: ${{ steps.build_run.outputs.file }}
-        KSAI_OUTCOME_EXPECTED: "true"
+        KSAI_OUTCOME_EXPECTED: ${{ steps.dispatch_record.outputs.profile == 'workflow-harness' && 'false' || 'true' }}
+        STAGE_PROFILE: ${{ steps.steering.outputs.profile }}
+        KSAI_CHANNEL_KILL_AT: ${{ steps.harness_cutoff.outputs.kill_at }}
+        KSAI_LAUNCH_DEADLINE_AT: ${{ steps.harness_cutoff.outputs.launch_at }}
+        KSAI_STEP_DEADLINE_AT: ${{ steps.deadlines.outputs.host_deadline_at }}
         MODEL: ${{ steps.build_run.outputs.model }}
         VARIANT: ${{ steps.build_run.outputs.effort }}
         OPENCODE_HOME: ${{ runner.temp }}/opencode-home
         OPENCODE_VERSION: ${{ steps.opencode_install.outputs.version }}
         KSAI_GOVERNED_DIR: ${{ steps.governance_prepare.outputs.dir }}
+        KSAI_STEP_SANDBOX_MANIFEST: ${{ steps.steps_prepare.outputs.sandbox_manifest || steps.steps_before.outputs.sandbox_manifest }}
         ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
         KSAI_MODEL_TOKEN: ${{ steps.mint.outputs.token }}
         KSAI_MODEL_TOKEN_EXPIRES_AT: ${{ steps.mint.outputs.expires_at }}
@@ -464,13 +623,19 @@ runs:
         OPENCODE_ALLOWED: ${{ steps.build_run.outputs.allowed_tools }}
         OPENCODE_DISALLOWED: ${{ steps.build_run.outputs.disallowed_tools }}
         REPO: ${{ github.repository }}
-        JOB_TIMEOUT_MINUTES: ${{ steps.dispatch_record.outputs.stage_minutes || inputs.job_timeout_minutes }}
+        JOB_TIMEOUT_MINUTES: ${{ steps.harness_cutoff.outputs.job_timeout_minutes || steps.dispatch_record.outputs.stage_minutes ||
+          inputs.job_timeout_minutes }}
         KSAI_JOB_STARTED_AT_MS: ${{ steps.runtime_ref.outputs.started_at_ms }}
         ATTRIBUTION_HEADERS: ${{ steps.model_headers.outputs.value }}
         MAX_CONSECUTIVE_FAILURES: ${{ inputs.max_consecutive_tool_failures }}
         MAX_REPEATED_CALLS: ${{ inputs.max_repeated_tool_calls }}
       working-directory: ${{ runner.temp }}
-      run: node "${SCRIPTS}/kreview/link-host.mjs"
+      run: |
+        if [[ "${STAGE_PROFILE}" == "workflow-harness" ]]; then
+          node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/kreview/link-host.mjs" || { code=$?; echo "exit_code=$code" >> "$GITHUB_OUTPUT"; exit "$code"; }
+        else
+          node "${SCRIPTS}/kreview/link-host.mjs"
+        fi
     - name: Say how the model run ended, whichever engine ran it
       id: model_run
       if: ${{ always() && steps.opencode.outcome != 'skipped' }}
@@ -513,6 +678,81 @@ runs:
         CONCLUSION: ${{ (steps.governed_held.outcome == 'failure' || steps.governed_held.outcome == 'cancelled') && 'failure' ||
           steps.model_run.outputs.conclusion }}
       run: echo "conclusion=${CONCLUSION}" >> "$GITHUB_OUTPUT"
+    - name: Save the harness stage answer
+      id: harness_save
+      if: ${{ steps.dispatch_record.outputs.profile == 'workflow-harness' && steps.governed_held.outcome == 'success' && steps.concluded.outputs.conclusion == 'success' }}
+      shell: bash
+      env:
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+        EXECUTION_FILE: ${{ steps.model_run.outputs.execution_file }}
+      run: node "${SCRIPTS}/ksai/workflow/stage.mjs" harness-save
+    - name: Tear down the harness
+      id: harness_down
+      if: ${{ always() && steps.dispatch_record.outputs.profile == 'workflow-harness' && steps.dispatch_record.outputs.stage_late != 'true' }}
+      shell: bash
+      env:
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+        HARNESS_PLAN_FILE: ${{ steps.dispatch_record.outputs.harness_plan_file }}
+        KSAI_STEP_DEADLINE_AT: ${{ steps.deadlines.outputs.teardown_deadline_at }}
+        CONCLUSION: ${{ job.status == 'cancelled' && 'cancelled' || '' }}
+      run: |
+        node "${SCRIPTS}/ksai/workflow/stage.mjs" harness-input down |
+          node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/ksai/harness/steps.mjs" down
+    - name: Reap the harness process groups
+      id: harness_reap
+      if: ${{ always() && steps.dispatch_record.outputs.profile == 'workflow-harness' && steps.dispatch_record.outputs.stage_late != 'true' }}
+      shell: bash
+      env:
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+        KSAI_STEP_DEADLINE_AT: ${{ steps.deadlines.outputs.reap_deadline_at }}
+      run: node "${SCRIPTS}/ksai/deadline-command.mjs" -- node "${SCRIPTS}/ksai/harness/steps.mjs" reap
+    - name: Record cancellation before harness completion
+      id: harness_cancelled
+      if: cancelled()
+      shell: bash
+      run: echo 'cancelled=true' >> "$GITHUB_OUTPUT"
+    - name: Complete the harness stage
+      id: harness_complete
+      if: ${{ always() && steps.dispatch_record.outputs.profile == 'workflow-harness' && steps.dispatch_record.outputs.stage_late != 'true' }}
+      shell: bash
+      env:
+        WORKFLOW_JOB: ${{ steps.dispatch_record.outputs.workflow_job }}
+        WORKFLOW_INSTANCE: ${{ steps.dispatch_record.outputs.workflow_instance }}
+        WORKFLOW_ATTEMPT: ${{ steps.dispatch_record.outputs.workflow_attempt }}
+        WORKFLOW_LEASE: ${{ steps.dispatch_record.outputs.workflow_lease }}
+        STAGE_PROFILE: ${{ steps.dispatch_record.outputs.profile }}
+        STAGE_LATE: ${{ steps.dispatch_record.outputs.stage_late }}
+        JOB_DEADLINE_AT: ${{ steps.deadlines.outputs.job_deadline_at }}
+        JOB_TIMEOUT_MINUTES: ${{ steps.dispatch_record.outputs.stage_job_minutes || inputs.job_timeout_minutes }}
+        KSAI_JOB_STARTED_AT_MS: ${{ steps.runtime_ref.outputs.started_at_ms }}
+        KSAI_CP_ENDPOINT: ${{ inputs.control_plane_endpoint }}
+        GATE_JOB_DEADLINE_AT: ${{ inputs.job_deadline_at }}
+        RECORD_JOB_DEADLINE_AT: ${{ steps.dispatch_record.outputs.job_deadline_at }}
+        SCRIPTS: ${{ runner.temp }}/ksai-scripts
+        CONCLUSION: ${{ steps.harness_cancelled.outputs.cancelled == 'true' && 'cancelled' || steps.governed_held.outcome == 'success' &&
+          steps.concluded.outputs.conclusion || 'failure' }}
+        HARNESS_FAILED_STEP: ${{ steps.deadlines.outputs.exit_code != '' && format('deadlines:{0}', steps.deadlines.outputs.exit_code) ||
+          steps.harness_restore.outputs.exit_code != '' && format('harness_restore:{0}', steps.harness_restore.outputs.exit_code) ||
+          steps.steering.outputs.exit_code != '' && format('steering:{0}', steps.steering.outputs.exit_code) ||
+          steps.build_run.outputs.exit_code != '' && format('build_run:{0}', steps.build_run.outputs.exit_code) ||
+          steps.cleanup.outputs.exit_code != '' && format('cleanup:{0}', steps.cleanup.outputs.exit_code) ||
+          steps.governed_run.outputs.exit_code != '' && format('governed_run:{0}', steps.governed_run.outputs.exit_code) ||
+          steps.opencode_install.outputs.exit_code != '' && format('opencode_install:{0}', steps.opencode_install.outputs.exit_code) ||
+          steps.model_headers.outputs.exit_code != '' && format('model_headers:{0}', steps.model_headers.outputs.exit_code) ||
+          steps.governance_prepare.outputs.exit_code != '' && format('governance_prepare:{0}', steps.governance_prepare.outputs.exit_code) ||
+          steps.harness_files.outputs.exit_code != '' && format('harness_files:{0}', steps.harness_files.outputs.exit_code) ||
+          steps.harness_setup.outputs.exit_code != '' && format('harness_setup:{0}', steps.harness_setup.outputs.exit_code) ||
+          steps.harness_cutoff.outputs.exit_code != '' && format('harness_cutoff:{0}', steps.harness_cutoff.outputs.exit_code) ||
+          steps.harness_relay.outputs.exit_code != '' && format('harness_relay:{0}', steps.harness_relay.outputs.exit_code) ||
+          steps.mint.outputs.exit_code != '' && format('mint:{0}', steps.mint.outputs.exit_code) ||
+          steps.steering.outcome == 'success' && steps.steering.outputs.run != 'true' && 'steering:1' || '' }}
+        HARNESS_ANSWER_FILE: ${{ steps.harness_save.outputs.answer_file }}
+        HARNESS_ANSWER_DIGEST: ${{ steps.harness_save.outputs.answer_digest }}
+        MODEL_EXIT_CODE: ${{ steps.opencode.outputs.exit_code }}
+        MODEL_LAUNCHED: ${{ steps.opencode.outputs.launched }}
+        MODEL_CONCLUSION: ${{ steps.opencode.outputs.conclusion }}
+        SESSION_REFUSED: ${{ steps.opencode.outputs.session_refused }}
+      run: node "${SCRIPTS}/ksai/workflow/stage.mjs"
     - name: Upload the opencode event stream
       if: ${{ always() && steps.opencode.outputs.events_file != '' }}
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -543,6 +783,8 @@ runs:
         SCRIPTS: ${{ runner.temp }}/ksai-scripts
         STAGE_STEPS_FILE: ${{ steps.dispatch_record.outputs.stage_steps_file }}
         BOUND_HEAD_SHA: ${{ steps.dispatch_record.outputs.source_revision }}
+        MERGE_BASE: ${{ steps.dispatch_record.outputs.merge_base }}
+        STEP_OUTPUTS_BEFORE: ${{ steps.steps_before.outputs.step_outputs }}
         KSAI_SECRET_NPM_TOKEN: ${{ inputs.npm_token }}
         KSAI_CP_ENDPOINT: ${{ inputs.control_plane_endpoint }}
         GH_TOKEN: ""
@@ -557,7 +799,7 @@ runs:
     - name: Complete the package stage this run executed
       id: stage_complete
       if: ${{ always() && steps.dispatch_record.outputs.workflow_job != '' &&
-        steps.staged_scripts.outcome == 'success' }}
+        steps.staged_scripts.outcome == 'success' && steps.dispatch_record.outputs.profile != 'workflow-harness' && steps.dispatch_record.outputs.stage_late != 'true' }}
       shell: bash
       env:
         WORKFLOW_JOB: ${{ steps.dispatch_record.outputs.workflow_job }}
@@ -580,6 +822,7 @@ runs:
         CHANGESET_MAX_BYTES: ${{ steps.dispatch_record.outputs.changeset_max_bytes }}
         CHANGESET_MAX_FILES: ${{ steps.dispatch_record.outputs.changeset_max_files }}
         EVENTS_FILE: ${{ steps.opencode.outputs.events_file }}
+        STEP_OUTPUTS_BEFORE: ${{ steps.steps_before.outputs.step_outputs }}
         STEP_OUTPUTS: ${{ steps.steps_after.outputs.step_outputs }}
         KSAI_GIT_FILEMODE: "true"
         KSAI_CP_ENDPOINT: ${{ inputs.control_plane_endpoint }}

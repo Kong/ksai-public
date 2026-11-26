@@ -8,6 +8,7 @@ export async function runMain(url = '', main = async () => {}) {
     await main();
   } catch (error) {
     console.error(annotation(error.message));
-    process.exitCode = 1;
+    const { exitCode } = error ?? {};
+    process.exitCode = Number.isInteger(exitCode) && exitCode >= 1 && exitCode <= 255 ? exitCode : 1;
   }
 }

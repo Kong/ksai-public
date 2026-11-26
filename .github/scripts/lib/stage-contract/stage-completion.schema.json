@@ -13,6 +13,7 @@
     "status": {"enum": ["succeeded", "failed", "cancelled"]},
     "result_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "output": {},
+    "harness": {"$ref": "#/$defs/harness"},
     "artifacts": {
       "type": "array",
       "maxItems": 32,
@@ -38,7 +39,20 @@
     {
       "properties": {"status": {"const": "succeeded"}},
       "required": ["result_digest", "output"],
-      "not": {"required": ["failure"]}
+      "not": {
+        "anyOf": [
+          {"required": ["failure"]},
+          {"required": ["harness"], "properties": {"harness": {"required": ["failure"]}}}
+        ]
+      }
+    },
+    {
+      "properties": {
+        "status": {"const": "succeeded"},
+        "harness": {"required": ["failure"]}
+      },
+      "required": ["harness"],
+      "not": {"anyOf": [{"required": ["result_digest"]}, {"required": ["output"]}, {"required": ["failure"]}, {"required": ["artifacts"]}]}
     },
     {
       "properties": {
@@ -48,5 +62,177 @@
       "required": ["failure"],
       "not": {"anyOf": [{"required": ["result_digest"]}, {"required": ["output"]}]}
     }
-  ]
+   ],
+  "$defs": {
+    "harness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "steps",
+        "endpoints"
+      ],
+      "properties": {
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "result",
+              "seconds"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "result": {
+                "enum": [
+                  "started",
+                  "succeeded",
+                  "failed",
+                  "skipped",
+                  "cancelled"
+                ]
+              },
+              "exit_code": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 255
+              },
+              "seconds": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 600
+              }
+            }
+          }
+        },
+        "endpoints": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "endpoint",
+              "owned"
+            ],
+            "properties": {
+              "endpoint": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 65535
+              },
+              "owned": {
+                "type": "boolean"
+              },
+              "probe": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "ready"
+                ],
+                "properties": {
+                  "ready": {
+                    "type": "boolean"
+                  },
+                  "status": {
+                    "type": "integer",
+                    "minimum": 100,
+                    "maximum": 599
+                  }
+                }
+              },
+              "instance": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "started_at": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "pid": {
+                    "type": "integer",
+                    "minimum": 2,
+                    "maximum": 2147483647
+                  },
+                  "pgid": {
+                    "type": "integer",
+                    "minimum": 2,
+                    "maximum": 2147483647
+                  }
+                }
+              }
+            }
+          }
+        },
+        "failure": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "phase",
+            "reason"
+          ],
+          "properties": {
+            "phase": {
+              "enum": [
+                "restore",
+                "toolchain",
+                "setup",
+                "probe",
+                "relay",
+                "mint",
+                "late",
+                "cutoff"
+              ]
+            },
+            "step": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "endpoint": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 65535
+            },
+            "reason": {
+              "enum": [
+                "base_unavailable",
+                "restore_refused",
+                "restore_deadline",
+                "restore_failed",
+                "toolchain_deadline",
+                "toolchain_failed",
+                "files_refused",
+                "endpoint_not_owned",
+                "owner_unreadable",
+                "probe_deadline",
+                "probe_failed",
+                "setup_deadline",
+                "setup_failed",
+                "relay_deadline",
+                "relay_failed",
+                "mint_deadline",
+                "mint_failed",
+                "cancelled",
+                "session_refused",
+                "stage_late",
+                "start_reserve",
+                "deadline_missing"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
 }
