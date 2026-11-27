@@ -17,7 +17,7 @@ const WORKER = import.meta.filename;
 const PROFILE = './prepare-contract/runtime-preparation.json';
 const SLICE_FIELDS = ['Id', 'Description', 'LoadState', 'ActiveState', 'SubState', 'Transient', 'InvocationID', 'Slice', 'ControlGroup', 'Delegate', 'StopWhenUnneeded', 'CollectMode', 'FragmentPath', 'DropInPaths'];
 const UNIT_FIELDS = ['Id', 'Description', 'Transient', 'InvocationID', 'MainPID', 'ControlGroup', 'User', 'Group', 'Delegate', 'KillMode', 'KillSignal', 'FinalKillSignal', 'SendSIGKILL', 'TimeoutStopUSec', 'Slice', 'FragmentPath', 'DropInPaths'];
-const SYSTEMD_BUILDS = Object.freeze(['255.4-1ubuntu8.17', '255.4-1ubuntu8.18', '259.9-0ubuntu0.1']);
+const SYSTEMD_BUILDS = Object.freeze(['255.4-1ubuntu8.17', '255.4-1ubuntu8.18', '255.4-1ubuntu8.19', '259.9-0ubuntu0.1']);
 const HEX = /^[0-9a-f]{32}$/;
 const OUTPUT_BYTES = 64 * 1024;
 const CONTROL_MS = 30_000;
@@ -454,9 +454,12 @@ function unitArguments(owner, executable, worker) {
 export async function runOwnedPreparationWorker(task, context, {
   signal = new AbortController().signal, nowMilliseconds = Date.now, launch = spawn, control = command, witness = cgroupWitness,
   nonce = () => randomBytes(16).toString('hex'), uid = process.getuid?.() ?? -1, gid = process.getgid?.() ?? -1,
-  platform = process.platform, kernelRelease = release(), executable = process.execPath, worker = WORKER, schedule = scheduleTimer,
+  env = process.env, platform = process.platform, kernelRelease = release(), executable = process.execPath, worker = WORKER, schedule = scheduleTimer,
 } = {}) {
   current(task, nowMilliseconds, signal);
+  if (env.RUNNER_ENVIRONMENT !== 'github-hosted' || !['ubuntu24', 'ubuntu26'].includes(env.ImageOS ?? '')) {
+    throw Object.assign(refused(), { message: 'fixed preparation requires a GitHub-hosted Ubuntu 24.04 or 26.04 runner' });
+  }
   assertPreparationKernel(platform, kernelRelease);
   if (uid < 1 || gid < 0 || !isAbsolute(executable) || worker !== WORKER) throw refused();
   const token = nonce();

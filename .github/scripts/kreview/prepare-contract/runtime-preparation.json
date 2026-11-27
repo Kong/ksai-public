@@ -27,10 +27,10 @@
   "github_root": "gh-attestation-github-v1",
   "components": {
     "opencode_installer": "sha256:de51f97d88c8c15772113c6dfd1474c3648991d2894716df2fc3c5a872361539",
-    "preparation_executor": "sha256:547117a407f00fe3b75b9a41e19444a1a22a1465d9bbe22f439b222649021ec8",
-    "sandbox_runtime": "sha256:d5bbe90a8c22a9b03fd4cbb592a1e944e4e8608f80b88c75f1eda4ad788ee0b1",
-    "sandbox_tools": "sha256:3b438693716dace32288fea5f35a4752c0d7d0bf7bc001e2ff668e07620d2580",
-    "sandbox_installer": "sha256:59b91e2e6a61435dcb46344f5a498251f86059f24f101af79e283f8a578dde4e",
+    "preparation_executor": "sha256:0be0e5cf93915e4bf2c2e3a37d418037fa949e8b7a6e2f63d4096e063e9affef",
+    "sandbox_runtime": "sha256:b5a2b32c61b8e1ce8599a6ab79f9093733db65acbdbef590dc2efccca8489322",
+    "sandbox_tools": "sha256:416dc227293614d26f5cc98da1c28fd355b0d123217513be796f44e400ba3253",
+    "sandbox_installer": "sha256:f59443a05a42c6c499262e18bc330ef4d2e3201f68761136f4fe7f223458543d",
     "github_anchors": "sha256:978d091b1fad0e8a937ae585c2ecb928abb40d501e6247785c6b334048647ab1"
   }
 }

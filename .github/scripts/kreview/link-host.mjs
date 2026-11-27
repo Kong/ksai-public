@@ -17,7 +17,7 @@ import controlPlane from '../lib/control-plane.cjs';
 import { ARTIFACTS, deliveriesUnder, digestOf, lockedOf } from './cp-prompts.mjs';
 import { exitedOn } from './execution-log.mjs';
 import { acknowledging } from './link-acknowledged.mjs';
-import { MAX_FRAME, jobOf, linkId } from '../link/link-protocol.mjs';
+import { MAX_FRAME, jobNameOf, jobOf, linkId } from '../link/link-protocol.mjs';
 import { linkClient, pollTransport, websocketTransport } from './link-client.mjs';
 import taskRequest from '../lib/task-request.cjs';
 import { isolatedToolPhase, parsed, PROVIDER_TIMEOUTS, totals, UNCONTINUED } from './opencode.mjs';
@@ -25,6 +25,7 @@ import { answer, everything, executionLog, openCallOf, reportedVersion, rootSess
 import { writeOutputs } from '../lib/outputs.mjs';
 import { reviewDeadlineAt, reviewTimeLeft } from '../lib/review-deadline.mjs';
 import { annotation } from '../lib/text.cjs';
+import { ENGINE_STOP_MS, LAUNCH_DEADLINE_AT, SESSION_REFUSED_OUTPUT, SESSION_REFUSED_VALUE } from '../ksai/harness/contract.mjs';
 import watchdogLimits from './watchdog.cjs';
 import { governedTools } from './governed-flow.mjs';
 import { collectSecrets, scrub } from './secrets.cjs';
@@ -41,7 +42,7 @@ import { RESTORED_EXPORT, Unapplied, checkpointBaseOf, checkpointSaved, checkpoi
 import { outcomeExpected } from './link-expect.mjs';
 import { traceparent, tracedFetch } from './otlp.mjs';
 import { transcriptOf, transcriptSent } from './link-transcript.mjs';
-import { toolIsolationProbe } from './opencode-tool-sandbox.mjs';
+import { buildScratch, prepareBuildScratch, toolIsolationProbe } from './opencode-tool-sandbox.mjs';
 import { compactions, streamFailure, toolTiming } from './opencode-v2-review.mjs';
 import { EXPORT_FILE, RESUME_ERROR, RESUME_EXPORT, SESSION_FILE, resumeError } from './opencode-v2-link.mjs';
 import { main as writeConfig } from './opencode-v2-config.mjs';
@@ -52,11 +53,13 @@ import { GOVERNED_CAPABILITY, deliveryReport, isGoverned, layGovernedPlugin, plu
 
 const REMINDER_ID = 'static.runtime.opencode-max-steps';
 const KILL_GRACE_MS = 10_000;
-const ENGINE_STOP_MS = 45_000;
+const EXIT_GRACE_MS = 30_000;
+export { ENGINE_STOP_MS };
 const KILLED_EXIT = 137;
 const CANCELLING = Object.freeze(['SIGINT', 'SIGTERM']);
 const SOCKET_ROOT = '/tmp/ksai-';
-const CANCELLED = 'job was cancelled, the run stopped itself and told the engine it was not lost';
+export const CANCELLED = 'job was cancelled, the run stopped itself and told the engine it was not lost';
+export const HARNESS_CUTOFF = 'the harness model cutoff stopped this stage';
 const { MAX_CEILING_MINUTES, SALVAGE_MARGIN_MINUTES, ceilingMinutes, wholeNumber } = watchdogLimits;
 const SESSION_ENV = Object.freeze(['KSAI_SESSION_PLUGIN']);
 const PLUGIN_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -84,7 +87,7 @@ const preserveScript = (env) => join(String(env.SCRIPTS ?? ''), 'kreview/link-pr
 const checkpointScript = (env) => join(String(env.SCRIPTS ?? ''), 'kreview/link-checkpoint.mjs');
 
 function spendAttemptOf(env) {
-  const job = String(env.GITHUB_JOB ?? '');
+  const job = jobNameOf(env);
   const compact = job.length <= 40 ? job : `${job.slice(0, 27)}~${createHash('sha256').update(job).digest('hex').slice(0, 12)}`;
   const index = String(env.KSAI_JOB_INDEX ?? '').trim() || '0';
   const id = `${env.GITHUB_RUN_ID}:${env.GITHUB_RUN_ATTEMPT}:${compact}:${index}`;
@@ -168,7 +171,9 @@ function ceilingOf(env) {
   return asked === '0' ? MAX_CEILING_MINUTES : ceilingMinutes(asked);
 }
 
-function deadlineOf(env, now) {
+const channelKillAt = (env) => Number(env.KSAI_CHANNEL_KILL_AT) || 0;
+
+export function deadlineOf(env, now) {
   const review = reviewTimeLeft(env, now);
   if (review !== null) {
     const left = review - ENGINE_STOP_MS;
@@ -178,8 +183,8 @@ function deadlineOf(env, now) {
     if (bounded <= 0) throw new Error('bounded review stopped before this session could start');
     return bounded;
   }
-  const killAt = Number(env.KSAI_CHANNEL_KILL_AT) || 0;
-  if (killAt > now) return killAt - now;
+  const killAt = channelKillAt(env);
+  if (killAt > 0) return Math.max(0, killAt - now);
   const given = Number(env.KSAI_DEADLINE_MS) || 0;
   if (given > 0) return given;
   const ceiling = ceilingOf(env);
@@ -208,7 +213,7 @@ export function runFact(env, now = Date.now()) {
   const number = Number(String(env.REPORT_NUM ?? '').trim());
   const index = String(env.KSAI_JOB_INDEX ?? '').trim() || '0';
   const charged = spendAttemptOf(env);
-  const job = String(env.GITHUB_JOB ?? '').trim();
+  const job = jobNameOf(env);
   return {
     flow,
     title: 'ksai',
@@ -708,19 +713,63 @@ export function childRunner(launch, env, scratch) {
 export async function main(env = process.env, {
   launch = spawn, mintFor = controlPlane.minter, startProvider = startProviderRelay, startTelemetry = startRelay,
   pinned = shipped, dial = '', fetch = globalThis.fetch, connect = (url, init) => new WebSocket(url, init), monitor = monitorProcess, probe = sandboxProblem, cancelled = new AbortController().signal,
-  socketRoot = SOCKET_ROOT,
+  socketRoot = SOCKET_ROOT, now = Date.now, schedule = setTimeout, unschedule = clearTimeout, exit = process.exit, stopSessions = stopReviewSessions,
 } = {}) {
+  const launchAt = Number(env[LAUNCH_DEADLINE_AT]);
+  if (launchAt > 0 && now() > launchAt) {
+    writeOutputs(env.GITHUB_OUTPUT, {
+      conclusion: 'failure', error: HARNESS_CUTOFF, events_file: env.EVENTS_FILE, [SESSION_REFUSED_OUTPUT]: SESSION_REFUSED_VALUE,
+    });
+    return 1;
+  }
   const root = mkdtempSync(socketRoot);
   chmodSync(root, 0o700);
+  const killAt = channelKillAt(env);
+  const cutoff = { stopped: false, refused: false, launched: false, finished: false, stop: () => {}, finish: null };
+  let wroteFinal = false;
+  const finalOutputs = (outputs) => {
+    if (wroteFinal) return;
+    wroteFinal = true;
+    writeOutputs(env.GITHUB_OUTPUT, { ...outputs, [SESSION_REFUSED_OUTPUT]: cutoffRefusal(cutoff) });
+  };
+  const stopTimer = killAt > 0 ? schedule(() => {
+    if (cutoff.finished) return;
+    cutoff.stopped = true;
+    cutoff.stop();
+  }, Math.max(0, killAt - ENGINE_STOP_MS - now())) : null;
+  const exitTimer = killAt > 0 ? schedule(() => {
+    if (!cutoff.finished) cutoff.stopped = true;
+    let code = 1;
+    try {
+      code = cutoff.finish ? cutoff.finish() : 1;
+    } finally {
+      finalOutputs({ conclusion: 'failure', error: HARNESS_CUTOFF, events_file: env.EVENTS_FILE });
+      exit(code);
+    }
+  }, Math.max(0, killAt + ENGINE_STOP_MS - now())) : null;
   try {
     const traced = tracedFetch(fetch, env, String(env.KSAI_CP_ENDPOINT ?? '').trim());
-    return await linkHost(env, root, { launch, mintFor, startProvider, startTelemetry, pinned, dial, fetch: traced, connect, monitor, probe, cancelled });
+    return await linkHost(env, root, { launch, mintFor, startProvider, startTelemetry, pinned, dial, fetch: traced, connect,
+      monitor, probe, cancelled, cutoff, finalOutputs, now, stopSessions });
   } finally {
+    if (stopTimer !== null) unschedule(stopTimer);
+    if (exitTimer !== null) unschedule(exitTimer);
     rmSync(root, { recursive: true, force: true });
   }
 }
 
-async function linkHost(env, root, { launch, mintFor, startProvider, startTelemetry, pinned, dial, fetch, connect, monitor, probe, cancelled }) {
+export function cutoffRefusal({ refused, stopped, launched }) {
+  return (refused || stopped) && !launched ? SESSION_REFUSED_VALUE : undefined;
+}
+
+export function sessionLaunchAllowed(env, now, stopped = false) {
+  const left = deadlineOf(env, now);
+  const launchAt = Number(env[LAUNCH_DEADLINE_AT]);
+  return left > 0 && !stopped && !(launchAt > 0 && now > launchAt);
+}
+
+async function linkHost(env, root, { launch, mintFor, startProvider, startTelemetry, pinned, dial, fetch, connect, monitor, probe, cancelled,
+  cutoff, finalOutputs, now, stopSessions }) {
   const runnerTemp = String(env.RUNNER_TEMP ?? '');
   const endpoint = String(env.KSAI_CP_ENDPOINT ?? '').trim();
   const governedDir = String(env.KSAI_GOVERNED_DIR ?? '').trim();
@@ -742,7 +791,7 @@ async function linkHost(env, root, { launch, mintFor, startProvider, startTeleme
   try {
     job = jobOf(env);
     render = renderFact(env);
-    run = runFact(env);
+    run = runFact(env, now());
     reviewDue = reviewDeadlineAt(env);
   } catch (error) {
     console.log(annotation(error.message));
@@ -858,6 +907,12 @@ async function linkHost(env, root, { launch, mintFor, startProvider, startTeleme
   const finished = new Promise((resolve) => {
     resolveDone = resolve;
   });
+  let cutoffStopping = null;
+  cutoff.stop = () => {
+    cutoffStopping = stopSessions(sessions);
+    resolveDone({ conclusion: 'failure', outputs: [{ name: 'error', value: HARNESS_CUTOFF }], reason: 'deadline' });
+  };
+  if (cutoff.stopped) cutoff.stop();
   const cancel = () => resolveDone({ conclusion: 'failure', outputs: [{ name: 'error', value: CANCELLED }], reason: 'cancelled' });
   cancelled.addEventListener('abort', cancel, { once: true });
   let reviewExpired = false;
@@ -867,7 +922,7 @@ async function linkHost(env, root, { launch, mintFor, startProvider, startTeleme
     reviewExpired = true;
     if (sessions.size && [...sessions.values()].every((held) => held.child && childExited(held.child))) return;
     reviewInterrupted = true;
-    await stopReviewSessions(sessions);
+    await stopSessions(sessions);
     resolveDone({ conclusion: 'failure', outputs: [{ name: 'error', value: 'the original bounded review deadline left no model time after the stop and cleanup reserve' }], reason: 'deadline' });
   };
   const reviewTimer = reviewDue === null ? null : setTimeout(() => {
@@ -1012,9 +1067,17 @@ async function linkHost(env, root, { launch, mintFor, startProvider, startTeleme
 
   let expected = null;
   let accepted = null;
-  const startSession = async ({ session, phase, render: named, policy: namedPolicy, restarts, resumes, env: given = [] }) => {
+  const assertSessionStart = () => {
     if (reviewExpired) throw new Error('the original bounded review deadline stopped this stage');
-    deadlineOf(env, Date.now());
+    if (sessionLaunchAllowed(env, now(), cutoff.stopped)) return;
+    if (channelKillAt(env) > 0 || Number(env[LAUNCH_DEADLINE_AT]) > 0) {
+      if (!cutoff.launched) cutoff.refused = true;
+      throw new Error(HARNESS_CUTOFF);
+    }
+    throw new Error('the stage has no model time before its stop reserve');
+  };
+  const startSession = async ({ session, phase, render: named, policy: namedPolicy, restarts, resumes, env: given = [] }) => {
+    assertSessionStart();
     const policy = sessionPolicy(namedPolicy);
     policyTimeLeft(policy, Date.now(), ENGINE_STOP_MS);
     accepted ??= taskRequest.heldByLink({ env, endpoint, job, link: client.link, seen: env.KSAI_TASK_REQUEST, fetch }).catch((error) => {
@@ -1079,6 +1142,9 @@ async function linkHost(env, root, { launch, mintFor, startProvider, startTeleme
     policyTimeLeft(policy, Date.now(), ENGINE_STOP_MS);
     if (writeConfig(sessionEnv) !== 0) throw new Error(`writing the OpenCode config for session ${session} failed`);
     configuredMcp = mcpServerCount(JSON.parse(readFileSync(config, 'utf8')));
+    if (buildScratch(sessionEnv) && !prepareBuildScratch(sessionEnv)) {
+      console.log(annotation(`the build directory for session ${session} could not be made, so its tool calls build in the in-memory /tmp`, 'warning'));
+    }
     const sandbox = sandboxArgs(sessionEnv, undefined, undefined, undefined, sockets);
     const isolation = isolatedToolPhase(phase);
     if (!probed.has(isolation)) probed.set(isolation, probe(sessionEnv, sandbox));
@@ -1097,12 +1163,11 @@ async function linkHost(env, root, { launch, mintFor, startProvider, startTeleme
       for (const frame of held.waiting.splice(0)) plugin.socket.write(`${JSON.stringify({ type: 'frame', frame })}\n`);
       client.send('session.started', `session/${session}/started`, { session, plugin_key: plugin.key.toString('base64') });
     });
+    assertSessionStart();
     if (held.killed) {
       client.send('session.ended', `session/${session}/ended`, { session, ...sessionEnd({ exit: KILLED_EXIT, killed: true, refused: held.resumeError }) });
       return;
     }
-    if (reviewExpired) throw new Error('the original bounded review deadline stopped this stage');
-    deadlineOf(env, Date.now());
     policyTimeLeft(policy, Date.now(), ENGINE_STOP_MS);
     held.offset = statSync(events).size;
     held.read = held.offset;
@@ -1110,7 +1175,9 @@ async function linkHost(env, root, { launch, mintFor, startProvider, startTeleme
     telemetry?.beginObservation();
     const finishTrace = traces.begin(began);
     const finishAttribution = attribution.begin(began);
+    assertSessionStart();
     held.child = launch('bwrap', [...sandbox, process.execPath, linkScript(env)], { env: sessionEnv, stdio: ['ignore', out, 'inherit'] });
+    cutoff.launched = true;
     const stopMonitoring = monitor(held.child.pid);
     held.child.once('close', async (code, signal) => {
       held.deadlineStop.clear();
@@ -1261,14 +1328,51 @@ async function linkHost(env, root, { launch, mintFor, startProvider, startTeleme
 
   const linking = client.start();
   const received = await finished;
+  cutoff.finished = true;
   if (reviewTimer !== null) clearTimeout(reviewTimer);
+  let end = null;
+  const endOf = () => {
+    if (end !== null) return end;
+    const ended = reviewInterrupted ? { ...received, conclusion: 'failure', outputs: [...received.outputs, { name: 'error', value: 'the original bounded review deadline stopped this stage' }] } : received;
+    const counted = usage?.ending();
+    const settledOk = ended.conclusion === 'success' || ended.conclusion === 'stopped';
+    const done = !counted?.error ? ended : settledOk
+      ? { ...ended, conclusion: 'failure', outputs: [...ended.outputs, { name: 'error', value: counted.error }] }
+      : { ...ended, outputs: [...ended.outputs, { name: 'warning', value: counted.error }] };
+    end = { ended, done };
+    return end;
+  };
+  let kept = null;
+  const keep = () => {
+    const { ended, done } = endOf();
+    const outputs = Object.fromEntries(done.outputs.map((one) => [one.name, one.value]));
+    const code = done.conclusion === 'success' || done.conclusion === 'stopped' ? 0 : 1;
+    settle(done.conclusion, outputs);
+    for (const warned of done.outputs.filter((one) => one.name === 'warning')) console.log(annotation(warned.value, 'warning'));
+    if (outputs.error) console.log(endedSaid(done.conclusion, outputs.error));
+    finalOutputs({
+      conclusion: code === 0 ? 'success' : 'failure',
+      events_file: events,
+      stopped: ended.conclusion === 'stopped' ? 'true' : '',
+      stopped_by: oneLine(outputs.stopped_by || (ended.conclusion === 'stopped' ? 'halt' : '')),
+      stopped_because: oneLine(outputs.stopped_because),
+      error: oneLine(outputs.error),
+      ceiling: String(ceilingOf(env) ?? ''),
+      model_never_asked: provider?.asked?.() === false ? 'true' : '',
+      preserved: oneLine(outputs.preserved),
+      preserve_reason: oneLine(outputs.preserve_reason),
+      preserve_tree: String(outputs.preserve_tree ?? ''),
+    });
+    keepWorked(governedDir, outputs.worked);
+    return reduced === 0 ? code : 1;
+  };
+  cutoff.finish = () => {
+    kept ??= keep();
+    return kept;
+  };
   await reviewStopping;
-  const ended = reviewInterrupted ? { ...received, conclusion: 'failure', outputs: [...received.outputs, { name: 'error', value: 'the original bounded review deadline stopped this stage' }] } : received;
-  const counted = usage?.ending();
-  const settledOk = ended.conclusion === 'success' || ended.conclusion === 'stopped';
-  const done = !counted?.error ? ended : settledOk
-    ? { ...ended, conclusion: 'failure', outputs: [...ended.outputs, { name: 'error', value: counted.error }] }
-    : { ...ended, outputs: [...ended.outputs, { name: 'warning', value: counted.error }] };
+  await cutoffStopping;
+  const { done } = endOf();
   await Promise.allSettled(uploads);
   cancelled.removeEventListener('abort', cancel);
   for (const held of sessions.values()) {
@@ -1286,32 +1390,17 @@ async function linkHost(env, root, { launch, mintFor, startProvider, startTeleme
   await new Promise((resolve) => { guardSocket.close(() => resolve()); });
   await provider?.close();
 
-  const outputs = Object.fromEntries(done.outputs.map((one) => [one.name, one.value]));
-  const code = done.conclusion === 'success' || done.conclusion === 'stopped' ? 0 : 1;
-  settle(done.conclusion, outputs);
+  const code = cutoff.finish();
   closeSync(out);
   rmSync(scratch, { recursive: true, force: true });
-  for (const warned of done.outputs.filter((one) => one.name === 'warning')) console.log(annotation(warned.value, 'warning'));
-  if (outputs.error) console.log(endedSaid(done.conclusion, outputs.error));
-  writeOutputs(env.GITHUB_OUTPUT, {
-    conclusion: code === 0 ? 'success' : 'failure',
-    events_file: events,
-    stopped: ended.conclusion === 'stopped' ? 'true' : '',
-    stopped_by: oneLine(outputs.stopped_by || (ended.conclusion === 'stopped' ? 'halt' : '')),
-    stopped_because: oneLine(outputs.stopped_because),
-    error: oneLine(outputs.error),
-    ceiling: String(ceilingOf(env) ?? ''),
-    model_never_asked: provider?.asked?.() === false ? 'true' : '',
-    preserved: oneLine(outputs.preserved),
-    preserve_reason: oneLine(outputs.preserve_reason),
-    preserve_tree: String(outputs.preserve_tree ?? ''),
-  });
-  keepWorked(governedDir, outputs.worked);
-  return reduced === 0 ? code : 1;
+  return code;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const cancelling = new AbortController();
   for (const signal of CANCELLING) process.once(signal, () => cancelling.abort());
-  process.exitCode = await main(process.env, { cancelled: cancelling.signal });
+  const code = await main(process.env, { cancelled: cancelling.signal });
+  if (channelKillAt(process.env) > 0) process.exit(code);
+  process.exitCode = code;
+  setTimeout(() => process.exit(), EXIT_GRACE_MS).unref();
 }

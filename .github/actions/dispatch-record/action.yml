@@ -40,6 +40,9 @@ outputs:
   source_revision:
     description: The source revision from the package-stage record.
     value: ${{ steps.record.outputs.source_revision }}
+  profile:
+    description: The stage profile from the control-plane record.
+    value: ${{ steps.record.outputs.profile }}
   changeset_max_bytes:
     description: The most bytes a write stage's change may hold, if the stage writes.
     value: ${{ steps.record.outputs.changeset_max_bytes }}
@@ -58,6 +61,15 @@ outputs:
   stage_steps_file:
     description: The file holding the fenced steps the control plane asks a write stage to run around the model, if any.
     value: ${{ steps.record.outputs.stage_steps_file }}
+  harness_plan_file:
+    description: The file with the control-plane harness plan.
+    value: ${{ steps.record.outputs.harness_plan_file }}
+  harness_base_sha:
+    description: The base commit from the control-plane harness record.
+    value: ${{ steps.record.outputs.harness_base_sha }}
+  harness_runner:
+    description: The runner label or JSON label list from the control-plane harness record.
+    value: ${{ steps.record.outputs.harness_runner }}
   stage_pull:
     description: The pull request from the package-stage record, if present.
     value: ${{ steps.record.outputs.stage_pull }}
@@ -76,6 +88,12 @@ outputs:
   stage_job_minutes:
     description: The job budget, in minutes, before the control plane reaps the attempt.
     value: ${{ steps.record.outputs.stage_job_minutes }}
+  job_deadline_at:
+    description: The absolute job deadline in epoch milliseconds.
+    value: ${{ steps.record.outputs.job_deadline_at }}
+  stage_late:
+    description: Whether the harness record arrived after the setup window.
+    value: ${{ steps.record.outputs.stage_late }}
   review_admission:
     description: The validated CP review clock and package stage identity, or empty for an ordinary stage.
     value: ${{ steps.record.outputs.review_admission }}
@@ -141,6 +159,7 @@ runs:
             ['workflow_attempt', 'workflowAttempt'],
             ['workflow_lease', 'workflowLease'],
             ['source_revision', 'sourceRevision'],
+            ['profile', 'profile'],
             ['changeset_max_bytes', 'changesetMaxBytes'],
             ['changeset_max_files', 'changesetMaxFiles'],
             ['merge_base', 'mergeBase'],
@@ -152,13 +171,15 @@ runs:
             ['plan_path', 'planPath'],
             ['stage_minutes', 'stageMinutes'],
             ['stage_job_minutes', 'stageJobMinutes'],
+            ['job_deadline_at', 'jobDeadlineAt'],
+            ['stage_late', 'stageLate'],
             ['review_admission', 'reviewAdmission'],
           ]) {
             core.setOutput(name, answer[held] ?? '');
           }
           if (!answer.read) {
             if ('none' in answer) {
-              core.notice('KSAI holds no record for this run. This can occur when you rerun a finished stage. This attempt runs nothing.');
+              core.notice('KSAI holds no record for this run, so this attempt runs nothing.');
             }
             return;
           }
@@ -170,4 +191,11 @@ runs:
             const steps = path.join(process.env.RUNNER_TEMP, `ksai-stage-steps-${answer.recordId}.json`);
             fs.writeFileSync(steps, answer.stageSteps, { encoding: 'utf8', mode: 0o600 });
             core.setOutput('stage_steps_file', steps);
+          }
+          if (answer.harnessPlan) {
+            const plan = path.join(process.env.RUNNER_TEMP, `ksai-harness-plan-${answer.recordId}.json`);
+            fs.writeFileSync(plan, answer.harnessPlan, { encoding: 'utf8', mode: 0o600 });
+            core.setOutput('harness_plan_file', plan);
+            core.setOutput('harness_base_sha', answer.harnessBaseSHA);
+            core.setOutput('harness_runner', answer.harnessRunner);
           }

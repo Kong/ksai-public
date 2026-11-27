@@ -46,6 +46,12 @@ jobs:
             tuf-repo.github.com:443
             ksai.kongcloud.io:443
           disable-telemetry: true
+      - name: Read the dispatch record
+        id: record
+        continue-on-error: true
+        uses: $/.github/actions/dispatch-record
+        with:
+          endpoint: https://ksai.kongcloud.io
       - name: Ask which runner this repository's work is carried out on
         id: settings
         continue-on-error: true
@@ -58,15 +64,9 @@ jobs:
         uses: $/.github/actions/run-credentials
         with:
           endpoint: https://ksai.kongcloud.io
-      - name: Read the dispatch record
-        id: record
-        continue-on-error: true
-        uses: $/.github/actions/dispatch-record
-        with:
-          endpoint: https://ksai.kongcloud.io
       - name: Decide whether this job carries the stage
         id: claim
-        if: ${{ steps.record.outputs.read == 'true' && steps.record.outputs.workflow_job != '' }}
+        if: ${{ steps.record.outputs.read == 'true' && steps.record.outputs.workflow_job != '' && steps.record.outputs.profile != 'workflow-harness' }}
         continue-on-error: true
         uses: $/.github/actions/stage-claim
         with:
@@ -102,6 +102,7 @@ jobs:
           kong_org_github_token: ${{ github.token }}
           artifact_retention_days: 14
           job_timeout_minutes: ${{ steps.record.outputs.stage_minutes || steps.settings.outputs.job_timeout_minutes }}
+          job_deadline_at: ${{ steps.record.outputs.job_deadline_at }}
           max_consecutive_tool_failures: ${{ steps.settings.outputs.max_consecutive_tool_failures }}
           max_repeated_tool_calls: ${{ steps.settings.outputs.max_repeated_tool_calls }}
           otel_endpoint: https://ingress.us-west-2.aws.dash0.com
@@ -124,6 +125,9 @@ jobs:
     outputs:
       runs_on: ${{ steps.settings.outputs.runs_on }}
       stage_job_minutes: ${{ steps.record.outputs.stage_job_minutes }}
+      job_deadline_at: ${{ steps.record.outputs.job_deadline_at }}
+      profile: ${{ steps.record.outputs.profile }}
+      harness_runner: ${{ steps.record.outputs.harness_runner }}
       review_admission: ${{ steps.record.outputs.review_admission }}
       job_timeout_minutes: ${{ steps.settings.outputs.job_timeout_minutes }}
       model_auth_mode: ${{ steps.credentials.outputs.model_auth_mode }}
@@ -142,6 +146,11 @@ jobs:
       - uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
         with:
           egress-policy: audit
+      - name: Read the dispatch record
+        id: record
+        uses: $/.github/actions/dispatch-record
+        with:
+          endpoint: https://ksai.kongcloud.io
       - name: Ask which runner this repository's work is carried out on
         id: settings
         uses: $/.github/actions/run-settings
@@ -184,27 +193,33 @@ jobs:
             echo "endpoint=$(host "${ENDPOINT}")"
             echo "gateway=$(host "${BASE_URL}")"
           } >>"${GITHUB_OUTPUT}"
-      - name: Read the dispatch record
-        id: record
-        uses: $/.github/actions/dispatch-record
-        with:
-          endpoint: https://ksai.kongcloud.io
       - name: Require a control-plane package stage
         shell: bash
         env:
           RECORD_READ: ${{ steps.record.outputs.read }}
           WORKFLOW_JOB: ${{ steps.record.outputs.workflow_job }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          STARTED_BY: ${{ github.actor }}
         run: |-
           set -euo pipefail
-          if [[ "${RECORD_READ}" != "true" || -z "${WORKFLOW_JOB}" ]]; then
-            echo "::error::The control plane did not admit a package stage"
-            exit 1
+          if [[ "${RECORD_READ}" == "true" && -n "${WORKFLOW_JOB}" ]]; then
+            exit 0
           fi
+          why="The control plane did not admit a package stage."
+          if [[ "${RECORD_READ}" != "true" && "${STARTED_BY}" != *"[bot]" ]]; then
+            why="${STARTED_BY} started this run outside KSAI. KSAI runs only the work that it starts."
+          elif [[ "${RECORD_READ}" != "true" && "${RUN_ATTEMPT}" != "1" ]]; then
+            why="This run is a rerun, and KSAI holds no record for it."
+          fi
+          fix="To run KSAI, comment /ksai on a pull request."
+          echo "::error::${why} ${fix}"
+          printf '%s\n\n%s\n' "${why}" "${fix}" >>"${GITHUB_STEP_SUMMARY}"
+          exit 1
   run:
     needs:
       - gate
       - stage
-    if: ${{ !cancelled() && needs.gate.result == 'success' && needs.stage.outputs.claimed != 'true' }}
+    if: ${{ !cancelled() && needs.gate.result == 'success' && needs.stage.outputs.claimed != 'true' && needs.gate.outputs.profile != 'workflow-harness' }}
     runs-on: ${{ startsWith(needs.gate.outputs.runs_on, '[') && fromJSON(needs.gate.outputs.runs_on) ||
       needs.gate.outputs.runs_on }}
     timeout-minutes: ${{ fromJSON(needs.gate.outputs.stage_job_minutes || needs.gate.outputs.job_timeout_minutes) }}
@@ -251,6 +266,7 @@ jobs:
           kong_org_github_token: ${{ github.token }}
           artifact_retention_days: 14
           job_timeout_minutes: ${{ needs.gate.outputs.stage_minutes || needs.gate.outputs.job_timeout_minutes }}
+          job_deadline_at: ${{ needs.gate.outputs.job_deadline_at }}
           max_consecutive_tool_failures: ${{ needs.gate.outputs.max_consecutive_tool_failures }}
           max_repeated_tool_calls: ${{ needs.gate.outputs.max_repeated_tool_calls }}
           otel_endpoint: https://ingress.us-west-2.aws.dash0.com
@@ -261,4 +277,80 @@ jobs:
           opencode_version: ${{ needs.gate.outputs.opencode_version }}
           anthropic_base_url: ${{ needs.gate.outputs.model_gateway_url }}
           npm_token: ${{ secrets.npm_token }}
+    name: Package stage
+  run_harness:
+    needs:
+      - gate
+      - stage
+    if: ${{ !cancelled() && needs.gate.result == 'success' && needs.stage.outputs.claimed != 'true' && needs.gate.outputs.profile == 'workflow-harness' }}
+    runs-on: ${{ startsWith(needs.gate.outputs.harness_runner, '[') && fromJSON(needs.gate.outputs.harness_runner) ||
+      needs.gate.outputs.harness_runner }}
+    timeout-minutes: ${{ fromJSON(needs.gate.outputs.stage_job_minutes || needs.gate.outputs.job_timeout_minutes) }}
+    environment: ${{ vars.KSAI_JOB_ENVIRONMENT }}
+    env:
+      KSAI_JOB: run
+      KSAI_MODEL_AUTH_MODE: ${{ needs.gate.outputs.model_auth_mode }}
+      KSAI_REVIEW_ADMISSION: ${{ needs.gate.outputs.review_admission }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        with:
+          egress-policy: block
+          allowed-endpoints: >-
+            api.github.com:443 github.com:443 *.githubusercontent.com:443 *.actions.githubusercontent.com:443
+            *.blob.core.windows.net:443 ingress.us-west-2.aws.dash0.com:443
+            archive.ubuntu.com:80 archive.ubuntu.com:443 azure.archive.ubuntu.com:80 security.ubuntu.com:80 security.ubuntu.com:443
+            tuf-repo-cdn.sigstore.dev:443 tuf-repo.github.com:443
+            ${{ startsWith(needs.gate.outputs.harness_runner, '[') && 'al2023-repos-us-east-2-de612dc2.s3.dualstack.us-east-2.amazonaws.com:443' || '' }}
+            ${{ needs.gate.outputs.egress_endpoints }} ${{ needs.gate.outputs.gateway }} ${{ needs.gate.outputs.endpoint }}
+          disable-telemetry: true
+      - name: Check the egress agent and prepare Bubblewrap on Amazon Linux
+        if: startsWith(needs.gate.outputs.harness_runner, '[')
+        run: |
+          set -euo pipefail
+          systemctl is-active --quiet agent.service
+          supports_userns() {
+            /usr/bin/bwrap --help 2>/dev/null | grep -E '^[[:space:]]+--disable-userns([[:space:]]|$)' >/dev/null
+          }
+          if ! supports_userns; then
+            sudo -n /usr/bin/dnf --disablerepo='*' --enablerepo=amazonlinux install -y bubblewrap
+            supports_userns
+          fi
+      - name: Mint this repository's read token
+        id: authz-token
+        uses: $/.github/actions/run-token
+        with:
+          grant: read
+          endpoint: https://ksai.kongcloud.io
+      - name: Read this run's credentials
+        id: credentials
+        uses: $/.github/actions/run-credentials
+        with:
+          endpoint: https://ksai.kongcloud.io
+      - name: Check out the revision the package stage reads
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.gate.outputs.source_revision }}
+          token: ${{ steps.authz-token.outputs.token }}
+          persist-credentials: false
+      - uses: $/.github/actions/ksai
+        env:
+          KSAI_PROVIDER_OBSERVATIONS: "true"
+        with:
+          source_org_github_token: ${{ steps.authz-token.outputs.token }}
+          kong_org_github_token: ${{ github.token }}
+          artifact_retention_days: 14
+          job_timeout_minutes: ${{ needs.gate.outputs.stage_minutes || needs.gate.outputs.job_timeout_minutes }}
+          job_deadline_at: ${{ needs.gate.outputs.job_deadline_at }}
+          max_consecutive_tool_failures: ${{ needs.gate.outputs.max_consecutive_tool_failures }}
+          max_repeated_tool_calls: ${{ needs.gate.outputs.max_repeated_tool_calls }}
+          otel_endpoint: https://ingress.us-west-2.aws.dash0.com
+          otel_headers: ${{ steps.credentials.outputs.otel_headers }}
+          denied_paths: ${{ needs.gate.outputs.denied_paths }}
+          control_plane_endpoint: https://ksai.kongcloud.io
+          record_id: ${{ needs.gate.outputs.record_id }}
+          opencode_version: ${{ needs.gate.outputs.opencode_version }}
+          anthropic_base_url: ${{ needs.gate.outputs.model_gateway_url }}
     name: Package stage

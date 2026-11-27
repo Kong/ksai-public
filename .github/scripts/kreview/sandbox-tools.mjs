@@ -4,7 +4,7 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { toolProcCapability } from './opencode-tool-sandbox.mjs';
+import { BWRAP, toolProcCapability } from './opencode-tool-sandbox.mjs';
 
 export const RIPGREP = Object.freeze({
   version: '15.2.0',
@@ -25,14 +25,16 @@ export const RIPGREP = Object.freeze({
 export const SANDBOX_SEARCH = '/usr/local/bin/rg';
 
 const INSTALLED_SEARCH = Object.freeze(['/usr/bin/rg', SANDBOX_SEARCH]);
-const APT_SOURCES = Object.freeze(['/etc/apt/sources.list.d/ubuntu.sources', '/etc/apt/sources.list.d/debian.sources']);
+const APT_SOURCES = Object.freeze(['/etc/apt/sources.list.d/ubuntu.sources', '/etc/apt/sources.list.d/debian.sources', '/etc/apt/sources.list']);
+const BWRAP_REQUIREMENT = `Install bubblewrap >= 0.8.0 in the runner image at ${BWRAP}`;
+const APT_GET = '/usr/bin/apt-get';
 const SUDO = Object.freeze(['/usr/bin/sudo', '-n', '--']);
 export const NESTED_SANDBOX_PROBE = Object.freeze([
-  '/usr/bin/bwrap', '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp', '--tmpfs', '/run',
+  BWRAP, '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp', '--tmpfs', '/run',
   ...toolProcCapability(),
   '--unshare-user', '--unshare-pid', '--unshare-net', '--new-session', '--die-with-parent',
   '--', '/bin/bash', fileURLToPath(new URL('./opencode-proc.sh', import.meta.url)),
-  '/usr/bin/bwrap', '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc',
+  BWRAP, '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc',
   '--unshare-user', '--unshare-pid', '--unshare-net', '--new-session', '--die-with-parent', '--', '/usr/bin/true',
 ]);
 const BWRAP_ATTACHMENT = /^\s*profile\s+\S+\s+\S*\/bwrap\s/m;
@@ -87,12 +89,18 @@ export async function installRipgrep({ run, workDir, arch = process.arch, fetchI
   return Object.freeze({ path: SANDBOX_SEARCH, fetched: true });
 }
 
+async function supportsDisableUserns(run) {
+  const help = await run([BWRAP, '--help']);
+  return /^\s*--disable-userns(?:\s|$)/m.test(help);
+}
+
 export async function installBubblewrap({ run, read = readFileSync }) {
-  if (await answers(run, ['/usr/bin/bwrap', '--version'])) return false;
-  const source = APT_SOURCES.find((path) => nonEmpty(path, read)) ?? '/etc/apt/sources.list';
-  if (!nonEmpty(source, read)) throw new Error('no operating-system APT source is available for bubblewrap');
+  if (await supportsDisableUserns(run).catch(() => false)) return false;
+  const source = APT_SOURCES.find((path) => nonEmpty(path, read));
+  if (!source) throw new Error(`No operating-system APT source is available. ${BWRAP_REQUIREMENT}.`);
+  if (!await answers(run, [APT_GET, '--version'])) throw new Error(`${APT_GET} is unavailable. ${BWRAP_REQUIREMENT}.`);
   const apt = [
-    '/usr/bin/apt-get',
+    APT_GET,
     '-o', `Dir::Etc::sourcelist=${source}`,
     '-o', 'Dir::Etc::sourceparts=-',
     '-o', 'APT::Get::List-Cleanup=0',
@@ -109,7 +117,7 @@ export async function installBubblewrap({ run, read = readFileSync }) {
       if (attempt === 3) throw error;
     }
   }
-  await run(['/usr/bin/bwrap', '--version']);
+  if (!await supportsDisableUserns(run)) throw new Error(`The APT package lacks --disable-userns. ${BWRAP_REQUIREMENT}.`);
   return true;
 }
 
@@ -133,6 +141,7 @@ export function bwrapAppArmorProfiles(directory = '/etc/apparmor.d', { list = re
 }
 
 export async function enableUserNamespaces({ run, profiles = bwrapAppArmorProfiles }) {
+  if (await answers(run, NESTED_SANDBOX_PROBE)) return;
   const sysctl = (setting) => answers(run, [...SUDO, '/usr/sbin/sysctl', '-w', setting]);
   await sysctl('kernel.apparmor_restrict_unprivileged_userns=0');
   if (await answers(run, NESTED_SANDBOX_PROBE)) return;
